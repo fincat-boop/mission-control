@@ -1172,12 +1172,19 @@ function openCampaignForm(campaign, reload, defaultEndpoint) {
       { name: 'channel_ids', label: 'על אילו מדיות הקמפיין יושב', type: 'multicheck',
         options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
         value: campaign?.channels?.map((c) => c.id) },
-      { name: 'share_pct', label: 'נתח מהשטח באחוזים (ריק = נגזר מהחשיבות מול קמפיינים מקבילים)',
-        type: 'number', value: campaign?.share_pct },
       { name: 'importance', label: 'חשיבות (1–10)', type: 'number',
-        value: campaign?.importance ?? 5 },
-      { name: 'target_posts', label: 'מספר זוויות (ריק = נגזר מהקצב של המדיות)',
-        type: 'number', value: campaign?.target_posts },
+        value: campaign?.importance ?? 5,
+        hint: 'זה מה שקובע כמה שטח מגיע לקמפיין. השאר את שני השדות הבאים על "אוטומטי".' },
+      { name: 'share_pct', label: 'נתח מהשטח', type: 'auto',
+        value: campaign?.share_pct,
+        auto: campaign?.share_auto != null ? `${campaign.share_auto}%` : 'לפי החשיבות',
+        placeholder: '%',
+        hint: 'אוטומטי מחלק את השטח לפי החשיבות מול הקמפיינים שרצים במקביל. ' +
+              'קבוע נועד למקרה שהובטח לקמפיין נתח מסוים בלי קשר לשאר.' },
+      { name: 'target_posts', label: 'מספר זוויות', type: 'auto',
+        value: campaign?.target_posts,
+        auto: campaign?.angles_auto != null ? String(campaign.angles_auto) : 'לפי המדיות',
+        hint: 'אוטומטי נגזר מהקצב של המדיות שנבחרו ומאורך הקמפיין.' },
       { name: 'urgent', label: 'קמפיין דחוף', type: 'checkbox', value: campaign?.urgent },
     ],
     extraActions: campaign && can('settings')
@@ -2186,6 +2193,10 @@ function wireGenericDialog() {
       if (f.type === 'checkbox') values[f.name] = el.checked;
       else if (f.type === 'multicheck') {
         values[f.name] = $$(`[data-multi="${f.name}"]:checked`).map((i) => Number(i.value));
+      } else if (f.type === 'auto') {
+        // מצב "אוטומטי" נשמר כ-null, וזה מה שגורם לשרת לגזור את הערך בעצמו
+        const manual = $(`#gen_${f.name}_mode`).checked;
+        values[f.name] = manual && el.value !== '' ? Number(el.value) : null;
       } else if (f.type === 'number') {
         values[f.name] = el.value === '' ? null : Number(el.value);
       } else if (f.type === 'select') {
@@ -2233,6 +2244,22 @@ function openGeneric(spec) {
           `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(l)}</option>`
         ).join('')}</select></div>`;
     }
+    if (f.type === 'auto') {
+      const manual = f.value != null;
+      return `<div class="frow"><label>${esc(f.label)}</label>
+        <div class="autofield">
+          <label class="opt"><input type="radio" name="${id}_r" ${manual ? '' : 'checked'}
+                 data-auto-off="${f.name}">
+            אוטומטי<b>${esc(f.auto ?? '—')}</b></label>
+          <label class="opt"><input type="radio" name="${id}_r" ${manual ? 'checked' : ''}
+                 id="${id}_mode" data-auto-on="${f.name}">
+            קבוע</label>
+          <input id="${id}" type="number" value="${esc(f.value ?? '')}"
+                 placeholder="${esc(f.placeholder ?? '')}" ${manual ? '' : 'disabled'}>
+        </div>
+        ${f.hint ? `<div class="fhint">${esc(f.hint)}</div>` : ''}
+      </div>`;
+    }
     if (f.type === 'textarea') {
       return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
         <textarea id="${id}">${esc(f.value ?? '')}</textarea></div>`;
@@ -2245,8 +2272,18 @@ function openGeneric(spec) {
       </div>`;
     }
     return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
-      <input id="${id}" type="${f.type}" value="${esc(f.value ?? '')}"></div>`;
+      <input id="${id}" type="${f.type}" value="${esc(f.value ?? '')}">
+      ${f.hint ? `<div class="fhint">${esc(f.hint)}</div>` : ''}</div>`;
   }).join('');
+
+  $$('#genBody [data-auto-on]').forEach((r) => r.addEventListener('change', () => {
+    const input = $(`#gen_${r.dataset.autoOn}`);
+    input.disabled = false;
+    input.focus();
+  }));
+  $$('#genBody [data-auto-off]').forEach((r) => r.addEventListener('change', () => {
+    $(`#gen_${r.dataset.autoOff}`).disabled = true;
+  }));
 
   // כפתורים נוספים (למשל "מחק תוכן") נשתלים משמאל לביטול/שמירה
   $('#genExtra').innerHTML = spec.extraActions ?? '';

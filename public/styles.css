@@ -297,6 +297,20 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
   border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px;
 }
 .chanpick i.none { color: var(--st-warn); border-color: var(--st-warn); }
+/* שדה שהמערכת גוזרת בעצמה, עם אפשרות לדרוס. ברירת המחדל היא אוטומטי,
+   ולכן היא מוצגת ראשונה ועם הערך שהמערכת חישבה — לא כתיבה לתוך ריק. */
+.autofield { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.autofield .opt {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0;
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 11px;
+  background: var(--page); font-size: 12.5px; color: var(--ink-1); cursor: pointer;
+}
+.autofield .opt:has(input:checked) { border-color: var(--accent); background: var(--panel-2); }
+.autofield .opt input { width: 15px; height: 15px; accent-color: var(--accent); flex: none; }
+.autofield .opt b { color: var(--accent); font-weight: 600; }
+.autofield > input[type=number] { width: 86px; flex: none; }
+.autofield > input:disabled { opacity: .4; }
+.fhint { font-size: 11.5px; color: var(--muted); line-height: 1.65; margin-top: 6px; }
 .whatif { background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 14px 0; font-size: 12.5px; line-height: 1.8; }
 .whatif b { display: block; margin-bottom: 4px; }
 .whatif .warn2 { color: var(--st-warn); }

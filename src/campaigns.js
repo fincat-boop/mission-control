@@ -87,7 +87,11 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
                         concurrent = []) {
   const needs = channelNeeds(campaign, campaignChannels, concurrent);
   const angles = angleCount(campaign, needs);
-  if (!angles) return { angles: [], needs, total_cells: 0, missing: 0, ready: 0 };
+  // Object ולא Map — כמו במסלול היציאה השני, אחרת הצרכן מקבל טיפוס אחר
+  // תלוי אם יצא תוכן או לא
+  if (!angles) {
+    return { angles: [], needs: Object.fromEntries(needs), total_cells: 0, missing: 0, ready: 0 };
+  }
 
   const byOrder = new Map(content.map((c) => [c.sort_order, c]));
   let missing = 0;
@@ -182,9 +186,18 @@ export async function campaignsWithHealth() {
       (p) => p.status === 'scheduled' || p.status === 'pending_approval').length;
     const published = myPosts.filter((p) => p.status === 'published').length;
 
+    // מה שהמערכת גוזרת בעצמה. נשלח תמיד — גם כשיש ערך ידני — כדי
+    // שהממשק יוכל להראות "אוטומטי = כך וכך" ולא לבקש מספר בלי הקשר.
+    const autoShare = Math.round(
+      effectiveShare({ ...c, share_pct: null }, list) * 100);
+    const autoAngles = angleCount({ ...c, target_posts: null },
+      channelNeeds(c, myChannels, list));
+
     return {
       ...c,
       channels: myChannels,
+      share_auto: autoShare,
+      angles_auto: autoAngles,
       angles_required: grid.angles.length,
       angles_written: mine.length,
       required: grid.total_cells,      // סך הפוסטים שהקמפיין צריך על כל המדיות
