@@ -303,9 +303,14 @@ async function renderBoard() {
   }).join('');
 
   const s = b.summary;
+  // min_value_per_promo=0 פירושו שהמשתמש כיבה את הדרישה במפורש — לא
+  // משווים כלפיה בכלל, כדי שלא יופיע ⚠ על יחס שהוא בחר לא לאכוף
   const ratio = s.value_per_promo === null
     ? 'אין עדיין פוסטים מכירתיים השבוע'
-    : `על כל מכירתי יש <b>${s.value_per_promo} פוסטי ערך</b> ${s.value_per_promo >= 3 ? '✓' : '⚠'}`;
+    : s.min_value_per_promo > 0
+      ? `על כל מכירתי יש <b>${s.value_per_promo} פוסטי ערך</b> ${
+          s.value_per_promo >= s.min_value_per_promo ? '✓' : '⚠'}`
+      : `על כל מכירתי יש <b>${s.value_per_promo} פוסטי ערך</b>`;
 
   $('#board').innerHTML = `
     <div class="oxy"><span class="t">מי מקבל במה:</span>${oxy || '<span class="d">אין נקודות קצה פעילות</span>'}</div>

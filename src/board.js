@@ -171,6 +171,8 @@ export async function buildBoard(anchorDate) {
       value,
       hybrid,
       value_per_promo: promoWeight > 0 ? Number((valueWeight / promoWeight).toFixed(1)) : null,
+      // הלקוח משווה מול הערך הזה במקום מול מספר קבוע — 0 אומר "בלי דרישה"
+      min_value_per_promo: Number(settings?.min_value_per_promo ?? 3),
     },
   };
 }
