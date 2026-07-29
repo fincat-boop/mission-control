@@ -12,6 +12,8 @@ import { planWeek } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
 import { buildStats, readActivity } from '../stats.js';
+import { gapWarning } from '../gap.js';
+import { analyzeImport, runImport } from '../import.js';
 
 const r = Router();
 
@@ -73,6 +75,14 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
   }
+  // שיבוץ צמוד מדי לפוסט קיים של אותה נקודה — מזהיר, לא חוסם
+  const gap = await gapWarning({
+    endpointId: b.endpoint_id, channelId: b.channel_id, when: b.scheduled_at,
+  });
+  if (gap && !b.confirm_gap) {
+    return res.status(409).json({ error: gap.message, warning: gap, needs_confirm: true });
+  }
+
   const post = await one(
     `insert into posts (channel_id, endpoint_id, content_id, title, kind,
                         scheduled_at, status, assignee_id, urgent, note)
@@ -130,6 +140,13 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
         const ch = await one('select name from channels where id = $1', [b.channel_id]);
         return bad(res, `אין לתוכן הזה גרסה ל${ch?.name ?? 'מדיה הזו'} — כותבים אותה קודם בתוכן`);
       }
+    }
+
+    const gap = await gapWarning({
+      endpointId: endpoint, channelId: channel, when, excludePostId: current.id,
+    });
+    if (gap && !b.confirm_gap) {
+      return res.status(409).json({ error: gap.message, warning: gap, needs_confirm: true });
     }
   }
 
@@ -737,6 +754,26 @@ r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
       overflow: created.filter((c) => required !== null && c.slot > required).length,
     });
   }));
+
+/**
+ * ייבוא תוכן מטבלה. שני שלבים בכוונה: תצוגה מקדימה שלא כותבת כלום,
+ * ואז ביצוע — כדי שאף אחד לא יטעין 200 שורות בלי לראות מה ייווצר.
+ */
+r.post('/campaigns/:id/import/preview', requirePerm('content'), wrap(async (req, res) => {
+  try {
+    res.json(await analyzeImport(req.params.id, req.body?.text));
+  } catch (e) {
+    return bad(res, e.message);
+  }
+}));
+
+r.post('/campaigns/:id/import', requirePerm('content'), wrap(async (req, res) => {
+  try {
+    res.status(201).json(await runImport(req.params.id, req.body?.text));
+  } catch (e) {
+    return bad(res, e.message);
+  }
+}));
 
 /** מקבל מערך, מחרוזת JSON או רשימה מופרדת בפסיקים */
 function parseIdList(v) {

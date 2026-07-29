@@ -315,6 +315,33 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .whatif b { display: block; margin-bottom: 4px; }
 .whatif .warn2 { color: var(--st-warn); }
 .dactions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+/* ייבוא מטבלה */
+#importDlg { width: min(700px, 95vw); }
+#importDlg textarea { min-height: 140px; font-family: ui-monospace, monospace; font-size: 12px; }
+.imphelp {
+  background: var(--page); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 14px; font-size: 12px; color: var(--ink-2); line-height: 1.7;
+}
+.imphelp b { display: block; color: var(--ink-1); margin-bottom: 5px; font-size: 12.5px; }
+.imphelp span { display: block; margin-top: 8px; }
+.imptable { border-collapse: collapse; margin: 8px 0; font-size: 11.5px; width: 100%; }
+.imptable th, .imptable td {
+  border: 1px solid var(--border); padding: 5px 9px; text-align: start; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
+}
+.imptable th { color: var(--ink-1); background: var(--panel-2); }
+.impbox {
+  border: 1px solid var(--border); border-radius: 9px; padding: 10px 13px;
+  margin-top: 10px; font-size: 12px; line-height: 1.75; color: var(--ink-2);
+}
+.impbox b { display: block; color: var(--ink-1); margin-bottom: 3px; }
+.impbox.ok  { border-color: var(--st-good); }
+.impbox.ok b { color: var(--st-good); }
+.impbox.bad { border-color: var(--st-crit); }
+.impbox.bad b { color: var(--st-crit); }
+.impbox.warn { border-color: var(--st-warn); }
+.impbox.warn b { color: var(--st-warn); }
+
 /* העוזר — ווידג'ט צ'אט מעוגן לפינת המסך.
    מתחת ל-toast ול-tooltip, ומעל התוכן. דיאלוגים מודאליים יושבים ב-top layer
    ולכן ממילא מכסים אותו כשהם פתוחים. */

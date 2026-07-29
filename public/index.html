@@ -106,6 +106,28 @@
   <button id="aiFab" title="העוזר" aria-label="פתח את העוזר">✨</button>
 </div>
 
+<!-- ייבוא תוכן מטבלה -->
+<dialog id="importDlg">
+  <h3>ייבוא תוכן מטבלה <small id="impCampaign"></small></h3>
+  <div class="imphelp" id="impHelp"></div>
+  <div class="frow">
+    <label for="impText">הדביקו כאן את הטבלה מ־Excel, או בחרו קובץ CSV</label>
+    <textarea id="impText" placeholder="בוחרים באקסל את התאים כולל שורת הכותרות, Ctrl+C, ומדביקים כאן."></textarea>
+  </div>
+  <div class="dactions" style="justify-content:space-between">
+    <span>
+      <button class="btn" id="impPick">בחר קובץ CSV</button>
+      <input type="file" id="impFile" accept=".csv,.tsv,.txt" hidden>
+    </span>
+    <span style="display:flex;gap:10px">
+      <button class="btn" id="impCancel">ביטול</button>
+      <button class="btn" id="impCheck">בדוק</button>
+      <button class="btn primary" id="impRun" disabled>ייבא</button>
+    </span>
+  </div>
+  <div id="impResult"></div>
+</dialog>
+
 <!-- דיאלוג כללי (הוספת ערוץ / נקודה / קמפיין / תוכן / משתמש) -->
 <dialog id="genDlg">
   <h3 id="genTitle"></h3>

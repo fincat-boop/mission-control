@@ -22,6 +22,7 @@ import { buildBoard, ymd } from './board.js';
 import { planWeek } from './engine.js';
 import { VIA_HEADER } from './audit.js';
 import { buildStats, readActivity } from './stats.js';
+import { gapWarning } from './gap.js';
 
 const MODEL = 'claude-opus-5';
 // דולר למיליון טוקן, לפי המחירון של claude-opus-5
@@ -762,6 +763,12 @@ async function checkMove({ post_id, scheduled_at, channel_id }) {
 
   const warnings = [];
   if (when_ < new Date()) warnings.push('התאריך החדש כבר עבר');
+
+  // מרווח צמוד מדי הוא אזהרה למשתמש, לא סיבה לפסול את ההצעה
+  const gap = await gapWarning({
+    endpointId: p.endpoint_id, channelId: target, when, excludePostId: p.id,
+  });
+  if (gap) warnings.push(gap.message);
   return { warnings };
 }
 

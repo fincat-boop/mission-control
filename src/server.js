@@ -14,7 +14,8 @@ const publicDir = join(here, '..', 'public');
 const app = express();
 app.set('trust proxy', 1); // Railway מגיש דרך פרוקסי — נחוץ ל-secure cookies
 
-app.use(express.json({ limit: '256kb' }));
+// טבלת תוכן לשנה שלמה, מודבקת מ-Excel, עוברת בקלות את 256kb
+app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));

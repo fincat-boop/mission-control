@@ -20,7 +20,13 @@ async function api(path, options = {}) {
     throw new Error('נדרשת התחברות');
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה');
+  if (!res.ok) {
+    // גוף התשובה נשמר על השגיאה: יש נתיבים שמחזירים אזהרה שאפשר לאשר
+    const err = new Error(data.error || 'הפעולה נכשלה');
+    err.status = res.status;
+    err.payload = data;
+    throw err;
+  }
   return data;
 }
 
@@ -41,6 +47,21 @@ const run = (fn) => async (...args) => {
 };
 
 const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
+
+/**
+ * שיבוץ שהשרת מזהיר עליו כצמוד מדי. האזהרה אינה חסימה: מציגים מה
+ * שהשרת יודע ושואלים, ומי שמאשר שולח שוב עם confirm_gap.
+ */
+async function postWithGapCheck(path, body, method = 'PATCH') {
+  try {
+    return await api(path, { method, body });
+  } catch (e) {
+    if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
+    const w = e.payload.warning;
+    if (!confirm(`${w.message}\n\nלשבץ בכל זאת?`)) return null;
+    return api(path, { method, body: { ...body, confirm_gap: true } });
+  }
+}
 
 function fillSelect(sel, items, labelKey, emptyLabel) {
   sel.innerHTML =
@@ -225,6 +246,7 @@ function wireChrome() {
   wireEngineDialog();
   wireGenericDialog();
   wireAIWidget();
+  wireImportDialog();
 }
 
 async function refreshTaskBadge() {
@@ -377,10 +399,9 @@ function wireBoardDrag() {
       const [y, m, d] = date.split('-').map(Number);
       at.setFullYear(y, m - 1, d);
 
-      await api(`/posts/${dragged.id}`, {
-        method: 'PATCH',
-        body: { scheduled_at: at.toISOString(), channel_id: channelId },
-      });
+      const moved = await postWithGapCheck(`/posts/${dragged.id}`,
+        { scheduled_at: at.toISOString(), channel_id: channelId });
+      if (!moved) return;   // המשתמש ביטל אחרי האזהרה
       toast('השיבוץ הוזז.');
       await Promise.all([renderBoard(), refreshAlerts()]);
     }));
@@ -1283,6 +1304,7 @@ function campaignGrid(c) {
       </select>
       <button class="btn primary" id="bulkPick">בחר קבצים</button>
       <input type="file" id="bulkInput" multiple hidden>
+      <button class="btn" id="importSheet">ייבוא מטבלה</button>
     </div>` : ''}
 
     <div class="board panel">
@@ -1319,6 +1341,8 @@ function wireCampaignGrid(selected, reload) {
       }
       openVariantForm({ item, channelId, campaign: selected }, reload);
     }));
+
+  $('#importSheet')?.addEventListener('click', () => openImport(selected, reload));
 
   const input = $('#bulkInput');
   $('#bulkPick')?.addEventListener('click', () => input.click());
@@ -1956,6 +1980,109 @@ function wireData() {
       await renderData();
     }));
   }
+}
+
+/* ========================= ייבוא תוכן מטבלה ========================= */
+
+let impCampaign = null;
+
+function wireImportDialog() {
+  $('#impCancel').addEventListener('click', () => $('#importDlg').close());
+  $('#impPick').addEventListener('click', () => $('#impFile').click());
+
+  $('#impFile').addEventListener('change', run(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    $('#impText').value = await file.text();
+    e.target.value = '';
+    await checkImport();
+  }));
+
+  $('#impCheck').addEventListener('click', run(checkImport));
+  // הדבקה היא הדרך הצפויה להגיע לכאן, ולכן היא בודקת מיד
+  $('#impText').addEventListener('paste', () => setTimeout(run(checkImport), 60));
+}
+
+/**
+ * @param {object} campaign
+ * @param {Function} reload
+ */
+function openImport(campaign, reload) {
+  impCampaign = { campaign, reload };
+  $('#impCampaign').textContent = `— ${campaign.name}`;
+  $('#impText').value = '';
+  $('#impResult').innerHTML = '';
+  $('#impRun').disabled = true;
+
+  const names = (campaign.channels ?? []).map((c) => c.name);
+  $('#impHelp').innerHTML = `
+    <b>המבנה שהמערכת מצפה לו</b>
+    שורה לכל זווית, עמודה לכל מדיה. התא הוא הניסוח של אותה זווית באותה מדיה.
+    <table class="imptable">
+      <tr><th>כותרת</th><th>סוג</th>${names.map((n) => `<th>${esc(n)}</th>`).join('')}</tr>
+      <tr><td>המסר הראשון</td><td>ערך</td>${names.map(() => '<td>הניסוח למדיה הזו…</td>').join('')}</tr>
+    </table>
+    <span>עמודת "סוג" מקבלת ערך / מכירתי / משולב, ואם היא חסרה הכול נחשב ערך.
+    תא ריק פירושו שאין גרסה למדיה הזו. שורה שהכותרת שלה כבר קיימת בקמפיין מדולגת,
+    כך שאפשר לייבא שוב אחרי תיקון בלי ליצור כפילויות.</span>`;
+
+  $('#impRun').onclick = run(async () => {
+    const btn = $('#impRun');
+    btn.disabled = true;
+    try {
+      const res = await api(`/campaigns/${campaign.id}/import`, {
+        method: 'POST', body: { text: $('#impText').value },
+      });
+      $('#importDlg').close();
+      toast(`יובאו ${res.created} זוויות · ${res.variants} ניסוחים.`);
+      await reload();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#importDlg').showModal();
+  $('#impText').focus();
+}
+
+async function checkImport() {
+  const text = $('#impText').value.trim();
+  const out = $('#impResult');
+  $('#impRun').disabled = true;
+  if (!text) { out.innerHTML = ''; return; }
+
+  let plan;
+  try {
+    plan = await api(`/campaigns/${impCampaign.campaign.id}/import/preview`,
+      { method: 'POST', body: { text } });
+  } catch (e) {
+    out.innerHTML = `<div class="impbox bad">${esc(e.message)}</div>`;
+    return;
+  }
+
+  const t = plan.totals;
+  const list = (title, items, cls) => items.length
+    ? `<div class="impbox ${cls}"><b>${esc(title)}</b>${
+        items.slice(0, 6).map((x) => `<div>${esc(x)}</div>`).join('')}${
+        items.length > 6 ? `<div>ועוד ${items.length - 6}…</div>` : ''}</div>`
+    : '';
+
+  const sample = plan.items.slice(0, 3).map((i) =>
+    `<tr><td>${esc(i.title)}</td><td>${esc(KIND_HE[i.kind])}</td>
+         <td>${i.variants.length ? esc(i.variants.map((v) => v.channel_name).join(', ')) : '—'}</td></tr>`
+  ).join('');
+
+  out.innerHTML = `
+    <div class="impbox ${t.errors ? 'bad' : 'ok'}">
+      <b>${t.errors ? 'יש שגיאות — שום דבר לא ייובא' : `ייווצרו ${t.to_create} זוויות ו-${t.variants} ניסוחים`}</b>
+      זוהו ${t.rows} שורות · מדיות שזוהו: ${plan.columns.channels.join(', ') || 'אין'}
+    </div>
+    ${list('שגיאות', plan.errors, 'bad')}
+    ${list('שורות שידולגו', plan.skipped, '')}
+    ${list('שים לב', plan.warnings, 'warn')}
+    ${sample ? `<table class="imptable"><tr><th>כותרת</th><th>סוג</th><th>ניסוחים</th></tr>${sample}</table>` : ''}`;
+
+  $('#impRun').disabled = t.errors > 0 || t.to_create === 0;
 }
 
 /* ========================= העוזר ========================= */

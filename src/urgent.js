@@ -1,5 +1,6 @@
 import { one, rows } from './db.js';
 import { weekStart, ymd } from './board.js';
+import { gapWarning } from './gap.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const DEFAULT_HOUR = 10;
@@ -129,6 +130,12 @@ export async function planUrgent(input) {
     if (!placed) {
       warnings.push(`אין שטח פנוי ב${ch.name} עד ${ymd(lastDay)} — הערוץ מלא`);
     } else {
+      // המבצע נכנס לשטח פנוי, אבל הוא עדיין יכול לנחות צמוד לפוסט קיים
+      // של אותה נקודה. זו לא סיבה לעצור מבצע דחוף — רק לומר את זה.
+      const gap = await gapWarning({
+        endpointId, channelId: ch.id, when: placed.scheduled_at,
+      });
+      if (gap) warnings.push(`${ch.name}: ${gap.message}`);
       placements.push(placed);
     }
   }
