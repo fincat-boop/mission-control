@@ -262,9 +262,12 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
       (!c.starts_on || c.starts_on <= to) && (!c.ends_on || c.ends_on >= from));
 
     const weights = new Map();
+    const drivers = new Map(); // אילו קמפיינים מזינים כל נקודה בחודש הזה
     for (const c of live) {
       const w = c.share_pct != null ? c.share_pct : (c.importance ?? 5) * 5;
       weights.set(c.endpoint_id, (weights.get(c.endpoint_id) ?? 0) + w);
+      if (!drivers.has(c.endpoint_id)) drivers.set(c.endpoint_id, []);
+      drivers.get(c.endpoint_id).push(c.name);
     }
     const total = [...weights.values()].reduce((s, v) => s + v, 0);
 
@@ -278,6 +281,7 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
           endpoint_id: e.id,
           name: e.name,
           pct: total ? Math.round(((weights.get(e.id) ?? 0) / total) * 100) : 0,
+          campaigns: drivers.get(e.id) ?? [],
         }))
         .filter((s) => s.pct > 0),
       campaign_count: live.length,

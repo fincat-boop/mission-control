@@ -487,12 +487,10 @@ async function openEngine() {
 // מיפוי מצב הקמפיין לצבע השבב
 const TONE_CLASS = { good: 'on', warn: '', bad: 'bad', muted: '' };
 
-// צבע יציב לכל נקודת קצה, לפי המיקום שלה ברשימה
+// הצבע נגזר מהמזהה ולא מהמיקום ברשימה. הרשימה ממוינת לפי משקל, ולכן
+// גזירה לפי מיקום הייתה מערבבת את כל הצבעים בכל שינוי משקל.
 const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429', '#2ec5c0'];
-const epColor = (id) => {
-  const i = state.endpoints.findIndex((e) => e.id === id);
-  return EP_COLORS[(i < 0 ? 0 : i) % EP_COLORS.length];
-};
+const epColor = (id) => EP_COLORS[Number(id) % EP_COLORS.length];
 
 async function renderStrategy() {
   const data = await api('/strategy');
@@ -521,35 +519,54 @@ async function renderStrategy() {
   wireStrategy();
 }
 
-/** פס מצטבר: לכל חודש, איך 100% מהשטח מתחלקים בין נקודות הקצה */
+/**
+ * שורה לכל נקודת קצה על ציר זמן משותף.
+ * גובה העמודה בכל חודש הוא הנתח של הנקודה באותו חודש, כך שרואים גם את
+ * הרצף של כל נקודה לאורך הזמן וגם את החפיפות ביניהן באותו חודש.
+ */
 function shareBand(timeline, milestones) {
-  if (!timeline.months.some((m) => m.segments.length)) {
+  const months = timeline.months;
+  if (!months.some((m) => m.segments.length)) {
     return '<div class="empty">אין קמפיינים פעילים, ולכן אין שטח לחלק.</div>';
   }
 
-  const cols = timeline.months.map((m) => {
-    const stack = m.segments.map((s) =>
-      `<div class="seg" style="height:${s.pct}%;background:${epColor(s.endpoint_id)}"
-            data-tt="${esc(s.name)} · ${s.pct}% ב${esc(m.label)}">
-         ${s.pct >= 12 ? `<span>${s.pct}%</span>` : ''}
-       </div>`).join('') || '<div class="seg none" data-tt="אין קמפיין פעיל בחודש הזה"></div>';
+  // רק נקודות שיש להן שטח כלשהו בחלון הזמן המוצג
+  const active = state.endpoints.filter((e) =>
+    months.some((m) => m.segments.some((s) => s.endpoint_id === e.id)));
 
-    const marks = milestones.filter((x) => x.on_date.slice(0, 7) === m.key);
+  const cols = `170px repeat(${months.length}, 1fr)`;
 
-    return `<div class="mcol${m.is_now ? ' now' : ''}">
-      <div class="stack">${stack}</div>
-      <div class="mlabel">${esc(m.label)}${m.is_now ? ' •' : ''}</div>
-      ${marks.map((x) => `<div class="mmark" data-tt="אבן דרך: ${esc(x.label)}">◆</div>`).join('')}
+  const header = `<div class="trow head" style="grid-template-columns:${cols}">
+    <span></span>
+    ${months.map((m) => {
+      const marks = milestones.filter((x) => x.on_date.slice(0, 7) === m.key);
+      return `<span class="${m.is_now ? 'now' : ''}">${esc(m.label)}
+        ${marks.map((x) => `<i class="mmark" data-tt="אבן דרך: ${esc(x.label)}">◆</i>`).join('')}
+      </span>`;
+    }).join('')}
+  </div>`;
+
+  const rows = active.map((e) => {
+    const cells = months.map((m) => {
+      const seg = m.segments.find((s) => s.endpoint_id === e.id);
+      if (!seg) return `<span class="cellbar${m.is_now ? ' now' : ''}"></span>`;
+      const tip = `${e.name} · ${esc(m.label)} · ${seg.pct}%` +
+                  (seg.campaigns.length ? ` · ${seg.campaigns.join(', ')}` : '');
+      return `<span class="cellbar${m.is_now ? ' now' : ''}" data-tt="${esc(tip)}">
+        <i style="height:${Math.max(8, seg.pct)}%;background:${epColor(e.id)}"></i>
+        ${seg.pct >= 20 ? `<b>${seg.pct}%</b>` : ''}
+      </span>`;
+    }).join('');
+
+    return `<div class="trow" style="grid-template-columns:${cols}">
+      <span class="tname">
+        <i class="dot" style="background:${epColor(e.id)}"></i>
+        <span>${esc(e.name)}<em>משקל ${e.importance}</em></span>
+      </span>${cells}
     </div>`;
   }).join('');
 
-  const legend = state.endpoints.map((e) =>
-    `<span><i class="sw" style="background:${epColor(e.id)}"></i>${esc(e.name)}</span>`).join('');
-
-  return `<div class="band">
-    <div class="bandcols">${cols}</div>
-    <div class="legend" style="padding:10px 16px 14px">${legend}</div>
-  </div>`;
+  return `<div class="tband">${header}${rows}</div>`;
 }
 
 function endpointCard(e, allocation) {
