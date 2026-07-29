@@ -117,6 +117,7 @@ r.post('/urgent/preview', requirePerm('content'), wrap(async (req, res) => {
 r.post('/urgent/commit', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
   const plan = await planUrgent(b);
+  if (plan.errors?.length) return bad(res, plan.errors.join(' · '));
   if (plan.placements.length === 0) return bad(res, 'לא נמצא שטח פנוי לשיבוץ הדחוף');
 
   const needsApproval = !(req.user.is_owner || req.user.perm_approve);

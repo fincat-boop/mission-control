@@ -20,6 +20,9 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
 app.use('/api', loadUser, api);
 
+// נתיב /api שלא נתפס הוא שגיאה, לא בקשה לדף
+app.use('/api', (_req, res) => res.status(404).json({ error: 'לא נמצא' }));
+
 app.use(express.static(publicDir, { extensions: ['html'] }));
 app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 
