@@ -110,8 +110,9 @@ export async function buildBoard(anchorDate) {
 
   const oxygen = endpoints.map((e) => {
     const lastAt = lastMap.get(e.id) ?? null;
+    // תאריך פרסום עתידי לא אמור לקרות, אבל אם קרה — 0 ולא מספר שלילי
     const daysSince = lastAt
-      ? Math.floor((now - new Date(lastAt)) / 86400000)
+      ? Math.max(0, Math.floor((now - new Date(lastAt)) / 86400000))
       : null;
     const scheduledThisWeek = posts.filter(
       (p) => p.endpoint_id === e.id && p.status !== 'hole'

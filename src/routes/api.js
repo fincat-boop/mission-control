@@ -354,20 +354,31 @@ r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
 /* ========================= תוכן ========================= */
 
-/** ספריית התוכן, כולל לאן כל פריט כבר שובץ */
+/** ספריית התוכן, עם הגרסאות לכל מדיה ולאן כל פריט כבר שובץ */
 r.get('/content', wrap(async (_req, res) => {
-  const items = await rows(
-    `select ci.*, e.name as endpoint_name, c.name as campaign_name,
-            coalesce(p.placements, 0) as placements
-       from content_items ci
-       join endpoints e on e.id = ci.endpoint_id
-       left join campaigns c on c.id = ci.campaign_id
-       left join (select content_id, count(*)::int as placements
-                    from posts where content_id is not null group by content_id) p
-              on p.content_id = ci.id
-      order by ci.campaign_id nulls last, ci.sort_order, ci.id`
-  );
-  res.json({ content: items });
+  const [items, variants, assets] = await Promise.all([
+    rows(
+      `select ci.*, e.name as endpoint_name, c.name as campaign_name,
+              coalesce(p.placements, 0) as placements
+         from content_items ci
+         join endpoints e on e.id = ci.endpoint_id
+         left join campaigns c on c.id = ci.campaign_id
+         left join (select content_id, count(*)::int as placements
+                      from posts where content_id is not null group by content_id) p
+                on p.content_id = ci.id
+        order by ci.campaign_id nulls last, ci.sort_order, ci.id`
+    ),
+    rows('select * from content_variants order by content_id, channel_id'),
+    rows('select id, content_id, filename, mime, size_bytes from content_assets order by id'),
+  ]);
+
+  res.json({
+    content: items.map((x) => ({
+      ...x,
+      variants: variants.filter((v) => v.content_id === x.id),
+      assets: assets.filter((a) => a.content_id === x.id),
+    })),
+  });
 }));
 
 const CONTENT_FIELDS = ['endpoint_id', 'campaign_id', 'kind', 'title', 'body',
@@ -627,14 +638,25 @@ r.get('/strategy', wrap(async (_req, res) => {
            group by c.id order by c.starts_on nulls last, c.id`),
   ]);
 
-  // פירוק לכל נקודת קצה: קמפיינים, תמהיל סוגים, כמה מהתוכן חוזר
+  // הספירה היא ישירות מול נקודת הקצה ולא דרך הקמפיינים,
+  // אחרת התוכן השוטף — שאין לו קמפיין — נופל מהספירה
+  const contentStats = await rows(
+    `select endpoint_id,
+            count(*)::int as content_count,
+            count(*) filter (where evergreen)::int as evergreen_count,
+            count(*) filter (where campaign_id is null)::int as background_count
+       from content_items group by endpoint_id`
+  );
+  const statsBy = new Map(contentStats.map((s) => [s.endpoint_id, s]));
+
   const byEndpoint = endpoints.map((e) => {
-    const mine = campaigns.filter((c) => c.endpoint_id === e.id);
+    const s = statsBy.get(e.id);
     return {
       ...e,
-      campaigns: mine,
-      content_count: mine.reduce((s, c) => s + c.content_count, 0),
-      evergreen_count: mine.reduce((s, c) => s + c.evergreen_count, 0),
+      campaigns: campaigns.filter((c) => c.endpoint_id === e.id),
+      content_count: s?.content_count ?? 0,
+      evergreen_count: s?.evergreen_count ?? 0,
+      background_count: s?.background_count ?? 0,
     };
   });
 

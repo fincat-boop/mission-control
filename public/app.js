@@ -62,6 +62,7 @@ const state = {
   campaigns: [],
   planEndpoint: null,      // נקודת הקצה שנבחרה בדרילדאון
   planCampaign: null,      // הקמפיין שנבחר בתוכה
+  planBackground: false,   // האם מציגים את התוכן השוטף של הנקודה
   tab: 'board',
 };
 
@@ -577,7 +578,7 @@ function endpointCard(e, allocation) {
     <div class="epstats">
       <span><b>${running}</b> קמפיינים</span>
       <span><b>${e.content_count}</b> תכנים</span>
-      <span><b>${e.evergreen_count}</b> חוזרים ♻</span>
+      <span><b>${e.background_count ?? 0}</b> שוטפים ♻</span>
     </div>
 
     ${alloc ? `<div class="sumline" style="margin:8px 0 0">
@@ -647,18 +648,76 @@ async function renderPlan() {
     <div class="crumbs">
       <button data-crumb="root" class="${!endpointId ? 'on' : ''}">כל נקודות הקצה</button>
       ${endpoint ? `<span>›</span>
-        <button data-crumb="endpoint" class="${!campaign ? 'on' : ''}">${esc(endpoint.name)}</button>` : ''}
+        <button data-crumb="endpoint" class="${!campaign && !state.planBackground ? 'on' : ''}">${esc(endpoint.name)}</button>` : ''}
       ${campaign ? `<span>›</span>
         <button data-crumb="campaign" class="on">${esc(campaign.name)}</button>` : ''}
+      ${state.planBackground && !campaign ? '<span>›</span><button class="on">תוכן שוטף</button>' : ''}
     </div>`;
 
   let body;
   if (campaign) body = campaignGrid(campaign);
-  else if (endpoint) body = campaignList(endpoint, campaigns);
-  else body = endpointList(campaigns);
+  else if (endpoint && state.planBackground) body = backgroundGrid(endpoint, content);
+  else if (endpoint) body = campaignList(endpoint, campaigns, content);
+  else body = endpointList(campaigns, content);
 
   $('#plan').innerHTML = crumbs + body;
   wirePlan(campaign, endpointId, content);
+}
+
+/** התוכן השוטף של נקודת קצה: לא שייך לקמפיין, רץ ברקע לאורך זמן */
+const backgroundOf = (content, endpointId) =>
+  content.filter((c) => !c.campaign_id && c.endpoint_id === endpointId);
+
+/**
+ * רשת התוכן השוטף. אין כאן תאריכים ואין מספר נדרש — זו ספרייה שהמנוע
+ * שולף ממנה כשנשאר שטח, ולא תוכנית עם לוח זמנים.
+ */
+function backgroundGrid(endpoint, content) {
+  const mine = backgroundOf(content, endpoint.id);
+  const channels = state.channels.filter((c) => c.active);
+
+  const head = channels.map((ch) => `<th>${esc(ch.name)}</th>`).join('');
+
+  const rows = mine.map((item) => {
+    const cells = channels.map((ch) => {
+      const v = item.variants.find((x) => x.channel_id === ch.id) ?? null;
+      const state_ = v ? v.status : 'empty';
+      const st = CELL[state_];
+      return `<td class="cell ${st.cls}" ${can('content')
+        ? `data-bg-cell="${item.id}" data-ch="${ch.id}"` : ''}
+        data-tt="${esc(ch.name)} · ${esc(st.label)}"><span>${st.label || '—'}</span></td>`;
+    }).join('');
+
+    const ready = item.variants.filter((v) => v.status === 'ready').length;
+    return `<tr>
+      <td class="angle" ${can('content') ? `data-bg-angle="${item.id}"` : ''}>
+        <div class="aname">${esc(item.title)}</div>
+        <div class="ameta">${esc(KIND_HE[item.kind])}
+          ${item.evergreen ? `· ♻ כל ${item.reuse_after_days ?? '—'} ימים` : '· חד-פעמי'}
+          ${item.placements ? `· שובץ ${item.placements}×` : ''}
+          · מוכן ב-${ready} מדיות</div>
+      </td>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div class="cbhead">
+      <div>
+        <h2>תוכן ערך שוטף — ${esc(endpoint.name)}</h2>
+        <p class="sub">רץ ברקע לאורך זמן, בלי קמפיין ובלי תאריכים.
+          המנוע שולף ממנו כשנשאר שטח פנוי, ומכבד את המרווח בין חזרות.</p>
+      </div>
+      <div class="spacer"></div>
+      ${can('content') ? '<button class="btn primary" id="addBackground">＋ זווית שוטפת</button>' : ''}
+    </div>
+
+    ${mine.length ? `<div class="board panel">
+      <table class="grid cgrid">
+        <thead><tr><th class="angle">זווית</th>${head}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="sumline">כל שורה היא מסר קבוע, וכל עמודה הניסוח שלו למדיה.</div>`
+    : '<div class="empty">אין עדיין תוכן שוטף לנקודה הזו.</div>'}`;
 }
 
 /** רמה 1: נקודות הקצה, עם סיכום הקמפיינים של כל אחת */
@@ -679,8 +738,10 @@ function endpointList(campaigns) {
 }
 
 /** רמה 2: הקמפיינים של נקודת הקצה */
-function campaignList(endpoint, campaigns) {
+function campaignList(endpoint, campaigns, content) {
   const mine = campaigns.filter((c) => c.endpoint_id === endpoint.id);
+  const bg = backgroundOf(content, endpoint.id);
+  const bgReady = bg.filter((c) => c.variants.some((v) => v.status === 'ready')).length;
   const group = (title, list) => list.length ? `
     <div class="setgroup" style="max-width:none">
       <h2>${esc(title)}</h2>
@@ -697,6 +758,21 @@ function campaignList(endpoint, campaigns) {
       <div class="spacer"></div>
       ${can('settings') ? '<button class="btn primary" id="addCampaign">＋ קמפיין חדש</button>' : ''}
     </div>
+    <div class="setgroup" style="max-width:none">
+      <h2>תוכן שוטף</h2>
+      <p class="sub">רץ ברקע כל הזמן, בלי תאריכים. המנוע שולף ממנו כשנשאר שטח.</p>
+      <div class="panel">
+        <div class="crow2" data-open-background>
+          <div class="cinfo">
+            <b>תוכן ערך שוטף</b>
+            <span class="d">${bg.length} זוויות · ${bgReady} מהן מוכנות לפחות במדיה אחת</span>
+          </div>
+          <span class="chip ${bg.length ? 'on' : 'bad'}">${
+            bg.length ? 'פעיל' : 'ריק'}</span>
+        </div>
+      </div>
+    </div>
+
     ${mine.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}
     ${group('רצים עכשיו', mine.filter((c) => c.phase === 'running'))}
     ${group('מתוכננים', mine.filter((c) => c.phase === 'upcoming'))}
@@ -728,9 +804,32 @@ function wirePlan(campaign, endpointId, content) {
   $$('#plan [data-crumb]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       if (b.dataset.crumb === 'root') { state.planEndpoint = null; state.planCampaign = null; }
-      if (b.dataset.crumb === 'endpoint') state.planCampaign = null;
+      state.planCampaign = b.dataset.crumb === 'campaign' ? state.planCampaign : null;
+      state.planBackground = false;
       await renderPlan();
     })));
+
+  $('#plan [data-open-background]')?.addEventListener('click', run(async () => {
+    state.planBackground = true;
+    state.planCampaign = null;
+    await renderPlan();
+  }));
+
+  $('#addBackground')?.addEventListener('click', () =>
+    openAngleForm({ background: { endpoint_id: endpointId } }, reload));
+
+  $$('#plan [data-bg-angle]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const item = content.find((x) => x.id === Number(b.dataset.bgAngle));
+      openAngleForm({ item, background: { endpoint_id: endpointId } }, reload);
+    }));
+
+  $$('#plan [data-bg-cell]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = content.find((x) => x.id === Number(b.dataset.bgCell));
+      openVariantForm({ item, channelId: Number(b.dataset.ch) }, reload);
+    }));
 
   $$('#plan [data-pick-endpoint]').forEach((b) =>
     b.addEventListener('click', run(async () => {
@@ -943,11 +1042,13 @@ function wireCampaignGrid(selected, reload) {
 }
 
 /** הזווית: המסר עצמו, הסוג, הקבצים המשותפים */
-function openAngleForm({ item, campaign, slot }, reload) {
+function openAngleForm({ item, campaign, slot, background }, reload) {
   const campaignOptions = [['', 'ללא קמפיין — תוכן שוטף'],
     ...state.campaigns.map((c) => [c.id, c.name])];
   const inCampaign = !!(campaign?.id ?? item?.campaign_id);
   const owner = state.campaigns.find((c) => c.id === (campaign?.id ?? item?.campaign_id));
+  // תוכן שוטף: אין קמפיין לרשת ממנו נקודת קצה, אז היא נלקחת מההקשר
+  const bgEndpoint = background?.endpoint_id;
 
   const existingFiles = (item?.assets ?? []).map((a) => `
     <div class="fileline">
@@ -969,15 +1070,20 @@ function openAngleForm({ item, campaign, slot }, reload) {
       ...(inCampaign ? [] : [{
         name: 'endpoint_id', label: 'נקודת קצה', type: 'select',
         options: state.endpoints.map((e) => [e.id, e.name]),
-        value: item?.endpoint_id,
+        value: item?.endpoint_id ?? bgEndpoint,
       }]),
+      ...(background && !item ? [{
+        name: 'channel_ids', label: 'לאילו מדיות לפתוח טיוטה', type: 'multicheck',
+        options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
+        value: state.channels.filter((c) => c.active).map((c) => c.id),
+      }] : []),
       { name: 'kind', label: 'סוג', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
         value: item?.kind },
       { name: 'evergreen', label: 'Evergreen — אפשר לפרסם שוב ושוב', type: 'checkbox',
-        value: item?.evergreen },
+        value: item ? item.evergreen : !!background },
       { name: 'reuse_after_days', label: 'מרווח בין חזרות (ימים) — ריק = ברירת המחדל',
-        type: 'number', value: item?.reuse_after_days },
+        type: 'number', value: item ? item.reuse_after_days : (background ? 30 : null) },
       { name: '__files', label: 'תמונות ומסמכים (משותפים לכל המדיות)',
         type: 'files', existing: existingFiles },
     ],
