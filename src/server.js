@@ -29,6 +29,13 @@ app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 // eslint-disable-next-line no-unused-vars -- express מזהה error handler לפי 4 ארגומנטים
 app.use((err, _req, res, _next) => {
   console.error(err);
+  // שגיאות העלאה מ-multer מקבלות הודעה מובנת במקום "משהו נשבר"
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'הקובץ גדול מדי — עד 10MB לקובץ' });
+  }
+  if (err?.code === 'LIMIT_FILE_COUNT') {
+    return res.status(413).json({ error: 'יותר מדי קבצים בבת אחת — עד 20' });
+  }
   res.status(500).json({ error: 'משהו נשבר בשרת' });
 });
 

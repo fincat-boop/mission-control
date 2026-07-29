@@ -9,6 +9,7 @@ export const TABLES = [
   'channels',
   'campaigns',
   'content_items',
+  'content_assets',
   'posts',
   'strategy_milestones',
   'tasks',

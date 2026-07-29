@@ -86,6 +86,20 @@ alter table content_items
 
 create index if not exists content_campaign_idx on content_items (campaign_id, sort_order);
 
+-- קבצים מצורפים לתוכן: תמונה, מסמך, כל דבר.
+-- נשמרים במסד ולא בדיסק, כדי שסקריפט הגיבוי יכסה אותם כמו כל השאר.
+create table if not exists content_assets (
+  id          serial primary key,
+  content_id  int not null references content_items(id) on delete cascade,
+  filename    text not null,
+  mime        text not null,
+  size_bytes  int not null,
+  data        bytea not null,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists content_assets_content_idx on content_assets (content_id);
+
 create table if not exists posts (
   id           serial primary key,
   channel_id   int not null references channels(id) on delete cascade,

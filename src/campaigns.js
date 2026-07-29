@@ -16,6 +16,41 @@ const DAY = 86400000;
 const daysBetween = (a, b) =>
   Math.max(0, Math.round((new Date(b) - new Date(a)) / DAY)) + 1;
 
+/**
+ * המשבצות של קמפיין על ציר הזמן.
+ *
+ * אין טבלת משבצות — הן נגזרות: משבצת i יושבת ב-starts_on + i×cadence_days,
+ * והתוכן שממלא אותה הוא זה ש-sort_order שלו הוא i+1. ככה סידור מחדש של
+ * התוכן הוא בדיוק הזזה שלו על הציר.
+ */
+export function slotsFor(campaign, content, today = ymd(new Date())) {
+  const required = requiredPosts(campaign);
+  if (required === null || !campaign.starts_on) return [];
+
+  const start = new Date(campaign.starts_on + 'T00:00:00');
+  const byOrder = new Map(content.map((c) => [c.sort_order, c]));
+
+  return Array.from({ length: required }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i * campaign.cadence_days);
+    // המשבצת האחרונה לא חורגת מסוף הקמפיין
+    const date = campaign.ends_on && ymd(d) > campaign.ends_on ? campaign.ends_on : ymd(d);
+
+    const item = byOrder.get(i + 1) ?? null;
+    const posts = item?.posts ?? [];
+    return {
+      index: i + 1,
+      date,
+      past: date < today,
+      content: item,
+      state: !item ? 'empty'
+           : posts.some((p) => p.status === 'published') ? 'published'
+           : posts.length ? 'scheduled'
+           : 'ready',
+    };
+  });
+}
+
 export function requiredPosts(campaign) {
   if (campaign.target_posts != null) return campaign.target_posts;
   if (!campaign.starts_on || !campaign.ends_on) return null;
@@ -25,7 +60,7 @@ export function requiredPosts(campaign) {
 
 /** כל הקמפיינים עם מצב מלא. */
 export async function campaignsWithHealth() {
-  const [list, content, posts] = await Promise.all([
+  const [list, content, posts, assets] = await Promise.all([
     rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance
             from campaigns c join endpoints e on e.id = c.endpoint_id
            order by c.active desc, c.starts_on nulls last, c.id`),
@@ -34,6 +69,8 @@ export async function campaignsWithHealth() {
                  p.channel_id, p.title, ch.name as channel_name
             from posts p left join channels ch on ch.id = p.channel_id
            where p.content_id is not null`),
+    // בלי העמודה data — היא כבדה ולא נחוצה לתצוגה
+    rows('select id, content_id, filename, mime, size_bytes from content_assets order by id'),
   ]);
 
   const today = ymd(new Date());
@@ -42,6 +79,16 @@ export async function campaignsWithHealth() {
     const mine = content.filter((x) => x.campaign_id === c.id);
     const ids = new Set(mine.map((x) => x.id));
     const myPosts = posts.filter((p) => ids.has(p.content_id));
+
+    const shaped = mine.map((x) => ({
+      id: x.id, title: x.title, kind: x.kind, sort_order: x.sort_order,
+      body: x.body, ready_channel_ids: x.ready_channel_ids,
+      assets: assets.filter((a) => a.content_id === x.id),
+      posts: myPosts.filter((p) => p.content_id === x.id).map((p) => ({
+        id: p.id, status: p.status, scheduled_at: p.scheduled_at,
+        channel_name: p.channel_name,
+      })),
+    }));
 
     const required = requiredPosts(c);
     const have = mine.length;
@@ -61,14 +108,8 @@ export async function campaignsWithHealth() {
       phase: phaseOf(c, today),
       status: statusOf({ c, today, required, have, placed }),
       pace: paceOf(c, today, published),
-      content: mine.map((x) => ({
-        id: x.id, title: x.title, kind: x.kind, sort_order: x.sort_order,
-        ready_channel_ids: x.ready_channel_ids,
-        posts: myPosts.filter((p) => p.content_id === x.id).map((p) => ({
-          id: p.id, status: p.status, scheduled_at: p.scheduled_at,
-          channel_name: p.channel_name,
-        })),
-      })),
+      content: shaped,
+      slots: slotsFor(c, shaped),
     };
   });
 }

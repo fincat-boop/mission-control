@@ -60,6 +60,7 @@ const state = {
   endpoints: [],
   users: [],
   campaigns: [],
+  selectedCampaign: null,  // הקמפיין שנבחר בעמוד התוכן
   tab: 'board',
 };
 
@@ -753,66 +754,230 @@ function openCampaignForm(campaign, reload) {
 
 /* ========================= תוכן ========================= */
 
+const SLOT_STATE = {
+  empty:     { label: 'ריקה',   tone: 'bad'  },
+  ready:     { label: 'מוכן',   tone: 'warn' },
+  scheduled: { label: 'משובץ',  tone: 'good' },
+  published: { label: 'פורסם',  tone: 'good' },
+};
+
+const isImage = (mime) => typeof mime === 'string' && mime.startsWith('image/');
+const kb = (n) => (n >= 1024 * 1024 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
+
 async function renderContent() {
-  const [{ content }, { campaigns }] = await Promise.all([
-    api('/content'), api('/campaigns'),
+  const [{ campaigns }, { content }] = await Promise.all([
+    api('/campaigns'), api('/content'),
   ]);
   state.campaigns = campaigns;
 
-  const unplaced = content.filter((c) => c.placements === 0);
+  // ברירת מחדל: הקמפיין הרץ שהכי חסר לו תוכן
+  if (!state.selectedCampaign || !campaigns.some((c) => c.id === state.selectedCampaign)) {
+    const running = campaigns.filter((c) => c.phase === 'running');
+    const pick = [...(running.length ? running : campaigns)]
+      .sort((a, b) => b.missing_content - a.missing_content)[0];
+    state.selectedCampaign = pick?.id ?? null;
+  }
 
+  const selected = campaigns.find((c) => c.id === state.selectedCampaign) ?? null;
+  const loose = content.filter((c) => !c.campaign_id);
+
+  $('#content').innerHTML = `
+    ${campaignPicker(campaigns, selected)}
+    ${selected ? campaignBoard(selected) : '<div class="empty">אין קמפיינים. פותחים אחד בטאב "קמפיינים".</div>'}
+    ${looseSection(loose)}`;
+
+  wireContent(selected);
+}
+
+function campaignPicker(campaigns, selected) {
+  if (!campaigns.length) return '';
+  const chip = (c) => {
+    const on = selected && c.id === selected.id;
+    const missing = c.missing_content;
+    return `<button class="cpick${on ? ' on' : ''}" data-pick="${c.id}">
+      <span class="nm">${c.urgent ? '⚡ ' : ''}${esc(c.name)}</span>
+      <span class="sub">${esc(c.endpoint_name)}</span>
+      <span class="chip ${missing ? 'bad' : 'on'}">${
+        missing ? `חסרים ${missing}` : 'מלא'}</span>
+    </button>`;
+  };
+  return `<div class="cpicker">${campaigns.map(chip).join('')}</div>`;
+}
+
+function campaignBoard(c) {
+  const range = c.starts_on && c.ends_on
+    ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
+
+  if (!c.slots.length) {
+    return `<div class="panel"><div class="empty">
+      לקמפיין הזה אין תאריכים, ולכן אין ציר זמן. מוסיפים תאריכים בטאב "קמפיינים".
+    </div></div>`;
+  }
+
+  const filled = c.slots.filter((s) => s.content).length;
+
+  return `
+    <div class="cbhead">
+      <div>
+        <h2>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</h2>
+        <p class="sub">${esc(c.endpoint_name)} · ${esc(range)} · פרסום כל ${c.cadence_days} ימים
+          ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
+      </div>
+      <div class="spacer"></div>
+      <div class="fill">
+        <b>${filled}</b> מתוך <b>${c.slots.length}</b> משבצות מלאות
+        ${c.missing_content ? `<span class="off">— חסרים ${c.missing_content}</span>`
+                            : '<span class="ok">✓</span>'}
+      </div>
+    </div>
+
+    ${can('content') ? `<div class="bulk" id="bulkZone">
+      <div>
+        <b>העלאה מרוכזת</b>
+        <span>בוחרים כמה קבצים בבת אחת, והמערכת מפזרת אותם למשבצות הריקות לפי הסדר.</span>
+      </div>
+      <div class="spacer"></div>
+      <select id="bulkKind">
+        <option value="value">ערך</option>
+        <option value="hybrid">משולב</option>
+        <option value="promo">מכירתי</option>
+      </select>
+      <button class="btn primary" id="bulkPick">בחר קבצים</button>
+      <input type="file" id="bulkInput" multiple hidden>
+    </div>` : ''}
+
+    <div class="track">${c.slots.map((s) => slotCard(s, c)).join('')}</div>`;
+}
+
+function slotCard(s, c) {
+  const st = SLOT_STATE[s.state];
+  const item = s.content;
+
+  if (!item) {
+    return `<div class="slot empty${s.past ? ' past' : ''}" ${
+      can('content') ? `data-fill="${s.index}"` : ''}>
+      <div class="shead"><b>${s.index}</b><span>${fmtDate(s.date)}</span></div>
+      <div class="sbody">
+        <span class="plus">＋</span>
+        <span class="lbl">${s.past ? 'משבצת שעברה וריקה' : 'ריקה — הוסף תוכן'}</span>
+      </div>
+    </div>`;
+  }
+
+  const img = item.assets.find((a) => isImage(a.mime));
+  const files = item.assets.filter((a) => !isImage(a.mime));
+  const where = item.posts.length
+    ? item.posts.map((p) => esc(p.channel_name ?? '')).join(', ')
+    : 'עוד לא שובץ ללוח';
+
+  return `<div class="slot ${item.kind}" data-open="${item.id}">
+    <div class="shead"><b>${s.index}</b><span>${fmtDate(s.date)}</span>
+      <span class="chip ${TONE_CLASS[st.tone]}">${st.label}</span></div>
+    <div class="sbody">
+      ${img ? `<img class="thumb" src="/api/assets/${img.id}" alt="">`
+            : `<div class="thumb none" style="background:${KIND_VAR[item.kind]}22;
+                 border-color:${KIND_VAR[item.kind]}">${esc(KIND_HE[item.kind])}</div>`}
+      <b class="ttl">${esc(item.title)}</b>
+      <span class="lbl">${esc(where)}</span>
+      ${files.length ? `<span class="lbl">📎 ${files.length} קבצים</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function looseSection(loose) {
+  if (!loose.length) return '';
   const row = (c) => `
-    <div class="contentline" style="border-bottom:1px solid var(--border);padding:10px 16px">
+    <div class="contentline" style="padding:9px 16px;border-bottom:1px solid var(--border)">
       <span class="sw" style="background:${KIND_VAR[c.kind]}"></span>
       <b>${esc(c.title)}</b>
-      <span style="color:var(--muted)">${esc(c.endpoint_name)}${
-        c.campaign_name ? ` · ${esc(c.campaign_name)}` : ' · תוכן שוטף'}</span>
+      <span style="color:var(--muted)">${esc(c.endpoint_name)}</span>
       <span class="chip ${c.placements ? 'on' : ''}">${
         c.placements ? `שובץ ${c.placements}×` : 'לא שובץ'}</span>
-      <span style="color:var(--muted);font-size:11.5px">${esc(readyIn(c, state.channels))}</span>
       ${can('content') ? `<span style="margin-inline-start:auto;display:flex;gap:6px">
-        <button class="btn small" data-edit-content="${c.id}">ערוך</button>
-        <button class="btn small" style="color:var(--st-crit)" data-del-content2="${c.id}">מחק</button>
+        <button class="btn small" data-edit-loose="${c.id}">ערוך</button>
+        <button class="btn small" style="color:var(--st-crit)" data-del-loose="${c.id}">מחק</button>
       </span>` : ''}
     </div>`;
 
-  $('#content').innerHTML = `
-    <div class="toolbar">
-      <div class="legend">
-        <span><b>${content.length}</b> פריטי תוכן</span>
-        <span>·</span>
-        <span><b>${unplaced.length}</b> עוד לא שובצו</span>
-      </div>
-      <div class="spacer"></div>
-      ${can('content') ? '<button class="btn primary" id="addContent2">＋ תוכן חדש</button>' : ''}
-    </div>
-    <div class="panel">${content.map(row).join('')
-      || '<div class="empty">אין עדיין תוכן. בלי תוכן המנוע לא יכול לשבץ כלום.</div>'}</div>`;
-
-  const reload = run(async () => { await renderContent(); await refreshAlerts(); });
-
-  $('#addContent2')?.addEventListener('click', () => openContentForm({}, reload));
-
-  $$('#content [data-edit-content]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const item = content.find((x) => x.id === Number(b.dataset.editContent));
-      openContentForm({ item }, reload);
-    }));
-
-  $$('#content [data-del-content2]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את התוכן?')) return;
-      await api(`/content/${b.dataset.delContent2}`, { method: 'DELETE' });
-      await reload();
-    })));
+  return `<div class="setgroup" style="max-width:none;margin-top:24px">
+    <h2>תוכן שוטף</h2>
+    <p class="sub">לא משויך לאף קמפיין. אפשר לשייך מתוך העריכה.</p>
+    <div class="panel">${loose.map(row).join('')}</div>
+  </div>`;
 }
 
-function openContentForm({ item, campaign }, reload) {
+function wireContent(selected) {
+  const reload = run(async () => { await renderContent(); await refreshAlerts(); });
+
+  $$('#content [data-pick]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      state.selectedCampaign = Number(b.dataset.pick);
+      await renderContent();
+    })));
+
+  $$('#content [data-fill]').forEach((b) =>
+    b.addEventListener('click', () =>
+      openContentForm({ campaign: selected, slot: Number(b.dataset.fill) }, reload)));
+
+  $$('#content [data-open]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const item = selected.content.find((x) => x.id === Number(b.dataset.open));
+      openContentForm({ item, campaign: selected }, reload);
+    }));
+
+  $$('#content [data-edit-loose]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      const { content } = await api('/content');
+      openContentForm({ item: content.find((x) => x.id === Number(b.dataset.editLoose)) }, reload);
+    })));
+
+  $$('#content [data-del-loose]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      if (!confirm('למחוק את התוכן?')) return;
+      await api(`/content/${b.dataset.delLoose}`, { method: 'DELETE' });
+      await reload();
+    })));
+
+  // העלאה מרוכזת
+  const input = $('#bulkInput');
+  $('#bulkPick')?.addEventListener('click', () => input.click());
+  input?.addEventListener('change', run(async () => {
+    if (!input.files?.length) return;
+    const fd = new FormData();
+    for (const f of input.files) fd.append('files', f);
+    fd.append('kind', $('#bulkKind').value);
+
+    toast(`מעלה ${input.files.length} קבצים…`);
+    const res = await fetch(`/api/campaigns/${selected.id}/bulk`, { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'ההעלאה נכשלה');
+
+    toast(`נוצרו ${data.created.length} פריטים${
+      data.overflow ? ` · ${data.overflow} מעבר למשבצות הקמפיין` : ''}.`);
+    input.value = '';
+    await reload();
+  }));
+}
+
+/**
+ * טופס תוכן. משמש גם למילוי משבצת (slot נתון), גם לעריכה,
+ * וגם ליצירה חופשית. הקבצים נשלחים בנפרד אחרי שהפריט נשמר.
+ */
+function openContentForm({ item, campaign, slot }, reload) {
   const campaignOptions = [['', 'ללא קמפיין — תוכן שוטף'],
     ...state.campaigns.map((c) => [c.id, c.name])];
 
+  const existingFiles = (item?.assets ?? []).map((a) => `
+    <div class="fileline">
+      ${isImage(a.mime) ? `<img src="/api/assets/${a.id}" alt="">` : '<span class="ic">📄</span>'}
+      <a href="/api/assets/${a.id}" target="_blank" rel="noopener">${esc(a.filename)}</a>
+      <span class="d">${kb(a.size_bytes)}</span>
+      <button type="button" class="btn small" data-del-asset="${a.id}"
+              style="color:var(--st-crit);margin-inline-start:auto">הסר</button>
+    </div>`).join('');
+
   openGeneric({
-    title: item ? 'עריכת תוכן' : 'תוכן חדש',
+    title: item ? 'עריכת תוכן' : (slot ? `מילוי משבצת ${slot}` : 'תוכן חדש'),
     fields: [
       { name: 'title', label: 'כותרת', type: 'text', value: item?.title },
       { name: 'endpoint_id', label: 'נקודת קצה', type: 'select',
@@ -827,11 +992,46 @@ function openContentForm({ item, campaign }, reload) {
       { name: 'ready_channel_ids', label: 'מוכן לערוצים', type: 'multicheck',
         options: state.channels.map((c) => [c.id, c.name]),
         value: item?.ready_channel_ids },
+      { name: '__files', label: 'תמונות ומסמכים', type: 'files', existing: existingFiles },
     ],
+    extraActions: item && can('content')
+      ? `<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק תוכן</button>`
+      : '',
     onSave: async (v) => {
-      if (item) await api(`/content/${item.id}`, { method: 'PATCH', body: v });
-      else await api('/content', { method: 'POST', body: v });
+      const body = { ...v };
+      delete body.__files;
+      if (slot) body.sort_order = slot;
+
+      const saved = item
+        ? (await api(`/content/${item.id}`, { method: 'PATCH', body })).content
+        : (await api('/content', { method: 'POST', body })).content;
+
+      const picked = $('#gen___files')?.files;
+      if (picked?.length) {
+        const fd = new FormData();
+        for (const f of picked) fd.append('files', f);
+        const res = await fetch(`/api/content/${saved.id}/assets`, { method: 'POST', body: fd });
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.error || 'הקבצים לא נשמרו');
+        }
+      }
       await reload();
+    },
+    onOpen: () => {
+      $$('#genBody [data-del-asset]').forEach((b) =>
+        b.addEventListener('click', run(async () => {
+          await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
+          b.closest('.fileline').remove();
+          toast('הקובץ הוסר.');
+        })));
+
+      $('#genDelete')?.addEventListener('click', run(async () => {
+        if (!confirm('למחוק את התוכן והקבצים שלו?')) return;
+        await api(`/content/${item.id}`, { method: 'DELETE' });
+        $('#genDlg').close();
+        await reload();
+      }));
     },
   });
 }
@@ -840,272 +1040,6 @@ const fmtDate = (d) => {
   const x = new Date(typeof d === 'string' && d.length === 10 ? d + 'T00:00:00' : d);
   return `${x.getDate()}.${x.getMonth() + 1}`;
 };
-
-/* ========================= ניהול ========================= */
-
-async function renderManage() {
-  const [{ endpoints }, { channels }, { settings }, { users }] = await Promise.all([
-    api('/endpoints'), api('/channels'), api('/settings'), api('/users'),
-  ]);
-  state.endpoints = endpoints;
-  state.channels = channels;
-  state.users = users;
-
-  const ro = !can('settings'); // read-only
-
-  $('#manage').innerHTML = `
-    <div class="setgroup">
-      <h2>נקודות קצה</h2>
-      <p class="sub">כל נקודה מרכזת אצלה הכול: הגדרות, קמפיינים, ותוכן.</p>
-      <div class="panel">${endpoints.map((e) => endpointItem(e, channels, ro)).join('')
-        || '<div class="empty">אין עדיין נקודות קצה.</div>'}</div>
-      ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addEndpoint">＋ הוסף נקודת קצה</button></div>'}
-    </div>
-
-    <div class="setgroup">
-      <h2>ערוצי פרסום</h2>
-      <p class="sub">כמה שטח יש בכל ערוץ ומה הכללים שלו.</p>
-      <div class="panel">${channels.map((c) => channelItem(c, ro)).join('')
-        || '<div class="empty">אין עדיין ערוצים.</div>'}</div>
-      ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
-    </div>
-
-    ${can('users') ? systemGroup(users, settings) : ''}`;
-
-  wireManage(ro);
-}
-
-function endpointItem(e, channels, ro) {
-  // הקמפיינים והתוכן עברו לטאבים משלהם. כאן נשארו רק ההגדרות של הנקודה עצמה.
-  const hasContent = e.content.length > 0;
-
-  return `<details class="item">
-    <summary>
-      <b>${esc(e.name)}</b>
-      <span class="info">חשיבות ${e.importance} · ${e.campaigns.length} קמפיינים</span>
-      <span class="chip ${hasContent ? 'on' : 'bad'}">${hasContent ? 'פעילה' : 'חסר תוכן'}</span>
-    </summary>
-    <div class="ibody">
-      <div class="prow">
-        <label>חשיבות (1–10) — כמה שטח מגיע לה</label>
-        <input type="number" min="1" max="10" value="${e.importance}"
-               data-ep-field="importance" data-id="${e.id}" ${ro ? 'disabled' : ''}>
-      </div>
-      <div class="prow">
-        <label>לפרסם לפחות פעם ב־ (ימים)</label>
-        <input type="number" min="1" value="${e.min_days_between}"
-               data-ep-field="min_days_between" data-id="${e.id}" ${ro ? 'disabled' : ''}>
-      </div>
-
-      <div class="subsec">
-        <h4>סיכום</h4>
-        <div class="contentline">${e.campaigns.length} קמפיינים · ${e.content.length} פריטי תוכן
-          <span style="color:var(--muted)">— לניהול שלהם: הטאבים "קמפיינים" ו"תוכן"</span></div>
-      </div>
-
-      ${ro ? '' : `<div style="margin-top:14px">
-        <button class="btn small" style="color:var(--st-crit)" data-del-endpoint="${e.id}">מחק נקודת קצה</button>
-      </div>`}
-    </div>
-  </details>`;
-}
-
-
-const readyIn = (c, channels) => {
-  const names = (c.ready_channel_ids ?? [])
-    .map((id) => channels.find((ch) => ch.id === id)?.name)
-    .filter(Boolean);
-  return names.length ? `— מוכן ל${names.join(', ')}` : '— עוד לא סומן לאף ערוץ';
-};
-
-function channelItem(c, ro) {
-  const num = (label, field, value, note = '') => `
-    <div class="prow">
-      <label>${note}${label}</label>
-      <input type="number" min="0" value="${value ?? ''}" placeholder="ללא"
-             data-ch-field="${field}" data-id="${c.id}" ${ro ? 'disabled' : ''}>
-    </div>`;
-  const sw = (kind) =>
-    `<span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:3px;` +
-    `background:${KIND_VAR[kind]};margin-inline-end:6px;vertical-align:-1px"></span>`;
-
-  return `<details class="item">
-    <summary>
-      <b>${esc(c.name)}</b>
-      <span class="info">עד ${c.max_per_week} בשבוע</span>
-      <span class="chip ${c.active ? 'on' : 'bad'}">${c.active ? 'פעיל' : 'מושבת'}</span>
-    </summary>
-    <div class="ibody">
-      ${num('כמה פוסטים מקסימום בשבוע (סה"כ)', 'max_per_week', c.max_per_week)}
-      ${num('מזה — מכירתיים מקסימום', 'max_promo_per_week', c.max_promo_per_week, sw('promo'))}
-      ${num('מזה — משולבים מקסימום', 'max_hybrid_per_week', c.max_hybrid_per_week, sw('hybrid'))}
-      ${num('מזה — ערך מקסימום', 'max_value_per_week', c.max_value_per_week, sw('value'))}
-      ${num('שטח ששמור לדברים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
-      ${ro ? '' : `<div style="display:flex;gap:8px;margin-top:12px">
-        <button class="btn small" data-toggle-channel="${c.id}" data-active="${c.active}">
-          ${c.active ? 'השבת ערוץ' : 'הפעל ערוץ'}</button>
-        <button class="btn small" style="color:var(--st-crit)" data-del-channel="${c.id}">מחק ערוץ</button>
-      </div>`}
-    </div>
-  </details>`;
-}
-
-function systemGroup(users, settings) {
-  const rows = users.map((u) => {
-    const cell = (perm) => u.is_owner
-      ? '✓'
-      : `<input type="checkbox" data-user="${u.id}" data-perm="${perm}" ${u[`perm_${perm}`] ? 'checked' : ''}>`;
-    return `<tr>
-      <td><b>${esc(u.name)}</b> ${u.is_owner ? '<span class="owner-tag">בעלים</span>' : ''}
-        <div style="color:var(--muted);font-size:11.5px">${esc(u.email)}</div></td>
-      <td>${cell('content')}</td><td>${cell('settings')}</td>
-      <td>${cell('approve')}</td><td>${cell('users')}</td>
-      <td>${u.is_owner ? '' : `<button class="btn small" data-del-user="${u.id}" style="color:var(--st-crit)">מחק</button>`}</td>
-    </tr>`;
-  }).join('');
-
-  const s = settings;
-  const eng = (label, field, value, step = '1') => `
-    <div class="prow"><label>${label}</label>
-      <input type="number" step="${step}" value="${value}" data-engine="${field}"></div>`;
-
-  return `<div class="setgroup" id="ownerOnly">
-    <h2>מערכת</h2>
-    <div class="panel">
-      <details class="item">
-        <summary><b>משתמשים והרשאות</b>
-          <span class="info">${users.length} משתמשים</span>
-          <span class="owner-tag">בעלים בלבד</span></summary>
-        <div class="ibody">
-          <table class="utable">
-            <thead><tr><th>משתמש</th><th>תוכן ושיבוץ</th><th>הגדרות</th>
-              <th>אישור דחוף־דורס</th><th>ניהול משתמשים</th><th></th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
-        </div>
-      </details>
-      <details class="item">
-        <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
-        <div class="ibody">
-          ${eng('מרווח מינימלי לאותה נקודה באותו ערוץ (ימים)', 'min_gap_days', s.min_gap_days)}
-          ${eng('מקסימום מכירתיים ביום, בכל הערוצים', 'max_promo_per_day', s.max_promo_per_day)}
-          ${eng('כמה ערך נדרש על כל מכירתי', 'min_value_per_promo', s.min_value_per_promo, '0.5')}
-          ${eng('"משולב" נספר כמכירתי', 'hybrid_weight', s.hybrid_weight, '0.1')}
-          ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
-        </div>
-      </details>
-    </div>
-  </div>`;
-}
-
-function wireManage(ro) {
-  const reload = run(async () => { await renderManage(); await renderBoard(); });
-
-  // עריכת שדה בשדה — נשמר ביציאה מהשדה
-  $$('#manage [data-ep-field]').forEach((inp) =>
-    inp.addEventListener('change', run(async () => {
-      await api(`/endpoints/${inp.dataset.id}`,
-        { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value) } });
-      toast('נשמר.');
-    })));
-
-  $$('#manage [data-ch-field]').forEach((inp) =>
-    inp.addEventListener('change', run(async () => {
-      const raw = inp.value.trim();
-      await api(`/channels/${inp.dataset.id}`,
-        { method: 'PATCH', body: { [inp.dataset.chField]: raw === '' ? null : Number(raw) } });
-      toast('נשמר.');
-    })));
-
-  $$('#manage [data-engine]').forEach((inp) =>
-    inp.addEventListener('change', run(async () => {
-      await api('/settings', { method: 'PATCH', body: { [inp.dataset.engine]: Number(inp.value) } });
-      toast('נשמר. הלוח יחושב מחדש.');
-    })));
-
-  $$('#manage [data-user][data-perm]').forEach((cb) =>
-    cb.addEventListener('change', run(async () => {
-      await api(`/users/${cb.dataset.user}`,
-        { method: 'PATCH', body: { [`perm_${cb.dataset.perm}`]: cb.checked } });
-      toast('ההרשאה עודכנה.');
-    })));
-
-  $$('#manage [data-del-user]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את המשתמש?')) return;
-      await api(`/users/${b.dataset.delUser}`, { method: 'DELETE' });
-      await reload();
-    })));
-
-  $$('#manage [data-del-endpoint]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את נקודת הקצה? כל הקמפיינים והתוכן שלה יימחקו איתה.')) return;
-      await api(`/endpoints/${b.dataset.delEndpoint}`, { method: 'DELETE' });
-      await reload();
-    })));
-
-  $$('#manage [data-del-channel]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את הערוץ? כל השיבוצים בו יימחקו.')) return;
-      await api(`/channels/${b.dataset.delChannel}`, { method: 'DELETE' });
-      await reload();
-    })));
-
-  $$('#manage [data-toggle-channel]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/channels/${b.dataset.toggleChannel}`,
-        { method: 'PATCH', body: { active: b.dataset.active !== 'true' } });
-      await reload();
-    })));
-
-  $$('#manage [data-del-campaign]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/campaigns/${b.dataset.delCampaign}`, { method: 'DELETE' });
-      await reload();
-    })));
-
-  $$('#manage [data-del-content]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/content/${b.dataset.delContent}`, { method: 'DELETE' });
-      await reload();
-    })));
-
-  if (!ro) {
-    $('#addEndpoint')?.addEventListener('click', () => openGeneric({
-      title: 'נקודת קצה חדשה',
-      fields: [
-        { name: 'name', label: 'שם', type: 'text' },
-        { name: 'importance', label: 'חשיבות (1–10)', type: 'number', value: 5 },
-        { name: 'min_days_between', label: 'לפרסם לפחות פעם ב־ (ימים)', type: 'number', value: 7 },
-      ],
-      onSave: async (v) => { await api('/endpoints', { method: 'POST', body: v }); await reload(); },
-    }));
-
-    $('#addChannel')?.addEventListener('click', () => openGeneric({
-      title: 'ערוץ חדש',
-      fields: [
-        { name: 'name', label: 'שם הערוץ', type: 'text' },
-        { name: 'max_per_week', label: 'מקסימום פרסומים בשבוע', type: 'number', value: 5 },
-      ],
-      onSave: async (v) => { await api('/channels', { method: 'POST', body: v }); await reload(); },
-    }));
-  }
-
-  $('#addUser')?.addEventListener('click', () => openGeneric({
-    title: 'משתמש חדש',
-    fields: [
-      { name: 'name', label: 'שם', type: 'text' },
-      { name: 'email', label: 'אימייל', type: 'email' },
-      { name: 'password', label: 'סיסמה (8 תווים לפחות)', type: 'password' },
-      { name: 'perm_content', label: 'תוכן ושיבוץ', type: 'checkbox', value: true },
-      { name: 'perm_settings', label: 'הגדרות', type: 'checkbox' },
-      { name: 'perm_approve', label: 'אישור דחוף־דורס', type: 'checkbox' },
-      { name: 'perm_users', label: 'ניהול משתמשים', type: 'checkbox' },
-    ],
-    onSave: async (v) => { await api('/users', { method: 'POST', body: v }); await reload(); },
-  }));
-}
 
 /* ========================= דיאלוג כללי ========================= */
 
@@ -1116,6 +1050,7 @@ function wireGenericDialog() {
   $('#genSave').addEventListener('click', run(async () => {
     const values = {};
     for (const f of genSpec.fields) {
+      if (f.type === 'files') continue; // קבצים נשלחים בנפרד ב-onSave
       const el = $(`#gen_${f.name}`);
       if (f.type === 'checkbox') values[f.name] = el.checked;
       else if (f.type === 'multicheck') {
@@ -1130,9 +1065,15 @@ function wireGenericDialog() {
         values[f.name] = el.value.trim() === '' ? null : el.value.trim();
       }
     }
-    await genSpec.onSave(values);
-    $('#genDlg').close();
-    toast('נשמר.');
+    const btn = $('#genSave');
+    btn.disabled = true;
+    try {
+      await genSpec.onSave(values);
+      $('#genDlg').close();
+      toast('נשמר.');
+    } finally {
+      btn.disabled = false;
+    }
   }));
 }
 
@@ -1165,9 +1106,21 @@ function openGeneric(spec) {
       return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
         <textarea id="${id}">${esc(f.value ?? '')}</textarea></div>`;
     }
+    if (f.type === 'files') {
+      return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
+        ${f.existing ?? ''}
+        <input id="${id}" type="file" multiple>
+        <span class="d" style="color:var(--muted);font-size:11.5px">עד 10MB לקובץ</span>
+      </div>`;
+    }
     return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
       <input id="${id}" type="${f.type}" value="${esc(f.value ?? '')}"></div>`;
   }).join('');
+
+  // כפתורים נוספים (למשל "מחק תוכן") נשתלים משמאל לביטול/שמירה
+  $('#genExtra').innerHTML = spec.extraActions ?? '';
+  spec.onOpen?.();
+
   $('#genDlg').showModal();
 }
 

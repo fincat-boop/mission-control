@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { migrate, pool, tx } from './db.js';
 import { TABLES } from './tables.js';
 
@@ -42,11 +43,16 @@ await tx(async (client) => {
   for (const t of TABLES) {
     const list = dump.tables[t] ?? [];
     for (const row of list) {
-      const cols = Object.keys(row);
+      const values = { ...row };
+      // הבייטים של הקבצים יושבים בתיקייה שלצד ה-JSON
+      if (t === 'content_assets') {
+        values.data = await readFile(join(dirname(file), dump.assets_dir, String(row.id)));
+      }
+      const cols = Object.keys(values);
       const params = cols.map((_, i) => `$${i + 1}`).join(', ');
       await client.query(
         `insert into ${t} (${cols.join(', ')}) values (${params})`,
-        cols.map((c) => row[c])
+        cols.map((c) => values[c])
       );
     }
 

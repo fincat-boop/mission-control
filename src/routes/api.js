@@ -1,7 +1,8 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { one, query, rows, tx } from '../db.js';
 import { buildAlerts } from '../alerts.js';
-import { campaignsWithHealth, currentAllocation } from '../campaigns.js';
+import { campaignsWithHealth, currentAllocation, requiredPosts } from '../campaigns.js';
 import {
   PUBLIC_USER_COLS, checkPassword, clearSession, hashPassword,
   issueSession, requireAuth, requirePerm,
@@ -16,6 +17,17 @@ const r = Router();
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
+
+// הקבצים נשמרים במסד, לכן הם עוברים דרך הזיכרון ולא נכתבים לדיסק.
+const MAX_FILE_MB = 10;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 20 },
+});
+
+/** שם קובץ בלי הסיומת — משמש ככותרת ברירת מחדל בהעלאה מרוכזת */
+const titleFromFilename = (name) =>
+  name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || name;
 
 /* ========================= התחברות ========================= */
 
@@ -327,11 +339,23 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג התוכן חייב להיות promo / value / hybrid');
   }
-  // פריט חדש בקמפיין נכנס בסוף התור
-  const nextOrder = b.campaign_id
-    ? (await one('select coalesce(max(sort_order),0) + 1 as n from content_items where campaign_id = $1',
-                 [b.campaign_id]))?.n ?? 1
-    : 0;
+  // משבצת מפורשת מנצחת (מילוי משבצת מהציר). בלעדיה — סוף התור.
+  let nextOrder = 0;
+  if (b.campaign_id) {
+    if (b.sort_order != null) {
+      const taken = await one(
+        'select 1 from content_items where campaign_id = $1 and sort_order = $2',
+        [b.campaign_id, b.sort_order]
+      );
+      if (taken) return bad(res, 'המשבצת הזו כבר תפוסה');
+      nextOrder = Number(b.sort_order);
+    } else {
+      nextOrder = (await one(
+        'select coalesce(max(sort_order),0) + 1 as n from content_items where campaign_id = $1',
+        [b.campaign_id]
+      ))?.n ?? 1;
+    }
+  }
 
   // ready_channel_ids חייב המרת טיפוס מפורשת: בלעדיה Postgres מפרש
   // את ברירת המחדל '{}' כטקסט ונופל על אי-התאמה ל-integer[]
@@ -355,6 +379,110 @@ r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   await query('delete from content_items where id = $1', [req.params.id]);
   res.json({ ok: true });
 }));
+
+/* ========================= קבצים מצורפים ========================= */
+
+r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
+  wrap(async (req, res) => {
+    const item = await one('select id from content_items where id = $1', [req.params.id]);
+    if (!item) return bad(res, 'לא נמצא תוכן כזה', 404);
+    if (!req.files?.length) return bad(res, 'לא הגיעו קבצים');
+
+    const saved = [];
+    for (const f of req.files) {
+      saved.push(await one(
+        `insert into content_assets (content_id, filename, mime, size_bytes, data)
+         values ($1,$2,$3,$4,$5)
+         returning id, content_id, filename, mime, size_bytes`,
+        [item.id, f.originalname, f.mimetype, f.size, f.buffer]
+      ));
+    }
+    res.status(201).json({ assets: saved });
+  }));
+
+/** הגשת הקובץ עצמו. מאחורי אותה בדיקת התחברות כמו כל השאר. */
+r.get('/assets/:id', wrap(async (req, res) => {
+  const a = await one(
+    'select filename, mime, data from content_assets where id = $1', [req.params.id]
+  );
+  if (!a) return bad(res, 'לא נמצא קובץ כזה', 404);
+  res.setHeader('Content-Type', a.mime);
+  // inline כדי שתמונות ייפתחו בתצוגה מקדימה ולא ירדו כקובץ
+  res.setHeader('Content-Disposition',
+    `inline; filename*=UTF-8''${encodeURIComponent(a.filename)}`);
+  res.send(a.data);
+}));
+
+r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
+  await query('delete from content_assets where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/**
+ * העלאה מרוכזת: כל קובץ הופך לפריט תוכן, והפריטים מתפזרים
+ * למשבצות הריקות של הקמפיין לפי הסדר.
+ */
+r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
+  wrap(async (req, res) => {
+    const campaign = await one('select * from campaigns where id = $1', [req.params.id]);
+    if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
+    if (!req.files?.length) return bad(res, 'לא הגיעו קבצים');
+
+    const kind = ['promo', 'value', 'hybrid'].includes(req.body?.kind)
+      ? req.body.kind : 'value';
+    const channelIds = parseIdList(req.body?.ready_channel_ids);
+
+    const existing = await rows(
+      'select sort_order from content_items where campaign_id = $1', [campaign.id]
+    );
+    const taken = new Set(existing.map((x) => x.sort_order));
+    const required = requiredPosts(campaign);
+
+    // המשבצות הריקות, לפי הסדר. אם נגמרו — ממשיכים אחרי המשבצת האחרונה.
+    const freeSlots = [];
+    for (let i = 1; required !== null && i <= required; i += 1) {
+      if (!taken.has(i)) freeSlots.push(i);
+    }
+    let overflowFrom = Math.max(0, ...existing.map((x) => x.sort_order), required ?? 0);
+
+    const created = [];
+    await tx(async (client) => {
+      for (const f of req.files) {
+        const slot = freeSlots.shift() ?? (overflowFrom += 1);
+        const item = (await client.query(
+          `insert into content_items (endpoint_id, campaign_id, kind, title,
+                                      ready_channel_ids, sort_order)
+           values ($1,$2,$3,$4,$5::int[],$6) returning *`,
+          [campaign.endpoint_id, campaign.id, kind, titleFromFilename(f.originalname),
+           channelIds, slot]
+        )).rows[0];
+
+        await client.query(
+          `insert into content_assets (content_id, filename, mime, size_bytes, data)
+           values ($1,$2,$3,$4,$5)`,
+          [item.id, f.originalname, f.mimetype, f.size, f.buffer]
+        );
+        created.push({ id: item.id, title: item.title, slot });
+      }
+    });
+
+    res.status(201).json({
+      created,
+      filled_slots: created.filter((c) => required === null || c.slot <= required).length,
+      overflow: created.filter((c) => required !== null && c.slot > required).length,
+    });
+  }));
+
+/** מקבל מערך, מחרוזת JSON או רשימה מופרדת בפסיקים */
+function parseIdList(v) {
+  if (Array.isArray(v)) return v.map(Number).filter(Boolean);
+  if (typeof v !== 'string' || !v.trim()) return [];
+  try {
+    const parsed = JSON.parse(v);
+    if (Array.isArray(parsed)) return parsed.map(Number).filter(Boolean);
+  } catch { /* לא JSON — ננסה כרשימה מופרדת בפסיקים */ }
+  return v.split(',').map(Number).filter(Boolean);
+}
 
 /* ========================= ערוצים ========================= */
 

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pool, rows } from './db.js';
+import { one, pool, rows } from './db.js';
 import { TABLES } from './tables.js';
 
 /**
@@ -20,12 +20,29 @@ const outDir = process.env.BACKUP_DIR || join(here, '..', 'backups');
 const dump = { created_at: new Date().toISOString(), tables: {} };
 
 for (const t of TABLES) {
-  dump.tables[t] = await rows(`select * from ${t} order by id`);
+  // הבייטים של הקבצים נשמרים בנפרד, אחרת ה-JSON מתנפח פי כמה
+  const cols = t === 'content_assets'
+    ? 'id, content_id, filename, mime, size_bytes, created_at' : '*';
+  dump.tables[t] = await rows(`select ${cols} from ${t} order by id`);
 }
 
 await mkdir(outDir, { recursive: true });
 const stamp = dump.created_at.replace(/[:.]/g, '-').slice(0, 19);
 const file = join(outDir, `backup-${stamp}.json`);
+
+// קובץ לכל asset, בשם שנגזר מהמזהה כדי שהשחזור ימצא אותו
+let assetBytes = 0;
+if (dump.tables.content_assets.length) {
+  const assetDir = join(outDir, `assets-${stamp}`);
+  await mkdir(assetDir, { recursive: true });
+  for (const a of dump.tables.content_assets) {
+    const { data } = await one('select data from content_assets where id = $1', [a.id]);
+    await writeFile(join(assetDir, String(a.id)), data);
+    assetBytes += data.length;
+  }
+  dump.assets_dir = `assets-${stamp}`;
+}
+
 await writeFile(file, JSON.stringify(dump, null, 2), 'utf8');
 
 const total = Object.values(dump.tables).reduce((s, r) => s + r.length, 0);
@@ -34,6 +51,10 @@ for (const [t, r] of Object.entries(dump.tables)) {
   if (r.length) console.log(`  ${t}: ${r.length}`);
 }
 console.log(`\nנשמר: ${file}`);
+if (assetBytes) {
+  console.log(`קבצים מצורפים: ${dump.tables.content_assets.length} · ` +
+              `${(assetBytes / 1024 / 1024).toFixed(1)}MB בתיקייה ${dump.assets_dir}`);
+}
 console.log('הקובץ מכיל hash-ים של סיסמאות. לא לשתף.');
 
 await pool.end();
