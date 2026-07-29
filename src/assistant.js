@@ -20,6 +20,8 @@ import { buildAlerts } from './alerts.js';
 import { campaignsWithHealth, currentAllocation, shareTimeline } from './campaigns.js';
 import { buildBoard, ymd } from './board.js';
 import { planWeek } from './engine.js';
+import { VIA_HEADER } from './audit.js';
+import { buildStats, readActivity } from './stats.js';
 
 const MODEL = 'claude-opus-5';
 // דולר למיליון טוקן, לפי המחירון של claude-opus-5
@@ -223,6 +225,35 @@ const READ_TOOLS = {
            from tasks t left join users u on u.id = t.assignee_id
           where t.done = false order by t.urgent desc, t.due_on nulls last, t.id`),
     }),
+  },
+
+  get_stats: {
+    description: 'סטטיסטיקה לתקופה: כמה פורסם, לפי סוג ולפי ערוץ, חלוקת השטח בין ' +
+      'נקודות הקצה, קצב בפועל מול היעד, ומשימות. בלי תאריכים — 30 הימים האחרונים.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'YYYY-MM-DD' },
+        to: { type: 'string', description: 'YYYY-MM-DD' },
+      },
+    },
+    run: (a) => buildStats(a.from, a.to),
+  },
+
+  get_activity: {
+    description: 'יומן הפעולות — מי עשה מה ומתי. אפשר לסנן לפי משתמש, לפי מקור ' +
+      '(ui / assistant) ולפי סוג ישות.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string' }, to: { type: 'string' },
+        user_id: { type: 'integer' },
+        via: { type: 'string', enum: ['ui', 'assistant', 'system'] },
+        entity: { type: 'string', description: 'posts / campaigns / content / channels ...' },
+        limit: { type: 'integer' },
+      },
+    },
+    run: (a) => readActivity({ ...a, limit: Math.min(a.limit ?? 60, 120) }),
   },
 
   engine_preview: {
@@ -947,6 +978,8 @@ export async function execute(proposal, cookie) {
     method: proposal.method,
     headers: {
       cookie: cookie ?? '',
+      // מסמן ביומן הפעולות שזו הצעה של העוזר שהמשתמש אישר, ולא פעולה ידנית
+      [VIA_HEADER]: 'assistant',
       ...(proposal.body ? { 'Content-Type': 'application/json' } : {}),
     },
     body: proposal.body ? JSON.stringify(proposal.body) : undefined,

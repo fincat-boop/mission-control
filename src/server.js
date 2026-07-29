@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import express from 'express';
 import { migrate, pool } from './db.js';
 import { loadUser } from './auth.js';
+import { audit } from './audit.js';
 import api from './routes/api.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -18,7 +19,7 @@ app.use(cookieParser());
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-app.use('/api', loadUser, api);
+app.use('/api', loadUser, audit, api);
 
 // נתיב /api שלא נתפס הוא שגיאה, לא בקשה לדף
 app.use('/api', (_req, res) => res.status(404).json({ error: 'לא נמצא' }));

@@ -11,6 +11,7 @@ import { buildBoard, weekMeta, ymd } from '../board.js';
 import { planWeek } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
+import { buildStats, readActivity } from '../stats.js';
 
 const r = Router();
 
@@ -972,6 +973,33 @@ r.delete('/users/:id', requirePerm('users'), wrap(async (req, res) => {
   if (Number(req.params.id) === req.user.id) return bad(res, 'אי אפשר למחוק את עצמך');
   await query('delete from users where id = $1', [req.params.id]);
   res.json({ ok: true });
+}));
+
+/* ========================= נתונים ויומן ========================= */
+
+/**
+ * סטטיסטיקה לתקופה. בלי from/to — 30 הימים האחרונים.
+ * הכול נספר בזמן הקריאה, ולכן תמיד מעודכן.
+ */
+r.get('/stats', wrap(async (req, res) => {
+  try {
+    res.json(await buildStats(req.query.from, req.query.to));
+  } catch (e) {
+    return bad(res, e.message);
+  }
+}));
+
+/** מי עשה מה. פתוח לכל מי שמחובר — שקיפות, לא סוד. */
+r.get('/activity', wrap(async (req, res) => {
+  try {
+    res.json(await readActivity({
+      from: req.query.from, to: req.query.to,
+      user_id: req.query.user_id, via: req.query.via,
+      entity: req.query.entity, limit: req.query.limit,
+    }));
+  } catch (e) {
+    return bad(res, e.message);
+  }
 }));
 
 /* ========================= העוזר ========================= */

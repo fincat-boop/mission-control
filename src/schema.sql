@@ -209,3 +209,23 @@ alter table engine_settings
   add column if not exists min_value_per_promo numeric(3,1) not null default 3;
 
 insert into engine_settings (id) values (1) on conflict (id) do nothing;
+
+-- ========================= יומן פעולות =========================
+-- מי עשה מה ומתי. נכתב אוטומטית לכל בקשה שמשנה נתונים, כולל פעולות
+-- שהעוזר הציע והמשתמש אישר — הן עוברות באותם נתיבים ולכן נרשמות זהה.
+create table if not exists activity_log (
+  id         bigserial primary key,
+  user_id    int references users(id) on delete set null,
+  user_name  text not null,              -- נשמר בנפרד כדי שמחיקת משתמש לא תמחק היסטוריה
+  via        text not null default 'ui'
+             check (via in ('ui','assistant','system')),
+  action     text not null,              -- create / update / delete / publish / approve / login ...
+  entity     text not null,              -- posts / campaigns / content ...
+  entity_id  text,
+  summary    text not null,              -- תיאור בעברית לקריאה אנושית
+  meta       jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists activity_log_time_idx on activity_log (created_at desc);
+create index if not exists activity_log_user_idx on activity_log (user_id, created_at desc);

@@ -104,6 +104,50 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
 .sumline { margin-top: 12px; font-size: 12.5px; color: var(--ink-2); }
 .sumline b { color: var(--ink-1); font-weight: 600; }
 
+/* ============ נתונים וסטטיסטיקה ============ */
+.periodpick.small { display: inline-flex; margin-inline-start: 10px; padding: 2px; vertical-align: middle; }
+.periodpick.small button { font-size: 11.5px; padding: 3px 10px; }
+.daterange { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
+.daterange input {
+  font: inherit; font-size: 12.5px; padding: 5px 9px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--ink-1);
+}
+.periodnote { font-size: 12px; color: var(--muted); }
+
+/* המספרים הגדולים: מה שרואים לפני שקוראים טבלה */
+.statgrid {
+  display: grid; gap: 10px; margin-bottom: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.statcard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.statcard .v { font-size: 24px; font-weight: 650; line-height: 1.1; }
+.statcard .l { font-size: 12.5px; color: var(--ink-2); margin-top: 5px; }
+.statcard .n { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.statcard.warn .v { color: var(--st-warn); }
+.statcard.bad  .v { color: var(--st-crit); }
+
+table.stattable { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.stattable th, .stattable td { padding: 9px 14px; border-bottom: 1px solid var(--border); text-align: start; }
+.stattable thead th { color: var(--muted); font-weight: 500; font-size: 11.5px; }
+.stattable tbody tr:last-child td { border-bottom: none; }
+.stattable td.warn { color: var(--st-warn); }
+.stattable td.bad  { color: var(--st-crit); }
+.stattable .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-inline-end: 8px; vertical-align: -1px; }
+/* פס יחס קצר לצד המספר — משווה בעין בלי לקרוא אחוזים */
+.minibar {
+  display: inline-block; width: 54px; height: 6px; border-radius: 3px;
+  background: var(--panel-2); overflow: hidden; vertical-align: middle; margin-inline-end: 7px;
+}
+.minibar i { display: block; height: 100%; border-radius: 3px; }
+.kindrow { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
+.kindstat i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-inline-end: 6px; vertical-align: -1px; }
+
+/* היומן: שורות צפופות, עמודת זמן צרה */
+.stattable.log td { padding: 7px 14px; }
+.stattable.log .when { color: var(--muted); font-size: 11.5px; white-space: nowrap; width: 130px; }
+.viatag { font-size: 11px; border: 1px solid var(--border); border-radius: 6px; padding: 1px 8px; color: var(--ink-2); }
+.viatag.assistant { border-color: var(--accent); color: var(--accent); }
+
 /* ============ אסטרטגיה ============ */
 .periodpick { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 8px; padding: 3px; background: var(--panel); }
 .periodpick button { font: inherit; font-size: 12.5px; padding: 5px 14px; border: none; border-radius: 6px; background: none; color: var(--ink-2); cursor: pointer; }
