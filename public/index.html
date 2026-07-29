@@ -74,33 +74,14 @@
   </div>
 </dialog>
 
-<!-- שיבוץ / עריכת פוסט -->
+<!-- תצוגה מקדימה של פוסט מהלוח -->
 <dialog id="postDlg">
-  <h3 id="postDlgTitle">שיבוץ חדש</h3>
-  <div class="frow"><label for="pTitle">כותרת</label><input id="pTitle" type="text"></div>
-  <div class="frow"><label for="pEndpoint">נקודת קצה</label><select id="pEndpoint"></select></div>
-  <div class="frow"><label for="pChannel">ערוץ</label><select id="pChannel"></select></div>
-  <div class="frow"><label for="pKind">סוג</label>
-    <select id="pKind">
-      <option value="value">ערך</option>
-      <option value="hybrid">משולב</option>
-      <option value="promo">מכירתי</option>
-    </select>
-  </div>
-  <div class="frow"><label for="pWhen">מתי</label><input id="pWhen" type="datetime-local"></div>
-  <div class="frow"><label for="pAssignee">אחראי</label><select id="pAssignee"></select></div>
-  <div class="frow"><label for="pStatus">מצב</label>
-    <select id="pStatus">
-      <option value="scheduled">משובץ</option>
-      <option value="published">פורסם</option>
-      <option value="pending_approval">ממתין לאישור</option>
-      <option value="hole">מחכה לתוכן</option>
-    </select>
-  </div>
+  <h3 id="postDlgTitle"></h3>
+  <div id="postPreview"></div>
   <div class="dactions">
-    <button class="btn" id="pDelete" style="color:var(--st-crit);margin-inline-end:auto" hidden>מחק</button>
-    <button class="btn" id="pCancel">ביטול</button>
-    <button class="btn primary" id="pSave">שמור</button>
+    <button class="btn" id="pOpenContent" style="margin-inline-end:auto">פתח בתוכן</button>
+    <button class="btn" id="pDelete" style="color:var(--st-crit)">הסר מהלוח</button>
+    <button class="btn primary" id="pClose">סגור</button>
   </div>
 </dialog>
 

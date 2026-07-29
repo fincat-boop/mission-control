@@ -40,6 +40,19 @@ const run = (fn) => async (...args) => {
   catch (e) { toast(e.message, true); }
 };
 
+const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
+
+function fillSelect(sel, items, labelKey, emptyLabel) {
+  sel.innerHTML =
+    (emptyLabel ? `<option value="">${esc(emptyLabel)}</option>` : '') +
+    items.map((i) => `<option value="${i.id}">${esc(i[labelKey])}</option>`).join('');
+}
+
+// זיהוי סוג קובץ ותצוגת גודל — בשימוש גם בלוח וגם במסך התוכן
+const isImage = (mime) => typeof mime === 'string' && mime.startsWith('image/');
+const isVideo = (mime) => typeof mime === 'string' && mime.startsWith('video/');
+const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
+
 const KIND_HE = { promo: 'מכירתי', value: 'ערך', hybrid: 'משולב' };
 const KIND_VAR = { promo: 'var(--leg-promo)', value: 'var(--leg-value)', hybrid: 'var(--leg-hybrid)' };
 
@@ -242,10 +255,10 @@ async function renderBoard() {
     const full = ch.used >= ch.max_per_week;
     const days = ch.days.map((day) => {
       const cards = day.posts.map((p) => postCard(p)).join('');
-      const add = editable
-        ? `<button class="addslot" data-add-channel="${ch.id}" data-add-date="${day.date}" title="שיבוץ חדש">＋</button>`
-        : '';
-      return `<td class="day">${cards}${add}</td>`;
+      // אין כאן יצירה ואין עריכה — רק צפייה וגרירה. הפרמטרים נקבעים בתוכן.
+      const drop = editable
+        ? `data-drop-channel="${ch.id}" data-drop-date="${day.date}"` : '';
+      return `<td class="day" ${drop}>${cards}</td>`;
     }).join('');
     return `<tr>
       <td class="chan">
@@ -298,21 +311,74 @@ async function renderBoard() {
   }));
   $('#runEngine')?.addEventListener('click', run(openEngine));
 
-  if (editable) {
-    $$('#board [data-add-channel]').forEach((btn) =>
-      btn.addEventListener('click', () => openPostDialog(null, {
-        channel_id: Number(btn.dataset.addChannel),
-        date: btn.dataset.addDate,
-      })));
-    $$('#board [data-post-id]').forEach((el) =>
-      el.addEventListener('click', () => openPostDialog(JSON.parse(el.dataset.post))));
-  }
+  // לחיצה מציגה את הפוסט כפי שהוא ייצא. גם למי שאין לו הרשאת עריכה.
+  $$('#board [data-post-id]').forEach((el) =>
+    el.addEventListener('click', run(() => openPostPreview(el.dataset.postId))));
+
+  if (editable) wireBoardDrag();
+}
+
+/**
+ * גרירת כרטיס ליום אחר על הלוח.
+ * שינוי מדיה מותר רק אם לתוכן יש גרסה מוכנה למדיה היעד — אחרת היינו
+ * מפרסמים שם ניסוח שנכתב למדיה אחרת.
+ */
+function wireBoardDrag() {
+  let dragged = null;
+
+  $$('#board [data-post-id]').forEach((el) => {
+    el.setAttribute('draggable', 'true');
+    el.addEventListener('dragstart', (e) => {
+      dragged = JSON.parse(el.dataset.post);
+      el.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    el.addEventListener('dragend', () => {
+      el.classList.remove('dragging');
+      $$('#board .day.over').forEach((d) => d.classList.remove('over'));
+      dragged = null;
+    });
+  });
+
+  $$('#board [data-drop-channel]').forEach((cell) => {
+    cell.addEventListener('dragover', (e) => {
+      if (!dragged) return;
+      e.preventDefault();
+      cell.classList.add('over');
+    });
+    cell.addEventListener('dragleave', () => cell.classList.remove('over'));
+
+    cell.addEventListener('drop', run(async (e) => {
+      e.preventDefault();
+      cell.classList.remove('over');
+      if (!dragged) return;
+
+      const channelId = Number(cell.dataset.dropChannel);
+      const date = cell.dataset.dropDate;
+      const sameSpot = channelId === dragged.channel_id &&
+                       date === ymd(new Date(dragged.scheduled_at));
+      if (sameSpot) return;
+
+      // שומרים את שעת היום המקורית
+      const at = new Date(dragged.scheduled_at);
+      const [y, m, d] = date.split('-').map(Number);
+      at.setFullYear(y, m - 1, d);
+
+      await api(`/posts/${dragged.id}`, {
+        method: 'PATCH',
+        body: { scheduled_at: at.toISOString(), channel_id: channelId },
+      });
+      toast('השיבוץ הוזז.');
+      await Promise.all([renderBoard(), refreshAlerts()]);
+    }));
+  });
 }
 
 function postCard(p) {
   const who = p.assignee_name ? ` · ${esc(p.assignee_name)}` : '';
   const payload = esc(JSON.stringify(p));
-  const clickable = can('content') ? `data-post-id="${p.id}" data-post="${payload}"` : '';
+  // התצוגה פתוחה לכולם; הגרירה בלבד מוגבלת להרשאת תוכן
+  const clickable = `data-post-id="${p.id}" data-post="${payload}"`;
 
   if (p.status === 'hole') {
     return `<div class="hole" ${clickable}
@@ -340,83 +406,79 @@ function postCard(p) {
     </div></div>`;
 }
 
-/* ========================= דיאלוג שיבוץ ========================= */
+/* ========================= תצוגת פוסט מהלוח ========================= */
 
-let editingPost = null;
+let previewPost = null;
 
 function wirePostDialog() {
-  $('#pCancel').addEventListener('click', () => $('#postDlg').close());
-  $('#pSave').addEventListener('click', run(savePost));
+  $('#pClose').addEventListener('click', () => $('#postDlg').close());
+
   $('#pDelete').addEventListener('click', run(async () => {
-    if (!editingPost) return;
-    await api(`/posts/${editingPost.id}`, { method: 'DELETE' });
+    if (!previewPost) return;
+    if (!confirm('להסיר את השיבוץ מהלוח? התוכן עצמו יישאר.')) return;
+    await api(`/posts/${previewPost.id}`, { method: 'DELETE' });
     $('#postDlg').close();
-    toast('השיבוץ נמחק.');
-    await Promise.all([renderBoard(), refreshTaskBadge()]);
+    toast('השיבוץ הוסר.');
+    await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+  }));
+
+  // מהלוח אל התוכן — שם עורכים את הטקסט, ולא בלוח
+  $('#pOpenContent').addEventListener('click', run(async () => {
+    if (!previewPost?.content_id) return toast('לשיבוץ הזה אין תוכן משויך.', true);
+    $('#postDlg').close();
+    const { content } = await api('/content');
+    const item = content.find((c) => c.id === previewPost.content_id);
+    state.planCampaign = item?.campaign_id ?? null;
+    state.planEndpoint = item?.endpoint_id ?? null;
+    state.planBackground = !item?.campaign_id;
+    await showTab('plan');
   }));
 }
 
-function openPostDialog(post, defaults = {}) {
-  editingPost = post;
-  $('#postDlgTitle').textContent = post ? 'עריכת שיבוץ' : 'שיבוץ חדש';
-  $('#pDelete').hidden = !post;
-
-  fillSelect($('#pEndpoint'), state.endpoints, 'name', 'ללא נקודת קצה');
-  fillSelect($('#pChannel'), state.channels, 'name');
-  fillSelect($('#pAssignee'), state.users, 'name', 'ללא אחראי');
-
-  $('#pTitle').value = post?.title ?? '';
-  $('#pEndpoint').value = post?.endpoint_id ?? '';
-  $('#pChannel').value = post?.channel_id ?? defaults.channel_id ?? state.channels[0]?.id ?? '';
-  $('#pKind').value = post?.kind ?? 'value';
-  $('#pAssignee').value = post?.assignee_id ?? '';
-  $('#pStatus').value = post?.status ?? 'scheduled';
-  $('#pWhen').value = post
-    ? toLocalInput(new Date(post.scheduled_at))
-    : `${defaults.date ?? ymd(new Date())}T10:00`;
-
+/** מה שאמור לצאת: הטקסט של המדיה הזו והקבצים שלה */
+async function openPostPreview(postId) {
+  $('#postDlgTitle').textContent = 'טוען…';
+  $('#postPreview').innerHTML = '';
   $('#postDlg').showModal();
-}
 
-function toLocalInput(d) {
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-}
+  const { post, variant, assets } = await api(`/posts/${postId}/preview`);
+  previewPost = post;
 
-async function savePost() {
-  const body = {
-    title: $('#pTitle').value.trim(),
-    endpoint_id: numOrNull($('#pEndpoint').value),
-    channel_id: Number($('#pChannel').value),
-    kind: $('#pKind').value,
-    status: $('#pStatus').value,
-    assignee_id: numOrNull($('#pAssignee').value),
-    scheduled_at: new Date($('#pWhen').value).toISOString(),
-  };
-  if (!body.title) return toast('צריך כותרת', true);
-  if (!body.channel_id) return toast('צריך לבחור ערוץ', true);
+  const when = new Date(post.scheduled_at)
+    .toLocaleString('he-IL', { dateStyle: 'full', timeStyle: 'short' });
 
-  if (editingPost) {
-    const wasPublished = editingPost.status === 'published';
-    await api(`/posts/${editingPost.id}`, { method: 'PATCH', body });
-    // מעבר ל"פורסם" מחתים שעת פרסום וסוגר את המשימה הצמודה
-    if (!wasPublished && body.status === 'published') {
-      await api(`/posts/${editingPost.id}/publish`, { method: 'POST' });
+  const media = assets.map((a) => {
+    if (isImage(a.mime)) {
+      return `<img class="pv" src="/api/assets/${a.id}" alt="${esc(a.filename)}">`;
     }
-  } else {
-    await api('/posts', { method: 'POST', body });
-  }
-  $('#postDlg').close();
-  toast('נשמר. הלוח עודכן.');
-  await Promise.all([renderBoard(), refreshTaskBadge()]);
-}
+    if (isVideo(a.mime)) {
+      return `<video class="pv" src="/api/assets/${a.id}" controls></video>`;
+    }
+    return `<a class="pvfile" href="/api/assets/${a.id}" target="_blank" rel="noopener">
+      📄 ${esc(a.filename)}</a>`;
+  }).join('');
 
-const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
+  const body = variant?.body?.trim();
 
-function fillSelect(sel, items, labelKey, emptyLabel) {
-  sel.innerHTML =
-    (emptyLabel ? `<option value="">${esc(emptyLabel)}</option>` : '') +
-    items.map((i) => `<option value="${i.id}">${esc(i[labelKey])}</option>`).join('');
+  $('#postDlgTitle').textContent = post.title;
+  $('#postPreview').innerHTML = `
+    <div class="pvmeta">
+      <span class="sw" style="background:${epColor(post.endpoint_id)}"></span>
+      ${esc(post.endpoint_name ?? 'ללא נקודת קצה')} · ${esc(post.channel_name ?? '')}
+      ${post.campaign_name ? ` · ${esc(post.campaign_name)}` : ''}
+      ${post.evergreen ? ' · ♻' : ''}
+    </div>
+    <div class="pvwhen">${esc(when)}${
+      post.assignee_name ? ` · אחראי: ${esc(post.assignee_name)}` : ''}</div>
+
+    ${media ? `<div class="pvmedia">${media}</div>` : ''}
+
+    ${body ? `<div class="pvbody">${esc(body)}</div>`
+            : '<div class="pvempty">אין עדיין טקסט לגרסה של המדיה הזו.</div>'}
+
+    ${variant && variant.status !== 'ready'
+      ? `<div class="pvwarn">הגרסה הזו במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
+         היא לא נחשבת מוכנה לפרסום.</div>` : ''}`;
 }
 
 /* ========================= מבצע דחוף ========================= */
@@ -1095,8 +1157,6 @@ function openCampaignForm(campaign, reload, defaultEndpoint) {
 
 /* ========================= תוכן ========================= */
 
-const isImage = (mime) => typeof mime === 'string' && mime.startsWith('image/');
-const kb = (n) => (n >= 1024 * 1024 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
 
 function campaignGrid(c) {
   const range = c.starts_on && c.ends_on
@@ -1371,7 +1431,6 @@ function openVariantForm({ item, channelId, campaign }, reload) {
   });
 }
 
-const isVideo = (mime) => typeof mime === 'string' && mime.startsWith('video/');
 
 /** שורת קובץ בטופס. ownOnly מבדיל בין קובץ של המדיה לקובץ משותף לזווית. */
 function assetLine(a, ownOnly) {
