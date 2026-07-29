@@ -125,6 +125,7 @@ function wireChrome() {
 
   wirePostDialog();
   wireUrgentDialog();
+  wireEngineDialog();
   wireGenericDialog();
 }
 
@@ -187,6 +188,7 @@ async function renderBoard() {
         <button data-week="${b.week.nextWeek}">›</button>
       </div>
       <button class="btn small" id="thisWeek">השבוע</button>
+      ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
       <div class="spacer"></div>
       <div class="legend">
         <span><i class="sw" style="background:var(--leg-promo)"></i>מכירתי</span>
@@ -213,6 +215,7 @@ async function renderBoard() {
     state.week = null;
     await renderBoard();
   }));
+  $('#runEngine')?.addEventListener('click', run(openEngine));
 
   if (editable) {
     $$('#board [data-add-channel]').forEach((btn) =>
@@ -386,6 +389,64 @@ async function commitUrgent() {
     ? 'נשלח לאישור — מופיע במשימות.'
     : `שובץ ב-${res.posts.length} ערוצים. הלוח עודכן.`);
   await Promise.all([renderBoard(), refreshTaskBadge()]);
+}
+
+/* ========================= מנוע השיבוץ ========================= */
+
+function wireEngineDialog() {
+  $('#eCancel').addEventListener('click', () => $('#engineDlg').close());
+  $('#eApply').addEventListener('click', run(async () => {
+    const res = await api('/engine/apply', { method: 'POST', body: { week: state.week } });
+    $('#engineDlg').close();
+    toast(`שובצו ${res.placed} פרסומים${res.holes ? ` · ${res.holes} חורים סומנו` : ''}.`);
+    await Promise.all([renderBoard(), refreshTaskBadge()]);
+  }));
+}
+
+async function openEngine() {
+  $('#enginePlan').innerHTML = '<div class="empty">מחשב…</div>';
+  $('#eApply').disabled = true;
+  $('#engineDlg').showModal();
+
+  const plan = await api('/engine/plan', { method: 'POST', body: { week: state.week } });
+
+  const placed = plan.placements.map((p) => `
+    <div class="camp"><div class="crow">
+      <span class="sw" style="width:9px;height:9px;border-radius:3px;background:${KIND_VAR[p.kind]}"></span>
+      <b>${esc(p.title)}</b>
+      <span class="d">${esc(p.channel_name)} · ${esc(p.day_label)} ${esc(p.time)}</span>
+    </div>
+    <div class="d" style="margin-top:4px">${esc(p.reason)}</div></div>`).join('');
+
+  const holes = plan.holes.map((h) => `
+    <div class="camp" style="border-color:var(--st-crit)"><div class="crow">
+      <b style="color:var(--st-crit)">מחכה לתוכן — ${esc(h.endpoint_name)}</b>
+      <span class="d">${esc(h.channel_name)} · ${esc(h.day_label)}</span>
+    </div>
+    <div class="d" style="margin-top:4px">${esc(h.reason)}${
+      h.days_since === null ? '' : ` · ${h.days_since} ימים בלי פרסום`}</div></div>`).join('');
+
+  const notes = (plan.notes ?? []).map((n) => `<div class="d">${esc(n)}</div>`).join('');
+  const r = plan.ratio;
+  const ratioLine = r
+    ? `<div class="sumline" style="margin:10px 0 0">אחרי השיבוץ: <b>${r.counts.promo} מכירתיים</b> ·
+       <b>${r.counts.value} ערך</b> · <b>${r.counts.hybrid} משולב</b>${
+         r.value_per_promo === null ? ''
+           : ` — יחס ${r.value_per_promo} ערך למכירתי (מינימום ${r.minRatio})`}</div>`
+    : '';
+
+  $('#enginePlan').innerHTML = `
+    <p class="sub" style="color:var(--muted);font-size:12.5px;margin-bottom:12px">
+      ${esc(plan.week.label)} — המנוע ממלא רק שטח פנוי. שום דבר שכבר על הלוח לא יזוז.</p>
+
+    ${plan.placements.length ? `<div class="subsec"><h4>ישובצו (${plan.placements.length})</h4>${placed}</div>` : ''}
+    ${plan.holes.length ? `<div class="subsec"><h4>יסומנו כחורים (${plan.holes.length})</h4>${holes}</div>` : ''}
+    ${ratioLine}
+    ${notes ? `<div class="whatif">${notes}</div>` : ''}
+    ${!plan.placements.length && !plan.holes.length
+      ? '<div class="empty">אין מה לשבץ — הלוח מלא, או שאין תוכן מוכן שמתאים לשטח שנשאר.</div>' : ''}`;
+
+  $('#eApply').disabled = plan.placements.length === 0 && plan.holes.length === 0;
 }
 
 /* ========================= אסטרטגיה ========================= */
@@ -681,6 +742,7 @@ function systemGroup(users, settings) {
         <div class="ibody">
           ${eng('מרווח מינימלי לאותה נקודה באותו ערוץ (ימים)', 'min_gap_days', s.min_gap_days)}
           ${eng('מקסימום מכירתיים ביום, בכל הערוצים', 'max_promo_per_day', s.max_promo_per_day)}
+          ${eng('כמה ערך נדרש על כל מכירתי', 'min_value_per_promo', s.min_value_per_promo, '0.5')}
           ${eng('"משולב" נספר כמכירתי', 'hybrid_weight', s.hybrid_weight, '0.1')}
           ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
         </div>

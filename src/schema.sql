@@ -122,4 +122,8 @@ create table if not exists engine_settings (
   content_alert_hours int not null default 48
 );
 
+-- כמה פוסטי ערך נדרשים על כל פוסט מכירתי. המנוע לא יחרוג מזה.
+alter table engine_settings
+  add column if not exists min_value_per_promo numeric(3,1) not null default 3;
+
 insert into engine_settings (id) values (1) on conflict (id) do nothing;

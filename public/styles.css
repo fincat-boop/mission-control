@@ -184,6 +184,9 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .whatif b { display: block; margin-bottom: 4px; }
 .whatif .warn2 { color: var(--st-warn); }
 .dactions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+#engineDlg { width: min(560px, 94vw); }
+#enginePlan { max-height: min(60vh, 460px); overflow-y: auto; }
+#enginePlan .subsec:first-child { margin-top: 0; }
 #tt { position: fixed; pointer-events: none; background: #0c0c0e; color: var(--ink-1); font-size: 12px; padding: 7px 11px; border: 1px solid var(--border); border-radius: 8px; z-index: 99; display: none; max-width: 250px; line-height: 1.55; }
 #toast { position: fixed; bottom: 24px; inset-inline-start: 50%; transform: translateX(50%); background: #0c0c0e; color: var(--ink-1); border: 1px solid var(--border); padding: 10px 20px; border-radius: 10px; font-size: 13px; display: none; z-index: 100; }
 #toast.err { border-color: var(--st-crit); color: #ffb4b6; }

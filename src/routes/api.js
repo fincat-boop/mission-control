@@ -5,6 +5,7 @@ import {
   issueSession, requireAuth, requirePerm,
 } from '../auth.js';
 import { buildBoard, strategyAllocation, weekMeta, ymd } from '../board.js';
+import { planWeek } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 
 const r = Router();
@@ -104,6 +105,50 @@ r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
   if (!post) return bad(res, 'אין שיבוץ שממתין לאישור עם המזהה הזה', 404);
   await query(`update tasks set done = true, done_at = now() where post_id = $1`, [post.id]);
   res.json({ post });
+}));
+
+/* ========================= מנוע השיבוץ ========================= */
+
+/** תכנון בלבד — לא נכתב כלום */
+r.post('/engine/plan', requirePerm('content'), wrap(async (req, res) => {
+  res.json(await planWeek(req.body?.week));
+}));
+
+/** ביצוע התכנון. מריץ תכנון טרי כדי שלא ייכתב משהו על סמך מצב ישן. */
+r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
+  const plan = await planWeek(req.body?.week);
+  if (plan.placements.length === 0 && plan.holes.length === 0) {
+    return bad(res, 'אין מה לשבץ — הלוח מלא או שאין תוכן מוכן');
+  }
+
+  const created = [];
+  for (const p of plan.placements) {
+    created.push(await one(
+      `insert into posts (channel_id, endpoint_id, content_id, title, kind,
+                          scheduled_at, status, note)
+       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
+      [p.channel_id, p.endpoint_id, p.content_id, p.title, p.kind, p.scheduled_at, p.reason]
+    ));
+  }
+
+  const holes = [];
+  for (const h of plan.holes) {
+    const post = await one(
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note)
+       values ($1,$2,'מחכה לתוכן',$3,$4,'hole',$5) returning *`,
+      [h.channel_id, h.endpoint_id, h.kind, h.scheduled_at, h.reason]
+    );
+    holes.push(post);
+    await query(
+      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
+       values ($1,$2,'write',$3,$4,true,$5)`,
+      [`לכתוב: תוכן ערך על "${h.endpoint_name}" ל${h.channel_name}`,
+       `${h.reason} · הלוח מחכה לזה ל${h.day_label}`,
+       post.id, h.endpoint_id, h.date]
+    );
+  }
+
+  res.status(201).json({ placed: created.length, holes: holes.length });
 }));
 
 /* ========================= מבצע דחוף ========================= */
@@ -389,7 +434,8 @@ r.get('/settings', wrap(async (_req, res) => {
 
 r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
   const s = await updateById('engine_settings',
-    ['min_gap_days', 'max_promo_per_day', 'hybrid_weight', 'content_alert_hours'],
+    ['min_gap_days', 'max_promo_per_day', 'hybrid_weight', 'content_alert_hours',
+     'min_value_per_promo'],
     1, req.body);
   res.json({ settings: s });
 }));
