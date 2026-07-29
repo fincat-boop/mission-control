@@ -484,13 +484,35 @@ async function openEngine() {
 
 /* ========================= אסטרטגיה ========================= */
 
-// מיפוי מצב הקמפיין לצבע השבב
-const TONE_CLASS = { good: 'on', warn: '', bad: 'bad', muted: '' };
-
-// הצבע נגזר מהמזהה ולא מהמיקום ברשימה. הרשימה ממוינת לפי משקל, ולכן
-// גזירה לפי מיקום הייתה מערבבת את כל הצבעים בכל שינוי משקל.
+// הצבע נגזר מהמזהה ולא מהמיקום ברשימה, כדי שהוא יישאר זהות של הנקודה
 const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429', '#2ec5c0'];
 const epColor = (id) => EP_COLORS[Number(id) % EP_COLORS.length];
+
+const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+                   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+const MONTHS_SHOWN = 12;
+
+/** תחילת החלון: חודש אחד אחורה מהיום */
+function ganttBase() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth() - 1, 1);
+}
+
+const monthIndex = (dateStr, base) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  return (d.getFullYear() - base.getFullYear()) * 12 + (d.getMonth() - base.getMonth());
+};
+
+/** מזיז תאריך במספר חודשים, בלי לגלוש לחודש הבא כשהיום לא קיים */
+function shiftMonths(dateStr, months) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const day = d.getDate();
+  const moved = new Date(d.getFullYear(), d.getMonth() + months, 1);
+  const lastDay = new Date(moved.getFullYear(), moved.getMonth() + 1, 0).getDate();
+  moved.setDate(Math.min(day, lastDay));
+  return ymd(moved);
+}
 
 async function renderStrategy() {
   const data = await api('/strategy');
@@ -499,113 +521,99 @@ async function renderStrategy() {
   $('#strategy').innerHTML = `
     <div class="toolbar">
       <div>
-        <h2 style="font-size:15px;font-weight:650">חלוקת השטח בין נקודות הקצה</h2>
+        <h2 style="font-size:15px;font-weight:650">ציר הקמפיינים</h2>
         <p class="sub" style="color:var(--muted);font-size:12.5px;margin-top:3px">
-          כמה מקום כל נקודה מקבלת לאורך הזמן. הפירוק לקמפיינים נמצא בטאב "קמפיינים ותוכן".</p>
+          כל קפסולה היא קמפיין לאורך חייו, בצבע נקודת הקצה שלו.
+          ${can('settings') ? 'גוררים אותה כדי להזיז את הקמפיין בזמן.' : ''}
+          המשקלים והתדירויות מוגדרים בטאב "ניהול".</p>
       </div>
     </div>
 
-    <div class="panel" style="margin-bottom:18px">${shareBand(data.timeline, data.milestones)}</div>
+    <div class="panel" style="margin-bottom:18px">${gantt(data)}</div>
 
-    <div class="setgroup" style="max-width:none">
-      <h2>נקודות הקצה</h2>
-      <p class="sub">המשקל קובע כמה שטח מגיע לנקודה כשאין נתח מפורש בקמפיין.</p>
-      <div class="eplist">${data.endpoints.map((e) => endpointCard(e, data.allocation)).join('')
-        || '<div class="empty">אין נקודות קצה. מוסיפים אותן בטאב "ניהול".</div>'}</div>
-    </div>
-
-    <div class="panel" style="max-width:640px;margin-top:16px">${allocPanel(data.allocation)}</div>`;
+    <div class="panel" style="max-width:640px">${allocPanel(data.allocation)}</div>`;
 
   wireStrategy();
 }
 
-/**
- * שורה לכל נקודת קצה על ציר זמן משותף.
- * גובה העמודה בכל חודש הוא הנתח של הנקודה באותו חודש, כך שרואים גם את
- * הרצף של כל נקודה לאורך הזמן וגם את החפיפות ביניהן באותו חודש.
- */
-function shareBand(timeline, milestones) {
-  const months = timeline.months;
-  if (!months.some((m) => m.segments.length)) {
-    return '<div class="empty">אין קמפיינים פעילים, ולכן אין שטח לחלק.</div>';
+function gantt(data) {
+  const base = ganttBase();
+  const dated = data.endpoints
+    .flatMap((e) => e.campaigns
+      .filter((c) => c.active && c.starts_on && c.ends_on)
+      .map((c) => ({ ...c, endpoint_name: e.name })));
+
+  if (!dated.length) {
+    return '<div class="empty">אין קמפיינים עם תאריכים.</div>';
   }
 
-  // רק נקודות שיש להן שטח כלשהו בחלון הזמן המוצג
-  const active = state.endpoints.filter((e) =>
-    months.some((m) => m.segments.some((s) => s.endpoint_id === e.id)));
+  const months = Array.from({ length: MONTHS_SHOWN }, (_, i) => {
+    const d = new Date(base.getFullYear(), base.getMonth() + i, 1);
+    const now = new Date();
+    return {
+      label: HE_MONTHS[d.getMonth()],
+      year: d.getFullYear(),
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      is_now: d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth(),
+    };
+  });
 
-  const cols = `170px repeat(${months.length}, 1fr)`;
-
-  const header = `<div class="trow head" style="grid-template-columns:${cols}">
-    <span></span>
+  const header = `<div class="gmonths">
+    <span class="glabel"></span>
     ${months.map((m) => {
-      const marks = milestones.filter((x) => x.on_date.slice(0, 7) === m.key);
+      const marks = data.milestones.filter((x) => x.on_date.slice(0, 7) === m.key);
       return `<span class="${m.is_now ? 'now' : ''}">${esc(m.label)}
-        ${marks.map((x) => `<i class="mmark" data-tt="אבן דרך: ${esc(x.label)}">◆</i>`).join('')}
-      </span>`;
+        ${marks.map((x) => `<i data-tt="אבן דרך: ${esc(x.label)}">◆</i>`).join('')}</span>`;
     }).join('')}
   </div>`;
 
-  const rows = active.map((e) => {
-    const cells = months.map((m) => {
-      const seg = m.segments.find((s) => s.endpoint_id === e.id);
-      if (!seg) return `<span class="cellbar${m.is_now ? ' now' : ''}"></span>`;
-      const tip = `${e.name} · ${esc(m.label)} · ${seg.pct}%` +
-                  (seg.campaigns.length ? ` · ${seg.campaigns.join(', ')}` : '');
-      return `<span class="cellbar${m.is_now ? ' now' : ''}" data-tt="${esc(tip)}">
-        <i style="height:${Math.max(8, seg.pct)}%;background:${epColor(e.id)}"></i>
-        ${seg.pct >= 20 ? `<b>${seg.pct}%</b>` : ''}
-      </span>`;
-    }).join('');
+  // שורה לכל נקודת קצה. קמפיינים שחופפים בזמן יורדים לנתיב נוסף.
+  const rows = data.endpoints.map((e) => {
+    const mine = dated.filter((c) => c.endpoint_id === e.id)
+      .sort((a, b) => a.starts_on.localeCompare(b.starts_on));
+    if (!mine.length) return '';
 
-    return `<div class="trow" style="grid-template-columns:${cols}">
-      <span class="tname">
-        <i class="dot" style="background:${epColor(e.id)}"></i>
-        <span>${esc(e.name)}<em>משקל ${e.importance}</em></span>
-      </span>${cells}
+    const lanes = [];
+    for (const c of mine) {
+      const from = Math.max(0, monthIndex(c.starts_on, base));
+      const to = Math.min(MONTHS_SHOWN, monthIndex(c.ends_on, base) + 1);
+      if (to <= from) continue;
+      let lane = lanes.find((l) => l.every((x) => x.to <= from || x.from >= to));
+      if (!lane) { lane = []; lanes.push(lane); }
+      lane.push({ ...c, from, to });
+    }
+
+    const laneHtml = lanes.map((lane) => `
+      <div class="glane">
+        ${lane.map((c) => capsule(c, e)).join('')}
+      </div>`).join('');
+
+    return `<div class="grow2">
+      <span class="glabel">
+        <i class="dot" style="background:${epColor(e.id)}"></i>${esc(e.name)}
+      </span>
+      <div class="gtrack">${laneHtml}</div>
     </div>`;
   }).join('');
 
-  return `<div class="tband">${header}${rows}</div>`;
+  return `<div class="gantt2">${header}${rows}
+    <div class="gnote">קפסולה נגררת בקפיצות של חודש. המנוע מפזר את הפוסטים
+      על המדיות לפי המשקל של נקודת הקצה.</div>
+  </div>`;
 }
 
-function endpointCard(e, allocation) {
-  const alloc = allocation.rows.find((r) => r.endpoint_id === e.id);
-  const running = e.campaigns.filter((c) => c.active).length;
-  const ro = !can('settings');
+function capsule(c, endpoint) {
+  const pct = (n) => (n / MONTHS_SHOWN) * 100;
+  const tip = `${c.name} · ${endpoint.name} · ${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` +
+              (c.share_pct != null ? ` · נתח ${c.share_pct}%` : ' · נתח נגזר מהמשקל');
 
-  return `<div class="epcard">
-    <div class="ephead">
-      <span class="dot" style="background:${epColor(e.id)}"></span>
-      <b>${esc(e.name)}</b>
-      <span class="chip ${e.active ? 'on' : 'bad'}">${e.active ? 'פעילה' : 'מושבתת'}</span>
-    </div>
-
-    <div class="prow">
-      <label>משקל / חשיבות (1–10)</label>
-      <input type="number" min="1" max="10" value="${e.importance}"
-             data-ep-field="importance" data-id="${e.id}" ${ro ? 'disabled' : ''}>
-    </div>
-    <div class="prow">
-      <label>לפרסם לפחות פעם ב־ (ימים)</label>
-      <input type="number" min="1" value="${e.min_days_between}"
-             data-ep-field="min_days_between" data-id="${e.id}" ${ro ? 'disabled' : ''}>
-    </div>
-
-    <div class="epstats">
-      <span><b>${running}</b> קמפיינים</span>
-      <span><b>${e.content_count}</b> תכנים</span>
-      <span><b>${e.background_count ?? 0}</b> שוטפים ♻</span>
-    </div>
-
-    ${alloc ? `<div class="sumline" style="margin:8px 0 0">
-      נתח ${alloc.target_pct}% · בפועל ${alloc.actual_pct}%
-      ${alloc.lagging ? '<span class="off">⚠ מפגרת</span>' : '<span class="ok">✓</span>'}
-    </div>` : ''}
-
-    <button class="btn small" data-open-endpoint="${e.id}" style="margin-top:10px">
-      פתח את הקמפיינים שלה ←</button>
-  </div>`;
+  return `<button class="caps${c.urgent ? ' urgent' : ''}"
+    style="inset-inline-start:${pct(c.from)}%;width:${pct(c.to - c.from)}%;
+           background:${epColor(endpoint.id)}"
+    data-campaign="${c.id}" data-from="${c.starts_on}" data-to="${c.ends_on}"
+    data-tt="${esc(tip)}">
+    <span>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</span>
+  </button>`;
 }
 
 function allocPanel(alloc) {
@@ -630,21 +638,64 @@ function allocPanel(alloc) {
   </div>`;
 }
 
+/**
+ * גרירת קפסולה על הציר. הקפיצה היא חודש שלם — הזזה ביום בודד לא אומרת
+ * כלום ברזולוציה הזו, וקפיצה לחודש שומרת על היום בחודש.
+ */
 function wireStrategy() {
-  $$('#strategy [data-ep-field]').forEach((inp) =>
-    inp.addEventListener('change', run(async () => {
-      await api(`/endpoints/${inp.dataset.id}`,
-        { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value) } });
-      toast('נשמר.');
-      await renderStrategy();
-    })));
+  if (!can('settings')) return;
 
-  $$('#strategy [data-open-endpoint]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      state.planEndpoint = Number(b.dataset.openEndpoint);
-      state.planCampaign = null;
+  $$('#strategy .caps').forEach((el) => {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const track = el.closest('.gtrack');
+      const colWidth = track.getBoundingClientRect().width / MONTHS_SHOWN;
+      const startX = e.clientX;
+      let deltaMonths = 0;
+
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging');
+
+      const move = (ev) => {
+        deltaMonths = Math.round((ev.clientX - startX) / colWidth);
+        // ב-RTL תנועה ימינה היא אחורה בזמן
+        const dir = getComputedStyle(track).direction === 'rtl' ? -1 : 1;
+        deltaMonths *= dir;
+        el.style.transform = `translateX(${(ev.clientX - startX)}px)`;
+        el.dataset.preview = deltaMonths;
+      };
+
+      const up = run(async () => {
+        el.releasePointerCapture(e.pointerId);
+        el.classList.remove('dragging');
+        el.style.transform = '';
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        if (!deltaMonths) return;
+
+        await api(`/campaigns/${el.dataset.campaign}`, {
+          method: 'PATCH',
+          body: {
+            starts_on: shiftMonths(el.dataset.from, deltaMonths),
+            ends_on: shiftMonths(el.dataset.to, deltaMonths),
+          },
+        });
+        toast(`הקמפיין הוזז ב-${Math.abs(deltaMonths)} חודשים.`);
+        await renderStrategy();
+      });
+
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+    });
+
+    // לחיצה בלי גרירה פותחת את הקמפיין
+    el.addEventListener('click', run(async () => {
+      if (el.dataset.preview && Number(el.dataset.preview) !== 0) return;
+      state.planCampaign = Number(el.dataset.campaign);
+      state.planBackground = false;
       await showTab('plan');
-    })));
+    }));
+  });
 }
 
 /* ========================= קמפיינים ותוכן ========================= */

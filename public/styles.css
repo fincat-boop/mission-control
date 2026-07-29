@@ -209,35 +209,43 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .userbadge b { color: var(--ink-1); font-weight: 600; }
 .empty { color: var(--muted); font-size: 12.5px; padding: 18px 16px; }
 
-/* ============ אסטרטגיה: ציר זמן לפי נקודת קצה ============ */
-.tband { padding: 14px 16px 18px; overflow-x: auto; }
-.trow { display: grid; align-items: stretch; gap: 3px; min-width: 720px; }
-.trow + .trow { margin-top: 3px; }
-.trow.head > span {
-  text-align: center; font-size: 11.5px; color: var(--muted);
+/* ============ אסטרטגיה: ציר קמפיינים נגרר ============ */
+.gantt2 { padding: 14px 16px 16px; overflow-x: auto; }
+.gmonths, .grow2 { display: grid; grid-template-columns: 170px 1fr; min-width: 760px; }
+.gmonths { margin-bottom: 10px; }
+.gmonths > span:not(.glabel) { display: none; }
+.gmonths { grid-template-columns: 170px repeat(12, 1fr); }
+.gmonths > span:not(.glabel) {
+  display: block; text-align: center; font-size: 11.5px; color: var(--muted);
   padding-bottom: 8px; border-bottom: 1px solid var(--border);
 }
-.trow.head > span.now { color: var(--ink-1); font-weight: 600; }
-.trow.head .mmark { color: var(--st-warn); font-style: normal; margin-inline-start: 3px; }
+.gmonths > span.now { color: var(--ink-1); font-weight: 600; }
+.gmonths i { font-style: normal; color: var(--st-warn); margin-inline-start: 3px; }
 
-.trow .tname {
+.grow2 { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.grow2:last-of-type { border-bottom: none; }
+.glabel {
   display: flex; align-items: center; gap: 8px; font-size: 12.5px;
   padding-inline-end: 12px; min-width: 0;
 }
-.trow .tname .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.trow .tname > span { min-width: 0; }
-.trow .tname em { display: block; font-style: normal; font-size: 11px; color: var(--muted); }
+.glabel .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
-.trow .cellbar {
-  position: relative; height: 40px; display: flex; align-items: flex-end;
-  justify-content: center; background: var(--panel-2); border-radius: 5px;
+.gtrack { position: relative; }
+.glane { position: relative; height: 30px; }
+.glane + .glane { margin-top: 4px; }
+
+.caps {
+  position: absolute; inset-block: 2px; font: inherit; font-size: 11.5px; font-weight: 600;
+  border: none; border-radius: 999px; color: rgba(0,0,0,.75);
+  padding: 0 11px; cursor: grab; text-align: start; overflow: hidden;
+  display: flex; align-items: center; touch-action: none;
 }
-.trow .cellbar.now { outline: 1px solid var(--accent); outline-offset: -1px; }
-.trow .cellbar i { display: block; width: 100%; border-radius: 5px; }
-.trow .cellbar b {
-  position: absolute; inset-block-end: 50%; transform: translateY(50%);
-  font-size: 10.5px; font-weight: 600; color: rgba(0,0,0,.65);
-}
+.caps span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caps:hover { filter: brightness(1.12); }
+.caps.urgent { box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
+.caps.dragging { cursor: grabbing; opacity: .85; z-index: 5; }
+
+.gnote { font-size: 11.5px; color: var(--muted); padding-top: 12px; }
 
 /* ============ אסטרטגיה: כרטיסי נקודות קצה ============ */
 .eplist { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
