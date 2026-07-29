@@ -266,6 +266,8 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 }
 .slot .ttl { font-size: 12.5px; line-height: 1.35; }
 .slot .lbl { font-size: 11px; color: var(--muted); }
+.lbl.ever, .chip.ever { color: var(--leg-value); }
+.chip.ever { border-color: var(--leg-value); }
 .slot.empty .sbody { align-items: center; justify-content: center; text-align: center; }
 .slot.empty .plus { font-size: 22px; color: var(--st-crit); line-height: 1; }
 .slot.empty.past .plus { color: var(--muted); }

@@ -879,6 +879,7 @@ function slotCard(s, c) {
                  border-color:${KIND_VAR[item.kind]}">${esc(KIND_HE[item.kind])}</div>`}
       <b class="ttl">${esc(item.title)}</b>
       <span class="lbl">${esc(where)}</span>
+      ${item.evergreen ? '<span class="lbl ever">♻ evergreen</span>' : ''}
       ${files.length ? `<span class="lbl">📎 ${files.length} קבצים</span>` : ''}
     </div>
   </div>`;
@@ -891,6 +892,8 @@ function looseSection(loose) {
       <span class="sw" style="background:${KIND_VAR[c.kind]}"></span>
       <b>${esc(c.title)}</b>
       <span style="color:var(--muted)">${esc(c.endpoint_name)}</span>
+      ${c.evergreen ? '<span class="chip ever">♻ evergreen</span>'
+                    : '<span class="chip">חד-פעמי</span>'}
       <span class="chip ${c.placements ? 'on' : ''}">${
         c.placements ? `שובץ ${c.placements}×` : 'לא שובץ'}</span>
       ${can('content') ? `<span style="margin-inline-start:auto;display:flex;gap:6px">
@@ -992,6 +995,10 @@ function openContentForm({ item, campaign, slot }, reload) {
       { name: 'ready_channel_ids', label: 'מוכן לערוצים', type: 'multicheck',
         options: state.channels.map((c) => [c.id, c.name]),
         value: item?.ready_channel_ids },
+      { name: 'evergreen', label: 'Evergreen — אפשר לפרסם שוב ושוב', type: 'checkbox',
+        value: item?.evergreen },
+      { name: 'reuse_after_days', label: 'מרווח בין חזרות (ימים) — ריק = ברירת המחדל של המנוע',
+        type: 'number', value: item?.reuse_after_days },
       { name: '__files', label: 'תמונות ומסמכים', type: 'files', existing: existingFiles },
     ],
     extraActions: item && can('content')

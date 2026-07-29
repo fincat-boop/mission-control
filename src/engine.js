@@ -61,6 +61,10 @@ export async function planWeek(anchorDate) {
     existing.filter((p) => p.content_id).map((p) => `${p.channel_id}:${p.content_id}`)
   );
 
+  // ההיסטוריה המלאה של כל פריט תוכן — בלעדיה תוכן חד-פעמי היה חוזר לאוויר
+  // בכל שבוע שבו הוא לא במקרה משובץ
+  const history = await contentHistory();
+
   // המרווח האחרון של כל נקודה בכל ערוץ, כדי לכבד min_gap_days
   const lastPerPair = await lastPostPerEndpointChannel();
 
@@ -74,7 +78,7 @@ export async function planWeek(anchorDate) {
 
     const pick = chooseForSlot({
       slot, endpoints, content, campaigns, debts, usage,
-      usedContent, lastPerPair, settings, placements,
+      usedContent, lastPerPair, settings, placements, history,
     });
     if (!pick) continue;
 
@@ -335,7 +339,7 @@ function buildSlots(week, channels, usage) {
 
 function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
-          usedContent, lastPerPair, settings } = ctx;
+          usedContent, lastPerPair, settings, history } = ctx;
 
   const minGap = settings?.min_gap_days ?? 7;
   const candidates = [];
@@ -354,6 +358,7 @@ function chooseForSlot(ctx) {
       c.endpoint_id === e.id &&
       (c.ready_channel_ids ?? []).includes(slot.channel_id) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
+      reusable(c, slot, history, settings) &&
       usage.allows(slot.channel_id, slot.dateKey, c.kind)
     );
     if (ready.length === 0) continue;
@@ -432,6 +437,42 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
   }
 
   return holes;
+}
+
+/**
+ * האם מותר להשתמש בפריט התוכן הזה במשבצת הזו.
+ *
+ * תוכן חד-פעמי (ברירת המחדל) יוצא לאוויר פעם אחת ונגמר.
+ * תוכן evergreen חוזר, אבל רק אחרי שעבר מספיק זמן מהפעם הקודמת באותו ערוץ.
+ */
+function reusable(c, slot, history, settings) {
+  const h = history.get(c.id);
+  if (!h) return true; // עוד לא פורסם מעולם
+
+  if (!c.evergreen) return false;
+
+  const lastHere = h.lastByChannel.get(slot.channel_id);
+  if (!lastHere) return true; // evergreen שעוד לא היה בערוץ הזה
+
+  const gap = Math.abs((new Date(slot.dateKey) - new Date(lastHere)) / 86400000);
+  return gap >= (c.reuse_after_days ?? settings?.min_gap_days ?? 7);
+}
+
+/** מתי כל פריט תוכן פורסם או שובץ, לכל ערוץ */
+async function contentHistory() {
+  const r = await rows(
+    `select content_id, channel_id, max(scheduled_at) as last_at
+       from posts
+      where content_id is not null
+        and status in ('scheduled','published','pending_approval')
+      group by content_id, channel_id`
+  );
+  const map = new Map();
+  for (const x of r) {
+    if (!map.has(x.content_id)) map.set(x.content_id, { lastByChannel: new Map() });
+    map.get(x.content_id).lastByChannel.set(x.channel_id, ymd(new Date(x.last_at)));
+  }
+  return map;
 }
 
 /** המרווח האחרון בין נקודת קצה לערוץ, לצורך min_gap_days */

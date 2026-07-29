@@ -331,7 +331,7 @@ r.get('/content', wrap(async (_req, res) => {
 }));
 
 const CONTENT_FIELDS = ['endpoint_id', 'campaign_id', 'kind', 'title', 'body',
-                        'ready_channel_ids', 'sort_order'];
+                        'ready_channel_ids', 'sort_order', 'evergreen', 'reuse_after_days'];
 
 r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
@@ -361,10 +361,11 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   // את ברירת המחדל '{}' כטקסט ונופל על אי-התאמה ל-integer[]
   const c = await one(
     `insert into content_items (endpoint_id, campaign_id, kind, title, body,
-                                ready_channel_ids, sort_order)
-     values ($1,$2,$3,$4,coalesce($5,''),coalesce($6::int[],'{}'::int[]),$7) returning *`,
+                                ready_channel_ids, sort_order, evergreen, reuse_after_days)
+     values ($1,$2,$3,$4,coalesce($5,''),coalesce($6::int[],'{}'::int[]),$7,
+             coalesce($8,false),$9) returning *`,
     [b.endpoint_id, b.campaign_id ?? null, b.kind, b.title, b.body ?? null,
-     b.ready_channel_ids ?? null, nextOrder]
+     b.ready_channel_ids ?? null, nextOrder, b.evergreen ?? null, b.reuse_after_days ?? null]
   );
   res.status(201).json({ content: c });
 }));

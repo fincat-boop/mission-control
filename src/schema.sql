@@ -84,6 +84,13 @@ alter table content_items
   add column if not exists campaign_id int references campaigns(id) on delete set null,
   add column if not exists sort_order int not null default 0;
 
+-- evergreen: תוכן שאפשר לפרסם שוב ושוב. ברירת המחדל היא חד-פעמי,
+-- כדי שפוסט השקה לא יחזור לאוויר מעצמו.
+-- reuse_after_days = כמה ימים להמתין בין חזרה לחזרה. null = min_gap_days של המנוע.
+alter table content_items
+  add column if not exists evergreen boolean not null default false,
+  add column if not exists reuse_after_days int;
+
 create index if not exists content_campaign_idx on content_items (campaign_id, sort_order);
 
 -- קבצים מצורפים לתוכן: תמונה, מסמך, כל דבר.

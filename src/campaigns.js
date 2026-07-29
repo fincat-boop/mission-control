@@ -83,6 +83,8 @@ export async function campaignsWithHealth() {
     const shaped = mine.map((x) => ({
       id: x.id, title: x.title, kind: x.kind, sort_order: x.sort_order,
       body: x.body, ready_channel_ids: x.ready_channel_ids,
+      evergreen: x.evergreen, reuse_after_days: x.reuse_after_days,
+      endpoint_id: x.endpoint_id, campaign_id: x.campaign_id,
       assets: assets.filter((a) => a.content_id === x.id),
       posts: myPosts.filter((p) => p.content_id === x.id).map((p) => ({
         id: p.id, status: p.status, scheduled_at: p.scheduled_at,
