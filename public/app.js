@@ -1785,7 +1785,7 @@ function wireManage(ro) {
  * השיחה נשמרת כאן בלקוח ונשלחת בכל פנייה — השרת חסר מצב.
  * `log` הוא מה שרואים על המסך; `history` הוא מה שהמודל רואה.
  */
-const ai = { history: [], log: [], busy: false, ready: null };
+const ai = { history: [], log: [], busy: false, ready: null, usd: 0 };
 
 const AI_INTRO = `<div class="aihint"><b>מה אני יכול</b>
 להסביר למה הלוח נראה כמו שהוא נראה, לאתר חורים ולהציע מה לעשות איתם.
@@ -1802,6 +1802,7 @@ function wireAIWidget() {
   $('#aiClear').addEventListener('click', () => {
     ai.history = [];
     ai.log = [];
+    ai.usd = 0;
     renderAI();
     $('#aiInput').focus();
   });
@@ -1856,6 +1857,10 @@ function renderAI() {
   }
   log.innerHTML = (ai.log.length ? '' : AI_INTRO) + ai.log.map(aiEntry).join('');
   log.scrollTop = log.scrollHeight;
+  // העלות המצטברת של השיחה — כדי שלא תהיה הפתעה בחשבון
+  $('#aiCost').textContent = ai.usd
+    ? `${ai.usd < 0.01 ? '<$0.01' : `$${ai.usd.toFixed(2)}`} בשיחה הזו`
+    : 'מבצע רק אחרי אישור';
 }
 
 function aiEntry(entry, i) {
@@ -1877,7 +1882,30 @@ function aiEntry(entry, i) {
            </div>`}
     </div>`;
   }
-  return `<div class="aimsg ${entry.role}">${esc(entry.text)}</div>`;
+  const html = entry.role === 'bot' ? aiText(entry.text) : esc(entry.text);
+  return `<div class="aimsg ${entry.role}">${html}</div>`;
+}
+
+/**
+ * העוזר מתבקש לכתוב טקסט רגיל, בלי markdown. מה שכן מותר לו זה שורת
+ * רשימה שמתחילה ב-"- ", ולכן רק היא מקבלת טיפול. ההימלטות קודמת להכול,
+ * כך שגם אם בכל זאת יגיע תו מסוכן הוא לא ייכנס כ-HTML.
+ */
+function aiText(text) {
+  return esc(text)
+    .split('\n')
+    .map((line) => {
+      if (/^\s*-\s+/.test(line)) {
+        return `<span class="li">${line.replace(/^\s*-\s+/, '')}</span>`;
+      }
+      // רשת ביטחון: אם בכל זאת חוזרת כותרת markdown, מציגים אותה ככותרת
+      // ולא כשורה שמתחילה בסולמיות
+      if (/^\s*#{1,6}\s+/.test(line)) {
+        return `<span class="h">${line.replace(/^\s*#{1,6}\s+/, '')}</span>`;
+      }
+      return line;
+    })
+    .join('\n');
 }
 
 // לחיצות על כפתורי ההצעות — האזנה אחת על המכל, כי התוכן מצויר מחדש
@@ -1915,6 +1943,7 @@ async function sendAI() {
       body: { message: text, messages: ai.history },
     });
     ai.history = res.messages;
+    ai.usd += res.usage?.usd ?? 0;
     ai.log.pop(); // "חושב…"
     ai.log.push({ type: 'msg', role: 'bot', text: res.reply });
     for (const proposal of res.proposals ?? []) ai.log.push({ type: 'proposal', proposal });

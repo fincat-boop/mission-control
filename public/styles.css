@@ -316,6 +316,10 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
   border-radius: 10px; padding: 8px 12px;
 }
 .aimsg.bot { align-self: flex-end; }
+/* שורת רשימה: הקו המפריד הופך לתבליט תלוי, כך שגלישה לשורה שנייה מיושרת */
+.aimsg .li { display: block; padding-inline-start: 14px; text-indent: -14px; }
+.aimsg .li::before { content: "• "; color: var(--muted); }
+.aimsg .h { display: block; font-weight: 650; margin-block: 4px 2px; }
 .aimsg.sys { align-self: center; color: var(--ink-2); font-size: 12px; text-align: center; }
 .aihint { color: var(--ink-2); font-size: 12.5px; line-height: 1.8; }
 .aihint b { display: block; color: var(--ink-1); margin-bottom: 6px; }

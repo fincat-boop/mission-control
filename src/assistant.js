@@ -22,6 +22,9 @@ import { buildBoard, ymd } from './board.js';
 import { planWeek } from './engine.js';
 
 const MODEL = 'claude-opus-5';
+// דולר למיליון טוקן, לפי המחירון של claude-opus-5
+const PRICE_IN = 5;
+const PRICE_OUT = 25;
 const MAX_TURNS = 8;          // סבבי כלים לפני שמפסיקים
 const PROPOSAL_TTL_MS = 30 * 60 * 1000;
 
@@ -118,8 +121,14 @@ function systemPrompt(user, snap) {
 5. אם משהו נראה לך רעיון רע — תגיד את זה במשפט, ואז תן למשתמש להחליט.
 
 ## סגנון
-עברית, ישיר ותכליתי. בלי הקדמות. משפטים קצרים. מספרים ותאריכים מדויקים.
-כשאתה מסביר החלטה — תגיד על מה היא מבוססת (איזה נתון ראית).
+אתה כותב בתוך חלון צ'אט צר, ולכן:
+- **טקסט רגיל בלבד.** בלי כותרות markdown, בלי \`##\`, בלי \`**\`, בלי טבלאות.
+  הדגשה נעשית במילים, לא בסימנים. רשימה נפתחת בקו מפריד "- " בתחילת שורה.
+- קצר. שתיים־שלוש פסקאות קצרות זה המקסימום לתשובה רגילה. אם יש עוד מה
+  לומר — תסיים במשפט אחד שמציע להעמיק, ותן למשתמש לבחור.
+- פותחים בשורה התחתונה: מה המצב או מה מצאת. הפירוט אחר כך.
+- עברית, ישיר, בלי הקדמות. מספרים ותאריכים מדויקים.
+- כשאתה מסביר החלטה — תגיד על מה היא מבוססת (איזה נתון ראית).
 
 ## מי מולך
 ${user.name}${user.is_owner ? ' (בעלים — כל ההרשאות)' : ''}
@@ -150,10 +159,18 @@ const READ_TOOLS = {
   },
 
   get_campaigns: {
-    description: 'כל הקמפיינים עם מצב המלאות שלהם: כמה תוכן חסר, מה הנתח בפועל מול המתוכנן.',
+    description: 'כל הקמפיינים עם מצב המלאות שלהם: כמה תוכן חסר, מה הנתח בפועל מול המתוכנן. ' +
+      'לפירוט ברמת הזווית והמדיה — get_content עם campaign_id.',
     input_schema: { type: 'object', properties: {} },
     run: async () => ({
-      campaigns: await campaignsWithHealth(),
+      // grid היא מטריצת התאים שהממשק מצייר — כ-10KB לקמפיין, ואותו מידע
+      // זמין דחוס יותר ב-get_content. בלי הגזימה הזו שאלה אחת עלתה פי שניים.
+      campaigns: (await campaignsWithHealth()).map(({ grid, content, ...c }) => ({
+        ...c,
+        content: (content ?? []).map((x) => ({
+          id: x.id, title: x.title, kind: x.kind, evergreen: x.evergreen,
+        })),
+      })),
       allocation: await currentAllocation(),
     }),
   },
@@ -758,24 +775,46 @@ export async function chat(user, history, message) {
 
   const messages = [...trimHistory(history), { role: 'user', content: message }];
   const proposals = [];
+  // מחיר משוער לשיחה — כדי שהעלות תהיה גלויה ולא הפתעה בסוף החודש
+  const spent = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
+  const cost = () => ({
+    input_tokens: spent.input + spent.cacheWrite + spent.cacheRead,
+    output_tokens: spent.output,
+    cached: spent.cacheRead,
+    usd: +(
+      (spent.input + spent.cacheWrite * 1.25 + spent.cacheRead * 0.1) / 1e6 * PRICE_IN
+      + spent.output / 1e6 * PRICE_OUT
+    ).toFixed(4),
+  });
 
   for (let turn = 0; turn < MAX_TURNS; turn += 1) {
     const res = await ask({
       model: MODEL,
       max_tokens: 8000,
       thinking: { type: 'adaptive' },
-      system,
+      // effort בינוני: העוזר קורא נתונים ומסביר, לא פותר בעיות קשות.
+      // ב-high כל שאלה לקחה כ-45 שניות — יותר מדי לחלון צ'אט.
+      output_config: { effort: 'medium' },
+      // ההגדרות והכלים לא משתנים בין סבבי הכלים של אותה שאלה. נקודת מטמון
+      // עליהם הופכת אותם לקריאה זולה מהסבב השני והלאה, במקום שליחה מלאה.
+      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+      cache_control: { type: 'ephemeral' },
       tools,
       messages,
     });
 
+    spent.input += res.usage.input_tokens;
+    spent.cacheWrite += res.usage.cache_creation_input_tokens ?? 0;
+    spent.cacheRead += res.usage.cache_read_input_tokens ?? 0;
+    spent.output += res.usage.output_tokens;
+
     messages.push({ role: 'assistant', content: res.content });
 
     if (res.stop_reason === 'refusal') {
-      return { messages, reply: 'לא הצלחתי לענות על זה.', proposals };
+      return { messages, reply: 'לא הצלחתי לענות על זה.', proposals, usage: cost() };
     }
     if (res.stop_reason !== 'tool_use') {
-      return { messages, reply: textOf(res.content), proposals };
+      return { messages, reply: textOf(res.content), proposals, usage: cost() };
     }
 
     const results = [];
@@ -796,6 +835,7 @@ export async function chat(user, history, message) {
     messages,
     reply: 'הסתבכתי — יותר מדי שלבים. נסה לנסח את הבקשה בצורה ממוקדת יותר.',
     proposals,
+    usage: cost(),
   };
 }
 
