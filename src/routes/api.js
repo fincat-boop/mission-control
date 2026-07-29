@@ -14,6 +14,8 @@ import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
 import { buildStats, readActivity } from '../stats.js';
 import { gapWarning } from '../gap.js';
 import { analyzeImport, runImport } from '../import.js';
+import { extract } from '../extract.js';
+import { analyzeDocument } from '../analyze.js';
 
 const r = Router();
 
@@ -766,6 +768,27 @@ r.post('/campaigns/:id/import/preview', requirePerm('content'), wrap(async (req,
     return bad(res, e.message);
   }
 }));
+
+/**
+ * ניתוח מסמך חופשי. המודל ממיר אותו לטבלה, והטבלה חוזרת ללקוח לעריכה
+ * ולאישור — היא לא נכתבת. הכתיבה עוברת אחר כך באותו נתיב ייבוא רגיל.
+ */
+r.post('/campaigns/:id/import/analyze', requirePerm('content'), upload.single('file'),
+  wrap(async (req, res) => {
+    if (!assistantReady()) {
+      return bad(res, 'הניתוח לא זמין — חסר מפתח API בהגדרות השרת', 503);
+    }
+    try {
+      const doc = req.file
+        ? extract(req.file)
+        : { kind: 'text', text: String(req.body?.text ?? ''), source: 'טקסט שהודבק' };
+      if (doc.kind === 'text' && !doc.text.trim()) return bad(res, 'אין מה לנתח');
+
+      res.json({ ...await analyzeDocument(req.params.id, doc), source: doc.source });
+    } catch (e) {
+      return bad(res, e.message, 502);
+    }
+  }));
 
 r.post('/campaigns/:id/import', requirePerm('content'), wrap(async (req, res) => {
   try {

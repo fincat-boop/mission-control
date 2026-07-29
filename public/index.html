@@ -111,13 +111,13 @@
   <h3>ייבוא תוכן מטבלה <small id="impCampaign"></small></h3>
   <div class="imphelp" id="impHelp"></div>
   <div class="frow">
-    <label for="impText">הדביקו כאן את הטבלה מ־Excel, או בחרו קובץ CSV</label>
-    <textarea id="impText" placeholder="בוחרים באקסל את התאים כולל שורת הכותרות, Ctrl+C, ומדביקים כאן."></textarea>
+    <label for="impText">הטבלה שתיובא — אפשר לערוך אותה כאן לפני שמייבאים</label>
+    <textarea id="impText" placeholder="מדביקים טבלה מ־Excel, או מעלים מסמך והמערכת תפרק אותו."></textarea>
   </div>
-  <div class="dactions" style="justify-content:space-between">
-    <span>
-      <button class="btn" id="impPick">בחר קובץ CSV</button>
-      <input type="file" id="impFile" accept=".csv,.tsv,.txt" hidden>
+  <div class="dactions" style="justify-content:space-between;flex-wrap:wrap">
+    <span style="display:flex;gap:10px">
+      <button class="btn" id="impPick">📄 העלה מסמך ונתח</button>
+      <input type="file" id="impFile" accept=".xlsx,.xlsm,.docx,.pdf,.csv,.tsv,.txt" hidden>
     </span>
     <span style="display:flex;gap:10px">
       <button class="btn" id="impCancel">ביטול</button>

@@ -1992,10 +1992,16 @@ function wireImportDialog() {
 
   $('#impFile').addEventListener('change', run(async (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    $('#impText').value = await file.text();
     e.target.value = '';
-    await checkImport();
+    if (!file) return;
+
+    // CSV כבר בפורמט שהמערכת מבינה, ואין טעם לשלם על ניתוח.
+    // כל השאר — אקסל, וורד, PDF — עובר דרך המודל.
+    if (/\.(csv|tsv|txt)$/i.test(file.name)) {
+      $('#impText').value = await file.text();
+      return void await checkImport();
+    }
+    await analyzeFile(file);
   }));
 
   $('#impCheck').addEventListener('click', run(checkImport));
@@ -2024,7 +2030,10 @@ function openImport(campaign, reload) {
     </table>
     <span>עמודת "סוג" מקבלת ערך / מכירתי / משולב, ואם היא חסרה הכול נחשב ערך.
     תא ריק פירושו שאין גרסה למדיה הזו. שורה שהכותרת שלה כבר קיימת בקמפיין מדולגת,
-    כך שאפשר לייבא שוב אחרי תיקון בלי ליצור כפילויות.</span>`;
+    כך שאפשר לייבא שוב אחרי תיקון בלי ליצור כפילויות.</span>
+    <span><b style="display:inline">אין לך את המבנה הזה?</b>
+    העלו את המסמך כמו שהוא — Excel, Word או PDF — והמערכת תפרק אותו לטבלה הזו.
+    התוצאה תופיע כאן לעריכה, ורק אחרי שתאשרו היא תיכנס.</span>`;
 
   $('#impRun').onclick = run(async () => {
     const btn = $('#impRun');
@@ -2043,6 +2052,45 @@ function openImport(campaign, reload) {
 
   $('#importDlg').showModal();
   $('#impText').focus();
+}
+
+/** מעלה מסמך לניתוח. התוצאה נוחתת בתיבה, ניתנת לעריכה, ואז נבדקת כרגיל. */
+async function analyzeFile(file) {
+  const out = $('#impResult');
+  const btns = [$('#impPick'), $('#impCheck'), $('#impRun')];
+  btns.forEach((b) => { b.disabled = true; });
+  out.innerHTML = `<div class="impbox">קורא את "${esc(file.name)}" ומפרק אותו… ` +
+                  'מסמך ארוך יכול לקחת דקה.</div>';
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`/api/campaigns/${impCampaign.campaign.id}/import/analyze`,
+      { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'הניתוח נכשל');
+
+    $('#impText').value = data.tsv;
+    const cost = data.usage?.usd
+      ? ` · עלות הניתוח ${data.usage.usd < 0.01 ? '<$0.01' : `$${data.usage.usd.toFixed(2)}`}`
+      : '';
+    out.innerHTML = `<div class="impbox ok"><b>זוהו ${data.count} זוויות</b>
+        ${esc(data.layout)}${esc(cost)}</div>` +
+      (data.notes?.length
+        ? `<div class="impbox warn"><b>מה שכדאי לבדוק</b>${
+            data.notes.map((n) => `<div>${esc(n)}</div>`).join('')}</div>`
+        : '');
+  } catch (e) {
+    out.innerHTML = `<div class="impbox bad">${esc(e.message)}</div>`;
+    return;
+  } finally {
+    btns.forEach((b) => { b.disabled = false; });
+    $('#impRun').disabled = true;
+  }
+  // הטבלה בתיבה — עכשיו היא עוברת את אותה בדיקה כמו טבלה שהודבקה ביד
+  const notes = $('#impResult').innerHTML;
+  await checkImport();
+  $('#impResult').innerHTML = notes + $('#impResult').innerHTML;
 }
 
 async function checkImport() {
