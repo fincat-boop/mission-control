@@ -222,9 +222,29 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .frow label { display: block; color: var(--ink-2); margin-bottom: 4px; font-size: 12px; }
 .frow input, .frow select, .frow textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--ink-1); }
 .frow textarea { min-height: 80px; resize: vertical; }
-.frow .checks { display: flex; flex-wrap: wrap; gap: 10px; }
-.frow .checks label { display: inline-flex; align-items: center; gap: 5px; margin: 0; color: var(--ink-1); font-size: 12.5px; }
-.frow .checks input { width: auto; accent-color: var(--accent); }
+/* מטרות לחיצה גדולות: הצ'קבוקסים היו דחוסים בשורה אחת וקשים לפגיעה */
+.frow .checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.frow .checks label {
+  display: inline-flex; align-items: center; gap: 7px; margin: 0;
+  color: var(--ink-1); font-size: 12.5px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+  background: var(--page);
+}
+.frow .checks label:hover { border-color: var(--accent); }
+.frow .checks label:has(input:checked) { border-color: var(--accent); background: var(--panel-2); }
+.frow .checks input { width: 15px; height: 15px; accent-color: var(--accent); }
+
+/* המדיות של הקמפיין, ישירות בשורה */
+.chanpick {
+  font: inherit; display: flex; flex-wrap: wrap; gap: 4px; cursor: pointer;
+  background: none; border: 1px dashed transparent; border-radius: 8px; padding: 3px 5px;
+}
+.chanpick:hover { border-color: var(--accent); }
+.chanpick i {
+  font-style: normal; font-size: 11px; color: var(--ink-2);
+  border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px;
+}
+.chanpick i.none { color: var(--st-warn); border-color: var(--st-warn); }
 .whatif { background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 14px 0; font-size: 12.5px; line-height: 1.8; }
 .whatif b { display: block; margin-bottom: 4px; }
 .whatif .warn2 { color: var(--st-warn); }

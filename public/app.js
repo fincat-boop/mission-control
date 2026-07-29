@@ -1027,9 +1027,14 @@ function campaignItem(c) {
   return `<div class="crow2" data-open-campaign="${c.id}">
     <div class="cinfo">
       <b>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</b>
-      <span class="d">${esc(range)} · ${
-        c.channels.length ? c.channels.map((x) => esc(x.name)).join(', ') : 'ללא מדיות'}</span>
+      <span class="d">${esc(range)}</span>
     </div>
+    <button class="chanpick" data-pick-channels="${c.id}"
+      data-tt="לחיצה לבחירת המדיות של הקמפיין">
+      ${c.channels.length
+        ? c.channels.map((x) => `<i>${esc(x.name)}</i>`).join('')
+        : '<i class="none">בחר מדיות</i>'}
+    </button>
     <div class="abar" style="max-width:150px" data-tt="${c.ready} מתוך ${c.required} מוכנים">
       <div class="actual" style="width:${pct}%"></div>
     </div>
@@ -1095,6 +1100,14 @@ function wirePlan(campaign, endpointId, content) {
       openCampaignForm(c, reload);
     }));
 
+  // בחירת מדיות ישירות מהשורה. קודם היא הייתה שדה אחד מתוך 14 בטופס העריכה.
+  $$('#plan [data-pick-channels]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const c = state.campaigns.find((x) => x.id === Number(b.dataset.pickChannels));
+      openChannelPicker(c, reload);
+    }));
+
   $$('#plan [data-toggle-pause]').forEach((b) =>
     b.addEventListener('click', run(async (e) => {
       e.stopPropagation();
@@ -1111,6 +1124,25 @@ function wirePlan(campaign, endpointId, content) {
     openCampaignForm(null, reload, endpointId));
 
   if (campaign) wireCampaignGrid(campaign, reload);
+}
+
+/** בחירת המדיות של קמפיין, בטופס אחד קצר במקום בתוך טופס העריכה המלא */
+function openChannelPicker(campaign, reload) {
+  if (!can('settings')) return toast('אין לך הרשאה לשנות את המדיות', true);
+
+  openGeneric({
+    title: `מדיות — ${campaign.name}`,
+    fields: [
+      { name: 'channel_ids', label: 'על אילו מדיות הקמפיין יושב', type: 'multicheck',
+        options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
+        value: campaign.channels?.map((c) => c.id) },
+    ],
+    onSave: async (v) => {
+      if (!v.channel_ids?.length) throw new Error('צריך לבחור לפחות מדיה אחת');
+      await api(`/campaigns/${campaign.id}`, { method: 'PATCH', body: v });
+      await reload();
+    },
+  });
 }
 
 function openCampaignForm(campaign, reload, defaultEndpoint) {
