@@ -492,6 +492,9 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
                    'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 
 const MONTHS_SHOWN = 12;
+// רזולוציית הציר היא חצי חודש: כל חודש נחלק ל-1 ול-16 בו
+const HALVES = MONTHS_SHOWN * 2;
+const MID_DAY = 16;
 
 /** תחילת החלון: חודש אחד אחורה מהיום */
 function ganttBase() {
@@ -504,15 +507,31 @@ const monthIndex = (dateStr, base) => {
   return (d.getFullYear() - base.getFullYear()) * 12 + (d.getMonth() - base.getMonth());
 };
 
-/** מזיז תאריך במספר חודשים, בלי לגלוש לחודש הבא כשהיום לא קיים */
-function shiftMonths(dateStr, months) {
+/** המשבצת של תאריך על ציר חצאי-החודשים */
+function halfIndex(dateStr, base) {
   const d = new Date(`${dateStr}T00:00:00`);
-  const day = d.getDate();
-  const moved = new Date(d.getFullYear(), d.getMonth() + months, 1);
-  const lastDay = new Date(moved.getFullYear(), moved.getMonth() + 1, 0).getDate();
-  moved.setDate(Math.min(day, lastDay));
-  return ymd(moved);
+  return monthIndex(dateStr, base) * 2 + (d.getDate() >= MID_DAY ? 1 : 0);
 }
+
+/** התאריך שבתחילת משבצת נתונה: ה-1 או ה-16 בחודש */
+function halfToDate(half, base) {
+  const month = Math.floor(half / 2);
+  const d = new Date(base.getFullYear(), base.getMonth() + month, half % 2 ? MID_DAY : 1);
+  return ymd(d);
+}
+
+// חשבון התאריכים לא עובר דרך מילישניות: המעבר לשעון חורף מוסיף או מוריד
+// שעה, ו-60 ימים הופכים ל-59. setDate ו-Date.UTC חסינים לזה.
+const addDays = (dateStr, days) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return ymd(d);
+};
+const daysBetweenDates = (a, b) => {
+  const [ay, am, ad] = a.split('-').map(Number);
+  const [by, bm, bd] = b.split('-').map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+};
 
 async function renderStrategy() {
   const data = await api('/strategy');
@@ -575,8 +594,8 @@ function gantt(data) {
 
     const lanes = [];
     for (const c of mine) {
-      const from = Math.max(0, monthIndex(c.starts_on, base));
-      const to = Math.min(MONTHS_SHOWN, monthIndex(c.ends_on, base) + 1);
+      const from = Math.max(0, halfIndex(c.starts_on, base));
+      const to = Math.min(HALVES, halfIndex(c.ends_on, base) + 1);
       if (to <= from) continue;
       let lane = lanes.find((l) => l.every((x) => x.to <= from || x.from >= to));
       if (!lane) { lane = []; lanes.push(lane); }
@@ -603,7 +622,7 @@ function gantt(data) {
 }
 
 function capsule(c, endpoint) {
-  const pct = (n) => (n / MONTHS_SHOWN) * 100;
+  const pct = (n) => (n / HALVES) * 100;
   const tip = `${c.name} · ${endpoint.name} · ${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` +
               (c.share_pct != null ? ` · נתח ${c.share_pct}%` : ' · נתח נגזר מהמשקל');
 
@@ -639,30 +658,33 @@ function allocPanel(alloc) {
 }
 
 /**
- * גרירת קפסולה על הציר. הקפיצה היא חודש שלם — הזזה ביום בודד לא אומרת
- * כלום ברזולוציה הזו, וקפיצה לחודש שומרת על היום בחודש.
+ * גרירת קפסולה על הציר, ברזולוציה של חצי חודש.
+ *
+ * ההתחלה נצמדת ל-1 או ל-16 בחודש, והסיום זז באותו מספר ימים בדיוק —
+ * כך אורך הקמפיין נשמר ולא מתקצר או מתארך תוך כדי הזזה.
  */
 function wireStrategy() {
   if (!can('settings')) return;
+
+  const base = ganttBase();
 
   $$('#strategy .caps').forEach((el) => {
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       const track = el.closest('.gtrack');
-      const colWidth = track.getBoundingClientRect().width / MONTHS_SHOWN;
+      const halfWidth = track.getBoundingClientRect().width / HALVES;
+      // ב-RTL תנועה שמאלה היא קדימה בזמן
+      const dir = getComputedStyle(track).direction === 'rtl' ? -1 : 1;
       const startX = e.clientX;
-      let deltaMonths = 0;
+      let deltaHalves = 0;
 
       el.setPointerCapture(e.pointerId);
       el.classList.add('dragging');
 
       const move = (ev) => {
-        deltaMonths = Math.round((ev.clientX - startX) / colWidth);
-        // ב-RTL תנועה ימינה היא אחורה בזמן
-        const dir = getComputedStyle(track).direction === 'rtl' ? -1 : 1;
-        deltaMonths *= dir;
-        el.style.transform = `translateX(${(ev.clientX - startX)}px)`;
-        el.dataset.preview = deltaMonths;
+        deltaHalves = Math.round(((ev.clientX - startX) / halfWidth) * dir);
+        el.style.transform = `translateX(${ev.clientX - startX}px)`;
+        el.dataset.preview = deltaHalves;
       };
 
       const up = run(async () => {
@@ -671,16 +693,21 @@ function wireStrategy() {
         el.style.transform = '';
         el.removeEventListener('pointermove', move);
         el.removeEventListener('pointerup', up);
-        if (!deltaMonths) return;
+        if (!deltaHalves) return;
+
+        const from = el.dataset.from;
+        const to = el.dataset.to;
+        const targetHalf = Math.max(0, halfIndex(from, base) + deltaHalves);
+        const newFrom = halfToDate(targetHalf, base);
+        const newTo = addDays(to, daysBetweenDates(from, newFrom));
 
         await api(`/campaigns/${el.dataset.campaign}`, {
-          method: 'PATCH',
-          body: {
-            starts_on: shiftMonths(el.dataset.from, deltaMonths),
-            ends_on: shiftMonths(el.dataset.to, deltaMonths),
-          },
+          method: 'PATCH', body: { starts_on: newFrom, ends_on: newTo },
         });
-        toast(`הקמפיין הוזז ב-${Math.abs(deltaMonths)} חודשים.`);
+
+        const steps = Math.abs(deltaHalves);
+        toast(steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
+                          : `הקמפיין הוזז ב-${steps} חצאי חודש.`);
         await renderStrategy();
       });
 

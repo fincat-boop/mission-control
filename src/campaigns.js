@@ -12,8 +12,19 @@ import { ymd } from './board.js';
  */
 
 const DAY = 86400000;
-const daysBetween = (a, b) =>
-  Math.max(0, Math.round((new Date(b) - new Date(a)) / DAY)) + 1;
+
+/**
+ * מספר הימים בין שני תאריכים, כולל שניהם.
+ * דרך Date.UTC ולא דרך הפרש מילישניות מקומי — מעבר שעון חורף/קיץ
+ * מוסיף או מוריד שעה ומקצר טווח של חודשיים ביום שלם.
+ */
+const daysBetween = (a, b) => {
+  const p = (s) => String(s).slice(0, 10).split('-').map(Number);
+  const [ay, am, ad] = p(a);
+  const [by, bm, bd] = p(b);
+  return Math.max(0, Math.round(
+    (Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / DAY)) + 1;
+};
 
 /**
  * הנתח שהקמפיין תופס בפועל.

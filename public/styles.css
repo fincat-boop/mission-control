@@ -230,7 +230,15 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 }
 .glabel .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
-.gtrack { position: relative; }
+/* קווי חודש וחצי-חודש, כדי שיהיה ברור לאן הקפסולה נוחתת */
+.gtrack {
+  position: relative;
+  background-image:
+    repeating-linear-gradient(to left,
+      var(--border) 0 1px, transparent 1px calc(100% / 12)),
+    repeating-linear-gradient(to left,
+      rgba(255,255,255,.045) 0 1px, transparent 1px calc(100% / 24));
+}
 .glane { position: relative; height: 30px; }
 .glane + .glane { margin-top: 4px; }
 
