@@ -1231,9 +1231,11 @@ function alertsPanel({ alerts, counts }) {
       <div class="panel"><div class="empty">אין התראות פתוחות. הכול בקצב.</div></div></div>`;
   }
 
+  // חומרת ההתראה מסומנת בנקודה, כמו בשבבי החמצן שבלוח
   const rows = alerts.map((a) => {
     const tone = ALERT_TONE[a.level];
-    return `<div class="task" style="border-inline-start:3px solid ${tone.color}">
+    return `<div class="task">
+      <span class="dot" style="background:${tone.color}" data-tt="${esc(tone.label)}"></span>
       <div class="tx">
         <b style="color:${tone.color}">${esc(a.title)}</b>
         <span>${esc(a.detail)}</span>
