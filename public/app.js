@@ -2059,8 +2059,10 @@ async function analyzeFile(file) {
   const out = $('#impResult');
   const btns = [$('#impPick'), $('#impCheck'), $('#impRun')];
   btns.forEach((b) => { b.disabled = true; });
-  out.innerHTML = `<div class="impbox">קורא את "${esc(file.name)}" ומפרק אותו… ` +
-                  'מסמך ארוך יכול לקחת דקה.</div>';
+  out.innerHTML = `<div class="impbox loading">
+      <span class="spinner"></span>
+      <span>קורא את "${esc(file.name)}" ומפרק אותו… מסמך ארוך יכול לקחת דקה.</span>
+    </div>`;
 
   try {
     const fd = new FormData();

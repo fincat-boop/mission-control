@@ -13,6 +13,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { one, rows } from './db.js';
+import { friendlyAiError } from './ai-errors.js';
 
 const MODEL = 'claude-opus-5';
 const MAX_CHARS = 200_000;      // מסמך ארוך מזה נחתך, עם הודעה למשתמש
@@ -144,15 +145,20 @@ export async function analyzeDocument(campaignId, doc) {
 
   // בסטרימינג ולא בקריאה רגילה: max_tokens גבוה על מסמך ארוך חוצה את
   // תקרת הזמן של בקשה יחידה, וה-SDK מסרב לשלוח אותה בלי סטרימינג
-  const stream = anthropic().messages.stream({
-    model: MODEL,
-    max_tokens: 32000,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCHEMA } },
-    system: prompt(campaign, channels),
-    messages: [{ role: 'user', content }],
-  });
-  const res = await stream.finalMessage();
+  let res;
+  try {
+    const stream = anthropic().messages.stream({
+      model: MODEL,
+      max_tokens: 32000,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCHEMA } },
+      system: prompt(campaign, channels),
+      messages: [{ role: 'user', content }],
+    });
+    res = await stream.finalMessage();
+  } catch (e) {
+    throw friendlyAiError(e);
+  }
 
   if (res.stop_reason === 'refusal') throw new Error('לא הצלחתי לנתח את המסמך הזה');
   if (res.stop_reason === 'max_tokens') {

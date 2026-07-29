@@ -341,6 +341,15 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .impbox.bad b { color: var(--st-crit); }
 .impbox.warn { border-color: var(--st-warn); }
 .impbox.warn b { color: var(--st-warn); }
+.impbox.loading { display: flex; align-items: center; gap: 10px; border-color: var(--accent); }
+/* ריבולבר קטן שמסתובב כל עוד המסמך בטעינה — עדיף על טקסט "טוען…" בלבד,
+   כי מהבהב שהמערכת חיה ולא נתקעה במהלך ניתוח שיכול לקחת עד דקה */
+.spinner {
+  width: 15px; height: 15px; flex: none; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* העוזר — ווידג'ט צ'אט מעוגן לפינת המסך.
    מתחת ל-toast ול-tooltip, ומעל התוכן. דיאלוגים מודאליים יושבים ב-top layer

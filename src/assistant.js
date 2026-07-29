@@ -23,6 +23,7 @@ import { planWeek } from './engine.js';
 import { VIA_HEADER } from './audit.js';
 import { buildStats, readActivity } from './stats.js';
 import { gapWarning } from './gap.js';
+import { friendlyAiError } from './ai-errors.js';
 
 const MODEL = 'claude-opus-5';
 // דולר למיליון טוקן, לפי המחירון של claude-opus-5
@@ -885,17 +886,7 @@ async function ask(params) {
   try {
     return await anthropic().messages.create(params);
   } catch (e) {
-    const known = {
-      401: 'המפתח (ANTHROPIC_API_KEY) לא תקין',
-      403: 'למפתח אין הרשאה לדגם הזה',
-      404: 'הדגם לא נמצא — ייתכן שהשם השתנה',
-      429: 'חריגה ממכסת הקריאות — כדאי לנסות בעוד דקה',
-      529: 'השירות עמוס כרגע — כדאי לנסות שוב',
-    }[e?.status];
-    if (known) throw new Error(known);
-    if (e?.status >= 500) throw new Error('תקלה בצד של הספק — כדאי לנסות שוב');
-    // 400 ודומיו: ההודעה של הספק היא המידע היחיד שיש, גם אם היא באנגלית
-    throw new Error(e?.error?.error?.message || e?.message || 'הקריאה נכשלה');
+    throw friendlyAiError(e);
   }
 }
 
