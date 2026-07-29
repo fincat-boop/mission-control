@@ -18,9 +18,11 @@ const problems = [];
 const DECL = /^(?:async\s+)?(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/gm;
 const declared = new Set([...src.matchAll(DECL)].map((m) => m[1]));
 
-// (?<!\.) — Date.UTC ודומיו הם גישה לתכונה, לא מזהה חופשי
+// (?<!\.) — Date.UTC ודומיו הם גישה לתכונה, לא מזהה חופשי.
+// טקסט בתוך <code> הוא מה שמוצג למשתמש (למשל שם משתנה סביבה) ולא קוד.
+const scanned = src.replace(/<code>[\s\S]*?<\/code>/g, '');
 const used = new Set(
-  [...src.matchAll(/(?<![.\w])([A-Z][A-Z0-9_]{2,})\b/g)].map((m) => m[1])
+  [...scanned.matchAll(/(?<![.\w])([A-Z][A-Z0-9_]{2,})\b/g)].map((m) => m[1])
 );
 // מילים ששייכות לשפה או למחרוזות ולא לקוד שלנו
 const IGNORE = new Set(['JSON', 'GET', 'POST', 'PATCH', 'PUT', 'DELETE',

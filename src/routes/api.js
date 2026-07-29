@@ -10,6 +10,7 @@ import {
 import { buildBoard, weekMeta, ymd } from '../board.js';
 import { planWeek } from '../engine.js';
 import { planUrgent } from '../urgent.js';
+import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
 
 const r = Router();
 
@@ -971,6 +972,36 @@ r.delete('/users/:id', requirePerm('users'), wrap(async (req, res) => {
   if (Number(req.params.id) === req.user.id) return bad(res, 'אי אפשר למחוק את עצמך');
   await query('delete from users where id = $1', [req.params.id]);
   res.json({ ok: true });
+}));
+
+/* ========================= העוזר ========================= */
+
+r.get('/assistant/status', (_req, res) => res.json({ ready: assistantReady() }));
+
+/**
+ * שיחה. ההיסטוריה נשמרת אצל הלקוח ונשלחת בכל פנייה — השרת חסר מצב.
+ * כלי כתיבה לא מבצעים כלום: הם מחזירים הצעות שממתינות לאישור.
+ */
+r.post('/assistant/chat', wrap(async (req, res) => {
+  const message = String(req.body?.message ?? '').trim();
+  if (!message) return bad(res, 'צריך לכתוב משהו');
+  if (!assistantReady()) return bad(res, 'העוזר לא מחובר — חסר מפתח API בהגדרות השרת', 503);
+
+  try {
+    res.json(await chat(req.user, req.body?.messages ?? [], message));
+  } catch (e) {
+    // שגיאת ספק (מפתח לא תקין, מכסה) — הודעה מובנת במקום "משהו נשבר"
+    return bad(res, `העוזר לא זמין כרגע: ${e.message}`, 502);
+  }
+}));
+
+/** ביצוע הצעה שהמשתמש אישר. עוברת דרך אותו נתיב API כמו פעולה ידנית. */
+r.post('/assistant/confirm', wrap(async (req, res) => {
+  const proposal = takeProposal(String(req.body?.proposal_id ?? ''), req.user.id);
+  if (!proposal) return bad(res, 'ההצעה כבר בוצעה או פגה — בקש מהעוזר להציע שוב', 410);
+
+  const result = await execute(proposal, req.headers.cookie);
+  res.json({ ok: true, summary: proposal.summary, result });
 }));
 
 /* ========================= עזר ========================= */

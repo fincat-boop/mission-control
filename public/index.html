@@ -12,6 +12,7 @@
   <div class="hrow">
     <h1>מרכז בקרה פרסומי <small>חתול פיננסי</small></h1>
     <div class="spacer"></div>
+    <button class="btn" id="btnAI">✨ עוזר</button>
     <button class="btn primary" id="btnUrgent">⚡ מבצע דחוף</button>
     <button class="btn small bell" id="btnAlerts" title="התראות">🔔<span class="badge" id="alertBadge" hidden></span></button>
     <span class="userbadge" id="userBadge"></span>
@@ -82,6 +83,20 @@
     <button class="btn" id="pOpenContent" style="margin-inline-end:auto">פתח בתוכן</button>
     <button class="btn" id="pDelete" style="color:var(--st-crit)">הסר מהלוח</button>
     <button class="btn primary" id="pClose">סגור</button>
+  </div>
+</dialog>
+
+<!-- העוזר -->
+<dialog id="aiDlg">
+  <h3>העוזר <small style="color:var(--ink-2);font-weight:400">מכיר את הנתונים · מבצע רק אחרי אישור</small></h3>
+  <div id="aiLog"></div>
+  <div class="frow" style="margin:12px 0 0">
+    <textarea id="aiInput" placeholder="שאל משהו, או בקש פעולה. למשל: למה אין לי אוויר על הוובינר השבוע?"></textarea>
+  </div>
+  <div class="dactions">
+    <button class="btn" id="aiClear" style="margin-inline-end:auto">שיחה חדשה</button>
+    <button class="btn" id="aiClose">סגור</button>
+    <button class="btn primary" id="aiSend">שלח</button>
   </div>
 </dialog>
 
