@@ -83,6 +83,9 @@ export async function planUrgent(input) {
 
       if (endpointId && sameDay.has(`${ch.id}:${dayKey}`)) continue;
 
+      // יום שהוגדר כחסום למדיה הזו — גם דחוף לא נכנס אליו
+      if ((ch.blocked_days ?? []).includes(day.getDay())) continue;
+
       const inSameWeek = (p) =>
         p.channel_id === ch.id && ymd(weekStart(new Date(p.scheduled_at))) === wkKey;
       const usedThisWeek = countIn(inSameWeek);

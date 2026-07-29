@@ -42,6 +42,10 @@ create table if not exists channels (
 alter table channels
   add column if not exists target_per_week numeric(4,1);
 
+-- ימים בשבוע שבהם המדיה לא מקבלת תוכן. 0 = ראשון ... 6 = שבת.
+alter table channels
+  add column if not exists blocked_days int[] not null default '{}';
+
 -- קמפיין הוא היחידה המרכזית: הוא נושא את התאריכים, החשיבות, הקצב והנתח.
 -- הוא ירש את התפקיד של strategy_allocations, שנמחקה.
 create table if not exists campaigns (

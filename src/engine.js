@@ -289,6 +289,10 @@ function buildUsage(channels, existing, settings) {
       const u = byChannel.get(channelId);
       if (!u || u.used >= u.budget) return false;
 
+      // יום שהוגדר כחסום למדיה הזו
+      const dow = new Date(`${dateKey}T00:00:00`).getDay();
+      if ((u.ch.blocked_days ?? []).includes(dow)) return false;
+
       const capField = { promo: 'max_promo_per_week', value: 'max_value_per_week',
                          hybrid: 'max_hybrid_per_week' }[kind];
       const cap = u.ch[capField];

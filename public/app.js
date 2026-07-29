@@ -53,6 +53,8 @@ const isImage = (mime) => typeof mime === 'string' && mime.startsWith('image/');
 const isVideo = (mime) => typeof mime === 'string' && mime.startsWith('video/');
 const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
 
+const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+
 const KIND_HE = { promo: 'מכירתי', value: 'ערך', hybrid: 'משולב' };
 const KIND_VAR = { promo: 'var(--leg-promo)', value: 'var(--leg-value)', hybrid: 'var(--leg-hybrid)' };
 
@@ -255,10 +257,15 @@ async function renderBoard() {
     const full = ch.used >= ch.max_per_week;
     const days = ch.days.map((day) => {
       const cards = day.posts.map((p) => postCard(p)).join('');
+      // יום חסום לא מקבל גרירה, ומסומן ויזואלית כדי שלא ינסו
+      const dow = new Date(`${day.date}T00:00:00`).getDay();
+      const blocked = (ch.blocked_days ?? []).includes(dow);
       // אין כאן יצירה ואין עריכה — רק צפייה וגרירה. הפרמטרים נקבעים בתוכן.
-      const drop = editable
+      const drop = editable && !blocked
         ? `data-drop-channel="${ch.id}" data-drop-date="${day.date}"` : '';
-      return `<td class="day" ${drop}>${cards}</td>`;
+      return `<td class="day${blocked ? ' blocked' : ''}" ${drop}
+        ${blocked ? `data-tt="${esc(ch.name)} לא מקבל תוכן בימי ${HE_DAYS[dow]}"` : ''}
+        >${cards}</td>`;
     }).join('');
     return `<tr>
       <td class="chan">
@@ -1585,6 +1592,16 @@ function channelItem(c, ro) {
       ${num('מזה — משולבים מקסימום', 'max_hybrid_per_week', c.max_hybrid_per_week, sw('hybrid'))}
       ${num('מזה — ערך מקסימום', 'max_value_per_week', c.max_value_per_week, sw('value'))}
       ${num('שטח ששמור לדברים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
+
+      <div class="prow" style="align-items:flex-start">
+        <label>ימים שבהם המדיה לא מקבלת תוכן</label>
+        <div class="checks" style="justify-content:flex-end">
+          ${HE_DAYS.map((d, i) => `<label>
+            <input type="checkbox" data-blocked="${c.id}" value="${i}"
+                   ${(c.blocked_days ?? []).includes(i) ? 'checked' : ''} ${ro ? 'disabled' : ''}>
+            ${d}</label>`).join('')}
+        </div>
+      </div>
       ${ro ? '' : `<div style="display:flex;gap:8px;margin-top:12px">
         <button class="btn small" data-toggle-channel="${c.id}" data-active="${c.active}">
           ${c.active ? 'השבת ערוץ' : 'הפעל ערוץ'}</button>
@@ -1660,6 +1677,16 @@ function wireManage(ro) {
       await api(`/channels/${inp.dataset.id}`,
         { method: 'PATCH', body: { [inp.dataset.chField]: raw === '' ? null : Number(raw) } });
       toast('נשמר.');
+    })));
+
+  // הימים החסומים נשמרים כקבוצה, כי הם מערך אחד ולא שדה בודד
+  $$('#manage [data-blocked]').forEach((cb) =>
+    cb.addEventListener('change', run(async () => {
+      const id = cb.dataset.blocked;
+      const days = $$(`[data-blocked="${id}"]:checked`).map((i) => Number(i.value));
+      await api(`/channels/${id}`, { method: 'PATCH', body: { blocked_days: days } });
+      toast(days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.`
+                        : 'כל הימים פתוחים.');
     })));
 
   $$('#manage [data-engine]').forEach((inp) =>

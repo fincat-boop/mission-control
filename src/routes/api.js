@@ -109,6 +109,14 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       }
     }
 
+    // יום שהמדיה לא מקבלת בו תוכן
+    const target = await one('select name, blocked_days from channels where id = $1', [channel]);
+    const dow = new Date(when).getDay();
+    if ((target?.blocked_days ?? []).includes(dow)) {
+      const names = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+      return bad(res, `${target.name} לא מקבל תוכן בימי ${names[dow]}`);
+    }
+
     // מעבר למדיה אחרת דורש שקיימת לתוכן גרסה למדיה הזו — אחרת היינו
     // מפרסמים שם ניסוח שנכתב למדיה אחרת
     if (b.channel_id && b.channel_id !== current.channel_id && current.content_id) {
@@ -747,7 +755,7 @@ r.get('/channels', wrap(async (_req, res) => {
 
 const CHANNEL_FIELDS = ['name', 'max_per_week', 'target_per_week', 'max_promo_per_week',
                         'max_hybrid_per_week', 'max_value_per_week', 'urgent_reserve_pct',
-                        'active', 'sort_order'];
+                        'blocked_days', 'active', 'sort_order'];
 
 r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
   if (!req.body?.name) return bad(res, 'צריך שם לערוץ');
