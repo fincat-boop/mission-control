@@ -23,7 +23,8 @@ for (const t of TABLES) {
   // הבייטים של הקבצים נשמרים בנפרד, אחרת ה-JSON מתנפח פי כמה
   const cols = t === 'content_assets'
     ? 'id, content_id, filename, mime, size_bytes, created_at' : '*';
-  dump.tables[t] = await rows(`select ${cols} from ${t} order by id`);
+  // order by 1 ולא by id: יש טבלאות עם מפתח מורכב ובלי עמודת id
+  dump.tables[t] = await rows(`select ${cols} from ${t} order by 1`);
 }
 
 await mkdir(outDir, { recursive: true });

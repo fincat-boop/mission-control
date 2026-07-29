@@ -56,11 +56,15 @@ await tx(async (client) => {
       );
     }
 
-    // יישור הרצף כדי שהמזהה הבא לא יתנגש בשורות ששוחזרו
-    if (t !== 'engine_settings') {
+    // יישור הרצף כדי שהמזהה הבא לא יתנגש בשורות ששוחזרו.
+    // מדלגים על טבלאות בלי עמודת id (מפתח מורכב) ועל טבלת ההגדרות.
+    const hasSerial = await client.query(
+      `select pg_get_serial_sequence($1, 'id') as seq`, [t]
+    );
+    if (hasSerial.rows[0]?.seq) {
       await client.query(
-        `select setval(pg_get_serial_sequence('${t}', 'id'),
-                       coalesce((select max(id) from ${t}), 1))`
+        `select setval($1, coalesce((select max(id) from ${t}), 1))`,
+        [hasSerial.rows[0].seq]
       );
     }
   }
