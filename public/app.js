@@ -716,14 +716,19 @@ function wireStrategy() {
         const newFrom = halfToDate(targetHalf, base);
         const newTo = addDays(to, daysBetweenDates(from, newFrom));
 
-        await api(`/campaigns/${el.dataset.campaign}`, {
+        const res = await api(`/campaigns/${el.dataset.campaign}`, {
           method: 'PATCH', body: { starts_on: newFrom, ends_on: newTo },
         });
 
         const steps = Math.abs(deltaHalves);
-        toast(steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
-                          : `הקמפיין הוזז ב-${steps} חצאי חודש.`);
+        const moved = res.moved_posts
+          ? ` · ${res.moved_posts} שיבוצים זזו איתו` : '';
+        toast((steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
+                           : `הקמפיין הוזז ב-${steps} חצאי חודש.`) + moved);
         await renderStrategy();
+
+        // הקמפיין נכנס לשבוע שכבר אפשר לתכנן — מציעים למלא אותו עכשיו
+        await offerEngine(newFrom, newTo);
       });
 
       el.addEventListener('pointermove', move);
@@ -738,6 +743,31 @@ function wireStrategy() {
       await showTab('plan');
     }));
   });
+}
+
+/**
+ * קמפיין שזז לתוך טווח שאפשר כבר לתכנן — מציעים למלא את השבוע.
+ * הזזת הקמפיין לבדה רק מסיטה את מה שכבר משובץ; פוסטים חדשים
+ * נוצרים רק כשהמנוע רץ, ובלי ההצעה הזו קל לפספס את זה.
+ */
+async function offerEngine(from, to) {
+  const today = ymd(new Date());
+  const weekEnd = addDays(ymd(weekStartOf(new Date())), 6);
+  const overlapsNow = from <= weekEnd && to >= today;
+  if (!overlapsNow) return;
+
+  if (!confirm('הקמפיין נכנס לשבוע הנוכחי. להריץ את המנוע ולראות מה הוא ממלא?')) return;
+  state.week = null;
+  await showTab('board');
+  await openEngine();
+}
+
+/** תחילת השבוע (ראשון) של תאריך נתון */
+function weekStartOf(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
 }
 
 /* ========================= קמפיינים ותוכן ========================= */

@@ -302,13 +302,47 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   if (b.starts_on && b.ends_on && b.starts_on > b.ends_on) {
     return bad(res, 'תאריך הסיום מוקדם מתאריך ההתחלה');
   }
+
+  const before = await one('select * from campaigns where id = $1', [req.params.id]);
+  if (!before) return bad(res, 'לא נמצא קמפיין כזה', 404);
+
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
-  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
   }
-  res.json({ campaign: c });
+
+  // הזזת קמפיין בזמן גוררת איתה את השיבוצים שלו. בלי זה הקמפיין זז
+  // והפוסטים נשארים מאחור, מנותקים מהחלון שהם אמורים לשרת.
+  let movedPosts = 0;
+  if (b.starts_on && before.starts_on && b.starts_on !== before.starts_on) {
+    const days = daysBetweenDates(before.starts_on, b.starts_on);
+    if (days !== 0) {
+      // רק מה שעוד לא יצא ועוד לא עבר. היסטוריה לא מזיזים.
+      const moved = await rows(
+        `update posts p
+            set scheduled_at = p.scheduled_at + ($1 || ' days')::interval
+           from content_items ci
+          where ci.id = p.content_id
+            and ci.campaign_id = $2
+            and p.status in ('scheduled','pending_approval','hole')
+            and p.scheduled_at >= now()
+          returning p.id`,
+        [days, c.id]
+      );
+      movedPosts = moved.length;
+    }
+  }
+
+  res.json({ campaign: c, moved_posts: movedPosts });
 }));
+
+/** מספר ימים בין שני תאריכים, בלי להיתקל במעבר שעון */
+function daysBetweenDates(a, b) {
+  const p = (s) => String(s).slice(0, 10).split('-').map(Number);
+  const [ay, am, ad] = p(a);
+  const [by, bm, bd] = p(b);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+}
 
 /* ========================= גרסאות לפי מדיה ========================= */
 
