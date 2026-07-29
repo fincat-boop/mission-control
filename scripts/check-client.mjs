@@ -26,7 +26,7 @@ const used = new Set(
 );
 // מילים ששייכות לשפה או למחרוזות ולא לקוד שלנו
 const IGNORE = new Set(['JSON', 'GET', 'POST', 'PATCH', 'PUT', 'DELETE',
-                        'UTF', 'MB', 'KB', 'URL', 'API', 'RTL', 'LTR']);
+                        'UTF', 'MB', 'KB', 'URL', 'API', 'RTL', 'LTR', 'CSS', 'HTML']);
 
 for (const name of used) {
   if (!declared.has(name) && !IGNORE.has(name) && !/^T\d/.test(name)) {

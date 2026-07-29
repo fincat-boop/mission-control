@@ -760,7 +760,7 @@ export async function chat(user, history, message) {
   const proposals = [];
 
   for (let turn = 0; turn < MAX_TURNS; turn += 1) {
-    const res = await anthropic().messages.create({
+    const res = await ask({
       model: MODEL,
       max_tokens: 8000,
       thinking: { type: 'adaptive' },
@@ -797,6 +797,28 @@ export async function chat(user, history, message) {
     reply: 'הסתבכתי — יותר מדי שלבים. נסה לנסח את הבקשה בצורה ממוקדת יותר.',
     proposals,
   };
+}
+
+/**
+ * קריאה למודל, עם תרגום שגיאות הספק להודעה שאפשר לפעול לפיה.
+ * בלי זה המשתמש מקבל JSON באנגלית מתוך ה-SDK.
+ */
+async function ask(params) {
+  try {
+    return await anthropic().messages.create(params);
+  } catch (e) {
+    const known = {
+      401: 'המפתח (ANTHROPIC_API_KEY) לא תקין',
+      403: 'למפתח אין הרשאה לדגם הזה',
+      404: 'הדגם לא נמצא — ייתכן שהשם השתנה',
+      429: 'חריגה ממכסת הקריאות — כדאי לנסות בעוד דקה',
+      529: 'השירות עמוס כרגע — כדאי לנסות שוב',
+    }[e?.status];
+    if (known) throw new Error(known);
+    if (e?.status >= 500) throw new Error('תקלה בצד של הספק — כדאי לנסות שוב');
+    // 400 ודומיו: ההודעה של הספק היא המידע היחיד שיש, גם אם היא באנגלית
+    throw new Error(e?.error?.error?.message || e?.message || 'הקריאה נכשלה');
+  }
 }
 
 const MAX_HISTORY = 40;

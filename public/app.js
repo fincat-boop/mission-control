@@ -219,7 +219,7 @@ function wireChrome() {
   wireUrgentDialog();
   wireEngineDialog();
   wireGenericDialog();
-  wireAIDialog();
+  wireAIWidget();
 }
 
 async function refreshTaskBadge() {
@@ -1793,31 +1793,56 @@ const AI_INTRO = `<div class="aihint"><b>מה אני יכול</b>
 אבל כל פעולה עוברת אצלך לאישור לפני שהיא קורית.
 במנוע השיבוץ אני לא נוגע: אני יכול להראות מה הוא היה מציע ולמה, לא לשנות אותו.</div>`;
 
-function wireAIDialog() {
-  $('#btnAI').addEventListener('click', openAI);
-  $('#aiClose').addEventListener('click', () => $('#aiDlg').close());
+const AI_OPEN_KEY = 'mb_ai_open';
+
+function wireAIWidget() {
+  $('#aiFab').addEventListener('click', () => openAI(true));
+  $('#aiClose').addEventListener('click', () => openAI(false));
   $('#aiSend').addEventListener('click', run(sendAI));
   $('#aiClear').addEventListener('click', () => {
     ai.history = [];
     ai.log = [];
     renderAI();
+    $('#aiInput').focus();
   });
-  $('#aiInput').addEventListener('keydown', (e) => {
+
+  const input = $('#aiInput');
+  input.addEventListener('keydown', (e) => {
     // Enter שולח, Shift+Enter יורד שורה
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       run(sendAI)();
     }
   });
+  // תיבת הכתיבה גדלה עם הטקסט עד לתקרה שנקבעת ב-CSS
+  input.addEventListener('input', autosizeAI);
+
+  // Esc סוגר את הווידג'ט כשהמיקוד בתוכו — בלי לפגוע בדיאלוגים
+  $('#aiWidget').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') openAI(false);
+  });
+
+  // נשאר פתוח בין רענונים אם ככה השארת אותו
+  if (localStorage.getItem(AI_OPEN_KEY) === '1') openAI(true);
 }
 
-const openAI = run(async () => {
+function autosizeAI() {
+  const el = $('#aiInput');
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+const openAI = run(async (open) => {
+  localStorage.setItem(AI_OPEN_KEY, open ? '1' : '0');
+  $('#aiPanel').hidden = !open;
+  $('#aiFab').hidden = open;
+  if (!open) return;
+
   if (ai.ready === null) {
     const { ready } = await api('/assistant/status');
     ai.ready = ready;
   }
   renderAI();
-  $('#aiDlg').showModal();
   $('#aiInput').focus();
 });
 
@@ -1878,6 +1903,7 @@ async function sendAI() {
 
   ai.busy = true;
   input.value = '';
+  autosizeAI();
   ai.log.push({ type: 'msg', role: 'me', text });
   ai.log.push({ type: 'msg', role: 'sys', text: 'חושב…' });
   renderAI();

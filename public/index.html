@@ -12,7 +12,6 @@
   <div class="hrow">
     <h1>מרכז בקרה פרסומי <small>חתול פיננסי</small></h1>
     <div class="spacer"></div>
-    <button class="btn" id="btnAI">✨ עוזר</button>
     <button class="btn primary" id="btnUrgent">⚡ מבצע דחוף</button>
     <button class="btn small bell" id="btnAlerts" title="התראות">🔔<span class="badge" id="alertBadge" hidden></span></button>
     <span class="userbadge" id="userBadge"></span>
@@ -86,19 +85,24 @@
   </div>
 </dialog>
 
-<!-- העוזר -->
-<dialog id="aiDlg">
-  <h3>העוזר <small style="color:var(--ink-2);font-weight:400">מכיר את הנתונים · מבצע רק אחרי אישור</small></h3>
-  <div id="aiLog"></div>
-  <div class="frow" style="margin:12px 0 0">
-    <textarea id="aiInput" placeholder="שאל משהו, או בקש פעולה. למשל: למה אין לי אוויר על הוובינר השבוע?"></textarea>
+<!-- העוזר — ווידג'ט קבוע בפינת המסך -->
+<div id="aiWidget">
+  <div class="aipanel" id="aiPanel" hidden>
+    <div class="aihead">
+      <b>העוזר</b>
+      <small>מבצע רק אחרי אישור</small>
+      <span class="spacer"></span>
+      <button class="aiico" id="aiClear" title="שיחה חדשה" aria-label="שיחה חדשה">⟳</button>
+      <button class="aiico" id="aiClose" title="סגור" aria-label="סגור">✕</button>
+    </div>
+    <div id="aiLog"></div>
+    <div class="aicompose">
+      <textarea id="aiInput" rows="1" placeholder="שאל משהו, או בקש פעולה…"></textarea>
+      <button class="btn primary small" id="aiSend">שלח</button>
+    </div>
   </div>
-  <div class="dactions">
-    <button class="btn" id="aiClear" style="margin-inline-end:auto">שיחה חדשה</button>
-    <button class="btn" id="aiClose">סגור</button>
-    <button class="btn primary" id="aiSend">שלח</button>
-  </div>
-</dialog>
+  <button id="aiFab" title="העוזר" aria-label="פתח את העוזר">✨</button>
+</div>
 
 <!-- דיאלוג כללי (הוספת ערוץ / נקודה / קמפיין / תוכן / משתמש) -->
 <dialog id="genDlg">
