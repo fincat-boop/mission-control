@@ -981,6 +981,8 @@ function wireContent(selected) {
 function openAngleForm({ item, campaign, slot }, reload) {
   const campaignOptions = [['', 'ללא קמפיין — תוכן שוטף'],
     ...state.campaigns.map((c) => [c.id, c.name])];
+  const inCampaign = !!(campaign?.id ?? item?.campaign_id);
+  const owner = state.campaigns.find((c) => c.id === (campaign?.id ?? item?.campaign_id));
 
   const existingFiles = (item?.assets ?? []).map((a) => `
     <div class="fileline">
@@ -992,14 +994,18 @@ function openAngleForm({ item, campaign, slot }, reload) {
     </div>`).join('');
 
   openGeneric({
-    title: item ? `זווית ${item.sort_order}` : `זווית חדשה${slot ? ` — מקום ${slot}` : ''}`,
+    title: (item ? `זווית ${item.sort_order}` : `זווית חדשה${slot ? ` — מקום ${slot}` : ''}`)
+      + (owner ? ` · ${owner.endpoint_name}` : ''),
     fields: [
       { name: 'title', label: 'המסר בקצרה', type: 'text', value: item?.title },
-      { name: 'endpoint_id', label: 'נקודת קצה', type: 'select',
-        options: state.endpoints.map((e) => [e.id, e.name]),
-        value: item?.endpoint_id ?? campaign?.endpoint_id },
       { name: 'campaign_id', label: 'קמפיין', type: 'select', options: campaignOptions,
         value: item?.campaign_id ?? campaign?.id ?? '' },
+      // נקודת הקצה מגיעה מהקמפיין. נשאלת רק לתוכן שוטף שאין לו קמפיין.
+      ...(inCampaign ? [] : [{
+        name: 'endpoint_id', label: 'נקודת קצה', type: 'select',
+        options: state.endpoints.map((e) => [e.id, e.name]),
+        value: item?.endpoint_id,
+      }]),
       { name: 'kind', label: 'סוג', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
         value: item?.kind },

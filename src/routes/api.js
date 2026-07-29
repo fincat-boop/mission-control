@@ -375,10 +375,17 @@ const CONTENT_FIELDS = ['endpoint_id', 'campaign_id', 'kind', 'title', 'body',
 
 r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
-  if (!b.endpoint_id || !b.title) return bad(res, 'צריך נקודת קצה וכותרת');
+  if (!b.title) return bad(res, 'צריך כותרת');
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג התוכן חייב להיות promo / value / hybrid');
   }
+
+  // נקודת הקצה מוגדרת על הקמפיין, לא על הזווית הבודדת
+  const endpointId = await resolveEndpoint(b);
+  if (!endpointId) {
+    return bad(res, 'תוכן שלא משויך לקמפיין צריך נקודת קצה');
+  }
+  b.endpoint_id = endpointId;
   // משבצת מפורשת מנצחת (מילוי משבצת מהציר). בלעדיה — סוף התור.
   let nextOrder = 0;
   if (b.campaign_id) {
@@ -425,10 +432,25 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
 }));
 
 r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
-  const c = await updateById('content_items', CONTENT_FIELDS, req.params.id, req.body);
+  const b = { ...req.body };
+  // מעבר לקמפיין אחר גורר איתו את נקודת הקצה שלו
+  if (b.campaign_id) {
+    const owner = await one('select endpoint_id from campaigns where id = $1', [b.campaign_id]);
+    if (owner) b.endpoint_id = owner.endpoint_id;
+  }
+  const c = await updateById('content_items', CONTENT_FIELDS, req.params.id, b);
   if (!c) return bad(res, 'לא נמצא תוכן כזה', 404);
   res.json({ content: c });
 }));
+
+/** נקודת הקצה של תוכן: מהקמפיין אם יש, אחרת מה שנשלח במפורש */
+async function resolveEndpoint(b) {
+  if (b.campaign_id) {
+    const c = await one('select endpoint_id from campaigns where id = $1', [b.campaign_id]);
+    if (c) return c.endpoint_id;
+  }
+  return b.endpoint_id ?? null;
+}
 
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   await query('delete from content_items where id = $1', [req.params.id]);
