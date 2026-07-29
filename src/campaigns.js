@@ -232,6 +232,61 @@ function paceOf(c, today, published, grid) {
   };
 }
 
+const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+                   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+/**
+ * חלוקת השטח בין נקודות הקצה, חודש אחר חודש.
+ *
+ * זו התמונה האסטרטגית: לא מה קורה בקמפיין מסוים, אלא כמה מקום כל נקודת קצה
+ * מקבלת לאורך הזמן. הנתח של כל חודש מנורמל ל-100% מהקמפיינים שרצים בו.
+ */
+export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
+  const [campaigns, endpoints] = await Promise.all([
+    rows('select * from campaigns where active = true'),
+    rows('select id, name, importance from endpoints where active = true order by importance desc, id'),
+  ]);
+
+  const now = new Date();
+  const base = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+  const monthCount = monthsBack + 1 + monthsAhead;
+
+  const months = Array.from({ length: monthCount }, (_, i) => {
+    const start = new Date(base.getFullYear(), base.getMonth() + i, 1);
+    const end = new Date(base.getFullYear(), base.getMonth() + i + 1, 0);
+    const from = ymd(start);
+    const to = ymd(end);
+
+    // הקמפיינים שנוגעים בחודש הזה
+    const live = campaigns.filter((c) =>
+      (!c.starts_on || c.starts_on <= to) && (!c.ends_on || c.ends_on >= from));
+
+    const weights = new Map();
+    for (const c of live) {
+      const w = c.share_pct != null ? c.share_pct : (c.importance ?? 5) * 5;
+      weights.set(c.endpoint_id, (weights.get(c.endpoint_id) ?? 0) + w);
+    }
+    const total = [...weights.values()].reduce((s, v) => s + v, 0);
+
+    return {
+      key: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`,
+      label: HE_MONTHS[start.getMonth()],
+      year: start.getFullYear(),
+      is_now: start.getFullYear() === now.getFullYear() && start.getMonth() === now.getMonth(),
+      segments: endpoints
+        .map((e) => ({
+          endpoint_id: e.id,
+          name: e.name,
+          pct: total ? Math.round(((weights.get(e.id) ?? 0) / total) * 100) : 0,
+        }))
+        .filter((s) => s.pct > 0),
+      campaign_count: live.length,
+    };
+  });
+
+  return { endpoints, months };
+}
+
 /**
  * חלוקת השטח בפועל מול הנתח שהוגדר, לקמפיינים שרצים עכשיו.
  */

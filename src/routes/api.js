@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { one, query, rows, tx } from '../db.js';
 import { buildAlerts } from '../alerts.js';
-import { angleCount, campaignsWithHealth, channelNeeds, currentAllocation } from '../campaigns.js';
+import { angleCount, campaignsWithHealth, channelNeeds, currentAllocation, shareTimeline } from '../campaigns.js';
 import {
   PUBLIC_USER_COLS, checkPassword, clearSession, hashPassword,
   issueSession, requireAuth, requirePerm,
@@ -605,6 +605,40 @@ r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
 r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   await query('delete from channels where id = $1', [req.params.id]);
   res.json({ ok: true });
+}));
+
+/* ========================= אסטרטגיה ========================= */
+
+/**
+ * התמונה ברמת נקודות הקצה: איך השטח מתחלק ביניהן לאורך הזמן,
+ * וכמה כל אחת קיבלה בפועל.
+ */
+r.get('/strategy', wrap(async (_req, res) => {
+  const [timeline, allocation, milestones, endpoints, campaigns] = await Promise.all([
+    shareTimeline(),
+    currentAllocation(),
+    rows(`select m.*, e.name as endpoint_name from strategy_milestones m
+            left join endpoints e on e.id = m.endpoint_id order by m.on_date`),
+    rows('select * from endpoints order by importance desc, id'),
+    rows(`select c.*, count(ci.id)::int as content_count,
+                 count(ci.id) filter (where ci.evergreen)::int as evergreen_count
+            from campaigns c
+            left join content_items ci on ci.campaign_id = c.id
+           group by c.id order by c.starts_on nulls last, c.id`),
+  ]);
+
+  // פירוק לכל נקודת קצה: קמפיינים, תמהיל סוגים, כמה מהתוכן חוזר
+  const byEndpoint = endpoints.map((e) => {
+    const mine = campaigns.filter((c) => c.endpoint_id === e.id);
+    return {
+      ...e,
+      campaigns: mine,
+      content_count: mine.reduce((s, c) => s + c.content_count, 0),
+      evergreen_count: mine.reduce((s, c) => s + c.evergreen_count, 0),
+    };
+  });
+
+  res.json({ timeline, allocation, milestones, endpoints: byEndpoint });
 }));
 
 /* ========================= התראות ========================= */

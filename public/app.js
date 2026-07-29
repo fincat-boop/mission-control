@@ -51,7 +51,7 @@ const hhmm = (iso) => new Date(iso).toTimeString().slice(0, 5);
 
 /* ========================= מצב ========================= */
 
-const TABS = ['board', 'campaigns', 'content', 'tasks', 'manage'];
+const TABS = ['board', 'strategy', 'plan', 'tasks', 'manage'];
 
 const state = {
   me: null,
@@ -60,7 +60,8 @@ const state = {
   endpoints: [],
   users: [],
   campaigns: [],
-  selectedCampaign: null,  // הקמפיין שנבחר בעמוד התוכן
+  planEndpoint: null,      // נקודת הקצה שנבחרה בדרילדאון
+  planCampaign: null,      // הקמפיין שנבחר בתוכה
   tab: 'board',
 };
 
@@ -96,8 +97,8 @@ async function boot() {
 
 const RENDERERS = {
   board: () => renderBoard(),
-  campaigns: () => renderCampaigns(),
-  content: () => renderContent(),
+  strategy: () => renderStrategy(),
+  plan: () => renderPlan(),
   tasks: () => renderTasks(),
   manage: () => renderManage(),
 };
@@ -480,183 +481,113 @@ async function openEngine() {
   $('#eApply').disabled = plan.placements.length === 0 && plan.holes.length === 0;
 }
 
-/* ========================= קמפיינים ========================= */
+/* ========================= אסטרטגיה ========================= */
 
-const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
-                   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
-
+// מיפוי מצב הקמפיין לצבע השבב
 const TONE_CLASS = { good: 'on', warn: '', bad: 'bad', muted: '' };
 
-async function renderCampaigns() {
-  const data = await api('/campaigns');
-  state.campaigns = data.campaigns;
+// צבע יציב לכל נקודת קצה, לפי המיקום שלה ברשימה
+const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429', '#2ec5c0'];
+const epColor = (id) => {
+  const i = state.endpoints.findIndex((e) => e.id === id);
+  return EP_COLORS[(i < 0 ? 0 : i) % EP_COLORS.length];
+};
 
-  const running = data.campaigns.filter((c) => c.phase === 'running');
-  const upcoming = data.campaigns.filter((c) => c.phase === 'upcoming');
-  const rest = data.campaigns.filter((c) => c.phase === 'ended' || c.phase === 'inactive');
+async function renderStrategy() {
+  const data = await api('/strategy');
+  state.endpoints = data.endpoints;
 
-  $('#campaigns').innerHTML = `
+  $('#strategy').innerHTML = `
     <div class="toolbar">
-      <div class="legend">
-        <span><b>${running.length}</b> רצים</span>
-        <span>·</span>
-        <span><b>${upcoming.length}</b> מתוכננים</span>
-        <span>·</span>
-        <span><b>${rest.length}</b> הסתיימו</span>
+      <div>
+        <h2 style="font-size:15px;font-weight:650">חלוקת השטח בין נקודות הקצה</h2>
+        <p class="sub" style="color:var(--muted);font-size:12.5px;margin-top:3px">
+          כמה מקום כל נקודה מקבלת לאורך הזמן. הפירוק לקמפיינים נמצא בטאב "קמפיינים ותוכן".</p>
       </div>
-      <div class="spacer"></div>
-      ${can('settings') ? '<button class="btn primary" id="addCampaign">＋ קמפיין חדש</button>' : ''}
     </div>
 
-    <div class="panel" style="margin-bottom:16px">${timeline(data)}</div>
+    <div class="panel" style="margin-bottom:18px">${shareBand(data.timeline, data.milestones)}</div>
 
-    ${group('רצים עכשיו', running)}
-    ${group('מתוכננים', upcoming)}
-    ${rest.length ? group('הסתיימו', rest) : ''}
+    <div class="setgroup" style="max-width:none">
+      <h2>נקודות הקצה</h2>
+      <p class="sub">המשקל קובע כמה שטח מגיע לנקודה כשאין נתח מפורש בקמפיין.</p>
+      <div class="eplist">${data.endpoints.map((e) => endpointCard(e, data.allocation)).join('')
+        || '<div class="empty">אין נקודות קצה. מוסיפים אותן בטאב "ניהול".</div>'}</div>
+    </div>
 
     <div class="panel" style="max-width:640px;margin-top:16px">${allocPanel(data.allocation)}</div>`;
 
-  wireCampaigns();
+  wireStrategy();
+}
 
-  function group(title, list) {
-    if (!list.length) return '';
-    return `<div class="setgroup" style="max-width:none">
-      <h2>${esc(title)}</h2>
-      <div class="panel">${list.map(campaignItem).join('')}</div>
+/** פס מצטבר: לכל חודש, איך 100% מהשטח מתחלקים בין נקודות הקצה */
+function shareBand(timeline, milestones) {
+  if (!timeline.months.some((m) => m.segments.length)) {
+    return '<div class="empty">אין קמפיינים פעילים, ולכן אין שטח לחלק.</div>';
+  }
+
+  const cols = timeline.months.map((m) => {
+    const stack = m.segments.map((s) =>
+      `<div class="seg" style="height:${s.pct}%;background:${epColor(s.endpoint_id)}"
+            data-tt="${esc(s.name)} · ${s.pct}% ב${esc(m.label)}">
+         ${s.pct >= 12 ? `<span>${s.pct}%</span>` : ''}
+       </div>`).join('') || '<div class="seg none" data-tt="אין קמפיין פעיל בחודש הזה"></div>';
+
+    const marks = milestones.filter((x) => x.on_date.slice(0, 7) === m.key);
+
+    return `<div class="mcol${m.is_now ? ' now' : ''}">
+      <div class="stack">${stack}</div>
+      <div class="mlabel">${esc(m.label)}${m.is_now ? ' •' : ''}</div>
+      ${marks.map((x) => `<div class="mmark" data-tt="אבן דרך: ${esc(x.label)}">◆</div>`).join('')}
     </div>`;
-  }
+  }).join('');
+
+  const legend = state.endpoints.map((e) =>
+    `<span><i class="sw" style="background:${epColor(e.id)}"></i>${esc(e.name)}</span>`).join('');
+
+  return `<div class="band">
+    <div class="bandcols">${cols}</div>
+    <div class="legend" style="padding:10px 16px 14px">${legend}</div>
+  </div>`;
 }
 
-function campaignItem(c) {
-  const range = c.starts_on && c.ends_on
-    ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
+function endpointCard(e, allocation) {
+  const alloc = allocation.rows.find((r) => r.endpoint_id === e.id);
+  const running = e.campaigns.filter((c) => c.active).length;
+  const ro = !can('settings');
 
-  // רק ההתקדמות בפועל נצבעת. שכבת "יעד" ברוחב מלא הייתה נקראת כפס מלא.
-  const bar = c.required
-    ? `<div class="abar" style="max-width:180px" data-tt="${c.placed} מתוך ${c.required} שובצו">
-         <div class="actual" style="width:${Math.min(100, Math.round((c.placed / c.required) * 100))}%"></div>
-       </div>`
-    : '';
-
-  const content = c.content.length
-    ? c.content.map((x) => contentLine(x, c)).join('')
-    : '<div class="empty" style="padding:8px 0">אין תוכן משויך לקמפיין הזה.</div>';
-
-  const paceNote = c.pace
-    ? `<div class="sumline" style="margin-top:8px">לפי התדירות היו אמורים לצאת עד עכשיו
-       <b>${c.pace.expected_by_now}</b> · יצאו <b>${c.pace.published}</b>${
-         c.pace.behind > 0 ? ` <span class="off">⚠ מפגר ב-${c.pace.behind}</span>` : ' <span class="ok">✓</span>'}</div>`
-    : '';
-
-  return `<details class="item" data-campaign="${c.id}">
-    <summary>
-      <b>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</b>
-      <span class="info">${esc(c.endpoint_name)} · ${esc(range)} · ${
-        c.channels.length ? c.channels.map((x) => esc(x.name)).join(', ') : 'ללא מדיות'}</span>
-      ${bar}
-      <span class="chip ${TONE_CLASS[c.status.tone]}">${esc(c.status.label)}</span>
-    </summary>
-    <div class="ibody">
-      ${c.goal ? `<p class="sub" style="color:var(--muted);font-size:12.5px;margin-bottom:10px">${esc(c.goal)}</p>` : ''}
-
-      <div class="prow"><label>זוויות</label><span>${c.angles_required} נדרשות${
-        c.target_posts != null ? ' (נקבע ידנית)' : ' (נגזר מהקצב של המדיות ומהנתח)'} · ${
-        c.angles_written} נכתבו</span></div>
-      <div class="prow"><label>פוסטים על כל המדיות</label><span>${c.ready} מוכנים מתוך ${c.required}${
-        c.missing_content ? ` <span class="off">— חסרים ${c.missing_content}</span>` : ' <span class="ok">✓</span>'}</span></div>
-      <div class="prow"><label>שובץ / פורסם</label><span>${c.scheduled} משובצים · ${c.published} פורסמו</span></div>
-      <div class="prow"><label>נתח מהשטח</label><span>${c.share_pct != null ? c.share_pct + '%' : '—'}</span></div>
-      <div class="prow"><label>חשיבות</label><span>${c.importance}</span></div>
-      ${paceNote}
-
-      <div class="subsec">
-        <h4>תוכן הקמפיין — לפי סדר הפרסום</h4>
-        ${content}
-        ${can('content') ? `<button class="btn small primary" data-add-campaign-content="${c.id}">＋ הוסף תוכן לקמפיין</button>` : ''}
-      </div>
-
-      ${can('settings') ? `<div style="display:flex;gap:8px;margin-top:14px">
-        <button class="btn small" data-edit-campaign="${c.id}">ערוך</button>
-        <button class="btn small" data-toggle-campaign="${c.id}" data-active="${c.active}">
-          ${c.active ? 'השבת' : 'הפעל'}</button>
-        <button class="btn small" style="color:var(--st-crit)" data-del-campaign="${c.id}">מחק</button>
-      </div>` : ''}
+  return `<div class="epcard">
+    <div class="ephead">
+      <span class="dot" style="background:${epColor(e.id)}"></span>
+      <b>${esc(e.name)}</b>
+      <span class="chip ${e.active ? 'on' : 'bad'}">${e.active ? 'פעילה' : 'מושבתת'}</span>
     </div>
-  </details>`;
-}
 
-function contentLine(x, c) {
-  const placed = x.posts.length;
-  const where = placed
-    ? x.posts.map((p) => `${esc(p.channel_name ?? '')} ${p.scheduled_at ? fmtDate(p.scheduled_at) : ''}`).join(' · ')
-    : 'עוד לא שובץ';
+    <div class="prow">
+      <label>משקל / חשיבות (1–10)</label>
+      <input type="number" min="1" max="10" value="${e.importance}"
+             data-ep-field="importance" data-id="${e.id}" ${ro ? 'disabled' : ''}>
+    </div>
+    <div class="prow">
+      <label>לפרסם לפחות פעם ב־ (ימים)</label>
+      <input type="number" min="1" value="${e.min_days_between}"
+             data-ep-field="min_days_between" data-id="${e.id}" ${ro ? 'disabled' : ''}>
+    </div>
 
-  const move = can('content')
-    ? `<span style="margin-inline-start:auto;display:flex;gap:4px">
-         <button class="btn small" data-move="up" data-content="${x.id}" data-campaign="${c.id}">↑</button>
-         <button class="btn small" data-move="down" data-content="${x.id}" data-campaign="${c.id}">↓</button>
-       </span>`
-    : '';
+    <div class="epstats">
+      <span><b>${running}</b> קמפיינים</span>
+      <span><b>${e.content_count}</b> תכנים</span>
+      <span><b>${e.evergreen_count}</b> חוזרים ♻</span>
+    </div>
 
-  return `<div class="contentline">
-    <span class="sw" style="background:${KIND_VAR[x.kind]}"></span>
-    <b>${x.sort_order}.</b> ${esc(x.title)}
-    <span style="color:var(--muted)">${placed ? '— ' + where : '— ' + where}</span>
-    ${move}</div>`;
-}
+    ${alloc ? `<div class="sumline" style="margin:8px 0 0">
+      נתח ${alloc.target_pct}% · בפועל ${alloc.actual_pct}%
+      ${alloc.lagging ? '<span class="off">⚠ מפגרת</span>' : '<span class="ok">✓</span>'}
+    </div>` : ''}
 
-/** ציר זמן של הקמפיינים. החליף את הגאנט של מסך האסטרטגיה. */
-function timeline(data) {
-  const dated = data.campaigns.filter((c) => c.starts_on && c.ends_on && c.active);
-  if (!dated.length) return '<div class="empty">אין קמפיינים עם תאריכים.</div>';
-
-  const base = new Date(dated.map((c) => c.starts_on).sort()[0] + 'T00:00:00');
-  base.setDate(1);
-  const monthOffset = (d) => {
-    const x = new Date(d + 'T00:00:00');
-    return (x.getFullYear() - base.getFullYear()) * 12 + (x.getMonth() - base.getMonth());
-  };
-
-  const head = Array.from({ length: 6 }, (_, i) => {
-    const m = new Date(base.getFullYear(), base.getMonth() + i, 1);
-    return `<span>${HE_MONTHS[m.getMonth()]}</span>`;
-  }).join('');
-
-  // שורה לכל נקודת קצה, עם כל הקמפיינים שלה עליה
-  const byEndpoint = new Map();
-  for (const c of dated) {
-    if (!byEndpoint.has(c.endpoint_id)) byEndpoint.set(c.endpoint_id, []);
-    byEndpoint.get(c.endpoint_id).push(c);
-  }
-
-  const rows = [...byEndpoint.values()].map((items) => {
-    const bars = items.map((c) => {
-      const from = Math.max(0, monthOffset(c.starts_on));
-      const to = Math.min(6, monthOffset(c.ends_on) + 1);
-      if (to <= from) return '';
-      const soft = c.status.key === 'missing_content' ? ' soft' : '';
-      const tip = `${c.name} · ${c.status.label}${c.share_pct != null ? ` · נתח ${c.share_pct}%` : ''}`;
-      return `<div class="gbar${soft}" style="grid-column:${from + 2}/${to + 2}" data-tt="${esc(tip)}">
-        ${esc(c.name)}${c.share_pct != null ? ` · <span class="pct">${c.share_pct}%</span>` : ''}</div>`;
-    }).join('');
-
-    const marks = data.milestones
-      .filter((m) => m.endpoint_id === items[0].endpoint_id)
-      .map((m) => {
-        const off = monthOffset(m.on_date);
-        if (off < 0 || off > 5) return '';
-        return `<div class="gmark" style="grid-column:${off + 2}/${off + 3}"
-          data-tt="אבן דרך: ${esc(m.label)}">◆ ${esc(m.label)} ${fmtDate(m.on_date)}</div>`;
-      }).join('');
-
-    return `<div class="grow">
-      <div class="gname">${esc(items[0].endpoint_name)}
-        <span class="d">חשיבות ${items[0].endpoint_importance}</span></div>
-      ${bars}${marks}</div>`;
-  }).join('');
-
-  return `<div class="gantt">
-    <div class="grow head"><span class="gname"></span>${head}</div>${rows}</div>`;
+    <button class="btn small" data-open-endpoint="${e.id}" style="margin-top:10px">
+      פתח את הקמפיינים שלה ←</button>
+  </div>`;
 }
 
 function allocPanel(alloc) {
@@ -675,82 +606,197 @@ function allocPanel(alloc) {
     </div>`).join('');
 
   return `<div class="alloc">
-    <h4>חלוקת השטח בפועל — ${fmtDate(alloc.window.from)} עד היום</h4>
+    <h4>יעד מול ביצוע — ${fmtDate(alloc.window.from)} עד היום</h4>
     ${rows}
     <p class="sumline" style="margin-top:10px">נמדד על ${alloc.window.total_published} פרסומים שיצאו בתקופה.</p>
   </div>`;
 }
 
-function wireCampaigns() {
-  const reload = run(async () => { await renderCampaigns(); await refreshAlerts(); });
+function wireStrategy() {
+  $$('#strategy [data-ep-field]').forEach((inp) =>
+    inp.addEventListener('change', run(async () => {
+      await api(`/endpoints/${inp.dataset.id}`,
+        { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value) } });
+      toast('נשמר.');
+      await renderStrategy();
+    })));
 
-  $('#addCampaign')?.addEventListener('click', () => openCampaignForm(null, reload));
+  $$('#strategy [data-open-endpoint]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      state.planEndpoint = Number(b.dataset.openEndpoint);
+      state.planCampaign = null;
+      await showTab('plan');
+    })));
+}
 
-  $$('#campaigns [data-edit-campaign]').forEach((b) =>
-    b.addEventListener('click', () => {
+/* ========================= קמפיינים ותוכן ========================= */
+
+async function renderPlan() {
+  const [{ campaigns }, { content }] = await Promise.all([
+    api('/campaigns'), api('/content'),
+  ]);
+  state.campaigns = campaigns;
+
+  // הקמפיין שנבחר מכתיב גם את נקודת הקצה, כדי שפירורי הלחם תמיד יהיו עקביים
+  const campaign = campaigns.find((c) => c.id === state.planCampaign) ?? null;
+  if (campaign) state.planEndpoint = campaign.endpoint_id;
+  const endpointId = state.planEndpoint;
+  const endpoint = state.endpoints.find((e) => e.id === endpointId) ?? null;
+
+  const crumbs = `
+    <div class="crumbs">
+      <button data-crumb="root" class="${!endpointId ? 'on' : ''}">כל נקודות הקצה</button>
+      ${endpoint ? `<span>›</span>
+        <button data-crumb="endpoint" class="${!campaign ? 'on' : ''}">${esc(endpoint.name)}</button>` : ''}
+      ${campaign ? `<span>›</span>
+        <button data-crumb="campaign" class="on">${esc(campaign.name)}</button>` : ''}
+    </div>`;
+
+  let body;
+  if (campaign) body = campaignGrid(campaign);
+  else if (endpoint) body = campaignList(endpoint, campaigns);
+  else body = endpointList(campaigns);
+
+  $('#plan').innerHTML = crumbs + body;
+  wirePlan(campaign, endpointId, content);
+}
+
+/** רמה 1: נקודות הקצה, עם סיכום הקמפיינים של כל אחת */
+function endpointList(campaigns) {
+  if (!state.endpoints.length) {
+    return '<div class="empty">אין נקודות קצה. מוסיפים אותן בטאב "ניהול".</div>';
+  }
+  const cards = state.endpoints.map((e) => {
+    const mine = campaigns.filter((c) => c.endpoint_id === e.id);
+    const missing = mine.reduce((s, c) => s + c.missing_content, 0);
+    return `<button class="epick" data-pick-endpoint="${e.id}">
+      <span class="nm"><i class="dot" style="background:${epColor(e.id)}"></i>${esc(e.name)}</span>
+      <span class="sub">${mine.length} קמפיינים · חשיבות ${e.importance}</span>
+      <span class="chip ${missing ? 'bad' : 'on'}">${missing ? `חסרים ${missing}` : 'מלא'}</span>
+    </button>`;
+  }).join('');
+  return `<div class="eplist">${cards}</div>`;
+}
+
+/** רמה 2: הקמפיינים של נקודת הקצה */
+function campaignList(endpoint, campaigns) {
+  const mine = campaigns.filter((c) => c.endpoint_id === endpoint.id);
+  const group = (title, list) => list.length ? `
+    <div class="setgroup" style="max-width:none">
+      <h2>${esc(title)}</h2>
+      <div class="panel">${list.map(campaignItem).join('')}</div>
+    </div>` : '';
+
+  return `
+    <div class="toolbar">
+      <div class="legend">
+        <span><b>${mine.filter((c) => c.phase === 'running').length}</b> רצים</span>
+        <span>·</span>
+        <span><b>${mine.filter((c) => c.phase === 'upcoming').length}</b> מתוכננים</span>
+      </div>
+      <div class="spacer"></div>
+      ${can('settings') ? '<button class="btn primary" id="addCampaign">＋ קמפיין חדש</button>' : ''}
+    </div>
+    ${mine.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}
+    ${group('רצים עכשיו', mine.filter((c) => c.phase === 'running'))}
+    ${group('מתוכננים', mine.filter((c) => c.phase === 'upcoming'))}
+    ${group('הסתיימו', mine.filter((c) => c.phase === 'ended' || c.phase === 'inactive'))}`;
+}
+
+function campaignItem(c) {
+  const range = c.starts_on && c.ends_on
+    ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
+  const pct = c.required ? Math.min(100, Math.round((c.ready / c.required) * 100)) : 0;
+
+  return `<div class="crow2" data-open-campaign="${c.id}">
+    <div class="cinfo">
+      <b>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</b>
+      <span class="d">${esc(range)} · ${
+        c.channels.length ? c.channels.map((x) => esc(x.name)).join(', ') : 'ללא מדיות'}</span>
+    </div>
+    <div class="abar" style="max-width:150px" data-tt="${c.ready} מתוך ${c.required} מוכנים">
+      <div class="actual" style="width:${pct}%"></div>
+    </div>
+    <span class="chip ${TONE_CLASS[c.status.tone]}">${esc(c.status.label)}</span>
+    ${can('settings') ? `<button class="btn small" data-edit-campaign="${c.id}">ערוך</button>` : ''}
+  </div>`;
+}
+
+function wirePlan(campaign, endpointId, content) {
+  const reload = run(async () => { await renderPlan(); await refreshAlerts(); });
+
+  $$('#plan [data-crumb]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      if (b.dataset.crumb === 'root') { state.planEndpoint = null; state.planCampaign = null; }
+      if (b.dataset.crumb === 'endpoint') state.planCampaign = null;
+      await renderPlan();
+    })));
+
+  $$('#plan [data-pick-endpoint]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      state.planEndpoint = Number(b.dataset.pickEndpoint);
+      state.planCampaign = null;
+      await renderPlan();
+    })));
+
+  $$('#plan [data-open-campaign]').forEach((el) =>
+    el.addEventListener('click', run(async (e) => {
+      if (e.target.closest('[data-edit-campaign]')) return;
+      state.planCampaign = Number(el.dataset.openCampaign);
+      await renderPlan();
+    })));
+
+  $$('#plan [data-edit-campaign]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
       const c = state.campaigns.find((x) => x.id === Number(b.dataset.editCampaign));
       openCampaignForm(c, reload);
     }));
 
-  $$('#campaigns [data-toggle-campaign]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/campaigns/${b.dataset.toggleCampaign}`,
-        { method: 'PATCH', body: { active: b.dataset.active !== 'true' } });
-      await reload();
-    })));
+  $('#addCampaign')?.addEventListener('click', () =>
+    openCampaignForm(null, reload, endpointId));
 
-  $$('#campaigns [data-del-campaign]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.')) return;
-      await api(`/campaigns/${b.dataset.delCampaign}`, { method: 'DELETE' });
-      await reload();
-    })));
-
-  $$('#campaigns [data-add-campaign-content]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const c = state.campaigns.find((x) => x.id === Number(b.dataset.addCampaignContent));
-      openContentForm({ campaign: c }, reload);
-    }));
-
-  $$('#campaigns [data-move]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      const campaignId = Number(b.dataset.campaign);
-      const c = state.campaigns.find((x) => x.id === campaignId);
-      const ids = c.content.map((x) => x.id);
-      const i = ids.indexOf(Number(b.dataset.content));
-      const j = b.dataset.move === 'up' ? i - 1 : i + 1;
-      if (j < 0 || j >= ids.length) return;
-      [ids[i], ids[j]] = [ids[j], ids[i]];
-      await api(`/campaigns/${campaignId}/order`, { method: 'PATCH', body: { content_ids: ids } });
-      await reload();
-    })));
+  if (campaign) wireCampaignGrid(campaign, reload);
 }
 
-function openCampaignForm(campaign, reload) {
+function openCampaignForm(campaign, reload, defaultEndpoint) {
   openGeneric({
     title: campaign ? 'עריכת קמפיין' : 'קמפיין חדש',
     fields: [
       { name: 'name', label: 'שם הקמפיין', type: 'text', value: campaign?.name },
       { name: 'endpoint_id', label: 'נקודת קצה', type: 'select',
-        options: state.endpoints.map((e) => [e.id, e.name]), value: campaign?.endpoint_id },
+        options: state.endpoints.map((e) => [e.id, e.name]),
+        value: campaign?.endpoint_id ?? defaultEndpoint },
       { name: 'goal', label: 'מה המטרה', type: 'text', value: campaign?.goal },
       { name: 'starts_on', label: 'מתאריך', type: 'date', value: campaign?.starts_on },
       { name: 'ends_on', label: 'עד תאריך', type: 'date', value: campaign?.ends_on },
       { name: 'channel_ids', label: 'על אילו מדיות הקמפיין יושב', type: 'multicheck',
         options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
         value: campaign?.channels?.map((c) => c.id) },
-      { name: 'target_posts', label: 'מספר זוויות (ריק = נגזר מהקצב של המדיות)',
-        type: 'number', value: campaign?.target_posts },
       { name: 'share_pct', label: 'נתח מהשטח באחוזים (ריק = נגזר מהחשיבות מול קמפיינים מקבילים)',
         type: 'number', value: campaign?.share_pct },
       { name: 'importance', label: 'חשיבות (1–10)', type: 'number',
         value: campaign?.importance ?? 5 },
+      { name: 'target_posts', label: 'מספר זוויות (ריק = נגזר מהקצב של המדיות)',
+        type: 'number', value: campaign?.target_posts },
       { name: 'urgent', label: 'קמפיין דחוף', type: 'checkbox', value: campaign?.urgent },
     ],
+    extraActions: campaign && can('settings')
+      ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק קמפיין</button>'
+      : '',
     onSave: async (v) => {
       if (campaign) await api(`/campaigns/${campaign.id}`, { method: 'PATCH', body: v });
       else await api('/campaigns', { method: 'POST', body: v });
       await reload();
+    },
+    onOpen: () => {
+      $('#genDelete')?.addEventListener('click', run(async () => {
+        if (!confirm('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.')) return;
+        await api(`/campaigns/${campaign.id}`, { method: 'DELETE' });
+        $('#genDlg').close();
+        state.planCampaign = null;
+        await reload();
+      }));
     },
   });
 }
@@ -767,43 +813,6 @@ const CELL = {
 
 const isImage = (mime) => typeof mime === 'string' && mime.startsWith('image/');
 const kb = (n) => (n >= 1024 * 1024 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
-
-async function renderContent() {
-  const [{ campaigns }, { content }] = await Promise.all([
-    api('/campaigns'), api('/content'),
-  ]);
-  state.campaigns = campaigns;
-
-  if (!state.selectedCampaign || !campaigns.some((c) => c.id === state.selectedCampaign)) {
-    const running = campaigns.filter((c) => c.phase === 'running');
-    const pick = [...(running.length ? running : campaigns)]
-      .sort((a, b) => b.missing_content - a.missing_content)[0];
-    state.selectedCampaign = pick?.id ?? null;
-  }
-
-  const selected = campaigns.find((c) => c.id === state.selectedCampaign) ?? null;
-  const loose = content.filter((c) => !c.campaign_id);
-
-  $('#content').innerHTML = `
-    ${campaignPicker(campaigns, selected)}
-    ${selected ? campaignGrid(selected)
-               : '<div class="empty">אין קמפיינים. פותחים אחד בטאב "אסטרטגיה".</div>'}
-    ${looseSection(loose)}`;
-
-  wireContent(selected);
-}
-
-function campaignPicker(campaigns, selected) {
-  if (!campaigns.length) return '';
-  const chip = (c) => `<button class="cpick${selected && c.id === selected.id ? ' on' : ''}"
-      data-pick="${c.id}">
-      <span class="nm">${c.urgent ? '⚡ ' : ''}${esc(c.name)}</span>
-      <span class="sub">${esc(c.endpoint_name)}</span>
-      <span class="chip ${c.missing_content ? 'bad' : 'on'}">${
-        c.missing_content ? `חסרים ${c.missing_content}` : 'מלא'}</span>
-    </button>`;
-  return `<div class="cpicker">${campaigns.map(chip).join('')}</div>`;
-}
 
 function campaignGrid(c) {
   const range = c.starts_on && c.ends_on
@@ -891,41 +900,10 @@ function campaignGrid(c) {
     </div>`;
 }
 
-function looseSection(loose) {
-  if (!loose.length) return '';
-  const row = (c) => `
-    <div class="contentline" style="padding:9px 16px;border-bottom:1px solid var(--border)">
-      <span class="sw" style="background:${KIND_VAR[c.kind]}"></span>
-      <b>${esc(c.title)}</b>
-      <span style="color:var(--muted)">${esc(c.endpoint_name)}</span>
-      ${c.evergreen ? '<span class="chip ever">♻ evergreen</span>'
-                    : '<span class="chip">חד-פעמי</span>'}
-      <span class="chip ${c.placements ? 'on' : ''}">${
-        c.placements ? `שובץ ${c.placements}×` : 'לא שובץ'}</span>
-      ${can('content') ? `<span style="margin-inline-start:auto;display:flex;gap:6px">
-        <button class="btn small" data-edit-loose="${c.id}">ערוך</button>
-        <button class="btn small" style="color:var(--st-crit)" data-del-loose="${c.id}">מחק</button>
-      </span>` : ''}
-    </div>`;
 
-  return `<div class="setgroup" style="max-width:none;margin-top:24px">
-    <h2>תוכן שוטף</h2>
-    <p class="sub">לא משויך לאף קמפיין.</p>
-    <div class="panel">${loose.map(row).join('')}</div>
-  </div>`;
-}
-
-function wireContent(selected) {
-  const reload = run(async () => { await renderContent(); await refreshAlerts(); });
-
-  $$('#content [data-pick]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      state.selectedCampaign = Number(b.dataset.pick);
-      await renderContent();
-    })));
-
+function wireCampaignGrid(selected, reload) {
   // לחיצה על הזווית עצמה — עריכת המסר, הסוג והקבצים
-  $$('#content [data-angle]').forEach((b) =>
+  $$('#plan [data-angle]').forEach((b) =>
     b.addEventListener('click', () => {
       const idx = Number(b.dataset.angle);
       const item = selected.content.find((x) => x.sort_order === idx) ?? null;
@@ -933,7 +911,7 @@ function wireContent(selected) {
     }));
 
   // לחיצה על תא — הניסוח של הזווית הזו למדיה הזו
-  $$('#content [data-cell]').forEach((b) =>
+  $$('#plan [data-cell]').forEach((b) =>
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = Number(b.dataset.cell);
@@ -945,19 +923,6 @@ function wireContent(selected) {
       }
       openVariantForm({ item, channelId, campaign: selected }, reload);
     }));
-
-  $$('#content [data-edit-loose]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      const { content } = await api('/content');
-      openAngleForm({ item: content.find((x) => x.id === Number(b.dataset.editLoose)) }, reload);
-    })));
-
-  $$('#content [data-del-loose]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את התוכן?')) return;
-      await api(`/content/${b.dataset.delLoose}`, { method: 'DELETE' });
-      await reload();
-    })));
 
   const input = $('#bulkInput');
   $('#bulkPick')?.addEventListener('click', () => input.click());
