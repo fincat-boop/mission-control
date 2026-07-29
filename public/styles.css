@@ -550,6 +550,12 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .crow2 .cinfo b { font-size: 13.5px; display: block; }
 .crow2 .cinfo .d { font-size: 11.5px; color: var(--muted); }
 .crow2 .chip { margin-inline-start: auto; }
+/* קמפיין מושהה: נשאר ברשימה, לא נעלם. מדמים לפי צבע ולא לפי opacity —
+   opacity על ההורה היה מדהה גם את כפתור "חזרה לחיים" עצמו, בדיוק
+   הפקד שהכי חשוב שיישאר בולט וקל ללחיצה. */
+.crow2.paused { background: var(--page); }
+.crow2.paused .cinfo b, .crow2.paused .cinfo .d { color: var(--muted); }
+.crow2.paused .chanpick { opacity: .5; }
 
 .cbhead { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
 .cbhead h2 { font-size: 15px; font-weight: 650; }

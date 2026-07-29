@@ -1050,6 +1050,7 @@ function campaignList(endpoint, campaigns, content) {
     ${mine.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}
     ${group('רצים עכשיו', mine.filter((c) => c.phase === 'running'))}
     ${group('מתוכננים', mine.filter((c) => c.phase === 'upcoming'))}
+    ${group('מושהים', mine.filter((c) => c.phase === 'paused'))}
     ${group('הסתיימו', mine.filter((c) => c.phase === 'ended' || c.phase === 'inactive'))}`;
 }
 
@@ -1058,9 +1059,9 @@ function campaignItem(c) {
     ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
   const pct = c.required ? Math.min(100, Math.round((c.ready / c.required) * 100)) : 0;
 
-  return `<div class="crow2" data-open-campaign="${c.id}">
+  return `<div class="crow2${c.paused_at ? ' paused' : ''}" data-open-campaign="${c.id}">
     <div class="cinfo">
-      <b>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</b>
+      <b>${c.paused_at ? '⏸ ' : c.urgent ? '⚡ ' : ''}${esc(c.name)}</b>
       <span class="d">${esc(range)}</span>
     </div>
     <button class="chanpick" data-pick-channels="${c.id}"
@@ -1074,8 +1075,9 @@ function campaignItem(c) {
     </div>
     <span class="chip ${TONE_CLASS[c.status.tone]}">${esc(c.status.label)}</span>
     ${can('settings') ? `
-      <button class="btn small" data-toggle-pause="${c.id}" data-paused="${!!c.paused_at}">
-        ${c.paused_at ? '▶ הפעל' : '⏸ השהה'}</button>
+      <button class="btn small${c.paused_at ? ' primary' : ''}"
+        data-toggle-pause="${c.id}" data-paused="${!!c.paused_at}">
+        ${c.paused_at ? '▶ חזרה לחיים' : '⏸ השהה'}</button>
       <button class="btn small" data-edit-campaign="${c.id}">ערוך</button>` : ''}
   </div>`;
 }
