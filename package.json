@@ -14,7 +14,8 @@
     "seed": "node src/seed.js",
     "backup": "node src/backup.js",
     "restore": "node src/restore.js",
-    "demo": "node src/demo.js"
+    "demo": "node src/demo.js",
+    "check": "node scripts/check-client.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

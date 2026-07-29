@@ -43,6 +43,25 @@ const run = (fn) => async (...args) => {
 const KIND_HE = { promo: 'מכירתי', value: 'ערך', hybrid: 'משולב' };
 const KIND_VAR = { promo: 'var(--leg-promo)', value: 'var(--leg-value)', hybrid: 'var(--leg-hybrid)' };
 
+// הקבועים שמשמשים יותר מסעיף אחד יושבים כאן ולא בתוך סעיף,
+// כדי ששכתוב של סעיף שלם לא ימחק אותם ממי שעדיין צריך אותם.
+
+/** מצב הקמפיין → מחלקת הצבע של השבב */
+const TONE_CLASS = { good: 'on', warn: '', bad: 'bad', muted: '' };
+
+/** מצב תא ברשת התוכן */
+const CELL = {
+  ready:        { label: 'מוכן',       cls: 'ok'    },
+  draft:        { label: 'טיוטה',      cls: 'draft' },
+  empty:        { label: 'חסר',        cls: 'gap'   },
+  not_relevant: { label: 'לא רלוונטי', cls: 'na'    },
+  not_needed:   { label: '',           cls: 'na'    },
+};
+
+// הצבע נגזר מהמזהה ולא מהמיקום ברשימה, כדי שיישאר זהות של הנקודה
+const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429', '#2ec5c0'];
+const epColor = (id) => EP_COLORS[Number(id) % EP_COLORS.length];
+
 const ymd = (d) => {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -483,10 +502,6 @@ async function openEngine() {
 }
 
 /* ========================= אסטרטגיה ========================= */
-
-// הצבע נגזר מהמזהה ולא מהמיקום ברשימה, כדי שהוא יישאר זהות של הנקודה
-const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429', '#2ec5c0'];
-const epColor = (id) => EP_COLORS[Number(id) % EP_COLORS.length];
 
 const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
                    'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
@@ -996,14 +1011,6 @@ function openCampaignForm(campaign, reload, defaultEndpoint) {
 }
 
 /* ========================= תוכן ========================= */
-
-const CELL = {
-  ready:        { label: 'מוכן',        cls: 'ok'    },
-  draft:        { label: 'טיוטה',       cls: 'draft' },
-  empty:        { label: 'חסר',         cls: 'gap'   },
-  not_relevant: { label: 'לא רלוונטי',  cls: 'na'    },
-  not_needed:   { label: '',            cls: 'na'    },
-};
 
 const isImage = (mime) => typeof mime === 'string' && mime.startsWith('image/');
 const kb = (n) => (n >= 1024 * 1024 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
