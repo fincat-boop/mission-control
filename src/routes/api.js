@@ -19,7 +19,9 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 // הקבצים נשמרים במסד, לכן הם עוברים דרך הזיכרון ולא נכתבים לדיסק.
-const MAX_FILE_MB = 10;
+// 50MB מכסה ריל או סרטון קצר. ה-volume של Postgres הוא 500MB בסך הכול,
+// ולכן יש התראת אחסון ב-alerts.js שמתריעה לפני שנגמר המקום.
+const MAX_FILE_MB = 50;
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 20 },
@@ -369,7 +371,7 @@ r.get('/content', wrap(async (_req, res) => {
         order by ci.campaign_id nulls last, ci.sort_order, ci.id`
     ),
     rows('select * from content_variants order by content_id, channel_id'),
-    rows('select id, content_id, filename, mime, size_bytes from content_assets order by id'),
+    rows('select id, content_id, variant_id, filename, mime, size_bytes from content_assets order by id'),
   ]);
 
   res.json({
@@ -470,23 +472,39 @@ r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
 
 /* ========================= קבצים מצורפים ========================= */
 
+/** קבצים משותפים לכל המדיות של הזווית */
 r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
   wrap(async (req, res) => {
     const item = await one('select id from content_items where id = $1', [req.params.id]);
     if (!item) return bad(res, 'לא נמצא תוכן כזה', 404);
-    if (!req.files?.length) return bad(res, 'לא הגיעו קבצים');
-
-    const saved = [];
-    for (const f of req.files) {
-      saved.push(await one(
-        `insert into content_assets (content_id, filename, mime, size_bytes, data)
-         values ($1,$2,$3,$4,$5)
-         returning id, content_id, filename, mime, size_bytes`,
-        [item.id, f.originalname, f.mimetype, f.size, f.buffer]
-      ));
-    }
-    res.status(201).json({ assets: saved });
+    res.status(201).json({ assets: await saveAssets(req.files, item.id, null) });
   }));
+
+/** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
+r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),
+  upload.array('files'), wrap(async (req, res) => {
+    const v = await one(
+      `insert into content_variants (content_id, channel_id)
+       values ($1,$2) on conflict (content_id, channel_id) do update set content_id = $1
+       returning *`,
+      [req.params.id, req.params.channelId]
+    );
+    res.status(201).json({ assets: await saveAssets(req.files, v.content_id, v.id) });
+  }));
+
+async function saveAssets(files, contentId, variantId) {
+  if (!files?.length) throw new Error('לא הגיעו קבצים');
+  const saved = [];
+  for (const f of files) {
+    saved.push(await one(
+      `insert into content_assets (content_id, variant_id, filename, mime, size_bytes, data)
+       values ($1,$2,$3,$4,$5,$6)
+       returning id, content_id, variant_id, filename, mime, size_bytes`,
+      [contentId, variantId, f.originalname, f.mimetype, f.size, f.buffer]
+    ));
+  }
+  return saved;
+}
 
 /** הגשת הקובץ עצמו. מאחורי אותה בדיקת התחברות כמו כל השאר. */
 r.get('/assets/:id', wrap(async (req, res) => {

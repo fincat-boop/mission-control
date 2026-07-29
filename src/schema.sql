@@ -133,6 +133,13 @@ create table if not exists content_assets (
 
 create index if not exists content_assets_content_idx on content_assets (content_id);
 
+-- קובץ יכול להיות משותף לכל המדיות (variant_id ריק) או שייך לגרסה אחת:
+-- הריל לאינסטגרם והתמונה לפייסבוק הם קבצים שונים לאותה זווית.
+alter table content_assets
+  add column if not exists variant_id int references content_variants(id) on delete cascade;
+
+create index if not exists content_assets_variant_idx on content_assets (variant_id);
+
 create table if not exists posts (
   id           serial primary key,
   channel_id   int not null references channels(id) on delete cascade,

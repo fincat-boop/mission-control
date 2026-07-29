@@ -1239,6 +1239,15 @@ function openVariantForm({ item, channelId, campaign }, reload) {
   const channel = state.channels.find((c) => c.id === channelId);
   const v = item.variants.find((x) => x.channel_id === channelId) ?? null;
 
+  // הקבצים של המדיה הזו בלבד, ולצידם מה שמשותף לכל המדיות של הזווית
+  const mine = (item.variant_assets ?? []).filter((a) => a.variant_id === v?.id);
+  const shared = item.assets ?? [];
+
+  const files = [
+    ...mine.map((a) => assetLine(a, true)),
+    ...shared.map((a) => assetLine(a, false)),
+  ].join('') || '';
+
   openGeneric({
     title: `${item.title} — ${channel?.name ?? ''}`,
     fields: [
@@ -1247,12 +1256,52 @@ function openVariantForm({ item, channelId, campaign }, reload) {
       { name: 'status', label: 'מצב', type: 'select', value: v?.status ?? 'draft',
         options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
                   ['not_relevant', 'לא רלוונטי למדיה הזו']] },
+      { name: '__files', label: `תמונות וסרטונים ל${channel?.name ?? 'מדיה הזו'}`,
+        type: 'files', existing: files },
     ],
     onSave: async (val) => {
-      await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body: val });
+      const body = { ...val };
+      delete body.__files;
+      await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
+
+      const picked = $('#gen___files')?.files;
+      if (picked?.length) {
+        const fd = new FormData();
+        for (const f of picked) fd.append('files', f);
+        const res = await fetch(`/api/content/${item.id}/variants/${channelId}/assets`,
+          { method: 'POST', body: fd });
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.error || 'הקבצים לא נשמרו');
+        }
+      }
       await reload();
     },
+    onOpen: () => {
+      $$('#genBody [data-del-asset]').forEach((b) =>
+        b.addEventListener('click', run(async () => {
+          await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
+          b.closest('.fileline').remove();
+          toast('הקובץ הוסר.');
+        })));
+    },
   });
+}
+
+const isVideo = (mime) => typeof mime === 'string' && mime.startsWith('video/');
+
+/** שורת קובץ בטופס. ownOnly מבדיל בין קובץ של המדיה לקובץ משותף לזווית. */
+function assetLine(a, ownOnly) {
+  const thumb = isImage(a.mime) ? `<img src="/api/assets/${a.id}" alt="">`
+              : isVideo(a.mime) ? '<span class="ic">🎬</span>'
+              : '<span class="ic">📄</span>';
+  return `<div class="fileline">
+    ${thumb}
+    <a href="/api/assets/${a.id}" target="_blank" rel="noopener">${esc(a.filename)}</a>
+    <span class="d">${kb(a.size_bytes)}${ownOnly ? '' : ' · משותף לזווית'}</span>
+    ${ownOnly ? `<button type="button" class="btn small" data-del-asset="${a.id}"
+       style="color:var(--st-crit);margin-inline-start:auto">הסר</button>` : ''}
+  </div>`;
 }
 
 const fmtDate = (d) => {

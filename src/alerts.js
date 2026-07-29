@@ -163,6 +163,25 @@ export async function buildAlerts() {
     });
   }
 
+  // הקבצים יושבים במסד, וה-volume שלו מוגבל. עדיף להתריע לפני שנגמר המקום
+  // מאשר לגלות את זה כשהעלאה נכשלת.
+  const VOLUME_MB = 500;
+  const size = await one(
+    `select pg_database_size(current_database()) as bytes,
+            (select coalesce(sum(size_bytes),0) from content_assets)::bigint as assets`
+  );
+  const usedMb = Number(size.bytes) / 1048576;
+  if (usedMb > VOLUME_MB * 0.7) {
+    alerts.push({
+      id: 'storage',
+      level: usedMb > VOLUME_MB * 0.9 ? 'crit' : 'warn',
+      title: 'האחסון מתמלא',
+      detail: `${Math.round(usedMb)}MB מתוך ${VOLUME_MB}MB · ` +
+              `מהם ${Math.round(Number(size.assets) / 1048576)}MB קבצים מצורפים`,
+      tab: 'manage',
+    });
+  }
+
   const order = { crit: 0, warn: 1, info: 2 };
   alerts.sort((a, b) => order[a.level] - order[b.level]);
 
