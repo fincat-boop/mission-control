@@ -219,17 +219,21 @@ async function renderBoard() {
   const b = await api(`/board${state.week ? `?week=${state.week}` : ''}`);
   const editable = can('content');
 
+  // רשימה אחת שמשמשת גם כמקרא הצבעים וגם כמצב האוויר של כל נקודה.
+  // קודם היו כאן שתי שורות שמציגות את אותן נקודות בשתי מערכות צבע שונות.
   const oxy = b.oxygen.map((o) => {
     const when = o.days_since === null
       ? 'עוד לא פורסם'
       : o.days_since === 0 ? 'פורסם היום'
       : o.days_since === 1 ? 'פורסם אתמול'
       : `${o.days_since} ימים בלי פרסום`;
-    const extra = o.stale && o.scheduled_this_week > 0
-      ? ` — משובץ ${o.scheduled_this_week} פעמים השבוע` : '';
-    return `<span class="oxychip${o.stale ? ' bad' : ''}">
-      <span class="dot"></span><b>${esc(o.name)}</b>
-      <span class="d">${esc(when + extra)}</span></span>`;
+    const onAir = !o.stale || o.scheduled_this_week > 0;
+    const tip = `${o.name} · ${when}` +
+                (o.scheduled_this_week ? ` · משובץ ${o.scheduled_this_week} פעמים השבוע`
+                                       : ' · לא משובץ השבוע');
+    return `<span class="oxychip${onAir ? '' : ' off'}" data-tt="${esc(tip)}">
+      <i class="sw" style="background:${epColor(o.endpoint_id)}"></i>${esc(o.name)}
+    </span>`;
   }).join('');
 
   const head = b.week.days.map((d) => `<th>${esc(d.label)}</th>`).join('');
@@ -268,10 +272,7 @@ async function renderBoard() {
       ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
       <div class="spacer"></div>
       <div class="legend">
-        ${state.endpoints.filter((e) => e.active !== false).map((e) =>
-          `<span><i class="sw" style="background:${epColor(e.id)}"></i>${esc(e.name)}</span>`
-        ).join('')}
-        <span>· הסוג מסומן בתג בכל פוסט · ⚡ דחוף · ✓ פורסם</span>
+        <span>הסוג מסומן בתג בכל פוסט · ⚡ דחוף · ✓ פורסם</span>
       </div>
     </div>
 

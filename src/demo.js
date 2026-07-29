@@ -206,10 +206,24 @@ const readyContent = await rows(
 );
 
 const now = new Date();
+// נקודת קצה אחת לא מקבלת שני פוסטים באותה מדיה באותו יום — אותו כלל
+// שהמנוע והמבצע הדחוף אוכפים. הדמו כותב ישירות למסד, ולכן הוא חייב לאכוף אותו בעצמו.
+const taken = new Set();
+let placed = 0;
+let skipped = 0;
+
 for (const [i, c] of readyContent.entries()) {
-  const when = at(i % 6, 9 + (i % 4) * 3);
+  let day = i % 6;
+  let when = null;
+  for (let tries = 0; tries < 7; tries += 1) {
+    const candidate = at((day + tries) % 7, 9 + (i % 4) * 3);
+    const key = `${c.endpoint_id}:${c.channel_id}:${ymd(candidate)}`;
+    if (!taken.has(key)) { taken.add(key); when = candidate; break; }
+  }
+  if (!when) { skipped += 1; continue; }
+
   // רק מה שכבר עבר מסומן כפורסם — אחרת "ימים בלי פרסום" יוצא שלילי
-  const published = i < 4 && when < now;
+  const published = placed < 4 && when < now;
   await query(
     `insert into posts (channel_id, endpoint_id, content_id, title, kind,
                         scheduled_at, status, assignee_id, published_at)
@@ -217,7 +231,9 @@ for (const [i, c] of readyContent.entries()) {
     [c.channel_id, c.endpoint_id, c.id, c.title, c.kind, when,
      published ? 'published' : 'scheduled', owner?.id ?? null, published ? when : null]
   );
+  placed += 1;
 }
+if (skipped) console.log(`${skipped} פוסטים דולגו — לא נמצא יום פנוי לאותה נקודה באותה מדיה`);
 
 /* ---------- משימות ---------- */
 const today = ymd(new Date());

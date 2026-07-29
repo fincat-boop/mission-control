@@ -15,7 +15,8 @@
     "backup": "node src/backup.js",
     "restore": "node src/restore.js",
     "demo": "node src/demo.js",
-    "check": "node scripts/check-client.mjs"
+    "check": "node scripts/check-client.mjs",
+    "fix-clashes": "node src/fix-clashes.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -46,13 +46,18 @@ section[hidden] { display: none; }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
 
 /* ============ הלוח ============ */
-.oxy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; font-size: 13px; }
-.oxy .t { color: var(--ink-2); }
-.oxychip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--panel); border-radius: 999px; padding: 5px 12px; }
-.oxychip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-good); }
-.oxychip.bad .dot { background: var(--st-crit); }
-.oxychip .d { color: var(--muted); font-size: 12px; }
-.oxychip.bad .d { color: var(--st-crit); }
+/* רשימת נקודות הקצה: גם מקרא הצבעים וגם מי מקבל במה השבוע.
+   הצבע תמיד של הנקודה; מי שלא באוויר מעומעם ולא מוחלף בצבע אחר. */
+.oxy { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; font-size: 12.5px; }
+.oxy .t { color: var(--muted); margin-inline-end: 4px; }
+.oxychip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); background: var(--panel);
+  border-radius: 999px; padding: 4px 11px; color: var(--ink-1);
+}
+.oxychip .sw { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.oxychip.off { color: var(--muted); border-style: dashed; }
+.oxychip.off .sw { opacity: .3; }
 .toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
 .weeknav { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .weeknav button { border: 1px solid var(--border); background: var(--panel); color: var(--ink-1); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
