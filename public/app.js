@@ -282,7 +282,10 @@ async function renderBoard() {
         <tbody>${body || `<tr><td class="empty" colspan="8">אין ערוצים פעילים — מוסיפים אותם במסך "ניהול"</td></tr>`}</tbody>
       </table>
     </div>
-    <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>`;
+    <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
+    ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
+      ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
+      — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}`;
 
   $$('#board [data-week]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
@@ -676,12 +679,12 @@ function capsule(c, endpoint) {
   const tip = `${c.name} · ${endpoint.name} · ${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` +
               (c.share_pct != null ? ` · נתח ${c.share_pct}%` : ' · נתח נגזר מהמשקל');
 
-  return `<button class="caps${c.urgent ? ' urgent' : ''}"
+  return `<button class="caps${c.urgent ? ' urgent' : ''}${c.paused_at ? ' paused' : ''}"
     style="inset-inline-start:${pct(c.from)}%;width:${pct(c.to - c.from)}%;
            background:${epColor(endpoint.id)}"
     data-campaign="${c.id}" data-from="${c.starts_on}" data-to="${c.ends_on}"
     data-tt="${esc(tip)}">
-    <span>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</span>
+    <span>${c.paused_at ? '⏸ ' : ''}${c.urgent ? '⚡ ' : ''}${esc(c.name)}</span>
   </button>`;
 }
 
@@ -969,7 +972,10 @@ function campaignItem(c) {
       <div class="actual" style="width:${pct}%"></div>
     </div>
     <span class="chip ${TONE_CLASS[c.status.tone]}">${esc(c.status.label)}</span>
-    ${can('settings') ? `<button class="btn small" data-edit-campaign="${c.id}">ערוך</button>` : ''}
+    ${can('settings') ? `
+      <button class="btn small" data-toggle-pause="${c.id}" data-paused="${!!c.paused_at}">
+        ${c.paused_at ? '▶ הפעל' : '⏸ השהה'}</button>
+      <button class="btn small" data-edit-campaign="${c.id}">ערוך</button>` : ''}
   </div>`;
 }
 
@@ -1026,6 +1032,18 @@ function wirePlan(campaign, endpointId, content) {
       const c = state.campaigns.find((x) => x.id === Number(b.dataset.editCampaign));
       openCampaignForm(c, reload);
     }));
+
+  $$('#plan [data-toggle-pause]').forEach((b) =>
+    b.addEventListener('click', run(async (e) => {
+      e.stopPropagation();
+      const paused = b.dataset.paused === 'true';
+      const res = await api(`/campaigns/${b.dataset.togglePause}/${paused ? 'resume' : 'pause'}`,
+        { method: 'POST' });
+      toast(paused
+        ? 'הקמפיין חזר לפעול. השיבוצים שלו חזרו ללוח.'
+        : `הקמפיין הושהה${res.held ? ` · ${res.held} שיבוצים ירדו מהלוח` : ''}.`);
+      await reload();
+    })));
 
   $('#addCampaign')?.addEventListener('click', () =>
     openCampaignForm(null, reload, endpointId));

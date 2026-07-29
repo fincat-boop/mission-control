@@ -368,6 +368,32 @@ r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async 
   res.json({ ok: true });
 }));
 
+/**
+ * השהיה והפעלה מחדש.
+ * לא נמחק כלום: השיבוצים נשארים במסד ופשוט מסוננים מהלוח וממנוע השיבוץ,
+ * כך שהפעלה מחדש מחזירה את התמונה בדיוק כפי שהייתה.
+ */
+r.post('/campaigns/:id/pause', requirePerm('settings'), wrap(async (req, res) => {
+  const c = await one(
+    'update campaigns set paused_at = now() where id = $1 returning *', [req.params.id]);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+
+  const held = await one(
+    `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
+      where ci.campaign_id = $1 and p.status in ('scheduled','pending_approval','hole')
+        and p.scheduled_at >= now()`,
+    [c.id]
+  );
+  res.json({ campaign: c, held: held.n });
+}));
+
+r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) => {
+  const c = await one(
+    'update campaigns set paused_at = null where id = $1 returning *', [req.params.id]);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  res.json({ campaign: c });
+}));
+
 /** סידור מחדש של התוכן בתוך קמפיין */
 r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) => {
   const ids = req.body?.content_ids;

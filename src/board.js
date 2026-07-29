@@ -67,12 +67,17 @@ export async function buildBoard(anchorDate) {
 
   const [channels, posts, endpoints, settings] = await Promise.all([
     rows('select * from channels where active = true order by sort_order, id'),
+    // שיבוצים של קמפיין מושהה יורדים מהלוח ולא נספרים בקיבולת.
+    // הם נשארים במסד — ההשהיה הפיכה.
     rows(
       `select p.*, u.name as assignee_name, e.name as endpoint_name
          from posts p
-         left join users u     on u.id = p.assignee_id
-         left join endpoints e on e.id = p.endpoint_id
+         left join users u          on u.id = p.assignee_id
+         left join endpoints e      on e.id = p.endpoint_id
+         left join content_items ci on ci.id = p.content_id
+         left join campaigns ca     on ca.id = ci.campaign_id
         where p.scheduled_at >= $1 and p.scheduled_at <= $2
+          and (ca.paused_at is null or p.status = 'published')
         order by p.scheduled_at`,
       [from, to]
     ),
@@ -136,6 +141,18 @@ export async function buildBoard(anchorDate) {
   const promoWeight = promo + hybrid * hybridWeight;
   const valueWeight = value + hybrid * (1 - hybridWeight);
 
+  // מה מוסתר בגלל השהיה — כדי שהלוח לא ייראה ריק בלי הסבר
+  const held = await rows(
+    `select ca.name, count(*)::int as n
+       from posts p
+       join content_items ci on ci.id = p.content_id
+       join campaigns ca     on ca.id = ci.campaign_id
+      where ca.paused_at is not null and p.status <> 'published'
+        and p.scheduled_at >= $1 and p.scheduled_at <= $2
+      group by ca.name order by ca.name`,
+    [from, to]
+  );
+
   return {
     week: {
       start: week.start,
@@ -145,6 +162,7 @@ export async function buildBoard(anchorDate) {
       prevWeek: week.prevWeek,
       nextWeek: week.nextWeek,
     },
+    held,
     channels: byChannel,
     oxygen,
     summary: {

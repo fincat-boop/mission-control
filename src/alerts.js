@@ -42,7 +42,8 @@ export async function buildAlerts() {
   const today = ymd(new Date());
 
   for (const c of campaigns) {
-    if (c.phase === 'ended' || c.phase === 'inactive') continue;
+    // קמפיין מושהה לא מייצר רעש — ההשהיה היא החלטה, לא בעיה
+    if (['ended','inactive','paused'].includes(c.phase)) continue;
 
     const daysToStart = c.starts_on
       ? Math.round((new Date(c.starts_on) - new Date(today)) / DAY) : null;

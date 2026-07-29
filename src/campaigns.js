@@ -204,6 +204,7 @@ export async function campaignsWithHealth() {
 }
 
 function phaseOf(c, today) {
+  if (c.paused_at) return 'paused';
   if (!c.active) return 'inactive';
   if (c.starts_on && c.starts_on > today) return 'upcoming';
   if (c.ends_on && c.ends_on < today) return 'ended';
@@ -212,6 +213,7 @@ function phaseOf(c, today) {
 
 function statusOf({ c, today, grid, myChannels }) {
   const phase = phaseOf(c, today);
+  if (phase === 'paused') return { key: 'paused', label: 'מושהה', tone: 'warn' };
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
   if (phase === 'ended') return { key: 'ended', label: 'הסתיים', tone: 'muted' };
   if (myChannels.length === 0) {

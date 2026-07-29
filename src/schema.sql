@@ -56,6 +56,11 @@ create table if not exists campaigns (
   created_at  timestamptz not null default now()
 );
 
+-- השהיה: הקמפיין שומר על התאריכים והתוכן שלו, אבל מפסיק להזין את המנוע
+-- והשיבוצים שטרם יצאו יורדים מהלוח. הכול חוזר בלחיצה, בלי לאבד דבר.
+alter table campaigns
+  add column if not exists paused_at timestamptz;
+
 alter table campaigns
   add column if not exists importance int not null default 5,
   -- דריסה ידנית של מספר הזוויות. null = נגזר מהתדירות של המדיות ומהנתח.

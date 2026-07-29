@@ -35,7 +35,8 @@ export async function planWeek(anchorDate) {
     one('select * from engine_settings where id = 1'),
     rows('select * from channels where active = true order by sort_order, id'),
     rows('select * from endpoints where active = true'),
-    // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת
+    // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
+    // תוכן של קמפיין מושהה לא נכנס לתכנון.
     rows(`select ci.*,
                  coalesce(
                    array_agg(v.channel_id) filter (where v.status = 'ready'),
@@ -43,6 +44,8 @@ export async function planWeek(anchorDate) {
                  ) as ready_channel_ids
             from content_items ci
             left join content_variants v on v.content_id = ci.id
+            left join campaigns ca on ca.id = ci.campaign_id
+           where ca.id is null or ca.paused_at is null
            group by ci.id
            order by ci.created_at`),
     rows(
@@ -52,7 +55,7 @@ export async function planWeek(anchorDate) {
           and status in ('scheduled','published','pending_approval')`,
       [from, to]
     ),
-    rows('select * from campaigns where active = true'),
+    rows('select * from campaigns where active = true and paused_at is null'),
   ]);
 
   const notes = [];

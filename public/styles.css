@@ -270,6 +270,14 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .caps:hover { filter: brightness(1.12); }
 .caps.urgent { box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
 .caps.dragging { cursor: grabbing; opacity: .85; z-index: 5; }
+/* קמפיין מושהה: הצבע נשאר, אבל הפס מפוספס ודהוי כדי שיהיה ברור שהוא לא רץ */
+.caps.paused {
+  opacity: .45;
+  background-image: repeating-linear-gradient(45deg,
+    rgba(0,0,0,.22) 0 5px, transparent 5px 10px);
+}
+.sumline.held { color: var(--st-warn); margin-top: 6px; }
+.sumline.held b { color: var(--st-warn); }
 
 .gnote { font-size: 11.5px; color: var(--muted); padding-top: 12px; }
 
