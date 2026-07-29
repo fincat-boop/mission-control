@@ -77,39 +77,44 @@ for (const [i, c] of channelRows.entries()) {
 
 /* ---------- קמפיינים ---------- */
 const year = new Date().getFullYear();
+// קמפיין נושא תאריכים, נתח מהשטח, חשיבות וקצב.
+// מהקצב נגזר כמה פוסטים הקמפיין צריך.
 await query(
-  `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct, urgent) values
-     ($1,'קמפיין רבעון 3',$2,$3,40,false),
-     ($1,'⚡ פלאש סייל 48 שעות',$4,$5,null,true),
-     ($6,'בניית באזז — וובינר ספטמבר',$7,$3,35,false)`,
+  `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
+                          importance, cadence_days, urgent, goal) values
+     ($1,'קמפיין רבעון 3',              $2,$3,40,  9, 7,  false,'להביא הרשמות לקורס'),
+     ($1,'⚡ פלאש סייל 48 שעות',        $4,$5,null,9, 2,  true, 'דחיפת מכירות קצרה'),
+     ($6,'בניית באזז — וובינר ספטמבר', $7,$3,35,  8, 7,  false,'למלא את הוובינר'),
+     ($8,'חשיפה שוטפת',                $2,$3,25,  7, 10, false,'לשמור על נוכחות')`,
   [ep['קורס תקציב משפחתי'], `${year}-07-01`, `${year}-09-30`,
    ymd(new Date()), ymd(new Date(Date.now() + 9 * 86400000)),
-   ep['מדריך השקעות חינם'], `${year}-08-01`]
+   ep['מדריך השקעות חינם'], `${year}-08-01`, ep['ליווי פיננסי אישי']]
 );
 
 /* ---------- תוכן מוכן ---------- */
 const fb = ch['קבוצת פייסבוק ראשית'], tg = ch['טלגרם'], nl = ch['ניוזלטר'], wa = ch['קבוצת וואטסאפ'];
+// תוכן משויך לקמפיין ומסודר בתוכו. sort_order קובע את סדר הפרסום.
+const camp = {};
+for (const c of await rows('select id, name from campaigns')) camp[c.name] = c.id;
+
 await query(
-  `insert into content_items (endpoint_id, kind, title, ready_channel_ids) values
-     ($1,'promo','פלאש סייל',$2),
-     ($1,'value','5 טעויות בתקציב',$3),
-     ($1,'hybrid','ניוזלטר אוגוסט',$4),
-     ($5,'value','מדריך — פרק 2',$3)`,
-  [ep['קורס תקציב משפחתי'], [fb, tg, wa], [fb, tg], [nl], ep['מדריך השקעות חינם']]
+  `insert into content_items (endpoint_id, kind, title, ready_channel_ids,
+                              campaign_id, sort_order) values
+     ($1,'promo', 'פלאש סייל',       $2,$6,1),
+     ($1,'value', '5 טעויות בתקציב', $3,$7,1),
+     ($1,'hybrid','ניוזלטר אוגוסט',  $4,$7,2),
+     ($5,'value', 'מדריך — פרק 2',   $3,$8,1)`,
+  [ep['קורס תקציב משפחתי'], [fb, tg, wa], [fb, tg], [nl], ep['מדריך השקעות חינם'],
+   camp['⚡ פלאש סייל 48 שעות'], camp['קמפיין רבעון 3'], camp['בניית באזז — וובינר ספטמבר']]
 );
 
 /* ---------- אסטרטגיה ---------- */
+// הנתחים והתאריכים יושבים על הקמפיינים עצמם. כאן נשארות רק אבני הדרך.
 await query(
-  `insert into strategy_allocations
-     (period_kind, period_label, starts_on, ends_on, endpoint_id, target_pct, label) values
-     ('quarter','רבעון 3',$1,$2,$3,40,'קמפיין רבעון 3'),
-     ('quarter','רבעון 3',$1,$2,$4,35,'באזז וובינר'),
-     ('quarter','רבעון 3',$1,$2,$5,25,'חשיפה שוטפת'),
-     ('half','חצי שנה שני',$1,$6,$3,40,'קמפיין רבעון 3'),
-     ('half','חצי שנה שני',$7,$6,$5,30,'קמפיין רבעון 4')`,
-  [`${year}-07-01`, `${year}-09-30`,
-   ep['קורס תקציב משפחתי'], ep['מדריך השקעות חינם'], ep['ליווי פיננסי אישי'],
-   `${year}-12-31`, `${year}-10-01`]
+  `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
+                          importance, cadence_days, goal)
+   values ($1,'קמפיין רבעון 4',$2,$3,30,7,7,'לפתוח את הרבעון עם ליווי אישי')`,
+  [ep['ליווי פיננסי אישי'], `${year}-10-01`, `${year}-12-31`]
 );
 await query(
   `insert into strategy_milestones (endpoint_id, label, on_date)

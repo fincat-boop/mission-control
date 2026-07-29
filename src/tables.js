@@ -10,7 +10,6 @@ export const TABLES = [
   'campaigns',
   'content_items',
   'posts',
-  'strategy_allocations',
   'strategy_milestones',
   'tasks',
   'engine_settings',

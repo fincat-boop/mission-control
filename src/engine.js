@@ -137,19 +137,27 @@ async function computeDebts(endpoints, settings) {
   );
   const lastMap = new Map(lastPublished.map((r) => [r.endpoint_id, r.last_at]));
 
-  // פער מיעד האסטרטגיה של התקופה שרלוונטית להיום
+  // פער מהנתח שהוגדר לקמפיינים שרצים עכשיו
   const today = ymd(new Date());
   const allocs = await rows(
-    `select endpoint_id, target_pct from strategy_allocations
-      where starts_on <= $1 and ends_on >= $1 and period_kind = 'quarter'`,
+    `select endpoint_id, max(share_pct) as target_pct
+       from campaigns
+      where active = true and share_pct is not null
+        and (starts_on is null or starts_on <= $1)
+        and (ends_on is null or ends_on >= $1)
+      group by endpoint_id`,
     [today]
   );
   const published = await rows(
     `select p.endpoint_id, count(*)::int as n
        from posts p
       where p.status = 'published' and p.endpoint_id is not null
-        and p.published_at >= (select min(starts_on) from strategy_allocations
-                                where starts_on <= $1 and ends_on >= $1 and period_kind = 'quarter')
+        and p.published_at >= coalesce(
+              (select min(starts_on) from campaigns
+                where active = true and share_pct is not null
+                  and (starts_on is null or starts_on <= $1)
+                  and (ends_on is null or ends_on >= $1)),
+              $1::date - 90)
       group by p.endpoint_id`,
     [today]
   );

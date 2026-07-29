@@ -1,10 +1,12 @@
 import { Router } from 'express';
-import { one, query, rows } from '../db.js';
+import { one, query, rows, tx } from '../db.js';
+import { buildAlerts } from '../alerts.js';
+import { campaignsWithHealth, currentAllocation } from '../campaigns.js';
 import {
   PUBLIC_USER_COLS, checkPassword, clearSession, hashPassword,
   issueSession, requireAuth, requirePerm,
 } from '../auth.js';
-import { buildBoard, strategyAllocation, weekMeta, ymd } from '../board.js';
+import { buildBoard, weekMeta, ymd } from '../board.js';
 import { planWeek } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 
@@ -231,23 +233,66 @@ r.delete('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
 
 /* ========================= קמפיינים ========================= */
 
+/** כל הקמפיינים עם מצב מלאות, קצב והתוכן שמשויך אליהם */
+r.get('/campaigns', wrap(async (_req, res) => {
+  const [campaigns, allocation, milestones] = await Promise.all([
+    campaignsWithHealth(),
+    currentAllocation(),
+    rows(`select m.*, e.name as endpoint_name
+            from strategy_milestones m
+            left join endpoints e on e.id = m.endpoint_id
+           order by m.on_date`),
+  ]);
+  res.json({ campaigns, allocation, milestones });
+}));
+
+const CAMPAIGN_FIELDS = ['name', 'endpoint_id', 'starts_on', 'ends_on', 'share_pct',
+                         'importance', 'cadence_days', 'target_posts', 'goal',
+                         'urgent', 'active'];
+
 r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   const b = req.body ?? {};
   if (!b.endpoint_id || !b.name) return bad(res, 'צריך נקודת קצה ושם קמפיין');
+  if (b.starts_on && b.ends_on && b.starts_on > b.ends_on) {
+    return bad(res, 'תאריך הסיום מוקדם מתאריך ההתחלה');
+  }
   const c = await one(
-    `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct, urgent)
-     values ($1,$2,$3,$4,$5,coalesce($6,false)) returning *`,
-    [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null,
-     b.share_pct ?? null, b.urgent ?? false]
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
+                            importance, cadence_days, target_posts, goal, urgent)
+     values ($1,$2,$3,$4,$5,
+             coalesce($6,(select importance from endpoints where id = $1)),
+             coalesce($7,7),$8,$9,coalesce($10,false))
+     returning *`,
+    [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null, b.share_pct ?? null,
+     b.importance ?? null, b.cadence_days ?? null, b.target_posts ?? null,
+     b.goal ?? null, b.urgent ?? false]
   );
   res.status(201).json({ campaign: c });
 }));
 
 r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
-  const c = await updateById('campaigns',
-    ['name', 'starts_on', 'ends_on', 'share_pct', 'urgent', 'active'], req.params.id, req.body);
+  const b = req.body ?? {};
+  if (b.starts_on && b.ends_on && b.starts_on > b.ends_on) {
+    return bad(res, 'תאריך הסיום מוקדם מתאריך ההתחלה');
+  }
+  const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
   res.json({ campaign: c });
+}));
+
+/** סידור מחדש של התוכן בתוך קמפיין */
+r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) => {
+  const ids = req.body?.content_ids;
+  if (!Array.isArray(ids)) return bad(res, 'צריך רשימת מזהי תוכן');
+  await tx(async (client) => {
+    for (const [i, contentId] of ids.entries()) {
+      await client.query(
+        'update content_items set sort_order = $1 where id = $2 and campaign_id = $3',
+        [i + 1, contentId, req.params.id]
+      );
+    }
+  });
+  res.json({ ok: true });
 }));
 
 r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
@@ -255,7 +300,26 @@ r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* ========================= תוכן מוכן ========================= */
+/* ========================= תוכן ========================= */
+
+/** ספריית התוכן, כולל לאן כל פריט כבר שובץ */
+r.get('/content', wrap(async (_req, res) => {
+  const items = await rows(
+    `select ci.*, e.name as endpoint_name, c.name as campaign_name,
+            coalesce(p.placements, 0) as placements
+       from content_items ci
+       join endpoints e on e.id = ci.endpoint_id
+       left join campaigns c on c.id = ci.campaign_id
+       left join (select content_id, count(*)::int as placements
+                    from posts where content_id is not null group by content_id) p
+              on p.content_id = ci.id
+      order by ci.campaign_id nulls last, ci.sort_order, ci.id`
+  );
+  res.json({ content: items });
+}));
+
+const CONTENT_FIELDS = ['endpoint_id', 'campaign_id', 'kind', 'title', 'body',
+                        'ready_channel_ids', 'sort_order'];
 
 r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
@@ -263,17 +327,26 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג התוכן חייב להיות promo / value / hybrid');
   }
+  // פריט חדש בקמפיין נכנס בסוף התור
+  const nextOrder = b.campaign_id
+    ? (await one('select coalesce(max(sort_order),0) + 1 as n from content_items where campaign_id = $1',
+                 [b.campaign_id]))?.n ?? 1
+    : 0;
+
+  // ready_channel_ids חייב המרת טיפוס מפורשת: בלעדיה Postgres מפרש
+  // את ברירת המחדל '{}' כטקסט ונופל על אי-התאמה ל-integer[]
   const c = await one(
-    `insert into content_items (endpoint_id, kind, title, body, ready_channel_ids)
-     values ($1,$2,$3,coalesce($4,''),coalesce($5,'{}')) returning *`,
-    [b.endpoint_id, b.kind, b.title, b.body ?? null, b.ready_channel_ids ?? null]
+    `insert into content_items (endpoint_id, campaign_id, kind, title, body,
+                                ready_channel_ids, sort_order)
+     values ($1,$2,$3,$4,coalesce($5,''),coalesce($6::int[],'{}'::int[]),$7) returning *`,
+    [b.endpoint_id, b.campaign_id ?? null, b.kind, b.title, b.body ?? null,
+     b.ready_channel_ids ?? null, nextOrder]
   );
   res.status(201).json({ content: c });
 }));
 
 r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
-  const c = await updateById('content_items',
-    ['kind', 'title', 'body', 'ready_channel_ids'], req.params.id, req.body);
+  const c = await updateById('content_items', CONTENT_FIELDS, req.params.id, req.body);
   if (!c) return bad(res, 'לא נמצא תוכן כזה', 404);
   res.json({ content: c });
 }));
@@ -312,45 +385,17 @@ r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* ========================= אסטרטגיה ========================= */
+/* ========================= התראות ========================= */
 
-r.get('/strategy', wrap(async (req, res) => {
-  const kind = ['quarter', 'half', 'year'].includes(req.query.period)
-    ? req.query.period : 'half';
-  const [allocations, milestones, allocation] = await Promise.all([
-    rows(`select a.*, e.name as endpoint_name
-            from strategy_allocations a
-            join endpoints e on e.id = a.endpoint_id
-           where a.period_kind = $1
-           order by a.starts_on, e.importance desc`, [kind]),
-    rows(`select m.*, e.name as endpoint_name
-            from strategy_milestones m
-            left join endpoints e on e.id = m.endpoint_id
-           order by m.on_date`),
-    strategyAllocation('quarter'),
-  ]);
-  res.json({ period_kind: kind, allocations, milestones, current: allocation });
+/**
+ * ההתראות מחושבות בזמן קריאה מהמצב האמיתי, ולא נשמרות בטבלה —
+ * ולכן התראה נעלמת מעצמה ברגע שהבעיה נפתרה.
+ */
+r.get('/alerts', wrap(async (_req, res) => {
+  res.json(await buildAlerts());
 }));
 
-r.post('/strategy/allocations', requirePerm('settings'), wrap(async (req, res) => {
-  const b = req.body ?? {};
-  if (!b.endpoint_id || !b.starts_on || !b.ends_on || b.target_pct == null) {
-    return bad(res, 'צריך נקודת קצה, טווח תאריכים ואחוז יעד');
-  }
-  const a = await one(
-    `insert into strategy_allocations
-       (period_kind, period_label, starts_on, ends_on, endpoint_id, target_pct, label)
-     values (coalesce($1,'quarter'),$2,$3,$4,$5,$6,$7) returning *`,
-    [b.period_kind ?? null, b.period_label ?? '', b.starts_on, b.ends_on,
-     b.endpoint_id, b.target_pct, b.label ?? null]
-  );
-  res.status(201).json({ allocation: a });
-}));
-
-r.delete('/strategy/allocations/:id', requirePerm('settings'), wrap(async (req, res) => {
-  await query('delete from strategy_allocations where id = $1', [req.params.id]);
-  res.json({ ok: true });
-}));
+/* ========================= אבני דרך ========================= */
 
 r.post('/strategy/milestones', requirePerm('settings'), wrap(async (req, res) => {
   const b = req.body ?? {};

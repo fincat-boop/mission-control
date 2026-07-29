@@ -37,6 +37,8 @@ create table if not exists channels (
   created_at           timestamptz not null default now()
 );
 
+-- קמפיין הוא היחידה המרכזית: הוא נושא את התאריכים, החשיבות, הקצב והנתח.
+-- הוא ירש את התפקיד של strategy_allocations, שנמחקה.
 create table if not exists campaigns (
   id          serial primary key,
   endpoint_id int not null references endpoints(id) on delete cascade,
@@ -49,6 +51,24 @@ create table if not exists campaigns (
   created_at  timestamptz not null default now()
 );
 
+alter table campaigns
+  add column if not exists importance int not null default 5,
+  -- כל כמה ימים הקמפיין רוצה לפרסם. ממנו נגזר כמה פוסטים הוא צריך.
+  add column if not exists cadence_days int not null default 7,
+  -- דריסה ידנית של מספר הפוסטים הנדרש. null = נגזר מהתדירות.
+  add column if not exists target_posts int,
+  add column if not exists goal text;
+
+do $$ begin
+  alter table campaigns add constraint campaigns_importance_range
+    check (importance between 1 and 10);
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter table campaigns add constraint campaigns_cadence_positive
+    check (cadence_days >= 1);
+exception when duplicate_object then null; end $$;
+
 create table if not exists content_items (
   id                serial primary key,
   endpoint_id       int not null references endpoints(id) on delete cascade,
@@ -58,6 +78,13 @@ create table if not exists content_items (
   ready_channel_ids int[] not null default '{}',
   created_at        timestamptz not null default now()
 );
+
+-- תוכן יכול להשתייך לקמפיין ולהיות מסודר בתוכו. בלי קמפיין = תוכן שוטף.
+alter table content_items
+  add column if not exists campaign_id int references campaigns(id) on delete set null,
+  add column if not exists sort_order int not null default 0;
+
+create index if not exists content_campaign_idx on content_items (campaign_id, sort_order);
 
 create table if not exists posts (
   id           serial primary key,
@@ -80,16 +107,8 @@ create index if not exists posts_scheduled_at_idx on posts (scheduled_at);
 create index if not exists posts_channel_idx      on posts (channel_id);
 create index if not exists posts_endpoint_idx     on posts (endpoint_id);
 
-create table if not exists strategy_allocations (
-  id           serial primary key,
-  period_kind  text not null check (period_kind in ('quarter','half','year')),
-  period_label text not null,
-  starts_on    date not null,
-  ends_on      date not null,
-  endpoint_id  int not null references endpoints(id) on delete cascade,
-  target_pct   int not null check (target_pct between 0 and 100),
-  label        text
-);
+-- strategy_allocations הוסרה. התוכן שלה עבר ל-campaigns.
+-- ראה src/migrations/001-campaigns-absorb-strategy.js
 
 create table if not exists strategy_milestones (
   id          serial primary key,
