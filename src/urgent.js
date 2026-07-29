@@ -45,11 +45,20 @@ export async function planUrgent(input) {
   // כל מה שכבר משובץ בטווח הרלוונטי, כולל שבוע אחורה כדי לספור קיבולת שבועית נכון
   const countFrom = weekStart(today);
   const existing = await rows(
-    `select id, channel_id, kind, scheduled_at
+    `select id, channel_id, endpoint_id, kind, scheduled_at
        from posts
       where status in ('scheduled','published','pending_approval')
         and scheduled_at >= $1 and scheduled_at <= $2`,
     [countFrom, lastDay]
+  );
+
+  // אותה נקודת קצה לא מקבלת שני פוסטים באותה מדיה באותו יום —
+  // אחרת מבצע דחוף יכול לנחות על יום שכבר יש בו תוכן ערך לאותה נקודה
+  const endpointId = input.endpoint_id ?? null;
+  const sameDay = new Set(
+    existing
+      .filter((p) => p.endpoint_id && p.endpoint_id === endpointId)
+      .map((p) => `${p.channel_id}:${ymd(new Date(p.scheduled_at))}`)
   );
 
   // ימי המועמדות: מהיום ועד התאריך האחרון
@@ -72,6 +81,8 @@ export async function planUrgent(input) {
       const dayKey = ymd(day);
       const wkKey = ymd(weekStart(day));
 
+      if (endpointId && sameDay.has(`${ch.id}:${dayKey}`)) continue;
+
       const inSameWeek = (p) =>
         p.channel_id === ch.id && ymd(weekStart(new Date(p.scheduled_at))) === wkKey;
       const usedThisWeek = countIn(inSameWeek);
@@ -87,6 +98,8 @@ export async function planUrgent(input) {
         (p) => ymd(new Date(p.scheduled_at)) === dayKey && p.kind === 'promo'
       );
       if (promoToday >= maxPromoPerDay) continue;
+
+      if (endpointId) sameDay.add(`${ch.id}:${dayKey}`);
 
       const at = new Date(day);
       at.setHours(DEFAULT_HOUR, 0, 0, 0);

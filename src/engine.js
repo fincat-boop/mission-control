@@ -74,6 +74,15 @@ export async function planWeek(anchorDate) {
   // בכל שבוע שבו הוא לא במקרה משובץ
   const history = await contentHistory();
 
+  // נקודת קצה לא מקבלת שני פוסטים באותה מדיה באותו יום.
+  // בלי זה אפשר להגיע למצב שבו באותו יום ובאותו ערוץ יוצא גם תוכן מכירתי
+  // וגם תוכן ערך על אותה נקודה, וזה קורא כמו שתי הודעות סותרות.
+  const sameDay = new Set(
+    existing
+      .filter((p) => p.endpoint_id)
+      .map((p) => `${p.endpoint_id}:${p.channel_id}:${ymd(new Date(p.scheduled_at))}`)
+  );
+
   // המרווח האחרון של כל נקודה בכל ערוץ, כדי לכבד min_gap_days
   const lastPerPair = await lastPostPerEndpointChannel();
 
@@ -87,7 +96,7 @@ export async function planWeek(anchorDate) {
 
     const pick = chooseForSlot({
       slot, endpoints, content, campaigns, debts, usage,
-      usedContent, lastPerPair, settings, placements, history,
+      usedContent, lastPerPair, settings, placements, history, sameDay,
     });
     if (!pick) continue;
 
@@ -117,6 +126,7 @@ export async function planWeek(anchorDate) {
 
     usage.take(slot.channel_id, slot.dateKey, pick.content.kind, hour);
     usedContent.add(`${slot.channel_id}:${pick.content.id}`);
+    sameDay.add(`${pick.endpoint.id}:${slot.channel_id}:${slot.dateKey}`);
     lastPerPair.set(`${pick.endpoint.id}:${slot.channel_id}`, slot.dateKey);
     debts.markScheduled(pick.endpoint.id);
   }
@@ -348,12 +358,14 @@ function buildSlots(week, channels, usage) {
 
 function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
-          usedContent, lastPerPair, settings, history } = ctx;
+          usedContent, lastPerPair, settings, history, sameDay } = ctx;
 
   const minGap = settings?.min_gap_days ?? 7;
   const candidates = [];
 
   for (const e of endpoints) {
+    // אותה נקודה, אותה מדיה, אותו יום — לא משנה מאיזה סוג
+    if (sameDay.has(`${e.id}:${slot.channel_id}:${slot.dateKey}`)) continue;
     // מרווח מינימלי לאותה נקודה באותו ערוץ
     const lastKey = lastPerPair.get(`${e.id}:${slot.channel_id}`);
     if (lastKey) {

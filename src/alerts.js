@@ -58,7 +58,7 @@ export async function buildAlerts() {
           detail: c.phase === 'running'
             ? `הקמפיין רץ וחסרים לו ${c.missing_content} פוסטים מתוך ${c.required}`
             : `מתחיל בעוד ${daysToStart} ימים וחסרים לו ${c.missing_content} מתוך ${c.required}`,
-          tab: 'campaigns',
+          tab: 'plan',
           campaign_id: c.id,
         });
       }
@@ -71,7 +71,7 @@ export async function buildAlerts() {
         title: `מפגר אחרי הקצב: ${c.name}`,
         detail: `לפי התדירות שהוגדרה היו אמורים לצאת ${c.pace.expected_by_now} פוסטים, ` +
                 `יצאו ${c.pace.published}`,
-        tab: 'campaigns',
+        tab: 'plan',
         campaign_id: c.id,
       });
     }
@@ -82,7 +82,7 @@ export async function buildAlerts() {
         level: 'info',
         title: `תוכן ממתין לשיבוץ: ${c.name}`,
         detail: `${c.unplaced} פריטי תוכן מוכנים ועוד לא נכנסו ללוח`,
-        tab: 'campaigns',
+        tab: 'plan',
         campaign_id: c.id,
       });
     }
@@ -96,7 +96,7 @@ export async function buildAlerts() {
       detail: e.days_since === null
         ? 'עוד לא פורסם ממנה כלום'
         : `${e.days_since} ימים בלי פרסום — הקצב שהוגדר הוא כל ${e.min_days_between}`,
-      tab: 'campaigns',
+      tab: 'plan',
       endpoint_id: e.id,
     });
   }
@@ -120,6 +120,34 @@ export async function buildAlerts() {
       detail: `${p.channel_name} · ${new Date(p.scheduled_at).toLocaleDateString('he-IL')}`,
       tab: 'tasks',
       post_id: p.id,
+    });
+  }
+
+  // התנגשות שיכולה להיווצר משיבוץ ידני או מנתונים ישנים:
+  // אותה נקודת קצה, אותה מדיה, אותו יום
+  const clashes = await rows(
+    `select e.name as endpoint_name, c.name as channel_name,
+            p.scheduled_at::date as on_date,
+            count(*)::int as n,
+            string_agg(distinct p.kind, ',') as kinds
+       from posts p
+       join endpoints e on e.id = p.endpoint_id
+       join channels c  on c.id = p.channel_id
+      where p.status in ('scheduled','pending_approval')
+        and p.scheduled_at >= now() - interval '1 day'
+      group by e.name, c.name, p.scheduled_at::date
+     having count(*) > 1`
+  );
+
+  for (const x of clashes) {
+    const mixed = x.kinds.includes('promo') && x.kinds.includes('value');
+    alerts.push({
+      id: `clash-${x.endpoint_name}-${x.channel_name}-${x.on_date}`,
+      level: mixed ? 'crit' : 'warn',
+      title: `${x.n} פוסטים לאותה נקודה באותו יום — ${x.endpoint_name}`,
+      detail: `${x.channel_name} · ${new Date(x.on_date).toLocaleDateString('he-IL')}` +
+              (mixed ? ' · גם מכירתי וגם ערך באותו יום' : ''),
+      tab: 'board',
     });
   }
 
