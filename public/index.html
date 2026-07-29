@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מרכז בקרה פרסומי — חתול פיננסי</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <h1>מרכז בקרה פרסומי <small>חתול פיננסי</small></h1>
+    <div class="spacer"></div>
+    <button class="btn primary" id="btnUrgent">⚡ מבצע דחוף</button>
+    <span class="userbadge" id="userBadge"></span>
+    <button class="btn small" id="btnLogout">יציאה</button>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true"  data-t="board">הלוח</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="strategy">אסטרטגיה</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="manage">ניהול</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="tasks">משימות<span class="badge" id="taskBadge" hidden></span></button>
+  </nav>
+</header>
+
+<main>
+  <section id="board"></section>
+  <section id="strategy" hidden></section>
+  <section id="manage" hidden></section>
+  <section id="tasks" hidden></section>
+</main>
+
+<!-- מבצע דחוף -->
+<dialog id="urgentDlg">
+  <h3>מבצע דחוף</h3>
+  <div class="frow">
+    <label for="uTitle">מה מפרסמים?</label>
+    <input id="uTitle" type="text" placeholder="מבצע 48 שעות — קורס תקציב משפחתי">
+  </div>
+  <div class="frow">
+    <label for="uEndpoint">נקודת קצה</label>
+    <select id="uEndpoint"></select>
+  </div>
+  <div class="frow">
+    <label for="uUntil">רלוונטי עד</label>
+    <input id="uUntil" type="date">
+  </div>
+  <div class="frow">
+    <label>איפה</label>
+    <div class="checks" id="uChannels"></div>
+  </div>
+  <div class="whatif" id="uWhatIf">
+    <b>מה יקרה:</b>
+    מלאו את הפרטים ולחצו "בדוק" כדי לראות איפה זה ישובץ.
+  </div>
+  <div class="dactions">
+    <button class="btn" id="uCancel">ביטול</button>
+    <button class="btn" id="uCheck">בדוק</button>
+    <button class="btn primary" id="uOk" disabled>אשר</button>
+  </div>
+</dialog>
+
+<!-- שיבוץ / עריכת פוסט -->
+<dialog id="postDlg">
+  <h3 id="postDlgTitle">שיבוץ חדש</h3>
+  <div class="frow"><label for="pTitle">כותרת</label><input id="pTitle" type="text"></div>
+  <div class="frow"><label for="pEndpoint">נקודת קצה</label><select id="pEndpoint"></select></div>
+  <div class="frow"><label for="pChannel">ערוץ</label><select id="pChannel"></select></div>
+  <div class="frow"><label for="pKind">סוג</label>
+    <select id="pKind">
+      <option value="value">ערך</option>
+      <option value="hybrid">משולב</option>
+      <option value="promo">מכירתי</option>
+    </select>
+  </div>
+  <div class="frow"><label for="pWhen">מתי</label><input id="pWhen" type="datetime-local"></div>
+  <div class="frow"><label for="pAssignee">אחראי</label><select id="pAssignee"></select></div>
+  <div class="frow"><label for="pStatus">מצב</label>
+    <select id="pStatus">
+      <option value="scheduled">משובץ</option>
+      <option value="published">פורסם</option>
+      <option value="pending_approval">ממתין לאישור</option>
+      <option value="hole">מחכה לתוכן</option>
+    </select>
+  </div>
+  <div class="dactions">
+    <button class="btn" id="pDelete" style="color:var(--st-crit);margin-inline-end:auto" hidden>מחק</button>
+    <button class="btn" id="pCancel">ביטול</button>
+    <button class="btn primary" id="pSave">שמור</button>
+  </div>
+</dialog>
+
+<!-- דיאלוג כללי (הוספת ערוץ / נקודה / קמפיין / תוכן / משתמש) -->
+<dialog id="genDlg">
+  <h3 id="genTitle"></h3>
+  <div id="genBody"></div>
+  <div class="dactions">
+    <button class="btn" id="genCancel">ביטול</button>
+    <button class="btn primary" id="genSave">שמור</button>
+  </div>
+</dialog>
+
+<div id="tt"></div>
+<div id="toast"></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

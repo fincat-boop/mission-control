@@ -1,0 +1,466 @@
+import { Router } from 'express';
+import { one, query, rows } from '../db.js';
+import {
+  PUBLIC_USER_COLS, checkPassword, clearSession, hashPassword,
+  issueSession, requireAuth, requirePerm,
+} from '../auth.js';
+import { buildBoard, strategyAllocation, weekMeta, ymd } from '../board.js';
+import { planUrgent } from '../urgent.js';
+
+const r = Router();
+
+/** עוטף handler אסינכרוני כך ששגיאה תגיע ל-error handler במקום להפיל את התהליך */
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
+
+/* ========================= התחברות ========================= */
+
+r.post('/auth/login', wrap(async (req, res) => {
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  const password = String(req.body?.password ?? '');
+  if (!email || !password) return bad(res, 'צריך אימייל וסיסמה');
+
+  const user = await one('select * from users where lower(email) = $1', [email]);
+  if (!user || !(await checkPassword(password, user.password_hash))) {
+    return bad(res, 'אימייל או סיסמה לא נכונים', 401);
+  }
+  issueSession(res, user);
+  const { password_hash, ...safe } = user;
+  res.json({ user: safe });
+}));
+
+r.post('/auth/logout', (req, res) => {
+  clearSession(res);
+  res.json({ ok: true });
+});
+
+r.get('/me', (req, res) => res.json({ user: req.user }));
+
+// מכאן והלאה — הכול דורש התחברות
+r.use(requireAuth);
+
+/* ========================= הלוח ========================= */
+
+r.get('/board', wrap(async (req, res) => {
+  res.json(await buildBoard(req.query.week));
+}));
+
+r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  if (!b.channel_id || !b.scheduled_at || !b.title) {
+    return bad(res, 'צריך ערוץ, כותרת ומועד');
+  }
+  if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
+    return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
+  }
+  const post = await one(
+    `insert into posts (channel_id, endpoint_id, content_id, title, kind,
+                        scheduled_at, status, assignee_id, urgent, note)
+     values ($1,$2,$3,$4,$5,$6,coalesce($7,'scheduled'),$8,coalesce($9,false),$10)
+     returning *`,
+    [b.channel_id, b.endpoint_id ?? null, b.content_id ?? null, b.title, b.kind,
+     b.scheduled_at, b.status ?? null, b.assignee_id ?? null, b.urgent ?? false, b.note ?? null]
+  );
+  res.status(201).json({ post });
+}));
+
+const POST_FIELDS = ['channel_id', 'endpoint_id', 'content_id', 'title', 'kind',
+                     'scheduled_at', 'status', 'assignee_id', 'urgent', 'note'];
+
+r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
+  const post = await updateById('posts', POST_FIELDS, req.params.id, req.body);
+  if (!post) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  res.json({ post });
+}));
+
+r.delete('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
+  await query('delete from posts where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/** סימון "פורסם" — מעדכן גם את המשימה הצמודה */
+r.post('/posts/:id/publish', requirePerm('content'), wrap(async (req, res) => {
+  const post = await one(
+    `update posts set status = 'published', published_at = now()
+      where id = $1 returning *`,
+    [req.params.id]
+  );
+  if (!post) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  await query(
+    `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
+    [post.id]
+  );
+  res.json({ post });
+}));
+
+/** אישור דחוף־דורס — הרשאה נפרדת */
+r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
+  const post = await one(
+    `update posts set status = 'scheduled' where id = $1 and status = 'pending_approval'
+      returning *`,
+    [req.params.id]
+  );
+  if (!post) return bad(res, 'אין שיבוץ שממתין לאישור עם המזהה הזה', 404);
+  await query(`update tasks set done = true, done_at = now() where post_id = $1`, [post.id]);
+  res.json({ post });
+}));
+
+/* ========================= מבצע דחוף ========================= */
+
+/** תצוגה מקדימה: "מה יקרה" — בלי לשמור כלום */
+r.post('/urgent/preview', requirePerm('content'), wrap(async (req, res) => {
+  res.json(await planUrgent(req.body ?? {}));
+}));
+
+/** אישור: משבץ בפועל לפי אותה תוכנית */
+r.post('/urgent/commit', requirePerm('content'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  const plan = await planUrgent(b);
+  if (plan.placements.length === 0) return bad(res, 'לא נמצא שטח פנוי לשיבוץ הדחוף');
+
+  const needsApproval = !(req.user.is_owner || req.user.perm_approve);
+  const created = [];
+  for (const p of plan.placements) {
+    const post = await one(
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at,
+                          status, assignee_id, urgent, note)
+       values ($1,$2,$3,'promo',$4,$5,$6,true,$7) returning *`,
+      [p.channel_id, b.endpoint_id ?? null, b.title, p.scheduled_at,
+       needsApproval ? 'pending_approval' : 'scheduled',
+       b.assignee_id ?? req.user.id, p.note ?? null]
+    );
+    created.push(post);
+    if (needsApproval) {
+      await query(
+        `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent)
+         values ($1,$2,'approve',$3,$4,true)`,
+        [`לאשר: ${b.title}`, `${p.channel_name} · ${p.day_label} · דורש הרשאת אישור`,
+         post.id, b.endpoint_id ?? null]
+      );
+    }
+  }
+  res.status(201).json({ posts: created, pending: needsApproval });
+}));
+
+/* ========================= נקודות קצה ========================= */
+
+r.get('/endpoints', wrap(async (_req, res) => {
+  const list = await rows('select * from endpoints order by importance desc, id');
+  const [campaigns, content] = await Promise.all([
+    rows('select * from campaigns order by starts_on nulls last, id'),
+    rows('select * from content_items order by created_at desc'),
+  ]);
+  res.json({
+    endpoints: list.map((e) => ({
+      ...e,
+      campaigns: campaigns.filter((c) => c.endpoint_id === e.id),
+      content: content.filter((c) => c.endpoint_id === e.id),
+    })),
+  });
+}));
+
+const ENDPOINT_FIELDS = ['name', 'importance', 'min_days_between', 'active', 'sort_order'];
+
+r.post('/endpoints', requirePerm('settings'), wrap(async (req, res) => {
+  if (!req.body?.name) return bad(res, 'צריך שם לנקודת הקצה');
+  const e = await one(
+    `insert into endpoints (name, importance, min_days_between)
+     values ($1, coalesce($2,5), coalesce($3,7)) returning *`,
+    [req.body.name, req.body.importance ?? null, req.body.min_days_between ?? null]
+  );
+  res.status(201).json({ endpoint: e });
+}));
+
+r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const e = await updateById('endpoints', ENDPOINT_FIELDS, req.params.id, req.body);
+  if (!e) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
+  res.json({ endpoint: e });
+}));
+
+r.delete('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
+  await query('delete from endpoints where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= קמפיינים ========================= */
+
+r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  if (!b.endpoint_id || !b.name) return bad(res, 'צריך נקודת קצה ושם קמפיין');
+  const c = await one(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct, urgent)
+     values ($1,$2,$3,$4,$5,coalesce($6,false)) returning *`,
+    [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null,
+     b.share_pct ?? null, b.urgent ?? false]
+  );
+  res.status(201).json({ campaign: c });
+}));
+
+r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const c = await updateById('campaigns',
+    ['name', 'starts_on', 'ends_on', 'share_pct', 'urgent', 'active'], req.params.id, req.body);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  res.json({ campaign: c });
+}));
+
+r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  await query('delete from campaigns where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= תוכן מוכן ========================= */
+
+r.post('/content', requirePerm('content'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  if (!b.endpoint_id || !b.title) return bad(res, 'צריך נקודת קצה וכותרת');
+  if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
+    return bad(res, 'סוג התוכן חייב להיות promo / value / hybrid');
+  }
+  const c = await one(
+    `insert into content_items (endpoint_id, kind, title, body, ready_channel_ids)
+     values ($1,$2,$3,coalesce($4,''),coalesce($5,'{}')) returning *`,
+    [b.endpoint_id, b.kind, b.title, b.body ?? null, b.ready_channel_ids ?? null]
+  );
+  res.status(201).json({ content: c });
+}));
+
+r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
+  const c = await updateById('content_items',
+    ['kind', 'title', 'body', 'ready_channel_ids'], req.params.id, req.body);
+  if (!c) return bad(res, 'לא נמצא תוכן כזה', 404);
+  res.json({ content: c });
+}));
+
+r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
+  await query('delete from content_items where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= ערוצים ========================= */
+
+r.get('/channels', wrap(async (_req, res) => {
+  res.json({ channels: await rows('select * from channels order by sort_order, id') });
+}));
+
+const CHANNEL_FIELDS = ['name', 'max_per_week', 'max_promo_per_week', 'max_hybrid_per_week',
+                        'max_value_per_week', 'urgent_reserve_pct', 'active', 'sort_order'];
+
+r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
+  if (!req.body?.name) return bad(res, 'צריך שם לערוץ');
+  const c = await one(
+    `insert into channels (name, max_per_week) values ($1, coalesce($2,5)) returning *`,
+    [req.body.name, req.body.max_per_week ?? null]
+  );
+  res.status(201).json({ channel: c });
+}));
+
+r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const c = await updateById('channels', CHANNEL_FIELDS, req.params.id, req.body);
+  if (!c) return bad(res, 'לא נמצא ערוץ כזה', 404);
+  res.json({ channel: c });
+}));
+
+r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
+  await query('delete from channels where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= אסטרטגיה ========================= */
+
+r.get('/strategy', wrap(async (req, res) => {
+  const kind = ['quarter', 'half', 'year'].includes(req.query.period)
+    ? req.query.period : 'half';
+  const [allocations, milestones, allocation] = await Promise.all([
+    rows(`select a.*, e.name as endpoint_name
+            from strategy_allocations a
+            join endpoints e on e.id = a.endpoint_id
+           where a.period_kind = $1
+           order by a.starts_on, e.importance desc`, [kind]),
+    rows(`select m.*, e.name as endpoint_name
+            from strategy_milestones m
+            left join endpoints e on e.id = m.endpoint_id
+           order by m.on_date`),
+    strategyAllocation('quarter'),
+  ]);
+  res.json({ period_kind: kind, allocations, milestones, current: allocation });
+}));
+
+r.post('/strategy/allocations', requirePerm('settings'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  if (!b.endpoint_id || !b.starts_on || !b.ends_on || b.target_pct == null) {
+    return bad(res, 'צריך נקודת קצה, טווח תאריכים ואחוז יעד');
+  }
+  const a = await one(
+    `insert into strategy_allocations
+       (period_kind, period_label, starts_on, ends_on, endpoint_id, target_pct, label)
+     values (coalesce($1,'quarter'),$2,$3,$4,$5,$6,$7) returning *`,
+    [b.period_kind ?? null, b.period_label ?? '', b.starts_on, b.ends_on,
+     b.endpoint_id, b.target_pct, b.label ?? null]
+  );
+  res.status(201).json({ allocation: a });
+}));
+
+r.delete('/strategy/allocations/:id', requirePerm('settings'), wrap(async (req, res) => {
+  await query('delete from strategy_allocations where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+r.post('/strategy/milestones', requirePerm('settings'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  if (!b.label || !b.on_date) return bad(res, 'צריך שם ותאריך לאבן הדרך');
+  const m = await one(
+    `insert into strategy_milestones (endpoint_id, label, on_date)
+     values ($1,$2,$3) returning *`,
+    [b.endpoint_id ?? null, b.label, b.on_date]
+  );
+  res.status(201).json({ milestone: m });
+}));
+
+r.delete('/strategy/milestones/:id', requirePerm('settings'), wrap(async (req, res) => {
+  await query('delete from strategy_milestones where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= משימות ========================= */
+
+r.get('/tasks', wrap(async (_req, res) => {
+  const all = await rows(
+    `select t.*, u.name as assignee_name, e.name as endpoint_name,
+            p.title as post_title, p.scheduled_at, c.name as channel_name,
+            ci.body as content_body
+       from tasks t
+       left join users u         on u.id = t.assignee_id
+       left join endpoints e     on e.id = t.endpoint_id
+       left join posts p         on p.id = t.post_id
+       left join channels c      on c.id = p.channel_id
+       left join content_items ci on ci.id = p.content_id
+      order by t.urgent desc, t.due_on nulls last, t.id`
+  );
+  const today = ymd(new Date());
+  const week = weekMeta(new Date());
+
+  res.json({
+    // due_on מגיע כמחרוזת 'YYYY-MM-DD'
+    today: all.filter((t) => !t.done && t.due_on === today),
+    attention: all.filter((t) => !t.done && t.due_on !== today),
+    done_this_week: all.filter(
+      (t) => t.done && t.done_at && ymd(new Date(t.done_at)) >= week.start
+    ),
+    open_count: all.filter((t) => !t.done).length,
+  });
+}));
+
+r.post('/tasks', requirePerm('content'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  if (!b.title) return bad(res, 'צריך כותרת למשימה');
+  const t = await one(
+    `insert into tasks (title, subtitle, kind, post_id, endpoint_id, assignee_id, due_on, urgent)
+     values ($1,$2,coalesce($3,'general'),$4,$5,$6,$7,coalesce($8,false)) returning *`,
+    [b.title, b.subtitle ?? null, b.kind ?? null, b.post_id ?? null, b.endpoint_id ?? null,
+     b.assignee_id ?? null, b.due_on ?? null, b.urgent ?? false]
+  );
+  res.status(201).json({ task: t });
+}));
+
+r.patch('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
+  const body = { ...req.body };
+  // סימון "בוצע" מחתים גם את השעה
+  if (body.done === true) body.done_at = new Date().toISOString();
+  if (body.done === false) body.done_at = null;
+  const t = await updateById('tasks',
+    ['title', 'subtitle', 'kind', 'assignee_id', 'due_on', 'urgent', 'done', 'done_at'],
+    req.params.id, body);
+  if (!t) return bad(res, 'לא נמצאה משימה כזו', 404);
+  res.json({ task: t });
+}));
+
+r.delete('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
+  await query('delete from tasks where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= כללי המנוע ========================= */
+
+r.get('/settings', wrap(async (_req, res) => {
+  res.json({ settings: await one('select * from engine_settings where id = 1') });
+}));
+
+r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
+  const s = await updateById('engine_settings',
+    ['min_gap_days', 'max_promo_per_day', 'hybrid_weight', 'content_alert_hours'],
+    1, req.body);
+  res.json({ settings: s });
+}));
+
+/* ========================= משתמשים ========================= */
+
+r.get('/users', wrap(async (_req, res) => {
+  res.json({ users: await rows(`select ${PUBLIC_USER_COLS} from users order by is_owner desc, id`) });
+}));
+
+r.post('/users', requirePerm('users'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  const email = String(b.email ?? '').trim().toLowerCase();
+  if (!b.name || !email || !b.password) return bad(res, 'צריך שם, אימייל וסיסמה');
+  if (String(b.password).length < 8) return bad(res, 'הסיסמה חייבת להיות באורך 8 תווים לפחות');
+
+  const exists = await one('select id from users where lower(email) = $1', [email]);
+  if (exists) return bad(res, 'כבר קיים משתמש עם האימייל הזה');
+
+  const u = await one(
+    `insert into users (name, email, password_hash, perm_content, perm_settings, perm_approve, perm_users)
+     values ($1,$2,$3,coalesce($4,true),coalesce($5,false),coalesce($6,false),coalesce($7,false))
+     returning ${PUBLIC_USER_COLS}`,
+    [b.name, email, await hashPassword(String(b.password)),
+     b.perm_content ?? null, b.perm_settings ?? null, b.perm_approve ?? null, b.perm_users ?? null]
+  );
+  res.status(201).json({ user: u });
+}));
+
+r.patch('/users/:id', requirePerm('users'), wrap(async (req, res) => {
+  const target = await one('select * from users where id = $1', [req.params.id]);
+  if (!target) return bad(res, 'לא נמצא משתמש כזה', 404);
+  if (target.is_owner) return bad(res, 'אי אפשר לשנות את הרשאות הבעלים', 403);
+
+  const b = { ...req.body };
+  if (b.password) {
+    if (String(b.password).length < 8) return bad(res, 'הסיסמה חייבת להיות באורך 8 תווים לפחות');
+    await query('update users set password_hash = $1 where id = $2',
+      [await hashPassword(String(b.password)), target.id]);
+    delete b.password;
+  }
+  const u = await updateById('users',
+    ['name', 'perm_content', 'perm_settings', 'perm_approve', 'perm_users'],
+    target.id, b, PUBLIC_USER_COLS);
+  res.json({ user: u ?? await one(`select ${PUBLIC_USER_COLS} from users where id = $1`, [target.id]) });
+}));
+
+r.delete('/users/:id', requirePerm('users'), wrap(async (req, res) => {
+  const target = await one('select is_owner from users where id = $1', [req.params.id]);
+  if (target?.is_owner) return bad(res, 'אי אפשר למחוק את הבעלים', 403);
+  if (Number(req.params.id) === req.user.id) return bad(res, 'אי אפשר למחוק את עצמך');
+  await query('delete from users where id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= עזר ========================= */
+
+/**
+ * עדכון חלקי בטוח: רק שדות מהרשימה הלבנה נכנסים ל-SQL,
+ * והערכים תמיד עוברים כפרמטרים.
+ */
+async function updateById(table, allowed, id, body, returning = '*') {
+  const entries = Object.entries(body ?? {}).filter(([k]) => allowed.includes(k));
+  if (entries.length === 0) {
+    return one(`select ${returning} from ${table} where id = $1`, [id]);
+  }
+  const sets = entries.map(([k], i) => `${k} = $${i + 2}`).join(', ');
+  const values = entries.map(([, v]) => v);
+  return one(
+    `update ${table} set ${sets} where id = $1 returning ${returning}`,
+    [id, ...values]
+  );
+}
+
+export default r;

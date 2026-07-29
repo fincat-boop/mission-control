@@ -1,0 +1,232 @@
+import { one, rows } from './db.js';
+
+const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+const HE_MONTHS = [
+  'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+  'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
+];
+
+/** YYYY-MM-DD בזמן מקומי (בלי קפיצות UTC) */
+export function ymd(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** תחילת השבוע (יום ראשון) של תאריך נתון, בחצות מקומית */
+export function weekStart(dateLike) {
+  const d = dateLike ? new Date(dateLike) : new Date();
+  if (Number.isNaN(d.getTime())) throw new Error('תאריך לא תקין');
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay()); // getDay: 0 = ראשון
+  return d;
+}
+
+export function weekMeta(anchorDate) {
+  const start = weekStart(anchorDate);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    return {
+      date: ymd(d),
+      dow: HE_DAYS[i],
+      label: `${HE_DAYS[i]} ${d.getDate()}.${d.getMonth() + 1}`,
+    };
+  });
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+
+  const label =
+    start.getMonth() === end.getMonth()
+      ? `${start.getDate()}–${end.getDate()} ${HE_MONTHS[start.getMonth()]}`
+      : `${start.getDate()} ${HE_MONTHS[start.getMonth()]} – ${end.getDate()} ${HE_MONTHS[end.getMonth()]}`;
+
+  const prev = new Date(start); prev.setDate(start.getDate() - 7);
+  const next = new Date(start); next.setDate(start.getDate() + 7);
+
+  return {
+    start: ymd(start),
+    end: ymd(end),
+    label,
+    days,
+    prevWeek: ymd(prev),
+    nextWeek: ymd(next),
+    startDate: start,
+    endDate: end,
+  };
+}
+
+/**
+ * מרכיב את כל מה שמסך "הלוח" צריך: השיבוצים של השבוע,
+ * ניצול הקיבולת בכל ערוץ, מצב החמצן של כל נקודת קצה, וסיכום היחסים.
+ */
+export async function buildBoard(anchorDate) {
+  const week = weekMeta(anchorDate);
+  const from = week.startDate;
+  const to = new Date(week.endDate);
+  to.setHours(23, 59, 59, 999);
+
+  const [channels, posts, endpoints, settings] = await Promise.all([
+    rows('select * from channels where active = true order by sort_order, id'),
+    rows(
+      `select p.*, u.name as assignee_name, e.name as endpoint_name
+         from posts p
+         left join users u     on u.id = p.assignee_id
+         left join endpoints e on e.id = p.endpoint_id
+        where p.scheduled_at >= $1 and p.scheduled_at <= $2
+        order by p.scheduled_at`,
+      [from, to]
+    ),
+    rows('select * from endpoints where active = true order by importance desc, id'),
+    one('select * from engine_settings where id = 1'),
+  ]);
+
+  const hybridWeight = Number(settings?.hybrid_weight ?? 0.5);
+
+  // שיבוצים לפי ערוץ ולפי יום
+  const byChannel = channels.map((ch) => {
+    const mine = posts.filter((p) => p.channel_id === ch.id);
+    const real = mine.filter((p) => p.status !== 'hole');
+    return {
+      ...ch,
+      used: real.length,
+      days: week.days.map((day) => ({
+        date: day.date,
+        posts: mine
+          .filter((p) => ymd(new Date(p.scheduled_at)) === day.date)
+          .map(shapePost),
+      })),
+    };
+  });
+
+  // חמצן: כמה זמן כל נקודת קצה לא פורסמה, וכמה היא משובצת השבוע
+  const lastPublished = await rows(
+    `select endpoint_id, max(published_at) as last_at
+       from posts
+      where status = 'published' and endpoint_id is not null
+      group by endpoint_id`
+  );
+  const lastMap = new Map(lastPublished.map((r) => [r.endpoint_id, r.last_at]));
+  const now = new Date();
+
+  const oxygen = endpoints.map((e) => {
+    const lastAt = lastMap.get(e.id) ?? null;
+    const daysSince = lastAt
+      ? Math.floor((now - new Date(lastAt)) / 86400000)
+      : null;
+    const scheduledThisWeek = posts.filter(
+      (p) => p.endpoint_id === e.id && p.status !== 'hole'
+    ).length;
+    const stale = daysSince === null || daysSince > e.min_days_between;
+    return {
+      endpoint_id: e.id,
+      name: e.name,
+      days_since: daysSince,
+      last_published_at: lastAt,
+      scheduled_this_week: scheduledThisWeek,
+      stale,
+    };
+  });
+
+  // סיכום היחס בין מכירתי לערך
+  const real = posts.filter((p) => p.status !== 'hole');
+  const promo = real.filter((p) => p.kind === 'promo').length;
+  const value = real.filter((p) => p.kind === 'value').length;
+  const hybrid = real.filter((p) => p.kind === 'hybrid').length;
+  const promoWeight = promo + hybrid * hybridWeight;
+  const valueWeight = value + hybrid * (1 - hybridWeight);
+
+  return {
+    week: {
+      start: week.start,
+      end: week.end,
+      label: week.label,
+      days: week.days,
+      prevWeek: week.prevWeek,
+      nextWeek: week.nextWeek,
+    },
+    channels: byChannel,
+    oxygen,
+    summary: {
+      total: real.length,
+      promo,
+      value,
+      hybrid,
+      value_per_promo: promoWeight > 0 ? Number((valueWeight / promoWeight).toFixed(1)) : null,
+    },
+  };
+}
+
+function shapePost(p) {
+  return {
+    id: p.id,
+    channel_id: p.channel_id,
+    endpoint_id: p.endpoint_id,
+    endpoint_name: p.endpoint_name,
+    content_id: p.content_id,
+    title: p.title,
+    kind: p.kind,
+    status: p.status,
+    urgent: p.urgent,
+    note: p.note,
+    assignee_id: p.assignee_id,
+    assignee_name: p.assignee_name,
+    scheduled_at: p.scheduled_at,
+    time: new Date(p.scheduled_at).toTimeString().slice(0, 5),
+    published_at: p.published_at,
+  };
+}
+
+/**
+ * חלוקת השטח בפועל מול היעד, לתקופת אסטרטגיה נתונה.
+ * "בפועל" = אחוז הפרסומים שיצאו בתקופה, לכל נקודת קצה.
+ */
+export async function strategyAllocation(periodKind = 'quarter') {
+  const allocations = await rows(
+    `select a.*, e.name as endpoint_name
+       from strategy_allocations a
+       join endpoints e on e.id = a.endpoint_id
+      where a.period_kind = $1
+      order by a.starts_on, a.target_pct desc`,
+    [periodKind]
+  );
+  if (allocations.length === 0) return { period: null, rows: [] };
+
+  // starts_on/ends_on מגיעים כמחרוזות 'YYYY-MM-DD', לכן ההשוואה לקסיקוגרפית ובטוחה
+  const today = ymd(new Date());
+  const current =
+    allocations.find((a) => a.starts_on <= today && a.ends_on >= today) ??
+    allocations[allocations.length - 1];
+
+  const inPeriod = allocations.filter(
+    (a) => a.starts_on === current.starts_on && a.ends_on === current.ends_on
+  );
+
+  const counts = await rows(
+    `select endpoint_id, count(*)::int as n
+       from posts
+      where status = 'published'
+        and published_at >= $1 and published_at < ($2::date + 1)
+        and endpoint_id is not null
+      group by endpoint_id`,
+    [current.starts_on, current.ends_on]
+  );
+  const total = counts.reduce((s, c) => s + c.n, 0);
+  const countMap = new Map(counts.map((c) => [c.endpoint_id, c.n]));
+
+  return {
+    period: { kind: current.period_kind, label: current.period_label, starts_on: current.starts_on, ends_on: current.ends_on },
+    rows: inPeriod.map((a) => {
+      const n = countMap.get(a.endpoint_id) ?? 0;
+      const actual = total > 0 ? Math.round((n / total) * 100) : 0;
+      return {
+        endpoint_id: a.endpoint_id,
+        endpoint_name: a.endpoint_name,
+        target_pct: a.target_pct,
+        actual_pct: actual,
+        published: n,
+        // פער של יותר מ-8 נקודות אחוז נחשב פיגור שדורש תיקון
+        lagging: a.target_pct - actual > 8,
+      };
+    }),
+  };
+}

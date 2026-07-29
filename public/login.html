@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>כניסה — מרכז בקרה פרסומי</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="loginwrap">
+  <form class="loginbox" id="loginForm">
+    <h1>מרכז בקרה פרסומי</h1>
+    <p class="sub">חתול פיננסי</p>
+
+    <div class="frow">
+      <label for="email">אימייל</label>
+      <input id="email" name="email" type="email" autocomplete="username" required>
+    </div>
+    <div class="frow">
+      <label for="password">סיסמה</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+
+    <button class="btn primary" type="submit" id="submitBtn">כניסה</button>
+    <div class="loginerr" id="err"></div>
+  </form>
+</div>
+
+<script>
+  const form = document.querySelector('#loginForm');
+  const err = document.querySelector('#err');
+  const btn = document.querySelector('#submitBtn');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.textContent = '';
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: form.email.value,
+          password: form.password.value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ההתחברות נכשלה');
+      location.href = '/';
+    } catch (e) {
+      err.textContent = e.message;
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

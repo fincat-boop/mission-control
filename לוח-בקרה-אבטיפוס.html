@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מרכז בקרה פרסומי — חתול פיננסי</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --page:    #131315;
+    --panel:   #1a1a1d;
+    --panel-2: #212125;
+    --border:  #2b2b30;
+    --ink-1:   #e9e9eb;
+    --ink-2:   #9c9ca4;
+    --muted:   #66666e;
+    --accent:  #4da3ff;
+    --leg-hybrid: #3987e5;
+    --leg-promo:  #eb6834;
+    --leg-value:  #1baf7a;
+    --st-good: #34c759; --st-warn: #fab219; --st-crit: #e5484d;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background:
+      linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px),
+      var(--page);
+    background-size: 40px 40px, 40px 40px, auto;
+    color: var(--ink-1); padding: 0 0 48px; min-height: 100vh; font-size: 14px;
+  }
+  header { background: var(--page); border-bottom: 1px solid var(--border); padding: 16px 28px 0; position: sticky; top: 0; z-index: 20; }
+  .hrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 16px; font-weight: 650; }
+  h1 small { color: var(--muted); font-weight: 400; font-size: 12px; margin-inline-start: 8px; }
+  .spacer { flex: 1; }
+  select, button.btn {
+    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--ink-1); cursor: pointer;
+  }
+  button.btn:hover { background: var(--panel-2); }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #0d1117; font-weight: 600; }
+  button.btn.small { padding: 3px 10px; font-size: 12px; border-radius: 6px; }
+  .tabs { display: flex; gap: 22px; margin-top: 16px; }
+  .tab { font: inherit; font-size: 14px; padding: 10px 2px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--ink-2); cursor: pointer; }
+  .tab:hover { color: var(--ink-1); }
+  .tab[aria-selected="true"] { color: var(--ink-1); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab .badge { background: var(--st-crit); color: #fff; border-radius: 8px; font-size: 10.5px; padding: 1px 6px; margin-inline-start: 6px; }
+  main { max-width: 1240px; margin: 0 auto; padding: 22px 28px; }
+  section[hidden] { display: none; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+
+  /* ============ הלוח ============ */
+  .oxy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; font-size: 13px; }
+  .oxy .t { color: var(--ink-2); }
+  .oxychip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--panel); border-radius: 999px; padding: 5px 12px; }
+  .oxychip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-good); }
+  .oxychip.bad .dot { background: var(--st-crit); }
+  .oxychip .d { color: var(--muted); font-size: 12px; }
+  .oxychip.bad .d { color: var(--st-crit); }
+  .toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
+  .weeknav { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .weeknav button { border: 1px solid var(--border); background: var(--panel); color: var(--ink-1); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 5px; vertical-align: -1px; }
+  .board { overflow-x: auto; }
+  table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
+  .grid th, .grid td { border-bottom: 1px solid var(--border); padding: 8px; vertical-align: top; font-size: 12.5px; }
+  .grid td + td, .grid th + th { border-inline-start: 1px solid var(--border); }
+  .grid tbody tr:last-child td { border-bottom: none; }
+  .grid thead th { color: var(--muted); font-weight: 500; font-size: 12px; text-align: center; padding: 10px 8px; }
+  .grid td.chan { width: 150px; }
+  .chan .cname { font-weight: 600; font-size: 13px; }
+  .chan .cap { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .grid td.day { min-width: 110px; height: 68px; }
+  .post { border-radius: 7px; padding: 6px 9px; margin-bottom: 5px; font-size: 12px; line-height: 1.4; color: #fff; }
+  .post .ep { font-weight: 600; display: block; }
+  .post .meta { opacity: .85; font-size: 10.5px; margin-top: 1px; }
+  .post.promo  { background: var(--leg-promo); }
+  .post.value  { background: var(--leg-value); }
+  .post.hybrid { background: var(--leg-hybrid); }
+  .post.published { opacity: .45; }
+  .post.published .ep::after { content: " ✓"; }
+  .hole { border: 1.5px dashed var(--st-crit); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; color: var(--st-crit); font-weight: 600; }
+  .hole small, .pending small { color: var(--muted); font-weight: 400; }
+  .pending { border: 1.5px dashed var(--st-warn); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; color: var(--st-warn); font-weight: 600; }
+  .sumline { margin-top: 12px; font-size: 12.5px; color: var(--ink-2); }
+  .sumline b { color: var(--ink-1); font-weight: 600; }
+
+  /* ============ אסטרטגיה ============ */
+  .periodpick { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 8px; padding: 3px; background: var(--panel); }
+  .periodpick button { font: inherit; font-size: 12.5px; padding: 5px 14px; border: none; border-radius: 6px; background: none; color: var(--ink-2); cursor: pointer; }
+  .periodpick button.on { background: var(--panel-2); color: var(--ink-1); font-weight: 600; }
+  .gantt { padding: 6px 16px 16px; overflow-x: auto; min-width: 0; }
+  .grow { display: grid; grid-template-columns: 150px repeat(6, 1fr); gap: 4px 0; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .grow:last-child { border-bottom: none; }
+  .grow.head { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .grow.head span { font-size: 11.5px; color: var(--muted); text-align: center; }
+  .grow .gname { font-size: 13px; font-weight: 600; padding-inline-end: 10px; grid-column: 1; }
+  .grow .gname .d { display: block; font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+  .gbar {
+    background: rgba(77,163,255,.16); border: 1px solid var(--accent); border-radius: 6px;
+    padding: 3px 9px; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin: 2px 3px;
+  }
+  .gbar .pct { color: var(--accent); font-weight: 600; }
+  .gbar.soft { border-style: dashed; opacity: .75; }
+  .gmark { font-size: 11px; color: var(--st-warn); white-space: nowrap; padding: 2px 6px; margin: 2px 3px; }
+  .nowline { position: relative; }
+  .alloc { padding: 14px 16px 16px; }
+  .alloc h4 { font-size: 13px; font-weight: 650; margin-bottom: 12px; }
+  .arow { display: flex; align-items: center; gap: 12px; padding: 7px 0; font-size: 12.5px; }
+  .arow .an { width: 150px; font-weight: 600; }
+  .abar { flex: 1; max-width: 320px; height: 14px; background: var(--panel-2); border-radius: 7px; position: relative; overflow: hidden; }
+  .abar .target { position: absolute; inset-block: 0; inset-inline-start: 0; background: rgba(77,163,255,.25); }
+  .abar .actual { position: absolute; inset-block: 2px; inset-inline-start: 0; background: var(--accent); border-radius: 5px; }
+  .arow .at { color: var(--ink-2); white-space: nowrap; }
+  .arow .ok { color: var(--st-good); }
+  .arow .off { color: var(--st-warn); }
+
+  /* ============ ניהול ============ */
+  .setgroup { max-width: 820px; margin-bottom: 24px; }
+  .setgroup > h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 4px; }
+  .setgroup > p.sub { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+  details.item { border-bottom: 1px solid var(--border); }
+  details.item:last-child { border-bottom: none; }
+  details.item summary { list-style: none; cursor: pointer; padding: 13px 16px; display: flex; align-items: center; gap: 12px; font-size: 13.5px; }
+  details.item summary::-webkit-details-marker { display: none; }
+  details.item summary::after { content: "‹"; color: var(--muted); margin-inline-start: auto; transition: transform .15s; }
+  details.item[open] summary::after { transform: rotate(-90deg); }
+  details.item summary b { font-weight: 600; }
+  details.item summary .info { color: var(--muted); font-size: 12px; }
+  details.item .ibody { padding: 2px 16px 16px; }
+  .chip { font-size: 11px; border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; color: var(--ink-2); }
+  .chip.on { color: var(--st-good); border-color: var(--st-good); }
+  .chip.bad { color: var(--st-crit); border-color: var(--st-crit); }
+  .prow { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .prow:last-child { border-bottom: none; }
+  .prow label { color: var(--ink-2); }
+  .prow input { width: 68px; font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); color: var(--ink-1); text-align: center; }
+  .subsec { margin-top: 14px; }
+  .subsec > h4 { font-size: 12.5px; font-weight: 650; color: var(--ink-2); margin-bottom: 8px; }
+  .camp { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; margin-bottom: 8px; }
+  .camp .crow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .camp b { font-size: 13px; }
+  .camp .d { color: var(--muted); font-size: 12px; }
+  .contentline { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 6px 0; flex-wrap: wrap; }
+  .contentline .sw { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+  .contentline .missing { color: var(--st-warn); }
+  .locked { text-align: center; padding: 60px 20px; color: var(--ink-2); font-size: 14px; }
+  .owner-tag { color: var(--accent); font-size: 11px; font-weight: 600; }
+  table.utable { width: 100%; border-collapse: collapse; }
+  .utable th, .utable td { padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; text-align: center; }
+  .utable th:first-child, .utable td:first-child { text-align: start; }
+  .utable thead th { color: var(--muted); font-weight: 500; }
+  .utable tbody tr:last-child td { border-bottom: none; }
+
+  /* ============ משימות ============ */
+  .tasks { max-width: 760px; }
+  .tgroup { margin-bottom: 22px; }
+  .tgroup > h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 10px; }
+  .task { padding: 13px 16px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border); }
+  .task:last-child { border-bottom: none; }
+  .task input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+  .task .tx b { font-size: 13.5px; display: block; }
+  .task .tx span { font-size: 12px; color: var(--muted); }
+  .task .act { margin-inline-start: auto; white-space: nowrap; }
+  .task.urgent .tx b { color: var(--st-crit); }
+
+  /* modal + tooltip + toast */
+  dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); color: var(--ink-1); padding: 24px; width: min(480px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h3 { font-size: 15px; margin-bottom: 14px; }
+  .frow { margin-bottom: 10px; font-size: 13px; }
+  .frow label { display: block; color: var(--ink-2); margin-bottom: 4px; font-size: 12px; }
+  .frow input, .frow select { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--ink-1); }
+  .whatif { background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 14px 0; font-size: 12.5px; line-height: 1.8; }
+  .whatif b { display: block; margin-bottom: 4px; }
+  .whatif .warn2 { color: var(--st-warn); }
+  .dactions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  #tt { position: fixed; pointer-events: none; background: #0c0c0e; color: var(--ink-1); font-size: 12px; padding: 7px 11px; border: 1px solid var(--border); border-radius: 8px; z-index: 99; display: none; max-width: 250px; line-height: 1.55; }
+  #toast { position: fixed; bottom: 24px; inset-inline-start: 50%; transform: translateX(50%); background: #0c0c0e; color: var(--ink-1); border: 1px solid var(--border); padding: 10px 20px; border-radius: 10px; font-size: 13px; display: none; z-index: 100; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <h1>מרכז בקרה פרסומי <small>חתול פיננסי</small></h1>
+    <div class="spacer"></div>
+    <button class="btn primary" id="btnUrgent">⚡ מבצע דחוף</button>
+    <div class="userpick">
+      <select id="user">
+        <option value="yonatan" selected>יונתן (בעלים)</option>
+        <option value="dov">דב</option>
+        <option value="adi">עדי</option>
+      </select>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-t="board">הלוח</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="strategy">אסטרטגיה</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="manage">ניהול</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="tasks">משימות<span class="badge">3</span></button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ===================== הלוח ===================== -->
+<section id="board">
+
+  <div class="oxy">
+    <span class="t">מי מקבל במה:</span>
+    <span class="oxychip"><span class="dot"></span><b>קורס תקציב</b><span class="d">פורסם אתמול</span></span>
+    <span class="oxychip"><span class="dot"></span><b>מדריך השקעות</b><span class="d">פורסם היום</span></span>
+    <span class="oxychip bad"><span class="dot"></span><b>ליווי אישי</b><span class="d">18 יום בלי פרסום — משובץ פעמיים השבוע</span></span>
+  </div>
+
+  <div class="toolbar">
+    <div class="weeknav"><button>‹</button> 2–8 אוגוסט <button>›</button></div>
+    <div class="spacer"></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--leg-promo)"></i>מכירתי</span>
+      <span><i class="sw" style="background:var(--leg-value)"></i>ערך</span>
+      <span><i class="sw" style="background:var(--leg-hybrid)"></i>משולב</span>
+      <span>· ⚡ דחוף · ✓ פורסם</span>
+    </div>
+  </div>
+
+  <div class="board panel">
+  <table class="grid">
+    <thead><tr>
+      <th></th><th>ראשון 2.8</th><th>שני 3.8</th><th>שלישי 4.8</th><th>רביעי 5.8</th><th>חמישי 6.8</th><th>שישי 7.8</th><th>שבת 8.8</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="chan"><div class="cname">קבוצת פייסבוק ראשית</div><div class="cap">4 מתוך 5 השבוע</div></td>
+        <td class="day"><div class="post value published" data-tt="ערך · קורס תקציב · פורסם 9:14"><span class="ep">קורס תקציב</span><div class="meta">9:00</div></div></td>
+        <td class="day"></td>
+        <td class="day"><div class="post hybrid" data-tt="משולב · מדריך השקעות · אחראית: עדי"><span class="ep">מדריך השקעות</span><div class="meta">19:00 · עדי</div></div></td>
+        <td class="day"><div class="post promo" data-tt="מכירתי · פלאש סייל · דחוף · עד 7.8"><span class="ep">⚡ פלאש סייל — קורס</span><div class="meta">10:00 · יונתן</div></div></td>
+        <td class="day"><div class="post value" data-tt="ערך · ליווי אישי · אחראי: דב"><span class="ep">ליווי אישי</span><div class="meta">9:30 · דב</div></div></td>
+        <td class="day"></td>
+        <td class="day"></td>
+      </tr>
+      <tr>
+        <td class="chan"><div class="cname">טלגרם</div><div class="cap">5 מתוך 7 השבוע</div></td>
+        <td class="day"><div class="post value published"><span class="ep">מדריך השקעות</span><div class="meta">12:00</div></div></td>
+        <td class="day"><div class="post hybrid"><span class="ep">קורס תקציב</span><div class="meta">18:00 · יונתן</div></div></td>
+        <td class="day"></td>
+        <td class="day"><div class="hole" data-tt="הלוח מחכה לתוכן: ערך — ליווי אישי בטלגרם. יש משימת כתיבה">מחכה לתוכן<br><small>ערך · ליווי אישי</small></div></td>
+        <td class="day"><div class="post promo"><span class="ep">⚡ פלאש סייל — קורס</span><div class="meta">11:00 · עדי</div></div></td>
+        <td class="day"><div class="post value"><span class="ep">מדריך השקעות</span><div class="meta">10:00 · דב</div></div></td>
+        <td class="day"></td>
+      </tr>
+      <tr>
+        <td class="chan"><div class="cname">אינסטגרם</div><div class="cap">3 מתוך 4 השבוע</div></td>
+        <td class="day"></td>
+        <td class="day"><div class="post value published"><span class="ep">ריל · קורס תקציב</span><div class="meta">17:00</div></div></td>
+        <td class="day"></td>
+        <td class="day"><div class="post hybrid"><span class="ep">סטורי · מדריך</span><div class="meta">20:00 · עדי</div></div></td>
+        <td class="day"></td>
+        <td class="day"><div class="pending" data-tt="דחוף שדוחה פוסט אחר — ממתין לאישור">ממתין לאישור<br><small>פלאש סייל · ריל</small></div></td>
+        <td class="day"></td>
+      </tr>
+      <tr>
+        <td class="chan"><div class="cname">ניוזלטר</div><div class="cap">1 מתוך 1 השבוע</div></td>
+        <td class="day"></td>
+        <td class="day"></td>
+        <td class="day"><div class="post hybrid"><span class="ep">ניוזלטר שבועי</span><div class="meta">8:00 · יונתן</div></div></td>
+        <td class="day"></td>
+        <td class="day"></td>
+        <td class="day"></td>
+        <td class="day"></td>
+      </tr>
+      <tr>
+        <td class="chan"><div class="cname">קבוצת וואטסאפ</div><div class="cap">2 מתוך 3 השבוע</div></td>
+        <td class="day"></td>
+        <td class="day"><div class="post value published"><span class="ep">טיפ · קורס תקציב</span><div class="meta">8:30</div></div></td>
+        <td class="day"></td>
+        <td class="day"></td>
+        <td class="day"><div class="post promo"><span class="ep">⚡ פלאש סייל — קורס</span><div class="meta">12:00 · דב</div></div></td>
+        <td class="day"></td>
+        <td class="day"></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="sumline">השבוע: <b>15 פרסומים</b> · מהם <b>4 מכירתיים</b> · על כל מכירתי יש <b>3.2 פוסטי ערך</b> ✓</div>
+</section>
+
+<!-- ===================== אסטרטגיה ===================== -->
+<section id="strategy" hidden>
+
+  <div class="toolbar">
+    <div class="periodpick">
+      <button>רבעון</button>
+      <button class="on">חצי שנה</button>
+      <button>שנה</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn primary" id="addStrategy">＋ הגדר אסטרטגיה לתקופה</button>
+  </div>
+
+  <div class="panel" style="margin-bottom:16px">
+    <div class="gantt">
+      <div class="grow head">
+        <span class="gname"></span>
+        <span>יולי</span><span>אוגוסט</span><span>ספטמבר</span><span>אוקטובר</span><span>נובמבר</span><span>דצמבר</span>
+      </div>
+      <div class="grow">
+        <div class="gname">קורס תקציב משפחתי<span class="d">חשיבות 9</span></div>
+        <div class="gbar" style="grid-column: 2 / 5" data-tt="קמפיין רבעון 3 · יולי–ספטמבר · יעד: 40% מהשטח">קמפיין רבעון 3 · <span class="pct">40%</span></div>
+        <div class="gbar" style="grid-column: 6 / 7" data-tt="בלאק פריידי · נובמבר · יעד: 50% מהשטח">בלאק פריידי · <span class="pct">50%</span></div>
+      </div>
+      <div class="grow">
+        <div class="gname">מדריך השקעות חינם<span class="d">חשיבות 8</span></div>
+        <div class="gbar" style="grid-column: 3 / 5" data-tt="בניית באזז לוובינר · אוגוסט–ספטמבר · 35%">באזז וובינר · <span class="pct">35%</span></div>
+        <div class="gmark" style="grid-column: 5 / 6" data-tt="אבן דרך: וובינר השקה 15.9 — המנוע מרים חימום בשבועיים שלפני">◆ וובינר 15.9</div>
+      </div>
+      <div class="grow">
+        <div class="gname">ליווי פיננסי אישי<span class="d">חשיבות 7</span></div>
+        <div class="gbar soft" style="grid-column: 2 / 5" data-tt="בלי קמפיין — חשיפה שוטפת לפי החשיבות">חשיפה שוטפת</div>
+        <div class="gbar" style="grid-column: 5 / 8" data-tt="קמפיין רבעון 4 · אוקטובר–דצמבר · 30%">קמפיין רבעון 4 · <span class="pct">30%</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="max-width:640px">
+    <div class="alloc">
+      <h4>התקופה הנוכחית — רבעון 3 · חלוקת השטח: יעד מול בפועל</h4>
+      <div class="arow"><span class="an">קורס תקציב</span><div class="abar"><div class="target" style="width:40%"></div><div class="actual" style="width:38%"></div></div><span class="at">יעד 40% · בפועל 38% <span class="ok">✓</span></span></div>
+      <div class="arow"><span class="an">מדריך השקעות</span><div class="abar"><div class="target" style="width:35%"></div><div class="actual" style="width:36%"></div></div><span class="at">יעד 35% · בפועל 36% <span class="ok">✓</span></span></div>
+      <div class="arow"><span class="an">ליווי אישי</span><div class="abar"><div class="target" style="width:25%"></div><div class="actual" style="width:14%"></div></div><span class="at">יעד 25% · בפועל 14% <span class="off">⚠ מפגרת</span></span></div>
+      <p class="sumline" style="margin-top:10px">המנוע משתמש ביעדים האלה כמשקל בשיבוץ. פער גדול מדי ⚠ — והוא מתקן קדימה, כמו שקורה עכשיו עם "ליווי אישי".</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== ניהול ===================== -->
+<section id="manage" hidden>
+
+  <div class="setgroup">
+    <h2>נקודות קצה</h2>
+    <p class="sub">כל נקודה מרכזת אצלה הכול: הגדרות, קמפיינים, ותוכן. מוסיפים תוכן מתוך הנקודה.</p>
+    <div class="panel">
+      <details class="item" open>
+        <summary><b>קורס תקציב משפחתי</b><span class="info">חשיבות 9 · 2 קמפיינים</span><span class="chip on">פעילה</span></summary>
+        <div class="ibody">
+          <div class="prow"><label>חשיבות (1–10) — כמה שטח מגיע לה</label><input value="9"></div>
+          <div class="prow"><label>לפרסם לפחות פעם ב־ (ימים)</label><input value="7"></div>
+
+          <div class="subsec">
+            <h4>קמפיינים</h4>
+            <div class="camp">
+              <div class="crow"><b>קמפיין רבעון 3</b><span class="d">יולי–ספטמבר · 40% מהשטח</span><span class="chip on">רץ</span></div>
+            </div>
+            <div class="camp">
+              <div class="crow"><b>⚡ פלאש סייל 48 שעות</b><span class="d">עד 7.8 · דחוף</span><span class="chip on">רץ</span></div>
+            </div>
+            <button class="btn small">＋ קמפיין</button>
+          </div>
+
+          <div class="subsec">
+            <h4>תוכן מוכן לפרסום</h4>
+            <div class="contentline"><span class="sw" style="background:var(--leg-promo)"></span>מכירתי: <b>פלאש סייל</b> — מוכן לפייסבוק, טלגרם, וואטסאפ</div>
+            <div class="contentline"><span class="sw" style="background:var(--leg-value)"></span>ערך: <b>5 טעויות בתקציב</b> — מוכן לפייסבוק, טלגרם</div>
+            <div class="contentline"><span class="sw" style="background:var(--leg-hybrid)"></span>משולב: <b>ניוזלטר אוגוסט</b> — מוכן לניוזלטר</div>
+            <button class="btn small primary">＋ הוסף תוכן</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="item">
+        <summary><b>מדריך השקעות חינם</b><span class="info">חשיבות 8 · קמפיין וובינר</span><span class="chip on">פעילה</span></summary>
+        <div class="ibody">
+          <div class="prow"><label>חשיבות (1–10)</label><input value="8"></div>
+          <div class="prow"><label>לפרסם לפחות פעם ב־ (ימים)</label><input value="10"></div>
+          <div class="subsec"><h4>קמפיינים</h4>
+            <div class="camp"><div class="crow"><b>בניית באזז — וובינר ספטמבר</b><span class="d">אוגוסט–ספטמבר</span><span class="chip on">רץ</span></div></div>
+            <button class="btn small">＋ קמפיין</button>
+          </div>
+          <div class="subsec"><h4>תוכן מוכן לפרסום</h4>
+            <div class="contentline"><span class="sw" style="background:var(--leg-value)"></span>ערך: <b>מדריך — פרק 2</b> — מוכן לפייסבוק, טלגרם</div>
+            <button class="btn small primary">＋ הוסף תוכן</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="item">
+        <summary><b>ליווי פיננסי אישי</b><span class="info">חשיבות 7</span><span class="chip bad">חסר תוכן</span></summary>
+        <div class="ibody">
+          <div class="prow"><label>חשיבות (1–10)</label><input value="7"></div>
+          <div class="prow"><label>לפרסם לפחות פעם ב־ (ימים)</label><input value="10"></div>
+          <div class="subsec"><h4>קמפיינים</h4>
+            <p style="font-size:12.5px;color:var(--muted);margin-bottom:8px">אין קמפיין — חשיפה שוטפת בלבד</p>
+            <button class="btn small">＋ קמפיין</button>
+          </div>
+          <div class="subsec"><h4>תוכן מוכן לפרסום</h4>
+            <div class="contentline"><span class="sw" style="background:var(--leg-value)"></span>ערך: <span class="missing">אין תוכן מוכן — הלוח מחכה לזה ליום ד' (טלגרם)</span></div>
+            <button class="btn small primary">＋ הוסף תוכן</button>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div style="margin-top:10px"><button class="btn">＋ הוסף נקודת קצה</button></div>
+  </div>
+
+  <div class="setgroup">
+    <h2>ערוצי פרסום</h2>
+    <p class="sub">כמה שטח יש בכל ערוץ ומה הכללים שלו.</p>
+    <div class="panel">
+      <details class="item">
+        <summary><b>קבוצת פייסבוק ראשית</b><span class="info">עד 5 בשבוע · על כל מכירתי — 3 ערך</span><span class="chip on">פעיל</span></summary>
+        <div class="ibody">
+          <div class="prow"><label>כמה פוסטים מקסימום בשבוע (סה"כ)</label><input value="5"></div>
+          <div class="prow"><label><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:3px;background:var(--leg-promo);margin-inline-end:6px;vertical-align:-1px"></span>מזה — מכירתיים מקסימום</label><input value="1"></div>
+          <div class="prow"><label><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:3px;background:var(--leg-hybrid);margin-inline-end:6px;vertical-align:-1px"></span>מזה — משולבים מקסימום</label><input value="2"></div>
+          <div class="prow"><label><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:3px;background:var(--leg-value);margin-inline-end:6px;vertical-align:-1px"></span>מזה — ערך מקסימום</label><input value="ללא" style="width:60px"></div>
+          <div class="prow"><label>שטח ששמור לדברים דחופים</label><input value="20%"></div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn small">השבת ערוץ</button>
+            <button class="btn small" style="color:var(--st-crit)">מחק ערוץ</button>
+          </div>
+        </div>
+      </details>
+      <details class="item"><summary><b>טלגרם</b><span class="info">עד 7 בשבוע</span><span class="chip on">פעיל</span></summary>
+        <div class="ibody"><div class="prow"><label>כמה פוסטים מקסימום בשבוע</label><input value="7"></div></div></details>
+      <details class="item"><summary><b>אינסטגרם</b><span class="info">עד 4 בשבוע</span><span class="chip on">פעיל</span></summary>
+        <div class="ibody"><div class="prow"><label>כמה פוסטים מקסימום בשבוע</label><input value="4"></div></div></details>
+      <details class="item"><summary><b>ניוזלטר</b><span class="info">1 בשבוע</span><span class="chip on">פעיל</span></summary>
+        <div class="ibody"><div class="prow"><label>כמה מיילים בשבוע</label><input value="1"></div></div></details>
+      <details class="item"><summary><b>קבוצת וואטסאפ</b><span class="info">עד 3 בשבוע</span><span class="chip on">פעיל</span></summary>
+        <div class="ibody"><div class="prow"><label>כמה הודעות מקסימום בשבוע</label><input value="3"></div></div></details>
+    </div>
+    <div style="margin-top:10px"><button class="btn">＋ הוסף ערוץ</button></div>
+  </div>
+
+  <div class="setgroup" id="ownerOnly">
+    <h2>מערכת</h2>
+    <div class="panel">
+      <details class="item">
+        <summary><b>משתמשים והרשאות</b><span class="info">3 משתמשים</span><span class="owner-tag">בעלים בלבד</span></summary>
+        <div class="ibody">
+          <table class="utable">
+            <thead><tr><th>משתמש</th><th>תוכן ושיבוץ</th><th>הגדרות</th><th>אישור דחוף־דורס</th><th>ניהול משתמשים</th></tr></thead>
+            <tbody>
+              <tr><td><b>יונתן</b> <span class="owner-tag">בעלים</span></td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td><b>דב</b></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
+              <tr><td><b>עדי</b></td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox"></td><td><input type="checkbox"></td></tr>
+            </tbody>
+          </table>
+          <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
+        </div>
+      </details>
+      <details class="item">
+        <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
+        <div class="ibody">
+          <div class="prow"><label>מרווח מינימלי לאותה נקודה באותו ערוץ (ימים)</label><input value="7"></div>
+          <div class="prow"><label>מקסימום מכירתיים ביום, בכל הערוצים</label><input value="1"></div>
+          <div class="prow"><label>"משולב" נספר כמכירתי</label><input value="0.5"></div>
+          <div class="prow"><label>התראת "מחכה לתוכן" — שעות מראש</label><input value="48"></div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <button class="btn primary" id="saveParams">שמור</button>
+</section>
+
+<!-- ===================== משימות ===================== -->
+<section id="tasks" hidden>
+  <div class="tasks">
+    <div class="tgroup">
+      <h2>היום</h2>
+      <div class="panel">
+        <div class="task"><input type="checkbox"><div class="tx"><b>לפרסם: מדריך השקעות — קבוצת פייסבוק, 19:00</b><span>משולב · אחראית: עדי · הטקסט מוכן</span></div><button class="btn small act">העתק טקסט</button></div>
+        <div class="task"><input type="checkbox"><div class="tx"><b>לפרסם: קורס תקציב — טלגרם, 18:00</b><span>משולב · אחראי: יונתן · הטקסט מוכן</span></div><button class="btn small act">העתק טקסט</button></div>
+      </div>
+    </div>
+    <div class="tgroup">
+      <h2>דורש טיפול</h2>
+      <div class="panel">
+        <div class="task urgent"><input type="checkbox"><div class="tx"><b>לכתוב: פוסט ערך על "ליווי אישי" לטלגרם</b><span>הלוח מחכה לזה ליום רביעי · הנקודה 18 יום בלי פרסום</span></div><button class="btn small act">פתח בנקודה</button></div>
+        <div class="task"><input type="checkbox"><div class="tx"><b>לאשר: פלאש סייל בריל — שישי</b><span>ידחה את "משולב · ליווי אישי" לשבוע הבא · דורש הרשאת אישור</span></div><button class="btn small act" id="approveBtn">לבחינה</button></div>
+      </div>
+    </div>
+    <div class="tgroup">
+      <h2>הושלם השבוע</h2>
+      <div class="panel">
+        <div class="task" style="opacity:.5"><input type="checkbox" checked><div class="tx"><b>פורסם: ריל קורס תקציב — אינסטגרם</b><span>שני · 17:00</span></div></div>
+        <div class="task" style="opacity:.5"><input type="checkbox" checked><div class="tx"><b>פורסם: טיפ יומי — וואטסאפ</b><span>שני · 8:30</span></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- מודאל מבצע דחוף -->
+<dialog id="urgentDlg">
+  <h3>מבצע דחוף</h3>
+  <div class="frow"><label>מה מפרסמים?</label><input value="מבצע 48 שעות — קורס תקציב משפחתי"></div>
+  <div class="frow"><label>רלוונטי עד</label><input type="date" value="2026-08-07"></div>
+  <div class="frow"><label>איפה</label><input value="פייסבוק, טלגרם, וואטסאפ"></div>
+  <div class="whatif">
+    <b>מה יקרה:</b>
+    ישובץ: פייסבוק רביעי · טלגרם חמישי · וואטסאפ חמישי<br>
+    שום פרסום מתוכנן לא זז<br>
+    <span class="warn2">שים לב: פייסבוק יגיע לגבול המכירתיים השבועי</span>
+  </div>
+  <div class="dactions">
+    <button class="btn" id="dlgCancel">ביטול</button>
+    <button class="btn primary" id="dlgOk">אשר</button>
+  </div>
+</dialog>
+
+<div id="tt"></div>
+<div id="toast"></div>
+
+<script>
+  const tabs = document.querySelectorAll('.tab');
+  const sections = { board: q('#board'), strategy: q('#strategy'), manage: q('#manage'), tasks: q('#tasks') };
+  function q(s){ return document.querySelector(s); }
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.setAttribute('aria-selected', x === t));
+    Object.entries(sections).forEach(([k, el]) => el.hidden = (k !== t.dataset.t));
+  }));
+
+  const userSel = q('#user');
+  const perms = {
+    yonatan: { settings: true, users: true },
+    dov:     { settings: true, users: false },
+    adi:     { settings: false, users: false }
+  };
+  function applyRole(){ q('#ownerOnly').style.display = perms[userSel.value].users ? '' : 'none'; }
+  userSel.addEventListener('change', applyRole); applyRole();
+
+  const tt = q('#tt');
+  document.addEventListener('mousemove', e => {
+    const el = e.target.closest('[data-tt]');
+    if (el) {
+      tt.textContent = el.dataset.tt; tt.style.display = 'block';
+      const x = Math.min(e.clientX + 14, innerWidth - tt.offsetWidth - 10);
+      tt.style.left = x + 'px'; tt.style.top = (e.clientY + 16) + 'px';
+    } else tt.style.display = 'none';
+  });
+
+  const dlg = q('#urgentDlg');
+  q('#btnUrgent').addEventListener('click', () => dlg.showModal());
+  q('#dlgCancel').addEventListener('click', () => dlg.close());
+  q('#dlgOk').addEventListener('click', () => { dlg.close(); toast('שובץ. הלוח עודכן.'); });
+  q('#saveParams')?.addEventListener('click', () => toast('נשמר. הלוח יחושב מחדש.'));
+  q('#approveBtn')?.addEventListener('click', () => toast('מסך אישור ייפתח כאן.'));
+  q('#addUser')?.addEventListener('click', () => toast('טופס משתמש חדש ייפתח כאן.'));
+  q('#addStrategy')?.addEventListener('click', () => toast('אשף קצר: בחר תקופה → מי בעדיפות ובכמה אחוזים → אבני דרך. המנוע מיישם.'));
+  document.querySelectorAll('.periodpick button').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.periodpick button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); toast('בדמו מוצגת תצוגת חצי שנה; בגרסה האמיתית הציר מתכווץ/נמתח.');
+  }));
+  function toast(msg){ const t = q('#toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 3200); }
+</script>
+</body>
+</html>
