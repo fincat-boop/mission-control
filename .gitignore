@@ -3,3 +3,6 @@ node_modules/
 .env.local
 *.log
 .DS_Store
+
+# גיבויים מכילים hash-ים של סיסמאות ואת כל תוכן המסד
+backups/

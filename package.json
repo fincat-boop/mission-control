@@ -11,7 +11,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
-    "seed": "node src/seed.js"
+    "seed": "node src/seed.js",
+    "backup": "node src/backup.js",
+    "restore": "node src/restore.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
