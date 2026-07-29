@@ -154,7 +154,8 @@ details.item .ibody { padding: 2px 16px 16px; }
 .prow { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; gap: 12px; }
 .prow:last-child { border-bottom: none; }
 .prow label { color: var(--ink-2); }
-.prow input { width: 68px; font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); color: var(--ink-1); text-align: center; }
+/* :not(checkbox) — אחרת תיבות הסימון של הימים החסומים יורשות רוחב 68px ומתפרקות */
+.prow input:not([type=checkbox]) { width: 68px; font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); color: var(--ink-1); text-align: center; }
 .prow input[type=text] { width: 240px; text-align: start; }
 .prow input:disabled { opacity: .55; cursor: not-allowed; }
 .subsec { margin-top: 14px; }
@@ -228,17 +229,18 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .frow label { display: block; color: var(--ink-2); margin-bottom: 4px; font-size: 12px; }
 .frow input, .frow select, .frow textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--ink-1); }
 .frow textarea { min-height: 80px; resize: vertical; }
-/* מטרות לחיצה גדולות: הצ'קבוקסים היו דחוסים בשורה אחת וקשים לפגיעה */
-.frow .checks { display: flex; flex-wrap: wrap; gap: 8px; }
-.frow .checks label {
+/* מטרות לחיצה גדולות: הצ'קבוקסים היו דחוסים בשורה אחת וקשים לפגיעה.
+   הכללים לא תחומים ל-.frow — אותה רשימת שבבים משמשת גם בשורות ההגדרות (.prow) */
+.checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.checks label {
   display: inline-flex; align-items: center; gap: 7px; margin: 0;
   color: var(--ink-1); font-size: 12.5px; cursor: pointer;
   border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
   background: var(--page);
 }
-.frow .checks label:hover { border-color: var(--accent); }
-.frow .checks label:has(input:checked) { border-color: var(--accent); background: var(--panel-2); }
-.frow .checks input { width: 15px; height: 15px; accent-color: var(--accent); }
+.checks label:hover { border-color: var(--accent); }
+.checks label:has(input:checked) { border-color: var(--accent); background: var(--panel-2); }
+.checks input { width: 15px; height: 15px; accent-color: var(--accent); flex: none; }
 
 /* המדיות של הקמפיין, ישירות בשורה */
 .chanpick {
