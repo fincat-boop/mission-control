@@ -58,9 +58,33 @@ const CELL = {
   not_needed:   { label: '',           cls: 'na'    },
 };
 
-// הצבע נגזר מהמזהה ולא מהמיקום ברשימה, כדי שיישאר זהות של הנקודה
-const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429', '#2ec5c0'];
-const epColor = (id) => EP_COLORS[Number(id) % EP_COLORS.length];
+/**
+ * צבע לכל נקודת קצה.
+ *
+ * לפי המיקום במיון לפי מזהה — לא לפי id % palette, שיכול לתת לשתי נקודות
+ * את אותו צבע, ולא לפי המיקום ברשימה המוצגת, שמשתנה כשמשנים משקל.
+ * המזהה לא זז לעולם, ולכן הצבע גם יציב וגם ייחודי.
+ */
+const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429',
+                   '#2ec5c0', '#e5679a', '#8bc34a', '#ff8f5c', '#7c8cff'];
+
+let epColors = new Map();
+function rebuildEpColors() {
+  epColors = new Map();
+  [...state.endpoints]
+    .sort((a, b) => a.id - b.id)
+    .forEach((e, i) => epColors.set(e.id, EP_COLORS[i % EP_COLORS.length]));
+}
+const epColor = (id) => epColors.get(Number(id)) ?? 'var(--muted)';
+
+/** טקסט כהה או בהיר, לפי בהירות הרקע — צהוב ולבן לא נקראים יחד */
+function inkOn(bg) {
+  const m = /^#([0-9a-f]{6})$/i.exec(bg);
+  if (!m) return '#fff';
+  const n = parseInt(m[1], 16);
+  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum > 0.6 ? '#14161a' : '#fff';
+}
 
 const ymd = (d) => {
   const p = (n) => String(n).padStart(2, '0');
@@ -110,6 +134,7 @@ async function boot() {
   ]);
   state.channels = channels;
   state.endpoints = endpoints;
+  rebuildEpColors();
   state.users = users;
 
   await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
@@ -243,10 +268,10 @@ async function renderBoard() {
       ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
       <div class="spacer"></div>
       <div class="legend">
-        <span><i class="sw" style="background:var(--leg-promo)"></i>מכירתי</span>
-        <span><i class="sw" style="background:var(--leg-value)"></i>ערך</span>
-        <span><i class="sw" style="background:var(--leg-hybrid)"></i>משולב</span>
-        <span>· ⚡ דחוף · ✓ פורסם</span>
+        ${state.endpoints.filter((e) => e.active !== false).map((e) =>
+          `<span><i class="sw" style="background:${epColor(e.id)}"></i>${esc(e.name)}</span>`
+        ).join('')}
+        <span>· הסוג מסומן בתג בכל פוסט · ⚡ דחוף · ✓ פורסם</span>
       </div>
     </div>
 
@@ -295,12 +320,20 @@ function postCard(p) {
       data-tt="ממתין לאישור — ${esc(p.title)}">
       ממתין לאישור<br><small>${esc(p.title)}</small></div>`;
   }
-  const cls = `post ${p.kind}${p.status === 'published' ? ' published' : ''}`;
-  const tip = `${KIND_HE[p.kind]} · ${p.endpoint_name ?? ''}${p.urgent ? ' · דחוף' : ''}` +
+  // הצבע הוא נקודת הקצה. סוג התוכן מסומן בתג קטן, כדי ששני הממדים
+  // יהיו קריאים בלי שאחד יסתיר את השני.
+  const bg = epColor(p.endpoint_id);
+  const cls = `post${p.status === 'published' ? ' published' : ''}`;
+  const tip = `${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}${p.urgent ? ' · דחוף' : ''}` +
               `${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
-  return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}">
+
+  return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}"
+    style="background:${bg};color:${inkOn(bg)}">
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
-    <div class="meta">${esc(p.time)}${who}</div></div>`;
+    <div class="meta">
+      <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
+      ${esc(p.time)}${who}
+    </div></div>`;
 }
 
 /* ========================= דיאלוג שיבוץ ========================= */
@@ -551,6 +584,7 @@ const daysBetweenDates = (a, b) => {
 async function renderStrategy() {
   const data = await api('/strategy');
   state.endpoints = data.endpoints;
+  rebuildEpColors();
 
   $('#strategy').innerHTML = `
     <div class="toolbar">
@@ -1346,6 +1380,7 @@ async function renderManage() {
     api('/endpoints'), api('/channels'), api('/settings'), api('/users'),
   ]);
   state.endpoints = endpoints;
+  rebuildEpColors();
   state.channels = channels;
   state.users = users;
 
