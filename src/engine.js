@@ -35,7 +35,16 @@ export async function planWeek(anchorDate) {
     one('select * from engine_settings where id = 1'),
     rows('select * from channels where active = true order by sort_order, id'),
     rows('select * from endpoints where active = true'),
-    rows('select * from content_items order by created_at'),
+    // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת
+    rows(`select ci.*,
+                 coalesce(
+                   array_agg(v.channel_id) filter (where v.status = 'ready'),
+                   '{}'
+                 ) as ready_channel_ids
+            from content_items ci
+            left join content_variants v on v.content_id = ci.id
+           group by ci.id
+           order by ci.created_at`),
     rows(
       `select id, channel_id, endpoint_id, content_id, kind, scheduled_at, status
          from posts

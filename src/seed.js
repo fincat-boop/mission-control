@@ -57,35 +57,35 @@ for (const e of endpointRows) {
 }
 
 /* ---------- ערוצים ---------- */
+// max = תקרה, target = הקצב הרצוי. מהקצב נגזר כמה מגיע לכל קמפיין במדיה.
 const channelRows = [
-  { name: 'קבוצת פייסבוק ראשית', max: 5, promo: 1, hybrid: 2, value: null, reserve: 20 },
-  { name: 'טלגרם', max: 7, promo: 2, hybrid: null, value: null, reserve: 20 },
-  { name: 'אינסטגרם', max: 4, promo: 1, hybrid: null, value: null, reserve: 20 },
-  { name: 'ניוזלטר', max: 1, promo: null, hybrid: null, value: null, reserve: 0 },
-  { name: 'קבוצת וואטסאפ', max: 3, promo: 1, hybrid: null, value: null, reserve: 20 },
+  { name: 'קבוצת פייסבוק ראשית', max: 5, target: 4, promo: 1, hybrid: 2, value: null, reserve: 20 },
+  { name: 'טלגרם', max: 7, target: 5, promo: 2, hybrid: null, value: null, reserve: 20 },
+  { name: 'אינסטגרם', max: 4, target: 3, promo: 1, hybrid: null, value: null, reserve: 20 },
+  { name: 'ניוזלטר', max: 1, target: 1, promo: null, hybrid: null, value: null, reserve: 0 },
+  { name: 'קבוצת וואטסאפ', max: 3, target: 2, promo: 1, hybrid: null, value: null, reserve: 20 },
 ];
 const ch = {};
 for (const [i, c] of channelRows.entries()) {
   const row = await one(
-    `insert into channels (name, max_per_week, max_promo_per_week, max_hybrid_per_week,
-                           max_value_per_week, urgent_reserve_pct, sort_order)
-     values ($1,$2,$3,$4,$5,$6,$7) returning *`,
-    [c.name, c.max, c.promo, c.hybrid, c.value, c.reserve, i]
+    `insert into channels (name, max_per_week, target_per_week, max_promo_per_week,
+                           max_hybrid_per_week, max_value_per_week, urgent_reserve_pct, sort_order)
+     values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+    [c.name, c.max, c.target, c.promo, c.hybrid, c.value, c.reserve, i]
   );
   ch[c.name] = row.id;
 }
 
 /* ---------- קמפיינים ---------- */
 const year = new Date().getFullYear();
-// קמפיין נושא תאריכים, נתח מהשטח, חשיבות וקצב.
-// מהקצב נגזר כמה פוסטים הקמפיין צריך.
+// קמפיין נושא תאריכים, נתח מהשטח וחשיבות. התדירות יושבת על המדיה, לא כאן.
 await query(
   `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
-                          importance, cadence_days, urgent, goal) values
-     ($1,'קמפיין רבעון 3',              $2,$3,40,  9, 7,  false,'להביא הרשמות לקורס'),
-     ($1,'⚡ פלאש סייל 48 שעות',        $4,$5,null,9, 2,  true, 'דחיפת מכירות קצרה'),
-     ($6,'בניית באזז — וובינר ספטמבר', $7,$3,35,  8, 7,  false,'למלא את הוובינר'),
-     ($8,'חשיפה שוטפת',                $2,$3,25,  7, 10, false,'לשמור על נוכחות')`,
+                          importance, urgent, goal) values
+     ($1,'קמפיין רבעון 3',              $2,$3,40,  9, false,'להביא הרשמות לקורס'),
+     ($1,'⚡ פלאש סייל 48 שעות',        $4,$5,null,9, true, 'דחיפת מכירות קצרה'),
+     ($6,'בניית באזז — וובינר ספטמבר', $7,$3,35,  8, false,'למלא את הוובינר'),
+     ($8,'חשיפה שוטפת',                $2,$3,25,  7, false,'לשמור על נוכחות')`,
   [ep['קורס תקציב משפחתי'], `${year}-07-01`, `${year}-09-30`,
    ymd(new Date()), ymd(new Date(Date.now() + 9 * 86400000)),
    ep['מדריך השקעות חינם'], `${year}-08-01`, ep['ליווי פיננסי אישי']]
@@ -108,12 +108,27 @@ await query(
    camp['⚡ פלאש סייל 48 שעות'], camp['קמפיין רבעון 3'], camp['בניית באזז — וובינר ספטמבר']]
 );
 
+// לכל זווית נפתחת גרסה לכל מדיה שהיא מכוונת אליה — הניסוח נכתב לכל אחת בנפרד
+await query(
+  `insert into content_variants (content_id, channel_id, status)
+   select ci.id, unnest(ci.ready_channel_ids), 'draft' from content_items ci
+   on conflict do nothing`
+);
+
+// על אילו מדיות כל קמפיין יושב
+await query(
+  `insert into campaign_channels (campaign_id, channel_id)
+   select distinct ci.campaign_id, unnest(ci.ready_channel_ids)
+     from content_items ci where ci.campaign_id is not null
+   on conflict do nothing`
+);
+
 /* ---------- אסטרטגיה ---------- */
 // הנתחים והתאריכים יושבים על הקמפיינים עצמם. כאן נשארות רק אבני הדרך.
 await query(
   `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
-                          importance, cadence_days, goal)
-   values ($1,'קמפיין רבעון 4',$2,$3,30,7,7,'לפתוח את הרבעון עם ליווי אישי')`,
+                          importance, goal)
+   values ($1,'קמפיין רבעון 4',$2,$3,30,7,'לפתוח את הרבעון עם ליווי אישי')`,
   [ep['ליווי פיננסי אישי'], `${year}-10-01`, `${year}-12-31`]
 );
 await query(

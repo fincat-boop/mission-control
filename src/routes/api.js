@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { one, query, rows, tx } from '../db.js';
 import { buildAlerts } from '../alerts.js';
-import { campaignsWithHealth, currentAllocation, requiredPosts } from '../campaigns.js';
+import { angleCount, campaignsWithHealth, channelNeeds, currentAllocation } from '../campaigns.js';
 import {
   PUBLIC_USER_COLS, checkPassword, clearSession, hashPassword,
   issueSession, requireAuth, requirePerm,
@@ -259,8 +259,19 @@ r.get('/campaigns', wrap(async (_req, res) => {
 }));
 
 const CAMPAIGN_FIELDS = ['name', 'endpoint_id', 'starts_on', 'ends_on', 'share_pct',
-                         'importance', 'cadence_days', 'target_posts', 'goal',
-                         'urgent', 'active'];
+                         'importance', 'target_posts', 'goal', 'urgent', 'active'];
+
+/** מעדכן על אילו מדיות הקמפיין יושב */
+async function setCampaignChannels(client, campaignId, ids) {
+  await client.query('delete from campaign_channels where campaign_id = $1', [campaignId]);
+  for (const channelId of ids) {
+    await client.query(
+      `insert into campaign_channels (campaign_id, channel_id) values ($1,$2)
+       on conflict do nothing`,
+      [campaignId, channelId]
+    );
+  }
+}
 
 r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   const b = req.body ?? {};
@@ -270,15 +281,17 @@ r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   }
   const c = await one(
     `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
-                            importance, cadence_days, target_posts, goal, urgent)
+                            importance, target_posts, goal, urgent)
      values ($1,$2,$3,$4,$5,
              coalesce($6,(select importance from endpoints where id = $1)),
-             coalesce($7,7),$8,$9,coalesce($10,false))
+             $7,$8,coalesce($9,false))
      returning *`,
     [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null, b.share_pct ?? null,
-     b.importance ?? null, b.cadence_days ?? null, b.target_posts ?? null,
-     b.goal ?? null, b.urgent ?? false]
+     b.importance ?? null, b.target_posts ?? null, b.goal ?? null, b.urgent ?? false]
   );
+  if (Array.isArray(b.channel_ids)) {
+    await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
+  }
   res.status(201).json({ campaign: c });
 }));
 
@@ -289,7 +302,34 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   }
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  if (Array.isArray(b.channel_ids)) {
+    await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
+  }
   res.json({ campaign: c });
+}));
+
+/* ========================= גרסאות לפי מדיה ========================= */
+
+/** יצירה או עדכון של הגרסה של זווית מסוימת במדיה מסוימת */
+r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
+
+  const v = await one(
+    `insert into content_variants (content_id, channel_id, body, status)
+     values ($1,$2,coalesce($3,''),$4)
+     on conflict (content_id, channel_id)
+       do update set body = coalesce($3, content_variants.body), status = $4
+     returning *`,
+    [req.params.id, req.params.channelId, b.body ?? null, status]
+  );
+  res.json({ variant: v });
+}));
+
+r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
+  await query('delete from content_variants where content_id = $1 and channel_id = $2',
+    [req.params.id, req.params.channelId]);
+  res.json({ ok: true });
 }));
 
 /** סידור מחדש של התוכן בתוך קמפיין */
@@ -367,6 +407,20 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     [b.endpoint_id, b.campaign_id ?? null, b.kind, b.title, b.body ?? null,
      b.ready_channel_ids ?? null, nextOrder, b.evergreen ?? null, b.reuse_after_days ?? null]
   );
+
+  // זווית חדשה נפתחת עם גרסת טיוטה לכל מדיה שביקשו — הניסוח נכתב לכל אחת בנפרד
+  const channelIds = parseIdList(b.channel_ids ?? b.ready_channel_ids);
+  if (channelIds.length) {
+    await tx(async (client) => {
+      for (const channelId of channelIds) {
+        await client.query(
+          `insert into content_variants (content_id, channel_id, body, status)
+           values ($1,$2,coalesce($3,''),$4) on conflict do nothing`,
+          [c.id, channelId, b.body ?? null, b.body ? 'ready' : 'draft']
+        );
+      }
+    });
+  }
   res.status(201).json({ content: c });
 }));
 
@@ -437,7 +491,14 @@ r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
       'select sort_order from content_items where campaign_id = $1', [campaign.id]
     );
     const taken = new Set(existing.map((x) => x.sort_order));
-    const required = requiredPosts(campaign);
+
+    const myChannels = await rows(
+      `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
+        where cc.campaign_id = $1 order by ch.sort_order, ch.id`,
+      [campaign.id]
+    );
+    // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו
+    const required = angleCount(campaign, channelNeeds(campaign, myChannels));
 
     // המשבצות הריקות, לפי הסדר. אם נגמרו — ממשיכים אחרי המשבצת האחרונה.
     const freeSlots = [];
@@ -455,8 +516,17 @@ r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
                                       ready_channel_ids, sort_order)
            values ($1,$2,$3,$4,$5::int[],$6) returning *`,
           [campaign.endpoint_id, campaign.id, kind, titleFromFilename(f.originalname),
-           channelIds, slot]
+           channelIds.length ? channelIds : myChannels.map((c) => c.id), slot]
         )).rows[0];
+
+        // הזווית נפתחת עם טיוטה לכל מדיה של הקמפיין — הטקסט נכתב לכל אחת בנפרד
+        for (const ch of (channelIds.length ? channelIds : myChannels.map((c) => c.id))) {
+          await client.query(
+            `insert into content_variants (content_id, channel_id, status)
+             values ($1,$2,'draft') on conflict do nothing`,
+            [item.id, ch]
+          );
+        }
 
         await client.query(
           `insert into content_assets (content_id, filename, mime, size_bytes, data)
@@ -491,8 +561,9 @@ r.get('/channels', wrap(async (_req, res) => {
   res.json({ channels: await rows('select * from channels order by sort_order, id') });
 }));
 
-const CHANNEL_FIELDS = ['name', 'max_per_week', 'max_promo_per_week', 'max_hybrid_per_week',
-                        'max_value_per_week', 'urgent_reserve_pct', 'active', 'sort_order'];
+const CHANNEL_FIELDS = ['name', 'max_per_week', 'target_per_week', 'max_promo_per_week',
+                        'max_hybrid_per_week', 'max_value_per_week', 'urgent_reserve_pct',
+                        'active', 'sort_order'];
 
 r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
   if (!req.body?.name) return bad(res, 'צריך שם לערוץ');

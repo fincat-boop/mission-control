@@ -37,6 +37,11 @@ create table if not exists channels (
   created_at           timestamptz not null default now()
 );
 
+-- הקצב הרצוי של המדיה, להבדיל מ-max_per_week שהוא תקרה.
+-- ממנו נגזר כמה פוסטים מגיעים לכל קמפיין שיושב על המדיה הזו.
+alter table channels
+  add column if not exists target_per_week numeric(4,1);
+
 -- קמפיין הוא היחידה המרכזית: הוא נושא את התאריכים, החשיבות, הקצב והנתח.
 -- הוא ירש את התפקיד של strategy_allocations, שנמחקה.
 create table if not exists campaigns (
@@ -53,21 +58,25 @@ create table if not exists campaigns (
 
 alter table campaigns
   add column if not exists importance int not null default 5,
-  -- כל כמה ימים הקמפיין רוצה לפרסם. ממנו נגזר כמה פוסטים הוא צריך.
-  add column if not exists cadence_days int not null default 7,
-  -- דריסה ידנית של מספר הפוסטים הנדרש. null = נגזר מהתדירות.
+  -- דריסה ידנית של מספר הזוויות. null = נגזר מהתדירות של המדיות ומהנתח.
   add column if not exists target_posts int,
   add column if not exists goal text;
+
+-- cadence_days ישב על הקמפיין וירד ממנו: התדירות שייכת למדיה, לא לקמפיין.
+-- ראה src/migrations/002-channel-cadence-and-variants.js
+alter table campaigns drop column if exists cadence_days;
 
 do $$ begin
   alter table campaigns add constraint campaigns_importance_range
     check (importance between 1 and 10);
 exception when duplicate_object then null; end $$;
 
-do $$ begin
-  alter table campaigns add constraint campaigns_cadence_positive
-    check (cadence_days >= 1);
-exception when duplicate_object then null; end $$;
+-- על אילו מדיות הקמפיין יושב
+create table if not exists campaign_channels (
+  campaign_id int not null references campaigns(id) on delete cascade,
+  channel_id  int not null references channels(id)  on delete cascade,
+  primary key (campaign_id, channel_id)
+);
 
 create table if not exists content_items (
   id                serial primary key,
@@ -90,6 +99,23 @@ alter table content_items
 alter table content_items
   add column if not exists evergreen boolean not null default false,
   add column if not exists reuse_after_days int;
+
+-- content_items הוא הזווית. הניסוח לכל מדיה יושב בגרסה נפרדת,
+-- כי אותה זווית נכתבת אחרת בפייסבוק, בניוזלטר ובוואטסאפ.
+create table if not exists content_variants (
+  id         serial primary key,
+  content_id int not null references content_items(id) on delete cascade,
+  channel_id int not null references channels(id) on delete cascade,
+  body       text not null default '',
+  -- not_relevant = הוחלט במפורש שהזווית הזו לא הולכת למדיה הזו,
+  -- ולכן התא לא נספר כחוסר
+  status     text not null default 'draft'
+             check (status in ('draft', 'ready', 'not_relevant')),
+  created_at timestamptz not null default now(),
+  unique (content_id, channel_id)
+);
+
+create index if not exists content_variants_content_idx on content_variants (content_id);
 
 create index if not exists content_campaign_idx on content_items (campaign_id, sort_order);
 

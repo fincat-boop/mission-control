@@ -272,6 +272,28 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .slot.empty .plus { font-size: 22px; color: var(--st-crit); line-height: 1; }
 .slot.empty.past .plus { color: var(--muted); }
 
+/* רשת הקמפיין: שורה לזווית, עמודה למדיה */
+.cgrid th.angle, .cgrid td.angle { width: 200px; text-align: start; }
+.cgrid thead th { text-align: center; }
+.cgrid thead th .need { font-size: 10.5px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+.cgrid td.angle { cursor: pointer; }
+.cgrid td.angle:hover { background: var(--panel-2); }
+.cgrid .anum { font-size: 11px; color: var(--muted); display: flex; gap: 6px; margin-bottom: 3px; }
+.cgrid .aname { font-size: 12.5px; font-weight: 600; }
+.cgrid .aname.muted { color: var(--muted); font-weight: 400; }
+.cgrid .ameta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.cgrid tr.past td { opacity: .65; }
+.cgrid td.cell {
+  text-align: center; font-size: 11.5px; cursor: pointer; vertical-align: middle;
+  color: var(--muted);
+}
+.cgrid td.cell:hover { background: var(--panel-2); }
+.cgrid td.cell.ok    { color: var(--st-good); }
+.cgrid td.cell.draft { color: var(--st-warn); }
+.cgrid td.cell.gap   { color: var(--st-crit); font-weight: 600; }
+.cgrid td.cell.na    { color: var(--muted); opacity: .45; cursor: default; }
+.cgrid td.cell.na:hover { background: none; }
+
 /* קבצים מצורפים בטופס */
 .fileline {
   display: flex; align-items: center; gap: 9px; padding: 6px 0; font-size: 12.5px;
