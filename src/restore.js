@@ -57,15 +57,21 @@ await tx(async (client) => {
     }
 
     // יישור הרצף כדי שהמזהה הבא לא יתנגש בשורות ששוחזרו.
-    // מדלגים על טבלאות בלי עמודת id (מפתח מורכב) ועל טבלת ההגדרות.
-    const hasSerial = await client.query(
-      `select pg_get_serial_sequence($1, 'id') as seq`, [t]
+    // pg_get_serial_sequence זורק שגיאה על עמודה שלא קיימת, ולכן בודקים קודם
+    // שיש בכלל עמודת id — יש טבלאות עם מפתח מורכב בלבד.
+    const col = await client.query(
+      `select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = $1 and column_name = 'id'`,
+      [t]
     );
-    if (hasSerial.rows[0]?.seq) {
-      await client.query(
-        `select setval($1, coalesce((select max(id) from ${t}), 1))`,
-        [hasSerial.rows[0].seq]
-      );
+    if (col.rowCount) {
+      const seq = await client.query(`select pg_get_serial_sequence($1, 'id') as seq`, [t]);
+      if (seq.rows[0]?.seq) {
+        await client.query(
+          `select setval($1, coalesce((select max(id) from ${t}), 1))`,
+          [seq.rows[0].seq]
+        );
+      }
     }
   }
 });
