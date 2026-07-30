@@ -1,5 +1,5 @@
 import { one, rows, query } from './db.js';
-import { weekMeta, ymd } from './board.js';
+import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 
 /**
  * מנוע השיבוץ.
@@ -259,7 +259,7 @@ async function computeDebts(endpoints, settings) {
     // נקודה שמעולם לא פורסמה מקבלת את החוב הגבוה ביותר
     const staleness = daysSince === null
       ? 2
-      : daysSince / Math.max(1, e.min_days_between);
+      : daysSince / Math.max(1, effectiveCadenceDays(e));
 
     const target = targetPct.get(e.id) ?? 0;
     const actual = actualPct.get(e.id) ?? 0;

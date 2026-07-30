@@ -1,5 +1,5 @@
 import { one, rows } from './db.js';
-import { ymd } from './board.js';
+import { effectiveCadenceDays, ymd } from './board.js';
 import { campaignsWithHealth } from './campaigns.js';
 
 /**
@@ -90,13 +90,14 @@ export async function buildAlerts() {
   }
 
   for (const e of endpoints) {
+    const cadence = effectiveCadenceDays(e);
     alerts.push({
       id: `endpoint-air-${e.id}`,
-      level: e.days_over >= e.min_days_between ? 'crit' : 'warn',
+      level: e.days_over >= cadence ? 'crit' : 'warn',
       title: `${e.name} לא מפרסמת`,
       detail: e.days_since === null
         ? 'עוד לא פורסם ממנה כלום'
-        : `${e.days_since} ימים בלי פרסום — הקצב שהוגדר הוא כל ${e.min_days_between}`,
+        : `${e.days_since} ימים בלי פרסום — הקצב ${e.min_days_between == null ? 'האוטומטי' : 'שהוגדר'} הוא כל ${cadence}`,
       tab: 'plan',
       endpoint_id: e.id,
     });
@@ -200,12 +201,12 @@ export async function buildAlerts() {
 /** נקודות קצה שעברו את הקצב שהוגדר להן בלי פרסום */
 async function endpointsWithoutAir() {
   const list = await rows(
-    `select e.id, e.name, e.min_days_between,
+    `select e.id, e.name, e.min_days_between, e.importance,
             max(p.published_at) as last_at
        from endpoints e
        left join posts p on p.endpoint_id = e.id and p.status = 'published'
       where e.active = true
-      group by e.id, e.name, e.min_days_between`
+      group by e.id, e.name, e.min_days_between, e.importance`
   );
   const now = new Date();
   return list
@@ -213,5 +214,5 @@ async function endpointsWithoutAir() {
       const daysSince = e.last_at ? Math.floor((now - new Date(e.last_at)) / DAY) : null;
       return { ...e, days_since: daysSince, days_over: daysSince === null ? 999 : daysSince };
     })
-    .filter((e) => e.days_since === null || e.days_since > e.min_days_between);
+    .filter((e) => e.days_since === null || e.days_since > effectiveCadenceDays(e));
 }

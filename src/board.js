@@ -6,6 +6,19 @@ const HE_MONTHS = [
   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
 ];
 
+/**
+ * כל כמה ימים נקודת קצה אמורה להתפרסם, בפועל.
+ *
+ * min_days_between ריק (ברירת המחדל לנקודה חדשה) אומר "תן למערכת להחליט
+ * לפי החשיבות" — אחרת שני השדות (חשיבות + קצב ידני) היו סותרים זה את
+ * זה בלי שום סדר. מספר מפורש הוא override מודע למקרה שיש צורך ספציפי.
+ * חשיבות גבוהה יותר ⇒ קצב תכוף יותר.
+ */
+export function effectiveCadenceDays(e) {
+  if (e.min_days_between != null) return e.min_days_between;
+  return Math.min(30, Math.max(2, Math.round(60 / Math.max(1, e.importance))));
+}
+
 /** YYYY-MM-DD בזמן מקומי (בלי קפיצות UTC) */
 export function ymd(d) {
   const p = (n) => String(n).padStart(2, '0');
@@ -122,7 +135,7 @@ export async function buildBoard(anchorDate) {
     const scheduledThisWeek = posts.filter(
       (p) => p.endpoint_id === e.id && p.status !== 'hole'
     ).length;
-    const stale = daysSince === null || daysSince > e.min_days_between;
+    const stale = daysSince === null || daysSince > effectiveCadenceDays(e);
     return {
       endpoint_id: e.id,
       name: e.name,

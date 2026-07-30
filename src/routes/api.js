@@ -7,7 +7,7 @@ import {
   PUBLIC_USER_COLS, checkPassword, clearSession, hashPassword,
   issueSession, requireAuth, requirePerm,
 } from '../auth.js';
-import { buildBoard, weekMeta, ymd } from '../board.js';
+import { buildBoard, effectiveCadenceDays, weekMeta, ymd } from '../board.js';
 import { planWeek, applyWeek, withEngineLock } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
@@ -317,6 +317,7 @@ r.get('/endpoints', wrap(async (_req, res) => {
   res.json({
     endpoints: list.map((e) => ({
       ...e,
+      effective_min_days: effectiveCadenceDays(e),
       campaigns: campaigns.filter((c) => c.endpoint_id === e.id),
       content: content.filter((c) => c.endpoint_id === e.id),
     })),
@@ -327,13 +328,14 @@ const ENDPOINT_FIELDS = ['name', 'importance', 'min_days_between', 'active', 'so
 
 r.post('/endpoints', requirePerm('settings'), wrap(async (req, res) => {
   if (!req.body?.name) return bad(res, 'צריך שם לנקודת הקצה');
+  // min_days_between ריק = אוטומטי לפי החשיבות, לא ברירת מחדל שרירותית
   const e = await one(
     `insert into endpoints (name, importance, min_days_between)
-     values ($1, coalesce($2,5), coalesce($3,7)) returning *`,
+     values ($1, coalesce($2,5), $3) returning *`,
     [req.body.name, req.body.importance ?? null, req.body.min_days_between ?? null]
   );
   const engine = await autoFill(req.body?.week);
-  res.status(201).json({ endpoint: e, engine });
+  res.status(201).json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine });
 }));
 
 r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {

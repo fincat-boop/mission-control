@@ -18,11 +18,18 @@ create table if not exists endpoints (
   id               serial primary key,
   name             text not null,
   importance       int not null default 5 check (importance between 1 and 10),
-  min_days_between int not null default 7,
+  -- ריק = אוטומטי (נגזר מהחשיבות, ראו effectiveCadenceDays ב-board.js).
+  -- מספר = override מפורש לצורך ספציפי, בלי קשר לחשיבות.
+  min_days_between int,
   active           boolean not null default true,
   sort_order       int not null default 0,
   created_at       timestamptz not null default now()
 );
+
+-- קיים מ-DB ישן עם not null default 7 — ריק הופך עכשיו לאוטומטי.
+-- נקודות קצה קיימות שומרות על הערך המפורש שהיה להן, בלי שינוי התנהגות.
+alter table endpoints alter column min_days_between drop not null;
+alter table endpoints alter column min_days_between drop default;
 
 create table if not exists channels (
   id                   serial primary key,

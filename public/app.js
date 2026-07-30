@@ -1636,8 +1636,21 @@ function endpointItem(e, channels, ro) {
       </div>
       <div class="prow">
         <label>לפרסם לפחות פעם ב־ (ימים)</label>
-        <input type="number" min="1" value="${e.min_days_between}"
-               data-ep-field="min_days_between" data-id="${e.id}" ${ro ? 'disabled' : ''}>
+        <div class="autofield">
+          <label class="opt"><input type="radio" name="cadence-${e.id}" value="auto"
+                 data-ep-cadence-mode="${e.id}" ${e.min_days_between == null ? 'checked' : ''}
+                 ${ro ? 'disabled' : ''}>
+            אוטומטי<b>${e.effective_min_days}</b></label>
+          <label class="opt"><input type="radio" name="cadence-${e.id}" value="manual"
+                 data-ep-cadence-mode="${e.id}" ${e.min_days_between != null ? 'checked' : ''}
+                 ${ro ? 'disabled' : ''}>
+            קבוע</label>
+          <input type="number" min="1" value="${e.min_days_between ?? ''}"
+                 data-ep-cadence-input="${e.id}" data-id="${e.id}"
+                 ${e.min_days_between == null ? 'disabled' : ''} ${ro ? 'disabled' : ''}>
+        </div>
+        <div class="fhint">אוטומטי מחשב קצב לפי החשיבות — חשיבות גבוהה יותר, קצב תכוף יותר.
+          קבוע נועד למקרה שיש צורך ספציפי בקצב מסוים, בלי קשר לחשיבות.</div>
       </div>
 
       <div class="subsec">
@@ -1783,6 +1796,32 @@ function wireManage(ro) {
       await renderBoard();
     })));
 
+  // אוטומטי/קבוע לקצב הפרסום — לא שני שדות שיכולים לסתור זה את זה
+  $$('#manage [data-ep-cadence-mode]').forEach((r) =>
+    r.addEventListener('change', run(async () => {
+      const id = r.dataset.epCadenceMode;
+      const input = $(`[data-ep-cadence-input="${id}"]`);
+      if (r.value === 'auto') {
+        input.disabled = true;
+        const res = await api(`/endpoints/${id}`,
+          { method: 'PATCH', body: { min_days_between: null, week: state.week } });
+        toast(engineToast('נשמר — הקצב יחושב אוטומטית לפי החשיבות.', res));
+        await renderBoard();
+      } else {
+        input.disabled = false;
+        input.focus();
+      }
+    })));
+
+  $$('#manage [data-ep-cadence-input]').forEach((inp) =>
+    inp.addEventListener('change', run(async () => {
+      const val = inp.value.trim() === '' ? null : Number(inp.value);
+      const res = await api(`/endpoints/${inp.dataset.id}`,
+        { method: 'PATCH', body: { min_days_between: val, week: state.week } });
+      toast(engineToast('נשמר.', res));
+      await renderBoard();
+    })));
+
   $$('#manage [data-ch-field]').forEach((inp) =>
     inp.addEventListener('change', run(async () => {
       const raw = inp.value.trim();
@@ -1870,7 +1909,10 @@ function wireManage(ro) {
       fields: [
         { name: 'name', label: 'שם', type: 'text' },
         { name: 'importance', label: 'חשיבות (1–10)', type: 'number', value: 5 },
-        { name: 'min_days_between', label: 'לפרסם לפחות פעם ב־ (ימים)', type: 'number', value: 7 },
+        { name: 'min_days_between', label: 'לפרסם לפחות פעם ב־ (ימים)', type: 'auto',
+          value: null, auto: 'נגזר מהחשיבות',
+          hint: 'אוטומטי מחשב קצב לפי החשיבות. קבוע נועד למקרה שיש צורך ספציפי בקצב מסוים, ' +
+                'בלי קשר לחשיבות.' },
       ],
       onSave: async (v) => {
         v.week = state.week;
