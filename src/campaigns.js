@@ -271,7 +271,7 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
  */
 export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
   const [campaigns, endpoints] = await Promise.all([
-    rows('select * from campaigns where active = true'),
+    rows('select * from campaigns where active = true and paused_at is null'),
     rows('select id, name, importance from endpoints where active = true order by importance desc, id'),
   ]);
 
@@ -327,7 +327,7 @@ export async function currentAllocation() {
   const running = await rows(
     `select c.*, e.name as endpoint_name
        from campaigns c join endpoints e on e.id = c.endpoint_id
-      where c.active = true and c.share_pct is not null
+      where c.active = true and c.paused_at is null and c.share_pct is not null
         and (c.starts_on is null or c.starts_on <= $1)
         and (c.ends_on is null or c.ends_on >= $1)
       order by c.share_pct desc`,

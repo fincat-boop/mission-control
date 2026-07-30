@@ -218,12 +218,13 @@ async function computeDebts(endpoints, settings) {
   );
   const lastMap = new Map(lastPublished.map((r) => [r.endpoint_id, r.last_at]));
 
-  // פער מהנתח שהוגדר לקמפיינים שרצים עכשיו
+  // פער מהנתח שהוגדר לקמפיינים שרצים עכשיו. קמפיין מושהה לא מתחרה על שטח,
+  // ולכן לא אמור למשוך יעד — בדיוק כמו שהוא לא מוצג בלוח.
   const today = ymd(new Date());
   const allocs = await rows(
     `select endpoint_id, max(share_pct) as target_pct
        from campaigns
-      where active = true and share_pct is not null
+      where active = true and paused_at is null and share_pct is not null
         and (starts_on is null or starts_on <= $1)
         and (ends_on is null or ends_on >= $1)
       group by endpoint_id`,
@@ -235,7 +236,7 @@ async function computeDebts(endpoints, settings) {
       where p.status = 'published' and p.endpoint_id is not null
         and p.published_at >= coalesce(
               (select min(starts_on) from campaigns
-                where active = true and share_pct is not null
+                where active = true and paused_at is null and share_pct is not null
                   and (starts_on is null or starts_on <= $1)
                   and (ends_on is null or ends_on >= $1)),
               $1::date - 90)
