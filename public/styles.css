@@ -95,8 +95,9 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
   width: fit-content; height: fit-content;
   transform: rotate(-10deg);
   font-size: 14px; font-weight: 800; letter-spacing: .04em; white-space: nowrap;
-  color: var(--st-good); border: 2px solid var(--st-good); border-radius: 6px;
-  padding: 2px 9px; background: rgba(52,199,89,.2);
+  color: #fff; border: 2px solid #fff; border-radius: 6px;
+  padding: 2px 9px; background: var(--st-good);
+  box-shadow: 0 0 12px 3px rgba(52,199,89,.85), 0 2px 4px rgba(0,0,0,.4);
 }
 
 /* תגית פינתית משותפת: אדום = אין תוכן, צהוב = יש טיוטה, כחול = יש תוכן מוכן */
