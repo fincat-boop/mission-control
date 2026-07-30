@@ -48,7 +48,7 @@ const port = process.env.PORT || 3000;
 await migrate();
 
 const server = app.listen(port, () => {
-  console.log(`מרכז בקרה פרסומי — מאזין על פורט ${port}`);
+  console.log(`Mission Control — מאזין על פורט ${port}`);
 });
 
 // תחזוקה ברקע: גיבוי יומי, וניקוי מבצעים דחופים שעברו זמנם בלי תוכן —

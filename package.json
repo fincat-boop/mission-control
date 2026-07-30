@@ -1,7 +1,7 @@
 {
   "name": "merkaz-bakara",
   "version": "1.0.0",
-  "description": "מרכז בקרה פרסומי — חתול פיננסי",
+  "description": "Mission Control — חתול פיננסי",
   "private": true,
   "type": "module",
   "engines": {
