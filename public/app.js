@@ -438,6 +438,7 @@ function postCard(p) {
 
   return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
+    ${p.status === 'published' ? '<span class="pub-badge">✓ פורסם</span>' : ''}
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>

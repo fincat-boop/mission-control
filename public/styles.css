@@ -75,7 +75,7 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
 .chan .cap.full { color: var(--st-warn); }
 .grid td.day { min-width: 110px; height: 68px; }
 /* הרקע הוא צבע נקודת הקצה ומוזרק מהקוד. סוג התוכן הוא התג שבתוך .meta. */
-.post { border-radius: 7px; padding: 6px 9px; margin-bottom: 5px; font-size: 12px; line-height: 1.4; cursor: pointer; }
+.post { position: relative; border-radius: 7px; padding: 6px 9px; margin-bottom: 5px; font-size: 12px; line-height: 1.4; cursor: pointer; }
 .post .ep { font-weight: 600; display: block; }
 .post .meta { opacity: .85; font-size: 10.5px; margin-top: 3px; display: flex; align-items: center; gap: 5px; }
 .post .kind {
@@ -85,7 +85,12 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
 }
 .post .kind.promo { background: rgba(0,0,0,.38); }
 .post.published { opacity: .45; }
-.post.published .ep::after { content: " ✓"; }
+.post .pub-badge {
+  position: absolute; inset-block-start: -7px; inset-inline-end: -6px;
+  background: var(--st-good); color: #fff; font-size: 9.5px; font-weight: 700;
+  letter-spacing: .02em; padding: 2px 7px; border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.35);
+}
 .hole { border: 1.5px dashed var(--st-crit); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; color: var(--st-crit); font-weight: 600; cursor: pointer; }
 .hole small, .pending small { color: var(--muted); font-weight: 400; }
 .pending { border: 1.5px dashed var(--st-warn); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; color: var(--st-warn); font-weight: 600; cursor: pointer; }
