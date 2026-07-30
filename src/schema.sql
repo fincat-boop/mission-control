@@ -53,6 +53,13 @@ alter table channels
 alter table channels
   add column if not exists blocked_days int[] not null default '{}';
 
+-- כמה יעיל לפרסם במדיה הזו (1–10). אופציונלי — ריק = ניטרלי, לא משפיע
+-- על כלום. כשמוגדר, המנוע מנסה למלא קודם משבצות של מדיות יעילות יותר,
+-- כדי שתוכן חשוב (חוב אוויר גבוה) יקבל קדימות על הבמה הטובה. ראו
+-- buildSlots ב-engine.js.
+alter table channels
+  add column if not exists efficiency int check (efficiency between 1 and 10);
+
 -- קמפיין הוא היחידה המרכזית: הוא נושא את התאריכים, החשיבות, הקצב והנתח.
 -- הוא ירש את התפקיד של strategy_allocations, שנמחקה.
 create table if not exists campaigns (

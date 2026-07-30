@@ -395,6 +395,12 @@ function buildUsage(channels, existing, settings) {
 /**
  * כל המשבצות האפשריות, ממוינות כך שהמנוע ממלא קודם ימים ריקים —
  * ככה השבוע יוצא מפוזר ולא נערם על יום אחד.
+ *
+ * שובר שוויון שני: יעילות המדיה (channels.efficiency, אופציונלי).
+ * בין שתי משבצות עם אותה עומס בדיוק, המדיה היעילה יותר נבחרת קודם —
+ * כך שכשיש כמה מדיות פנויות באותה מידה, התוכן עם החוב הגבוה ביותר
+ * (הכי "חשוב" ברגע הזה, לפי computeDebts) הוא זה שמגיע לבמה הטובה,
+ * לפני שהוא מאבד עדיפות בגלל שכבר שובץ במקום אחר באותה ריצה.
  */
 function buildSlots(week, channels, usage) {
   const slots = [];
@@ -406,6 +412,7 @@ function buildSlots(week, channels, usage) {
         date: new Date(`${day.date}T00:00:00`),
         dateKey: day.date,
         label: day.label,
+        efficiency: ch.efficiency ?? 5,
       });
     }
   }
@@ -413,6 +420,7 @@ function buildSlots(week, channels, usage) {
     const busyA = usage.dayCount(a.channel_id, a.dateKey);
     const busyB = usage.dayCount(b.channel_id, b.dateKey);
     if (busyA !== busyB) return busyA - busyB;
+    if (a.efficiency !== b.efficiency) return b.efficiency - a.efficiency;
     return a.dateKey.localeCompare(b.dateKey);
   });
 }

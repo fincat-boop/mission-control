@@ -1675,10 +1675,10 @@ const readyIn = (c, channels) => {
 };
 
 function channelItem(c, ro) {
-  const num = (label, field, value, note = '') => `
+  const num = (label, field, value, note = '', max = '') => `
     <div class="prow">
       <label>${note}${label}</label>
-      <input type="number" min="0" value="${value ?? ''}" placeholder="ללא"
+      <input type="number" min="0" ${max ? `max="${max}"` : ''} value="${value ?? ''}" placeholder="ללא"
              data-ch-field="${field}" data-id="${c.id}" ${ro ? 'disabled' : ''}>
     </div>`;
   const sw = (kind) =>
@@ -1698,6 +1698,11 @@ function channelItem(c, ro) {
       ${num('מזה — משולבים מקסימום', 'max_hybrid_per_week', c.max_hybrid_per_week, sw('hybrid'))}
       ${num('מזה — ערך מקסימום', 'max_value_per_week', c.max_value_per_week, sw('value'))}
       ${num('שטח ששמור לדברים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
+      ${num('יעילות פרסום במדיה הזו (1–10) — אופציונלי', 'efficiency', c.efficiency, '', 10)}
+      <div class="fhint" style="margin-top:-8px">
+        ריק = ניטרלי. כשמוגדר, המנוע מנסה למלא קודם משבצות במדיות עם יעילות גבוהה יותר,
+        כדי שתוכן חשוב יגיע לבמה הכי טובה קודם.
+      </div>
 
       <div class="prow" style="align-items:flex-start">
         <label>ימים שבהם המדיה לא מקבלת תוכן</label>

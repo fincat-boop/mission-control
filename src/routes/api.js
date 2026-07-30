@@ -845,13 +845,13 @@ r.get('/channels', wrap(async (_req, res) => {
 
 const CHANNEL_FIELDS = ['name', 'max_per_week', 'target_per_week', 'max_promo_per_week',
                         'max_hybrid_per_week', 'max_value_per_week', 'urgent_reserve_pct',
-                        'blocked_days', 'active', 'sort_order'];
+                        'blocked_days', 'active', 'sort_order', 'efficiency'];
 
 r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
   if (!req.body?.name) return bad(res, 'צריך שם לערוץ');
   const c = await one(
-    `insert into channels (name, max_per_week) values ($1, coalesce($2,5)) returning *`,
-    [req.body.name, req.body.max_per_week ?? null]
+    `insert into channels (name, max_per_week, efficiency) values ($1, coalesce($2,5), $3) returning *`,
+    [req.body.name, req.body.max_per_week ?? null, req.body.efficiency ?? null]
   );
   const engine = await autoFill(req.body?.week);
   res.status(201).json({ channel: c, engine });
