@@ -355,6 +355,15 @@ async function renderBoard() {
   $$('#board [data-post-id]').forEach((el) =>
     el.addEventListener('click', run(() => openPostPreview(el.dataset.postId))));
 
+  // כפתור פרסום ישיר על הכרטיס — לא פותח את התצוגה המקדימה
+  $$('#board [data-mark-publish]').forEach((btn) =>
+    btn.addEventListener('click', run(async (e) => {
+      e.stopPropagation();
+      await api(`/posts/${btn.dataset.markPublish}/publish`, { method: 'POST' });
+      toast('סומן כפורסם.');
+      await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+    })));
+
   if (editable) wireBoardDrag();
 }
 
@@ -456,9 +465,15 @@ function postCard(p) {
 
   // הצבע הוא נקודת הקצה. סוג התוכן מסומן בתג קטן, כדי ששני הממדים
   // יהיו קריאים בלי שאחד יסתיר את השני.
+  // "יש תוכן מוכן" הוא אוטומטי לגמרי — נגזר מהסטטוס האמיתי (hole/pending/published).
+  // "פורסם" הוא הדבר היחיד שלא נגזר משום מקום: מישהו צריך לקבוע את זה בפועל.
+  const canPublish = p.status === 'scheduled' && can('content');
+
   return `<div class="post" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
     <span class="corner-tag blue">יש תוכן</span>
+    ${canPublish ? `<button type="button" class="mark-pub" data-mark-publish="${p.id}"
+      draggable="false" title="סמן כפורסם">✓</button>` : ''}
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
