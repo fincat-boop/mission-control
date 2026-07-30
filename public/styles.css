@@ -91,7 +91,19 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
   letter-spacing: .02em; padding: 2px 7px; border-radius: 999px;
   box-shadow: 0 1px 3px rgba(0,0,0,.35);
 }
-.hole { border: 1.5px dashed var(--st-crit); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; color: var(--st-crit); font-weight: 600; cursor: pointer; }
+.hole {
+  position: relative; border: 1.5px dashed var(--st-crit); border-radius: 7px;
+  padding: 6px 9px; font-size: 11.5px; color: var(--st-crit); font-weight: 600; cursor: pointer;
+}
+/* יש תוכן בטיוטה שעוד לא אושר לאף ערוץ — פחות דחוף מ"אין תוכן בכלל" */
+.hole.draft { border-color: var(--st-warn); color: var(--st-warn); }
+.hole .hole-tag {
+  position: absolute; inset-block-start: -7px; inset-inline-end: -6px;
+  background: var(--st-crit); color: #fff; font-size: 9.5px; font-weight: 700;
+  letter-spacing: .02em; padding: 2px 7px; border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.35);
+}
+.hole.draft .hole-tag { background: var(--st-warn); }
 .hole small, .pending small { color: var(--muted); font-weight: 400; }
 .pending { border: 1.5px dashed var(--st-warn); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; color: var(--st-warn); font-weight: 600; cursor: pointer; }
 /* כפתור ההוספה לא משתתף בזרימה: הוא מרחף בפינת המשבצת ורק משנה שקיפות.

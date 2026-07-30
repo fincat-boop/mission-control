@@ -420,8 +420,12 @@ function postCard(p) {
   const clickable = `data-post-id="${p.id}" data-post="${payload}"`;
 
   if (p.status === 'hole') {
-    return `<div class="hole" ${clickable}
-      data-tt="הלוח מחכה לתוכן: ${esc(KIND_HE[p.kind])} — ${esc(p.endpoint_name ?? '')}">
+    // ה"סיבה" שהמנוע כתב מבדילה בין שני מצבים: יש טיוטה שעוד לא אושרה
+    // לאף ערוץ פנוי, או שאין בכלל תוכן לנקודה הזו — ראו findHoles ב-engine.js
+    const hasDraft = (p.note ?? '').includes('יש תוכן');
+    return `<div class="hole${hasDraft ? ' draft' : ''}" ${clickable}
+      data-tt="הלוח מחכה לתוכן: ${esc(KIND_HE[p.kind])} — ${esc(p.endpoint_name ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}">
+      <span class="hole-tag">${hasDraft ? 'טיוטה לא מאושרת' : 'אין תוכן'}</span>
       מחכה לתוכן<br><small>${esc(KIND_HE[p.kind])} · ${esc(p.endpoint_name ?? '')}</small></div>`;
   }
   if (p.status === 'pending_approval') {
