@@ -497,6 +497,17 @@ function wirePostDialog() {
     await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
   }));
 
+  // כפתור יחיד שמתנהג לפי מצב הפוסט: מתוכנן → מסמן פורסם, פורסם → מבטל
+  $('#pPublish').addEventListener('click', run(async () => {
+    if (!previewPost) return;
+    const wasPublished = previewPost.status === 'published';
+    const path = wasPublished ? 'unpublish' : 'publish';
+    await api(`/posts/${previewPost.id}/${path}`, { method: 'POST' });
+    $('#postDlg').close();
+    toast(wasPublished ? 'הפרסום בוטל, השיבוץ חזר למתוכנן.' : 'סומן כפורסם.');
+    await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+  }));
+
   // מהלוח אל התוכן — שם עורכים את הטקסט, ולא בלוח
   $('#pOpenContent').addEventListener('click', run(async () => {
     if (!previewPost?.content_id) return toast('לשיבוץ הזה אין תוכן משויך.', true);
@@ -514,10 +525,15 @@ function wirePostDialog() {
 async function openPostPreview(postId) {
   $('#postDlgTitle').textContent = 'טוען…';
   $('#postPreview').innerHTML = '';
+  $('#pPublish').hidden = true;
   $('#postDlg').showModal();
 
   const { post, variant, assets } = await api(`/posts/${postId}/preview`);
   previewPost = post;
+
+  const pubBtn = $('#pPublish');
+  pubBtn.hidden = !(can('content') && ['scheduled', 'published'].includes(post.status));
+  pubBtn.textContent = post.status === 'published' ? 'בטל פרסום' : 'סמן כפורסם';
 
   const when = new Date(post.scheduled_at)
     .toLocaleString('he-IL', { dateStyle: 'full', timeStyle: 'short' });

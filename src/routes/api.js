@@ -229,6 +229,17 @@ r.post('/posts/:id/publish', requirePerm('content'), wrap(async (req, res) => {
   res.json({ post });
 }));
 
+/** ביטול "פורסם" — חוזר למתוכנן, למקרה שסימנו בטעות */
+r.post('/posts/:id/unpublish', requirePerm('content'), wrap(async (req, res) => {
+  const post = await one(
+    `update posts set status = 'scheduled', published_at = null
+      where id = $1 and status = 'published' returning *`,
+    [req.params.id]
+  );
+  if (!post) return bad(res, 'אין שיבוץ מפורסם עם המזהה הזה', 404);
+  res.json({ post });
+}));
+
 /** אישור דחוף־דורס — הרשאה נפרדת */
 r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
   const post = await one(
