@@ -458,7 +458,7 @@ function postCard(p) {
   // יהיו קריאים בלי שאחד יסתיר את השני.
   return `<div class="post" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
-    <span class="corner-tag green">יש תוכן</span>
+    <span class="corner-tag blue">יש תוכן</span>
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
