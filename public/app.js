@@ -1186,7 +1186,9 @@ function wirePlan(campaign, endpointId, content) {
       const res = await api(`/campaigns/${b.dataset.togglePause}/${paused ? 'resume' : 'pause'}`,
         { method: 'POST', body: { week: state.week } });
       toast(paused
-        ? 'הקמפיין חזר לפעול. השיבוצים שלו חזרו ללוח.'
+        ? 'הקמפיין חזר לפעול.' +
+          (res.cleared ? ` ${res.cleared} שיבוצים ישנים נוקו —` : '') +
+          (res.engine?.placed ? ` המנוע שיבץ ${res.engine.placed} מחדש.` : ' המנוע ימקם אותו מחדש בפעם הבאה שיש מקום.')
         : `הקמפיין הושהה${res.held ? ` · ${res.held} שיבוצים ירדו מהלוח` : ''}.`);
       await reload();
     })));
@@ -2563,6 +2565,9 @@ async function renderTasks() {
         state.planBackground = false;
       }
       await showTab(b.dataset.goto);
+      // התראה על פוסט ספציפי (חור/ממתין לאישור/בלי טקסט) פותחת אותו ישר,
+      // לא רק מחליפה טאב ומשאירה למשתמש למצוא אותו בעצמו
+      if (b.dataset.post) await openPostPreview(b.dataset.post);
     })));
 
   $$('#tasks [data-task-done]').forEach((cb) =>
@@ -2614,7 +2619,8 @@ function alertsPanel({ alerts, counts }) {
         <span>${esc(a.detail)}</span>
       </div>
       <button class="btn small act" data-goto="${esc(a.tab)}"
-        data-campaign="${a.campaign_id ?? ''}" data-endpoint="${a.endpoint_id ?? ''}">פתח</button>
+        data-campaign="${a.campaign_id ?? ''}" data-endpoint="${a.endpoint_id ?? ''}"
+        data-post="${a.post_id ?? ''}">פתח</button>
     </div>`;
   }).join('');
 

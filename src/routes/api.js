@@ -500,8 +500,21 @@ r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) =
   const c = await one(
     'update campaigns set paused_at = null where id = $1 returning *', [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+
+  // המשבצות הישנות קפאו בזמן ההשהיה — בינתיים המנוע כבר יכול היה למלא
+  // את אותו יום/ערוץ עם משהו אחר. במקום להחזיר אוטומטית לאותו מקום
+  // (וליצור התנגשות), מנקים את מה שעוד לא יצא לאוויר והמנוע ממקם מחדש.
+  const cleared = await rows(
+    `delete from posts p using content_items ci
+      where ci.id = p.content_id and ci.campaign_id = $1
+        and p.status in ('scheduled','pending_approval','hole')
+        and p.scheduled_at >= now()
+      returning p.id`,
+    [c.id]
+  );
+
   const engine = await autoFill(req.body?.week);
-  res.json({ campaign: c, engine });
+  res.json({ campaign: c, cleared: cleared.length, engine });
 }));
 
 /** סידור מחדש של התוכן בתוך קמפיין */
