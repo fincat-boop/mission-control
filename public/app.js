@@ -574,9 +574,16 @@ async function openPostPreview(postId) {
 
 /* ========================= מבצע דחוף ========================= */
 
+// מבצע דחוף לא נושא תוכן מלא (רק כותרת) — אין לו לחצן "אשר" בלי אישור
+// מודע לכך, ולכן צריך גם את תוצאת הבדיקה האחרונה וגם את מצב התיבה
+let urgentPlanOk = false;
+
 function wireUrgentDialog() {
   $('#uCancel').addEventListener('click', () => $('#urgentDlg').close());
   $('#uCheck').addEventListener('click', run(previewUrgent));
+  $('#uAck').addEventListener('change', () => {
+    $('#uOk').disabled = !(urgentPlanOk && $('#uAck').checked);
+  });
   $('#uOk').addEventListener('click', run(commitUrgent));
 }
 
@@ -593,6 +600,8 @@ function openUrgent() {
   $('#uUntil').value = ymd(inTwoDays);
   $('#uTitle').value = '';
   $('#uWhatIf').innerHTML = '<b>מה יקרה:</b> מלאו את הפרטים ולחצו "בדוק".';
+  $('#uAck').checked = false;
+  urgentPlanOk = false;
   $('#uOk').disabled = true;
   $('#urgentDlg').showModal();
 }
@@ -609,6 +618,7 @@ async function previewUrgent() {
 
   if (plan.errors?.length) {
     $('#uWhatIf').innerHTML = `<b>חסר מידע:</b>${plan.errors.map((e) => `<br>${esc(e)}`).join('')}`;
+    urgentPlanOk = false;
     $('#uOk').disabled = true;
     return;
   }
@@ -621,7 +631,8 @@ async function previewUrgent() {
   $('#uWhatIf').innerHTML = `<b>מה יקרה:</b>
     ${lines ? `ישובץ: ${lines}<br>` : ''}
     שום פרסום מתוכנן לא זז<br>${warns}`;
-  $('#uOk').disabled = !plan.ok;
+  urgentPlanOk = plan.ok;
+  $('#uOk').disabled = !(urgentPlanOk && $('#uAck').checked);
 }
 
 async function commitUrgent() {
@@ -1574,8 +1585,9 @@ const fmtDate = (d) => {
 /* ========================= ניהול ========================= */
 
 async function renderManage() {
-  const [{ endpoints }, { channels }, { settings }, { users }] = await Promise.all([
+  const [{ endpoints }, { channels }, { settings }, { users }, backupsRes] = await Promise.all([
     api('/endpoints'), api('/channels'), api('/settings'), api('/users'),
+    can('settings') ? api('/backups') : Promise.resolve(null),
   ]);
   state.endpoints = endpoints;
   rebuildEpColors();
@@ -1601,7 +1613,7 @@ async function renderManage() {
       ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
     </div>
 
-    ${can('users') ? systemGroup(users, settings) : ''}`;
+    ${can('users') ? systemGroup(users, settings, backupsRes?.backups ?? null) : ''}`;
 
   wireManage(ro);
 }
@@ -1692,7 +1704,7 @@ function channelItem(c, ro) {
   </details>`;
 }
 
-function systemGroup(users, settings) {
+function systemGroup(users, settings, backups) {
   const rows = users.map((u) => {
     const cell = (perm) => u.is_owner
       ? '✓'
@@ -1737,6 +1749,21 @@ function systemGroup(users, settings) {
           ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
         </div>
       </details>
+      ${backups ? `<details class="item">
+        <summary><b>גיבויים אוטומטיים</b>
+          <span class="info">${backups.length
+            ? `${backups.length} שמורים · אחרון ${fmtDate(ymd(new Date(backups[0].created_at)))}`
+            : 'עוד לא רץ גיבוי'}</span></summary>
+        <div class="ibody">
+          <p class="sub">רץ אוטומטית כל 24 שעות, שומר עותק של כל הטבלאות בתוך ה-DB עצמו
+            (בלי קבצים מצורפים — הם כבר בטוחים ב-content_assets). מגן מפני טעות אפליקטיבית,
+            לא מפני אובדן הדיסק עצמו — לזה יש את הגיבוי המובנה של Railway ל-Postgres.</p>
+          ${backups.length ? `<table class="utable"><thead><tr><th>מתי</th><th>שורות</th></tr></thead>
+            <tbody>${backups.slice(0, 10).map((b) => `<tr>
+              <td>${esc(new Date(b.created_at).toLocaleString('he-IL'))}</td>
+              <td>${b.row_count}</td></tr>`).join('')}</tbody></table>` : ''}
+        </div>
+      </details>` : ''}
     </div>
   </div>`;
 }

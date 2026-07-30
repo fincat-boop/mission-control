@@ -229,3 +229,17 @@ create table if not exists activity_log (
 
 create index if not exists activity_log_time_idx on activity_log (created_at desc);
 create index if not exists activity_log_user_idx on activity_log (user_id, created_at desc);
+
+-- ========================= גיבוי אוטומטי =========================
+-- תמונת מצב תקופתית של הטבלאות היחסיות (בלי בייטים של קבצים מצורפים —
+-- הם כבר בטוחים בעצמם ב-content_assets, וכפילות שלהם כאן הייתה ממלאת
+-- את ה-volume מהר). מגן מפני טעות ברמת האפליקציה, לא מפני אובדן הדיסק
+-- עצמו — לזה יש את הגיבוי המובנה של Railway ל-Postgres.
+create table if not exists backups (
+  id         serial primary key,
+  created_at timestamptz not null default now(),
+  row_count  int not null,
+  payload    jsonb not null
+);
+
+create index if not exists backups_created_at_idx on backups (created_at desc);

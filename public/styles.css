@@ -356,6 +356,12 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .whatif { background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 14px 0; font-size: 12.5px; line-height: 1.8; }
 .whatif b { display: block; margin-bottom: 4px; }
 .whatif .warn2 { color: var(--st-warn); }
+/* אישור מודע לפני שיבוץ דחוף בלי תוכן מלא */
+.ack-row {
+  display: flex; align-items: flex-start; gap: 8px; margin-top: 4px;
+  font-size: 12px; color: var(--ink-2); line-height: 1.5; cursor: pointer;
+}
+.ack-row input { margin-top: 3px; flex-shrink: 0; }
 .dactions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
 /* ייבוא מטבלה */
 #importDlg { width: min(700px, 95vw); }

@@ -1014,6 +1014,16 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
   res.json({ settings: s, engine });
 }));
 
+/* ========================= גיבויים ========================= */
+
+/** מטא-דאטה בלבד — בלי ה-payload עצמו, כדי שהרשימה תהיה קלה */
+r.get('/backups', requirePerm('settings'), wrap(async (_req, res) => {
+  const list = await rows(
+    'select id, created_at, row_count from backups order by created_at desc'
+  );
+  res.json({ backups: list });
+}));
+
 /* ========================= משתמשים ========================= */
 
 r.get('/users', wrap(async (_req, res) => {

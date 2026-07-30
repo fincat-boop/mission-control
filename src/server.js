@@ -6,6 +6,7 @@ import express from 'express';
 import { migrate, pool } from './db.js';
 import { loadUser } from './auth.js';
 import { audit } from './audit.js';
+import { backupNow, cleanupStaleUrgent } from './maintenance.js';
 import api from './routes/api.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -50,8 +51,20 @@ const server = app.listen(port, () => {
   console.log(`מרכז בקרה פרסומי — מאזין על פורט ${port}`);
 });
 
+// תחזוקה ברקע: גיבוי יומי, וניקוי מבצעים דחופים שעברו זמנם בלי תוכן —
+// כמה דקות אחרי העלייה כדי לא להאט את ה-boot, ואז על פי לוח קבוע.
+// אין תלות בגורם חיצוני (cron וכו') — מספיק כל עוד יש instance אחד.
+const HOUR = 3600000;
+const timers = [
+  setTimeout(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 2 * 60000),
+  setInterval(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 24 * HOUR),
+  setTimeout(() => { cleanupStaleUrgent().catch((e) => console.error('ניקוי מבצעים דחופים נכשל:', e)); }, 5 * 60000),
+  setInterval(() => { cleanupStaleUrgent().catch((e) => console.error('ניקוי מבצעים דחופים נכשל:', e)); }, 6 * HOUR),
+];
+
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
+    timers.forEach(clearTimeout);
     server.close(async () => {
       await pool.end();
       process.exit(0);
