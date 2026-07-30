@@ -8,7 +8,7 @@ import {
   issueSession, requireAuth, requirePerm,
 } from '../auth.js';
 import { buildBoard, weekMeta, ymd } from '../board.js';
-import { planWeek } from '../engine.js';
+import { planWeek, applyWeek, withEngineLock } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
 import { buildStats, readActivity } from '../stats.js';
@@ -23,6 +23,21 @@ const r = Router();
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
+
+/**
+ * מריץ מילוי אוטומטי של המנוע לשבוע שהלקוח מציג, אחרי שינוי בקלט שלו
+ * (כלל, קמפיין, תוכן, נקודת קצה, ערוץ). לא נכשלת כשאין מה למלא, ולא
+ * מפילה את הבקשה המקורית אם הריצה נתקלת בבעיה — המוטציה שכבר נשמרה
+ * חשובה יותר מהמילוי האוטומטי שאחריה.
+ */
+async function autoFill(week) {
+  try {
+    return await withEngineLock(() => applyWeek(week));
+  } catch (e) {
+    console.error('autoFill נכשל:', e);
+    return { placed: 0, holes: 0 };
+  }
+}
 
 // הקבצים נשמרים במסד, לכן הם עוברים דרך הזיכרון ולא נכתבים לדיסק.
 // 50MB מכסה ריל או סרטון קצר. ה-volume של Postgres הוא 500MB בסך הכול,
@@ -195,7 +210,8 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
 
 r.delete('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   await query('delete from posts where id = $1', [req.params.id]);
-  res.json({ ok: true });
+  const engine = await autoFill(req.body?.week);
+  res.json({ ok: true, engine });
 }));
 
 /** סימון "פורסם" — מעדכן גם את המשימה הצמודה */
@@ -234,39 +250,11 @@ r.post('/engine/plan', requirePerm('content'), wrap(async (req, res) => {
 
 /** ביצוע התכנון. מריץ תכנון טרי כדי שלא ייכתב משהו על סמך מצב ישן. */
 r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
-  const plan = await planWeek(req.body?.week);
-  if (plan.placements.length === 0 && plan.holes.length === 0) {
+  const result = await withEngineLock(() => applyWeek(req.body?.week));
+  if (result.placed === 0 && result.holes === 0) {
     return bad(res, 'אין מה לשבץ — הלוח מלא או שאין תוכן מוכן');
   }
-
-  const created = [];
-  for (const p of plan.placements) {
-    created.push(await one(
-      `insert into posts (channel_id, endpoint_id, content_id, title, kind,
-                          scheduled_at, status, note)
-       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
-      [p.channel_id, p.endpoint_id, p.content_id, p.title, p.kind, p.scheduled_at, p.reason]
-    ));
-  }
-
-  const holes = [];
-  for (const h of plan.holes) {
-    const post = await one(
-      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note)
-       values ($1,$2,'מחכה לתוכן',$3,$4,'hole',$5) returning *`,
-      [h.channel_id, h.endpoint_id, h.kind, h.scheduled_at, h.reason]
-    );
-    holes.push(post);
-    await query(
-      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
-       values ($1,$2,'write',$3,$4,true,$5)`,
-      [`לכתוב: תוכן ערך על "${h.endpoint_name}" ל${h.channel_name}`,
-       `${h.reason} · הלוח מחכה לזה ל${h.day_label}`,
-       post.id, h.endpoint_id, h.date]
-    );
-  }
-
-  res.status(201).json({ placed: created.length, holes: holes.length });
+  res.status(201).json(result);
 }));
 
 /* ========================= מבצע דחוף ========================= */
@@ -333,18 +321,21 @@ r.post('/endpoints', requirePerm('settings'), wrap(async (req, res) => {
      values ($1, coalesce($2,5), coalesce($3,7)) returning *`,
     [req.body.name, req.body.importance ?? null, req.body.min_days_between ?? null]
   );
-  res.status(201).json({ endpoint: e });
+  const engine = await autoFill(req.body?.week);
+  res.status(201).json({ endpoint: e, engine });
 }));
 
 r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
   const e = await updateById('endpoints', ENDPOINT_FIELDS, req.params.id, req.body);
   if (!e) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
-  res.json({ endpoint: e });
+  const engine = await autoFill(req.body?.week);
+  res.json({ endpoint: e, engine });
 }));
 
 r.delete('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
   await query('delete from endpoints where id = $1', [req.params.id]);
-  res.json({ ok: true });
+  const engine = await autoFill(req.body?.week);
+  res.json({ ok: true, engine });
 }));
 
 /* ========================= קמפיינים ========================= */
@@ -396,7 +387,8 @@ r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
   }
-  res.status(201).json({ campaign: c });
+  const engine = await autoFill(b.week);
+  res.status(201).json({ campaign: c, engine });
 }));
 
 r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
@@ -435,7 +427,8 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     }
   }
 
-  res.json({ campaign: c, moved_posts: movedPosts });
+  const engine = await autoFill(b.week);
+  res.json({ campaign: c, moved_posts: movedPosts, engine });
 }));
 
 /** מספר ימים בין שני תאריכים, בלי להיתקל במעבר שעון */
@@ -461,13 +454,15 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
      returning *`,
     [req.params.id, req.params.channelId, b.body ?? null, status]
   );
-  res.json({ variant: v });
+  const engine = await autoFill(b.week);
+  res.json({ variant: v, engine });
 }));
 
 r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
   await query('delete from content_variants where content_id = $1 and channel_id = $2',
     [req.params.id, req.params.channelId]);
-  res.json({ ok: true });
+  const engine = await autoFill(req.body?.week);
+  res.json({ ok: true, engine });
 }));
 
 /**
@@ -486,14 +481,16 @@ r.post('/campaigns/:id/pause', requirePerm('settings'), wrap(async (req, res) =>
         and p.scheduled_at >= now()`,
     [c.id]
   );
-  res.json({ campaign: c, held: held.n });
+  const engine = await autoFill(req.body?.week);
+  res.json({ campaign: c, held: held.n, engine });
 }));
 
 r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) => {
   const c = await one(
     'update campaigns set paused_at = null where id = $1 returning *', [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
-  res.json({ campaign: c });
+  const engine = await autoFill(req.body?.week);
+  res.json({ campaign: c, engine });
 }));
 
 /** סידור מחדש של התוכן בתוך קמפיין */
@@ -508,12 +505,14 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
       );
     }
   });
-  res.json({ ok: true });
+  const engine = await autoFill(req.body?.week);
+  res.json({ ok: true, engine });
 }));
 
 r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   await query('delete from campaigns where id = $1', [req.params.id]);
-  res.json({ ok: true });
+  const engine = await autoFill(req.body?.week);
+  res.json({ ok: true, engine });
 }));
 
 /* ========================= תוכן ========================= */
@@ -603,7 +602,8 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
       }
     });
   }
-  res.status(201).json({ content: c });
+  const engine = await autoFill(b.week);
+  res.status(201).json({ content: c, engine });
 }));
 
 r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
@@ -615,7 +615,8 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   }
   const c = await updateById('content_items', CONTENT_FIELDS, req.params.id, b);
   if (!c) return bad(res, 'לא נמצא תוכן כזה', 404);
-  res.json({ content: c });
+  const engine = await autoFill(b.week);
+  res.json({ content: c, engine });
 }));
 
 /** נקודת הקצה של תוכן: מהקמפיין אם יש, אחרת מה שנשלח במפורש */
@@ -629,7 +630,8 @@ async function resolveEndpoint(b) {
 
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   await query('delete from content_items where id = $1', [req.params.id]);
-  res.json({ ok: true });
+  const engine = await autoFill(req.body?.week);
+  res.json({ ok: true, engine });
 }));
 
 /* ========================= קבצים מצורפים ========================= */
@@ -825,18 +827,21 @@ r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
     `insert into channels (name, max_per_week) values ($1, coalesce($2,5)) returning *`,
     [req.body.name, req.body.max_per_week ?? null]
   );
-  res.status(201).json({ channel: c });
+  const engine = await autoFill(req.body?.week);
+  res.status(201).json({ channel: c, engine });
 }));
 
 r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   const c = await updateById('channels', CHANNEL_FIELDS, req.params.id, req.body);
   if (!c) return bad(res, 'לא נמצא ערוץ כזה', 404);
-  res.json({ channel: c });
+  const engine = await autoFill(req.body?.week);
+  res.json({ channel: c, engine });
 }));
 
 r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   await query('delete from channels where id = $1', [req.params.id]);
-  res.json({ ok: true });
+  const engine = await autoFill(req.body?.week);
+  res.json({ ok: true, engine });
 }));
 
 /* ========================= אסטרטגיה ========================= */
@@ -981,7 +986,8 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
     ['min_gap_days', 'max_promo_per_day', 'hybrid_weight', 'content_alert_hours',
      'min_value_per_promo'],
     1, req.body);
-  res.json({ settings: s });
+  const engine = await autoFill(req.body?.week);
+  res.json({ settings: s, engine });
 }));
 
 /* ========================= משתמשים ========================= */

@@ -455,9 +455,9 @@ function wirePostDialog() {
   $('#pDelete').addEventListener('click', run(async () => {
     if (!previewPost) return;
     if (!confirm('להסיר את השיבוץ מהלוח? התוכן עצמו יישאר.')) return;
-    await api(`/posts/${previewPost.id}`, { method: 'DELETE' });
+    const res = await api(`/posts/${previewPost.id}`, { method: 'DELETE', body: { week: state.week } });
     $('#postDlg').close();
-    toast('השיבוץ הוסר.');
+    toast('השיבוץ הוסר.' + (res.engine?.placed ? ` המנוע מילא את המקום שהתפנה.` : ''));
     await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
   }));
 
@@ -855,19 +855,20 @@ function wireStrategy() {
         const newFrom = halfToDate(targetHalf, base);
         const newTo = addDays(to, daysBetweenDates(from, newFrom));
 
+        // week: הבקשה מציינת לאיזה שבוע לכוון את המילוי האוטומטי — השבוע
+        // שהקמפיין נכנס אליו עכשיו, לא בהכרח מה שמוצג כרגע בלוח
         const res = await api(`/campaigns/${el.dataset.campaign}`, {
-          method: 'PATCH', body: { starts_on: newFrom, ends_on: newTo },
+          method: 'PATCH', body: { starts_on: newFrom, ends_on: newTo, week: newFrom },
         });
 
         const steps = Math.abs(deltaHalves);
         const moved = res.moved_posts
           ? ` · ${res.moved_posts} שיבוצים זזו איתו` : '';
+        const filled = res.engine?.placed
+          ? ` · המנוע מילא ${res.engine.placed} משבצות פנויות` : '';
         toast((steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
-                           : `הקמפיין הוזז ב-${steps} חצאי חודש.`) + moved);
-        await renderStrategy();
-
-        // הקמפיין נכנס לשבוע שכבר אפשר לתכנן — מציעים למלא אותו עכשיו
-        await offerEngine(newFrom, newTo);
+                           : `הקמפיין הוזז ב-${steps} חצאי חודש.`) + moved + filled);
+        await Promise.all([renderStrategy(), renderBoard()]);
       });
 
       el.addEventListener('pointermove', move);
@@ -882,31 +883,6 @@ function wireStrategy() {
       await showTab('plan');
     }));
   });
-}
-
-/**
- * קמפיין שזז לתוך טווח שאפשר כבר לתכנן — מציעים למלא את השבוע.
- * הזזת הקמפיין לבדה רק מסיטה את מה שכבר משובץ; פוסטים חדשים
- * נוצרים רק כשהמנוע רץ, ובלי ההצעה הזו קל לפספס את זה.
- */
-async function offerEngine(from, to) {
-  const today = ymd(new Date());
-  const weekEnd = addDays(ymd(weekStartOf(new Date())), 6);
-  const overlapsNow = from <= weekEnd && to >= today;
-  if (!overlapsNow) return;
-
-  if (!confirm('הקמפיין נכנס לשבוע הנוכחי. להריץ את המנוע ולראות מה הוא ממלא?')) return;
-  state.week = null;
-  await showTab('board');
-  await openEngine();
-}
-
-/** תחילת השבוע (ראשון) של תאריך נתון */
-function weekStartOf(date) {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - d.getDay());
-  return d;
 }
 
 /* ========================= קמפיינים ותוכן ========================= */
@@ -1088,7 +1064,9 @@ function campaignItem(c) {
 }
 
 function wirePlan(campaign, endpointId, content) {
-  const reload = run(async () => { await renderPlan(); await refreshAlerts(); });
+  const reload = run(async () => {
+    await Promise.all([renderPlan(), renderBoard(), refreshAlerts()]);
+  });
 
   $$('#plan [data-crumb]').forEach((b) =>
     b.addEventListener('click', run(async () => {
@@ -1154,7 +1132,7 @@ function wirePlan(campaign, endpointId, content) {
       e.stopPropagation();
       const paused = b.dataset.paused === 'true';
       const res = await api(`/campaigns/${b.dataset.togglePause}/${paused ? 'resume' : 'pause'}`,
-        { method: 'POST' });
+        { method: 'POST', body: { week: state.week } });
       toast(paused
         ? 'הקמפיין חזר לפעול. השיבוצים שלו חזרו ללוח.'
         : `הקמפיין הושהה${res.held ? ` · ${res.held} שיבוצים ירדו מהלוח` : ''}.`);
@@ -1180,6 +1158,7 @@ function openChannelPicker(campaign, reload) {
     ],
     onSave: async (v) => {
       if (!v.channel_ids?.length) throw new Error('צריך לבחור לפחות מדיה אחת');
+      v.week = state.week;
       await api(`/campaigns/${campaign.id}`, { method: 'PATCH', body: v });
       await reload();
     },
@@ -1219,6 +1198,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint) {
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק קמפיין</button>'
       : '',
     onSave: async (v) => {
+      v.week = state.week;
       if (campaign) await api(`/campaigns/${campaign.id}`, { method: 'PATCH', body: v });
       else await api('/campaigns', { method: 'POST', body: v });
       await reload();
@@ -1226,7 +1206,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint) {
     onOpen: () => {
       $('#genDelete')?.addEventListener('click', run(async () => {
         if (!confirm('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.')) return;
-        await api(`/campaigns/${campaign.id}`, { method: 'DELETE' });
+        await api(`/campaigns/${campaign.id}`, { method: 'DELETE', body: { week: state.week } });
         $('#genDlg').close();
         state.planCampaign = null;
         await reload();
@@ -1421,6 +1401,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
     onSave: async (v) => {
       const body = { ...v };
       delete body.__files;
+      body.week = state.week;
       if (slot && !item) {
         body.sort_order = slot;
         // זווית חדשה נפתחת עם טיוטה לכל מדיה של הקמפיין
@@ -1452,7 +1433,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
         })));
       $('#genDelete')?.addEventListener('click', run(async () => {
         if (!confirm('למחוק את הזווית וכל הגרסאות שלה?')) return;
-        await api(`/content/${item.id}`, { method: 'DELETE' });
+        await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         $('#genDlg').close();
         await reload();
       }));
@@ -1488,6 +1469,7 @@ function openVariantForm({ item, channelId, campaign }, reload) {
     onSave: async (val) => {
       const body = { ...val };
       delete body.__files;
+      body.week = state.week;
       await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
 
       const picked = $('#gen___files')?.files;
@@ -1707,20 +1689,26 @@ function systemGroup(users, settings) {
 function wireManage(ro) {
   const reload = run(async () => { await renderManage(); await renderBoard(); });
 
+  const engineToast = (base, res) =>
+    base + (res.engine?.placed ? ` המנוע מילא ${res.engine.placed} משבצות פנויות.` : '');
+
   // עריכת שדה בשדה — נשמר ביציאה מהשדה
   $$('#manage [data-ep-field]').forEach((inp) =>
     inp.addEventListener('change', run(async () => {
-      await api(`/endpoints/${inp.dataset.id}`,
-        { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value) } });
-      toast('נשמר.');
+      const res = await api(`/endpoints/${inp.dataset.id}`,
+        { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value), week: state.week } });
+      toast(engineToast('נשמר.', res));
+      await renderBoard();
     })));
 
   $$('#manage [data-ch-field]').forEach((inp) =>
     inp.addEventListener('change', run(async () => {
       const raw = inp.value.trim();
-      await api(`/channels/${inp.dataset.id}`,
-        { method: 'PATCH', body: { [inp.dataset.chField]: raw === '' ? null : Number(raw) } });
-      toast('נשמר.');
+      const res = await api(`/channels/${inp.dataset.id}`,
+        { method: 'PATCH',
+          body: { [inp.dataset.chField]: raw === '' ? null : Number(raw), week: state.week } });
+      toast(engineToast('נשמר.', res));
+      await renderBoard();
     })));
 
   // הימים החסומים נשמרים כקבוצה, כי הם מערך אחד ולא שדה בודד
@@ -1728,15 +1716,19 @@ function wireManage(ro) {
     cb.addEventListener('change', run(async () => {
       const id = cb.dataset.blocked;
       const days = $$(`[data-blocked="${id}"]:checked`).map((i) => Number(i.value));
-      await api(`/channels/${id}`, { method: 'PATCH', body: { blocked_days: days } });
-      toast(days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.`
-                        : 'כל הימים פתוחים.');
+      const res = await api(`/channels/${id}`,
+        { method: 'PATCH', body: { blocked_days: days, week: state.week } });
+      toast(engineToast(days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.`
+                        : 'כל הימים פתוחים.', res));
+      await renderBoard();
     })));
 
   $$('#manage [data-engine]').forEach((inp) =>
     inp.addEventListener('change', run(async () => {
-      await api('/settings', { method: 'PATCH', body: { [inp.dataset.engine]: Number(inp.value) } });
-      toast('נשמר. הלוח יחושב מחדש.');
+      const res = await api('/settings',
+        { method: 'PATCH', body: { [inp.dataset.engine]: Number(inp.value), week: state.week } });
+      toast(engineToast('נשמר.', res));
+      await renderBoard();
     })));
 
   $$('#manage [data-user][data-perm]').forEach((cb) =>
@@ -1756,33 +1748,37 @@ function wireManage(ro) {
   $$('#manage [data-del-endpoint]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       if (!confirm('למחוק את נקודת הקצה? כל הקמפיינים והתוכן שלה יימחקו איתה.')) return;
-      await api(`/endpoints/${b.dataset.delEndpoint}`, { method: 'DELETE' });
+      await api(`/endpoints/${b.dataset.delEndpoint}`,
+        { method: 'DELETE', body: { week: state.week } });
       await reload();
     })));
 
   $$('#manage [data-del-channel]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       if (!confirm('למחוק את הערוץ? כל השיבוצים בו יימחקו.')) return;
-      await api(`/channels/${b.dataset.delChannel}`, { method: 'DELETE' });
+      await api(`/channels/${b.dataset.delChannel}`,
+        { method: 'DELETE', body: { week: state.week } });
       await reload();
     })));
 
   $$('#manage [data-toggle-channel]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       await api(`/channels/${b.dataset.toggleChannel}`,
-        { method: 'PATCH', body: { active: b.dataset.active !== 'true' } });
+        { method: 'PATCH', body: { active: b.dataset.active !== 'true', week: state.week } });
       await reload();
     })));
 
   $$('#manage [data-del-campaign]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      await api(`/campaigns/${b.dataset.delCampaign}`, { method: 'DELETE' });
+      await api(`/campaigns/${b.dataset.delCampaign}`,
+        { method: 'DELETE', body: { week: state.week } });
       await reload();
     })));
 
   $$('#manage [data-del-content]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      await api(`/content/${b.dataset.delContent}`, { method: 'DELETE' });
+      await api(`/content/${b.dataset.delContent}`,
+        { method: 'DELETE', body: { week: state.week } });
       await reload();
     })));
 
@@ -1794,7 +1790,11 @@ function wireManage(ro) {
         { name: 'importance', label: 'חשיבות (1–10)', type: 'number', value: 5 },
         { name: 'min_days_between', label: 'לפרסם לפחות פעם ב־ (ימים)', type: 'number', value: 7 },
       ],
-      onSave: async (v) => { await api('/endpoints', { method: 'POST', body: v }); await reload(); },
+      onSave: async (v) => {
+        v.week = state.week;
+        await api('/endpoints', { method: 'POST', body: v });
+        await reload();
+      },
     }));
 
     $('#addChannel')?.addEventListener('click', () => openGeneric({
@@ -1803,7 +1803,11 @@ function wireManage(ro) {
         { name: 'name', label: 'שם הערוץ', type: 'text' },
         { name: 'max_per_week', label: 'מקסימום פרסומים בשבוע', type: 'number', value: 5 },
       ],
-      onSave: async (v) => { await api('/channels', { method: 'POST', body: v }); await reload(); },
+      onSave: async (v) => {
+        v.week = state.week;
+        await api('/channels', { method: 'POST', body: v });
+        await reload();
+      },
     }));
   }
 

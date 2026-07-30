@@ -1,4 +1,4 @@
-import { one, rows } from './db.js';
+import { one, rows, query } from './db.js';
 import { weekMeta, ymd } from './board.js';
 
 /**
@@ -48,11 +48,18 @@ export async function planWeek(anchorDate) {
            where ca.id is null or ca.paused_at is null
            group by ci.id
            order by ci.created_at`),
+    // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
+    // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
+    // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
+    // שכבר קרתה, בדיוק כמו ב-board.js.
     rows(
-      `select id, channel_id, endpoint_id, content_id, kind, scheduled_at, status
-         from posts
-        where scheduled_at >= $1 and scheduled_at <= $2
-          and status in ('scheduled','published','pending_approval')`,
+      `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status
+         from posts p
+         left join content_items ci on ci.id = p.content_id
+         left join campaigns ca     on ca.id = ci.campaign_id
+        where p.scheduled_at >= $1 and p.scheduled_at <= $2
+          and p.status in ('scheduled','published','pending_approval')
+          and (ca.paused_at is null or p.status = 'published')`,
       [from, to]
     ),
     rows('select * from campaigns where active = true and paused_at is null'),
@@ -151,6 +158,54 @@ export async function planWeek(anchorDate) {
     ratio,
     notes,
   };
+}
+
+// שרשרת שממתינה שהריצה הקודמת תיגמר, כדי שתי הרצות חופפות (למשל שינוי
+// כלל ואז מיד גרירת קמפיין) לא יחשבו את אותה משבצת פנויה פעמיים.
+let applyChain = Promise.resolve();
+export function withEngineLock(fn) {
+  const run = applyChain.then(fn, fn);
+  applyChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * מתכננת שבוע וכותבת בפועל את מה שהיא הציעה — פוסטים חדשים למשבצות
+ * פנויות, ומשימת "לכתוב" לכל חור. לא נוגעת במה שכבר על הלוח.
+ * @param {string|Date} [anchorDate]
+ * @returns {Promise<{placed:number, holes:number}>}
+ */
+export async function applyWeek(anchorDate) {
+  const plan = await planWeek(anchorDate);
+
+  const created = [];
+  for (const p of plan.placements) {
+    created.push(await one(
+      `insert into posts (channel_id, endpoint_id, content_id, title, kind,
+                          scheduled_at, status, note)
+       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
+      [p.channel_id, p.endpoint_id, p.content_id, p.title, p.kind, p.scheduled_at, p.reason]
+    ));
+  }
+
+  const holes = [];
+  for (const h of plan.holes) {
+    const post = await one(
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note)
+       values ($1,$2,'מחכה לתוכן',$3,$4,'hole',$5) returning *`,
+      [h.channel_id, h.endpoint_id, h.kind, h.scheduled_at, h.reason]
+    );
+    holes.push(post);
+    await query(
+      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
+       values ($1,$2,'write',$3,$4,true,$5)`,
+      [`לכתוב: תוכן ערך על "${h.endpoint_name}" ל${h.channel_name}`,
+       `${h.reason} · הלוח מחכה לזה ל${h.day_label}`,
+       post.id, h.endpoint_id, h.date]
+    );
+  }
+
+  return { placed: created.length, holes: holes.length };
 }
 
 /* ========================= חוב אוויר ========================= */
