@@ -2550,8 +2550,20 @@ async function renderTasks() {
     ${group('הושלם השבוע', t.done_this_week, 'עוד לא הושלמו משימות השבוע.')}
   </div>`;
 
+  // "פתח" על התראת קמפיין/נקודת קצה קופץ ישר לתוכם, לא לדף שורש הבחירה
   $$('#tasks [data-goto]').forEach((b) =>
-    b.addEventListener('click', run(() => showTab(b.dataset.goto))));
+    b.addEventListener('click', run(async () => {
+      if (b.dataset.campaign) {
+        state.planCampaign = Number(b.dataset.campaign);
+        state.planEndpoint = null;
+        state.planBackground = false;
+      } else if (b.dataset.endpoint) {
+        state.planEndpoint = Number(b.dataset.endpoint);
+        state.planCampaign = null;
+        state.planBackground = false;
+      }
+      await showTab(b.dataset.goto);
+    })));
 
   $$('#tasks [data-task-done]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
@@ -2601,7 +2613,8 @@ function alertsPanel({ alerts, counts }) {
         <b style="color:${tone.color}">${esc(a.title)}</b>
         <span>${esc(a.detail)}</span>
       </div>
-      <button class="btn small act" data-goto="${esc(a.tab)}">פתח</button>
+      <button class="btn small act" data-goto="${esc(a.tab)}"
+        data-campaign="${a.campaign_id ?? ''}" data-endpoint="${a.endpoint_id ?? ''}">פתח</button>
     </div>`;
   }).join('');
 
