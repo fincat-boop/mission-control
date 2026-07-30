@@ -88,12 +88,15 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
    יושבת מעליו באלכסון, כמו חותמת גומי, ולא נכנסת ל-opacity של השאר */
 .post.published { overflow: hidden; }
 .post.published .published-inner { opacity: .5; }
+/* inset:0 + margin:auto ממרכז בדיוק גיאומטרי, בלי תלות בכיוון RTL —
+   הגרסה הקודמת עם left:50%+translate יצאה לא ממורכזת בפועל */
 .post.published .pub-stamp {
-  position: absolute; inset-block-start: 50%; inset-inline-start: 50%;
-  transform: translate(-50%, -50%) rotate(-10deg);
-  font-size: 10.5px; font-weight: 800; letter-spacing: .03em; white-space: nowrap;
-  color: var(--st-good); border: 1.5px solid var(--st-good); border-radius: 4px;
-  padding: 1px 7px; background: rgba(52,199,89,.18);
+  position: absolute; inset: 0; margin: auto;
+  width: fit-content; height: fit-content;
+  transform: rotate(-10deg);
+  font-size: 14px; font-weight: 800; letter-spacing: .04em; white-space: nowrap;
+  color: var(--st-good); border: 2px solid var(--st-good); border-radius: 6px;
+  padding: 2px 9px; background: rgba(52,199,89,.2);
 }
 
 /* תגית פינתית משותפת: אדום = אין תוכן, צהוב = יש טיוטה, כחול = יש תוכן מוכן */
