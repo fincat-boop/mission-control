@@ -84,12 +84,14 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
   background: rgba(0,0,0,.22); border: 1px solid rgba(255,255,255,.28);
 }
 .post .kind.promo { background: rgba(0,0,0,.38); }
-/* פוסט שפורסם: לא צריך יותר את צבע הנקודה, רק אפור וחותמת אחת ברורה */
-.post.published {
-  background: var(--panel-2); color: var(--ink-2);
-  min-height: 40px; display: flex; align-items: center; justify-content: center;
+/* פוסט שפורסם: הכרטיס (צבע, כותרת, פרטים) נשאר, רק דהוי — והחותמת
+   הירוקה למעלה נשארת חדה, לא בתוך ה-opacity של שאר הכרטיס */
+.post.published .published-inner { opacity: .5; }
+.post.published .pub-stamp {
+  display: block; text-align: center; font-size: 11px; font-weight: 800;
+  letter-spacing: .03em; color: #fff; background: var(--st-good);
+  border-radius: 5px; padding: 2px 0; margin-bottom: 4px;
 }
-.post.published .pub-stamp { font-size: 13px; font-weight: 700; letter-spacing: .03em; }
 
 /* תגית פינתית משותפת: אדום = אין תוכן, צהוב = יש טיוטה, ירוק = יש תוכן מוכן */
 .corner-tag {

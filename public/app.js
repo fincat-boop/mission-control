@@ -436,18 +436,26 @@ function postCard(p) {
 
   const tip = `${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}${p.urgent ? ' · דחוף' : ''}` +
               `${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
+  const bg = epColor(p.endpoint_id);
 
-  // פוסט שכבר יצא לאוויר: לא צריך יותר את צבע הנקודה או פרטי השיבוץ —
-  // רק חותמת גדולה שאומרת שזה כבר קרה. הפרטים המלאים עדיין ב-tooltip.
+  // פוסט שכבר יצא לאוויר: הכרטיס עצמו נשאר (צבע, כותרת, פרטים), רק
+  // דהוי, וחותמת ירוקה גדולה למעלה אומרת שזה כבר קרה.
   if (p.status === 'published') {
-    return `<div class="post published" ${clickable} data-tt="${esc(tip)}">
-      <span class="pub-stamp">פורסם</span>
+    return `<div class="post published" ${clickable} data-tt="${esc(tip)}"
+      style="background:${bg};color:${inkOn(bg)}">
+      <span class="pub-stamp">✓ פורסם</span>
+      <div class="published-inner">
+        <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
+        <div class="meta">
+          <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
+          ${esc(p.time)}${who}
+        </div>
+      </div>
     </div>`;
   }
 
   // הצבע הוא נקודת הקצה. סוג התוכן מסומן בתג קטן, כדי ששני הממדים
   // יהיו קריאים בלי שאחד יסתיר את השני.
-  const bg = epColor(p.endpoint_id);
   return `<div class="post" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
     <span class="corner-tag green">יש תוכן</span>
