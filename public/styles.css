@@ -86,13 +86,14 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
 .post .kind.promo { background: rgba(0,0,0,.38); }
 /* פוסט שפורסם: הכרטיס (צבע, כותרת, פרטים) נשאר, רק דהוי — והחותמת
    יושבת מעליו באלכסון, כמו חותמת גומי, ולא נכנסת ל-opacity של השאר */
+.post.published { overflow: hidden; }
 .post.published .published-inner { opacity: .5; }
 .post.published .pub-stamp {
   position: absolute; inset-block-start: 50%; inset-inline-start: 50%;
-  transform: translate(-50%, -50%) rotate(-12deg);
-  font-size: 15px; font-weight: 800; letter-spacing: .04em; white-space: nowrap;
-  color: var(--st-good); border: 2px solid var(--st-good); border-radius: 6px;
-  padding: 2px 10px; background: rgba(52,199,89,.15);
+  transform: translate(-50%, -50%) rotate(-10deg);
+  font-size: 10.5px; font-weight: 800; letter-spacing: .03em; white-space: nowrap;
+  color: var(--st-good); border: 1.5px solid var(--st-good); border-radius: 4px;
+  padding: 1px 7px; background: rgba(52,199,89,.18);
 }
 
 /* תגית פינתית משותפת: אדום = אין תוכן, צהוב = יש טיוטה, כחול = יש תוכן מוכן */
