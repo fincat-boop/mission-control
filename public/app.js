@@ -1825,7 +1825,15 @@ function systemGroup(users, settings, backups) {
         <div class="ibody">
           ${eng('מרווח מינימלי לאותה נקודה באותו ערוץ (ימים)', 'min_gap_days', s.min_gap_days)}
           ${eng('מקסימום מכירתיים ביום, בכל הערוצים', 'max_promo_per_day', s.max_promo_per_day)}
-          ${eng('כמה ערך נדרש על כל מכירתי', 'min_value_per_promo', s.min_value_per_promo, '0.5')}
+          <div class="prow">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="engRatioOn" ${s.min_value_per_promo > 0 ? 'checked' : ''}>
+              לאכוף יחס ערך מול מכירתי
+            </label>
+            <input type="number" step="0.5" min="0.5" id="engRatioVal"
+                   value="${s.min_value_per_promo > 0 ? s.min_value_per_promo : 3}"
+                   data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 ? '' : 'disabled'}>
+          </div>
           ${eng('"משולב" נספר כמכירתי', 'hybrid_weight', s.hybrid_weight, '0.1')}
           ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
         </div>
@@ -1919,6 +1927,18 @@ function wireManage(ro) {
       toast(engineToast('נשמר.', res));
       await renderBoard();
     })));
+
+  // יחס ערך/מכירתי אופציונלי — 0 אומר למנוע לא לאכוף אותו בכלל
+  $('#engRatioOn')?.addEventListener('change', run(async (e) => {
+    const numInput = $('#engRatioVal');
+    const enforcing = e.target.checked;
+    numInput.disabled = !enforcing;
+    const value = enforcing ? (Number(numInput.value) || 3) : 0;
+    const res = await api('/settings',
+      { method: 'PATCH', body: { min_value_per_promo: value, week: state.week } });
+    toast(engineToast(enforcing ? 'נשמר — היחס נאכף שוב.' : 'נשמר — היחס לא נאכף יותר.', res));
+    await renderBoard();
+  }));
 
   $$('#manage [data-user][data-perm]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
