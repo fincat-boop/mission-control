@@ -93,6 +93,37 @@
   </div>
 </dialog>
 
+<!-- הוספת פוסט ידנית ממשבצת ריקה בלוח -->
+<dialog id="addPostDlg">
+  <h3>פוסט חדש</h3>
+  <p class="sub" id="apContext"></p>
+  <div class="frow">
+    <label for="apTitle">כותרת</label>
+    <input id="apTitle" type="text" placeholder="למשל: תזכורת להרשמה לוובינר">
+  </div>
+  <div class="frow">
+    <label for="apEndpoint">נקודת קצה</label>
+    <select id="apEndpoint"></select>
+  </div>
+  <div class="frow">
+    <label for="apKind">סוג</label>
+    <select id="apKind">
+      <option value="value">ערך</option>
+      <option value="hybrid">משולב</option>
+      <option value="promo">מכירתי</option>
+    </select>
+  </div>
+  <div class="frow">
+    <label for="apTime">שעה</label>
+    <input id="apTime" type="time" value="10:00">
+  </div>
+  <div class="dactions">
+    <button class="btn" id="apCancel" style="margin-inline-end:auto">ביטול</button>
+    <button class="btn" id="apAddOnly">הוסף פוסט</button>
+    <button class="btn primary" id="apAddAndCheck">הוסף ובדוק שיבוץ מחדש</button>
+  </div>
+</dialog>
+
 <!-- העוזר — ווידג'ט קבוע בפינת המסך -->
 <div id="aiWidget">
   <div class="aipanel" id="aiPanel" hidden>

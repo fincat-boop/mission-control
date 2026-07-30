@@ -242,6 +242,7 @@ function wireChrome() {
   });
 
   wirePostDialog();
+  wireAddPostDialog();
   wireUrgentDialog();
   wireEngineDialog();
   wireGenericDialog();
@@ -288,12 +289,16 @@ async function renderBoard() {
       // יום חסום לא מקבל גרירה, ומסומן ויזואלית כדי שלא ינסו
       const dow = new Date(`${day.date}T00:00:00`).getDay();
       const blocked = (ch.blocked_days ?? []).includes(dow);
-      // אין כאן יצירה ואין עריכה — רק צפייה וגרירה. הפרמטרים נקבעים בתוכן.
       const drop = editable && !blocked
         ? `data-drop-channel="${ch.id}" data-drop-date="${day.date}"` : '';
+      // הוספה ידנית של פוסט — לא נוגעת בכלום אחר בלוח, רק פותחת משבצת חדשה
+      const add = editable && !blocked
+        ? `<button type="button" class="addslot" data-add-slot
+             data-channel="${ch.id}" data-date="${day.date}"
+             data-channel-name="${esc(ch.name)}" title="הוסף פוסט">+</button>` : '';
       return `<td class="day${blocked ? ' blocked' : ''}" ${drop}
         ${blocked ? `data-tt="${esc(ch.name)} לא מקבל תוכן בימי ${HE_DAYS[dow]}"` : ''}
-        >${cards}</td>`;
+        >${cards}${add}</td>`;
     }).join('');
     return `<tr>
       <td class="chan">
@@ -363,6 +368,13 @@ async function renderBoard() {
       toast('סומן כפורסם.');
       await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
     })));
+
+  // + במשבצת ריקה — הוספת פוסט ידנית
+  $$('#board [data-add-slot]').forEach((btn) =>
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAddPost(Number(btn.dataset.channel), btn.dataset.date, btn.dataset.channelName);
+    }));
 
   if (editable) wireBoardDrag();
 }
@@ -570,6 +582,57 @@ async function openPostPreview(postId) {
     ${variant && variant.status !== 'ready'
       ? `<div class="pvwarn">הגרסה הזו במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
          היא לא נחשבת מוכנה לפרסום.</div>` : ''}`;
+}
+
+/* ========================= הוספת פוסט ידנית ========================= */
+
+let addSlotCtx = null;
+
+function wireAddPostDialog() {
+  $('#apCancel').addEventListener('click', () => $('#addPostDlg').close());
+  $('#apAddOnly').addEventListener('click', run(() => submitManualPost(false)));
+  $('#apAddAndCheck').addEventListener('click', run(() => submitManualPost(true)));
+}
+
+function openAddPost(channelId, date, channelName) {
+  addSlotCtx = { channelId, date };
+  fillSelect($('#apEndpoint'), state.endpoints, 'name', 'ללא נקודת קצה');
+  $('#apContext').textContent = `${channelName} · ${fmtDate(date)}`;
+  $('#apTitle').value = '';
+  $('#apKind').value = 'value';
+  $('#apTime').value = '10:00';
+  $('#addPostDlg').showModal();
+  $('#apTitle').focus();
+}
+
+/**
+ * "הוסף פוסט" לא נוגע בשום דבר אחר בלוח — בדיוק כמו גרירה ידנית של
+ * כרטיס קיים. "הוסף ובדוק שיבוץ מחדש" מוסיף ואז פותח את אותה תצוגת
+ * מנוע שמשמשת את "מלא את השבוע": מציגה מה ישתבץ בפועל, ולא נוגעת
+ * בלוח עד שלוחצים "שבץ הכול" שם.
+ */
+async function submitManualPost(reorganizeAfter) {
+  const title = $('#apTitle').value.trim();
+  if (!title) return toast('צריך כותרת לפוסט', true);
+
+  const [h, m] = $('#apTime').value.split(':').map(Number);
+  const at = new Date(`${addSlotCtx.date}T00:00:00`);
+  at.setHours(Number.isNaN(h) ? 10 : h, Number.isNaN(m) ? 0 : m, 0, 0);
+
+  const created = await postWithGapCheck('/posts', {
+    channel_id: addSlotCtx.channelId,
+    endpoint_id: numOrNull($('#apEndpoint').value),
+    title,
+    kind: $('#apKind').value,
+    scheduled_at: at.toISOString(),
+  }, 'POST');
+  if (!created) return; // המשתמש ביטל אחרי אזהרת המרווח
+
+  $('#addPostDlg').close();
+  toast('הפוסט נוסף ללוח.');
+  await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+
+  if (reorganizeAfter) await openEngine();
 }
 
 /* ========================= מבצע דחוף ========================= */
