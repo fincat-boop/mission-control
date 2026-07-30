@@ -425,7 +425,7 @@ function postCard(p) {
     const hasDraft = (p.note ?? '').includes('יש תוכן');
     return `<div class="hole${hasDraft ? ' draft' : ''}" ${clickable}
       data-tt="הלוח מחכה לתוכן: ${esc(KIND_HE[p.kind])} — ${esc(p.endpoint_name ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}">
-      <span class="hole-tag">${hasDraft ? 'טיוטה לא מאושרת' : 'אין תוכן'}</span>
+      <span class="corner-tag ${hasDraft ? 'yellow' : 'red'}">${hasDraft ? 'יש טיוטה' : 'אין תוכן'}</span>
       מחכה לתוכן<br><small>${esc(KIND_HE[p.kind])} · ${esc(p.endpoint_name ?? '')}</small></div>`;
   }
   if (p.status === 'pending_approval') {
@@ -433,16 +433,24 @@ function postCard(p) {
       data-tt="ממתין לאישור — ${esc(p.title)}">
       ממתין לאישור<br><small>${esc(p.title)}</small></div>`;
   }
-  // הצבע הוא נקודת הקצה. סוג התוכן מסומן בתג קטן, כדי ששני הממדים
-  // יהיו קריאים בלי שאחד יסתיר את השני.
-  const bg = epColor(p.endpoint_id);
-  const cls = `post${p.status === 'published' ? ' published' : ''}`;
+
   const tip = `${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}${p.urgent ? ' · דחוף' : ''}` +
               `${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
 
-  return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}"
+  // פוסט שכבר יצא לאוויר: לא צריך יותר את צבע הנקודה או פרטי השיבוץ —
+  // רק חותמת גדולה שאומרת שזה כבר קרה. הפרטים המלאים עדיין ב-tooltip.
+  if (p.status === 'published') {
+    return `<div class="post published" ${clickable} data-tt="${esc(tip)}">
+      <span class="pub-stamp">פורסם</span>
+    </div>`;
+  }
+
+  // הצבע הוא נקודת הקצה. סוג התוכן מסומן בתג קטן, כדי ששני הממדים
+  // יהיו קריאים בלי שאחד יסתיר את השני.
+  const bg = epColor(p.endpoint_id);
+  return `<div class="post" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
-    ${p.status === 'published' ? '<span class="pub-badge">✓ פורסם</span>' : ''}
+    <span class="corner-tag green">יש תוכן</span>
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
