@@ -1325,6 +1325,7 @@ function campaignGrid(c) {
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
+      ${can('settings') ? `<button class="btn small" data-edit-campaign="${c.id}">✎ ערוך קמפיין</button>` : ''}
       <div class="fill">
         <b>${c.ready}</b> מתוך <b>${c.required}</b> פוסטים מוכנים
         ${c.missing_content ? `<span class="off">— חסרים ${c.missing_content}</span>`
