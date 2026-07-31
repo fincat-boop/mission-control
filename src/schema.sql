@@ -199,7 +199,7 @@ create table if not exists tasks (
   title       text not null,
   subtitle    text,
   kind        text not null default 'general'
-              check (kind in ('publish','write','approve','general')),
+              check (kind in ('publish','write','approve','general','swap')),
   post_id     int references posts(id) on delete cascade,
   endpoint_id int references endpoints(id) on delete set null,
   assignee_id int references users(id) on delete set null,
@@ -209,6 +209,14 @@ create table if not exists tasks (
   done_at     timestamptz,
   created_at  timestamptz not null default now()
 );
+
+-- 'swap' — הצעת המנוע להחליף פוסט בלי תוכן בתוכן מוכן של נקודה אחרת,
+-- כשמתקרבים למועד הפרסום. meta נושא את פרטי ההצעה (content_id/endpoint_id
+-- מוצעים) כדי שהפעולה בממשק לא תצטרך לחשב אותם מחדש.
+alter table tasks drop constraint if exists tasks_kind_check;
+alter table tasks add constraint tasks_kind_check
+  check (kind in ('publish','write','approve','general','swap'));
+alter table tasks add column if not exists meta jsonb;
 
 create table if not exists engine_settings (
   id                  int primary key default 1 check (id = 1),

@@ -6,7 +6,7 @@ import express from 'express';
 import { migrate, pool } from './db.js';
 import { loadUser } from './auth.js';
 import { audit } from './audit.js';
-import { backupNow, cleanupStaleUrgent } from './maintenance.js';
+import { backupNow, cleanupStaleUrgent, suggestContentSwaps } from './maintenance.js';
 import api from './routes/api.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -60,6 +60,8 @@ const timers = [
   setInterval(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 24 * HOUR),
   setTimeout(() => { cleanupStaleUrgent().catch((e) => console.error('ניקוי מבצעים דחופים נכשל:', e)); }, 5 * 60000),
   setInterval(() => { cleanupStaleUrgent().catch((e) => console.error('ניקוי מבצעים דחופים נכשל:', e)); }, 6 * HOUR),
+  setTimeout(() => { suggestContentSwaps().catch((e) => console.error('הצעת החלפת תוכן נכשלה:', e)); }, 3 * 60000),
+  setInterval(() => { suggestContentSwaps().catch((e) => console.error('הצעת החלפת תוכן נכשלה:', e)); }, HOUR),
 ];
 
 for (const sig of ['SIGTERM', 'SIGINT']) {

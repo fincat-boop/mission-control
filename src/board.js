@@ -82,13 +82,16 @@ export async function buildBoard(anchorDate) {
     rows('select * from channels where active = true order by sort_order, id'),
     // שיבוצים של קמפיין מושהה יורדים מהלוח ולא נספרים בקיבולת.
     // הם נשארים במסד — ההשהיה הפיכה.
+    // v.status — הגרסה הספציפית למדיה שהפוסט הזה משודר בה, כדי שהלוח
+    // יוכל להראות "יש תוכן" (מוכן) לעומת "יש טיוטה", לא רק "יש/אין".
     rows(
-      `select p.*, u.name as assignee_name, e.name as endpoint_name
+      `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status
          from posts p
          left join users u          on u.id = p.assignee_id
          left join endpoints e      on e.id = p.endpoint_id
          left join content_items ci on ci.id = p.content_id
          left join campaigns ca     on ca.id = ci.campaign_id
+         left join content_variants v on v.content_id = p.content_id and v.channel_id = p.channel_id
         where p.scheduled_at >= $1 and p.scheduled_at <= $2
           and (ca.paused_at is null or p.status = 'published')
         order by p.scheduled_at`,
@@ -197,6 +200,7 @@ function shapePost(p) {
     endpoint_id: p.endpoint_id,
     endpoint_name: p.endpoint_name,
     content_id: p.content_id,
+    variant_status: p.variant_status,
     title: p.title,
     kind: p.kind,
     status: p.status,

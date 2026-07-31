@@ -37,11 +37,19 @@ export async function planWeek(anchorDate) {
     rows('select * from endpoints where active = true'),
     // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
     // תוכן של קמפיין מושהה לא נכנס לתכנון.
+    //
+    // ready_channel_ids — רק גרסה שסומנה "מוכן". eligible_channel_ids — גם
+    // טיוטה: השיבוץ הולך לפי האסטרטגיה, לא לפי אם כבר נכתב טקסט סופי.
+    // המנוע ממשיך להעדיף מוכן על פני טיוטה כשיש ברירה (ראו chooseForSlot).
     rows(`select ci.*,
                  coalesce(
                    array_agg(v.channel_id) filter (where v.status = 'ready'),
                    '{}'
-                 ) as ready_channel_ids
+                 ) as ready_channel_ids,
+                 coalesce(
+                   array_agg(v.channel_id) filter (where v.status in ('ready','draft')),
+                   '{}'
+                 ) as eligible_channel_ids
             from content_items ci
             left join content_variants v on v.content_id = ci.id
             left join campaigns ca on ca.id = ci.campaign_id
@@ -190,9 +198,12 @@ export async function applyWeek(anchorDate) {
 
   const holes = [];
   for (const h of plan.holes) {
+    // status='scheduled', לא 'hole': המשבצת משובצת לפי האסטרטגיה כמו כל
+    // שיבוץ אחר (תופסת קיבולת אמיתית, נספרת בסיכום) — רק שאין לה תוכן
+    // עדיין. content_id נשאר null, ולכן שכבת התצוגה מסמנת אותה "אין תוכן".
     const post = await one(
       `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note)
-       values ($1,$2,'מחכה לתוכן',$3,$4,'hole',$5) returning *`,
+       values ($1,$2,'ממתין לתוכן',$3,$4,'scheduled',$5) returning *`,
       [h.channel_id, h.endpoint_id, h.kind, h.scheduled_at, h.reason]
     );
     holes.push(post);
@@ -446,9 +457,12 @@ function chooseForSlot(ctx) {
       if (gapDays < minGap) continue;
     }
 
+    // טיוטה נחשבת מועמדת כמו תוכן מוכן — השיבוץ הולך לפי האסטרטגיה,
+    // לא לפי אם כבר נכתב טקסט סופי. bool כדי שאפשר יהיה להעדיף מוכן
+    // על פני טיוטה כשיש ברירה, בלי לפסול טיוטה כשאין ברירה אחרת.
     const ready = content.filter((c) =>
       c.endpoint_id === e.id &&
-      (c.ready_channel_ids ?? []).includes(slot.channel_id) &&
+      (c.eligible_channel_ids ?? []).includes(slot.channel_id) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&
       usage.allows(slot.channel_id, slot.dateKey, c.kind)
@@ -464,13 +478,16 @@ function chooseForSlot(ctx) {
     const rank = inCampaign
       ? { promo: 0, hybrid: 1, value: 2 }
       : { value: 0, hybrid: 1, promo: 2 };
-    ready.sort((a, b) => rank[a.kind] - rank[b.kind]);
+    const isReady = (c) => (c.ready_channel_ids ?? []).includes(slot.channel_id);
+    // מוכן קודם, טיוטה רק אם אין ברירה — בתוך כל קבוצה, לפי סוג התוכן
+    ready.sort((a, b) => (isReady(b) - isReady(a)) || (rank[a.kind] - rank[b.kind]));
 
     candidates.push({
       endpoint: e,
       content: ready[0],
       score: debts.score(e.id),
       inCampaign,
+      draft: !isReady(ready[0]),
     });
   }
 
@@ -484,6 +501,7 @@ function chooseForSlot(ctx) {
   else if (p.staleness >= 1) bits.push(`${Math.floor(p.daysSince)} ימים בלי פרסום`);
   if (p.deficit > 0.05) bits.push(`מפגרת ${Math.round(p.deficit * 100)} נק' אחרי יעד הרבעון`);
   if (best.inCampaign) bits.push('קמפיין רץ');
+  if (best.draft) bits.push('התוכן עוד בטיוטה — צריך לכתוב את הניסוח הסופי');
   bits.push(`חשיבות ${best.endpoint.importance}`);
 
   return { ...best, reason: bits.join(' · ') };
@@ -506,12 +524,16 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
 
     const hasAnyContent = content.some((c) => c.endpoint_id === e.id);
 
-    // ערוץ שיש בו מקום — שם נסמן את החור
+    // ערוץ שיש בו מקום — שם נשבץ בלי תוכן. גם טיוטה כבר נבדקה ונפסלה
+    // למעלה בלולאת ה-slots הרגילה, אז אם הגענו לכאן — באמת אין כלום.
     const target = channels.find((ch) => usage.remaining(ch.id) > 0);
     if (!target) continue;
 
-    // אמצע השבוע, כדי שיישאר זמן לכתוב
+    // אמצע השבוע, כדי שיישאר זמן לכתוב. תופסים בפועל את המקום כדי
+    // ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת הזו עדיין פנויה.
     const day = week.days[3] ?? week.days[0];
+    usage.take(target.id, day.date, 'value', 12);
+
     holes.push({
       channel_id: target.id,
       channel_name: target.name,
@@ -522,8 +544,8 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
       day_label: day.label,
       scheduled_at: new Date(`${day.date}T12:00:00`).toISOString(),
       reason: hasAnyContent
-        ? 'יש תוכן, אבל לא מסומן כמוכן לאף ערוץ פנוי'
-        : 'אין תוכן מוכן לנקודה הזו',
+        ? 'יש תוכן לנקודה הזו, אבל אף גרסה לא מתאימה לערוץ פנוי כרגע'
+        : 'אין שום תוכן (גם לא טיוטה) לנקודה הזו',
       days_since: p.daysSince === null ? null : Math.floor(p.daysSince),
     });
   }

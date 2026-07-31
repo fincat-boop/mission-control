@@ -500,11 +500,18 @@ function postCard(p) {
 
   // הצבע הוא נקודת הקצה. סוג התוכן מסומן בתג קטן, כדי ששני הממדים
   // יהיו קריאים בלי שאחד יסתיר את השני.
-  // "יש תוכן מוכן" הוא אוטומטי לגמרי — נגזר מהסטטוס האמיתי (hole/pending/published).
+  // התגית נגזרת מהמצב האמיתי של התוכן — לא רק "משובץ = מוכן". שיבוץ
+  // יכול להיות לפי אסטרטגיה גם בלי תוכן סופי (וגם בלי תוכן בכלל).
   // "פורסם" הוא הדבר היחיד שלא נגזר משום מקום: מישהו צריך לקבוע את זה בפועל.
+  const contentTag = !p.content_id
+    ? { cls: 'red', label: 'אין תוכן' }
+    : p.variant_status === 'ready'
+      ? { cls: 'blue', label: 'יש תוכן' }
+      : { cls: 'yellow', label: 'יש טיוטה' };
+
   return `<div class="post" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
-    <span class="corner-tag blue">יש תוכן</span>
+    <span class="corner-tag ${contentTag.cls}">${contentTag.label}</span>
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
@@ -2772,6 +2779,25 @@ async function renderTasks() {
       toast('סומן כפורסם.');
       await Promise.all([renderTasks(), refreshTaskBadge(), renderBoard()]);
     })));
+
+  // הצעת החלפת תוכן: מעדכן את השיבוץ עם התוכן המוצע וסוגר את המשימה
+  $$('#tasks [data-swap-post]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      const meta = JSON.parse(b.dataset.swapMeta || '{}');
+      if (!meta.suggested_content_id) return toast('אין הצעה שמורה למשימה הזו.', true);
+      await api(`/posts/${b.dataset.swapPost}`, {
+        method: 'PATCH',
+        body: {
+          content_id: meta.suggested_content_id,
+          endpoint_id: meta.suggested_endpoint_id,
+          title: meta.suggested_title,
+          kind: meta.suggested_kind,
+        },
+      });
+      await api(`/tasks/${b.dataset.swapTask}`, { method: 'PATCH', body: { done: true } });
+      toast('הוחלף. השיבוץ מציג עכשיו את התוכן המוצע.');
+      await Promise.all([renderTasks(), refreshTaskBadge(), renderBoard()]);
+    })));
 }
 
 const ALERT_TONE = {
@@ -2826,6 +2852,11 @@ function taskRow(t) {
     const text = t.content_body || t.post_title || t.title;
     action = `<button class="btn small act" data-copy="${esc(text)}">העתק טקסט</button>
               <button class="btn small act" data-publish="${t.post_id}">סמן כפורסם</button>`;
+  } else if (t.kind === 'swap' && t.post_id && can('content')) {
+    // ההצעה נשמרת ב-meta של המשימה עצמה — לא צריך לחשב אותה שוב בלחיצה
+    action = `<button class="btn small act primary" data-swap-post="${t.post_id}"
+      data-swap-task="${t.id}" data-swap-meta="${esc(JSON.stringify(t.meta ?? {}))}">
+      החלף בתוכן המוצע</button>`;
   }
 
   return `<div class="task${t.urgent && !t.done ? ' urgent' : ''}"${t.done ? ' style="opacity:.5"' : ''}>
