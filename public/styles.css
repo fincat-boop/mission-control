@@ -100,18 +100,6 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
   box-shadow: 0 0 12px 3px rgba(52,199,89,.85), 0 2px 4px rgba(0,0,0,.4);
 }
 
-/* כפתור סימון "פורסם" ישיר על הכרטיס — נראה רק בריחוף, בפינה הנגדית לתגית */
-.post .mark-pub {
-  position: absolute; inset-block-end: -6px; inset-inline-start: -6px;
-  width: 19px; height: 19px; border-radius: 50%; border: none; padding: 0;
-  background: var(--panel); color: var(--st-good); font-size: 11px; font-weight: 800;
-  display: grid; place-items: center; cursor: pointer; font: inherit;
-  box-shadow: 0 1px 3px rgba(0,0,0,.4);
-  opacity: 0; transition: opacity .12s ease;
-}
-.post:hover .mark-pub { opacity: 1; }
-.post .mark-pub:hover { background: var(--st-good); color: #fff; }
-
 /* תגית פינתית משותפת: אדום = אין תוכן, צהוב = יש טיוטה, כחול = יש תוכן מוכן */
 .corner-tag {
   position: absolute; inset-block-start: -7px; inset-inline-end: -6px;
@@ -310,6 +298,9 @@ dialog {
   max-height: 88vh; overflow-y: auto;
 }
 dialog::backdrop { background: rgba(0,0,0,.6); }
+.confirm-dlg { width: min(380px, 92vw); }
+.confirm-dlg #confirmMsg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 16px; }
+.confirm-dlg .btn.crit { color: var(--st-crit); }
 dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .frow { margin-bottom: 10px; font-size: 13px; }
 .frow label { display: block; color: var(--ink-2); margin-bottom: 4px; font-size: 12px; }

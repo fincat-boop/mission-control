@@ -49,6 +49,38 @@ const run = (fn) => async (...args) => {
 const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
 
 /**
+ * אישור/ביטול בתוך האפליקציה — לא confirm() של הדפדפן. מחזיר Promise
+ * שנפתר ל-true/false, כדי שאפשר יהיה לכתוב `if (!await confirmDialog(...))`
+ * בדיוק כמו שהיה עם confirm() הרגיל.
+ */
+function confirmDialog(message, { okLabel = 'אישור', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dlg = $('#confirmDlg');
+    const okBtn = $('#confirmOk');
+    $('#confirmMsg').textContent = message;
+    okBtn.textContent = okLabel;
+    okBtn.classList.toggle('primary', !danger);
+    okBtn.classList.toggle('crit', danger);
+
+    let decided = false;
+    const finish = (result) => {
+      if (decided) return;
+      decided = true;
+      dlg.removeEventListener('close', onClose);
+      resolve(result);
+    };
+    const onOk = () => { finish(true); dlg.close(); };
+    const onCancel = () => { finish(false); dlg.close(); };
+    const onClose = () => finish(false);
+
+    okBtn.addEventListener('click', onOk, { once: true });
+    $('#confirmCancel').addEventListener('click', onCancel, { once: true });
+    dlg.addEventListener('close', onClose);
+    dlg.showModal();
+  });
+}
+
+/**
  * שיבוץ שהשרת מזהיר עליו כצמוד מדי. האזהרה אינה חסימה: מציגים מה
  * שהשרת יודע ושואלים, ומי שמאשר שולח שוב עם confirm_gap.
  */
@@ -58,7 +90,7 @@ async function postWithGapCheck(path, body, method = 'PATCH') {
   } catch (e) {
     if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
     const w = e.payload.warning;
-    if (!confirm(`${w.message}\n\nלשבץ בכל זאת?`)) return null;
+    if (!(await confirmDialog(`${w.message}\n\nלשבץ בכל זאת?`))) return null;
     return api(path, { method, body: { ...body, confirm_gap: true } });
   }
 }
@@ -360,15 +392,6 @@ async function renderBoard() {
   $$('#board [data-post-id]').forEach((el) =>
     el.addEventListener('click', run(() => openPostPreview(el.dataset.postId))));
 
-  // כפתור פרסום ישיר על הכרטיס — לא פותח את התצוגה המקדימה
-  $$('#board [data-mark-publish]').forEach((btn) =>
-    btn.addEventListener('click', run(async (e) => {
-      e.stopPropagation();
-      await api(`/posts/${btn.dataset.markPublish}/publish`, { method: 'POST' });
-      toast('סומן כפורסם.');
-      await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
-    })));
-
   // + במשבצת ריקה — הוספת פוסט ידנית
   $$('#board [data-add-slot]').forEach((btn) =>
     btn.addEventListener('click', (e) => {
@@ -479,13 +502,9 @@ function postCard(p) {
   // יהיו קריאים בלי שאחד יסתיר את השני.
   // "יש תוכן מוכן" הוא אוטומטי לגמרי — נגזר מהסטטוס האמיתי (hole/pending/published).
   // "פורסם" הוא הדבר היחיד שלא נגזר משום מקום: מישהו צריך לקבוע את זה בפועל.
-  const canPublish = p.status === 'scheduled' && can('content');
-
   return `<div class="post" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
     <span class="corner-tag blue">יש תוכן</span>
-    ${canPublish ? `<button type="button" class="mark-pub" data-mark-publish="${p.id}"
-      draggable="false" title="סמן כפורסם">✓</button>` : ''}
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
@@ -502,7 +521,7 @@ function wirePostDialog() {
 
   $('#pDelete').addEventListener('click', run(async () => {
     if (!previewPost) return;
-    if (!confirm('להסיר את השיבוץ מהלוח? התוכן עצמו יישאר.')) return;
+    if (!(await confirmDialog('להסיר את השיבוץ מהלוח? התוכן עצמו יישאר.', { danger: true }))) return;
     const res = await api(`/posts/${previewPost.id}`, { method: 'DELETE', body: { week: state.week } });
     $('#postDlg').close();
     toast('השיבוץ הוסר.' + (res.engine?.placed ? ` המנוע מילא את המקום שהתפנה.` : ''));
@@ -1333,7 +1352,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint) {
     },
     onOpen: () => {
       $('#genDelete')?.addEventListener('click', run(async () => {
-        if (!confirm('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.')) return;
+        if (!(await confirmDialog('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.', { danger: true }))) return;
         await api(`/campaigns/${campaign.id}`, { method: 'DELETE', body: { week: state.week } });
         $('#genDlg').close();
         state.planCampaign = null;
@@ -1561,7 +1580,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
           toast('הקובץ הוסר.');
         })));
       $('#genDelete')?.addEventListener('click', run(async () => {
-        if (!confirm('למחוק את הזווית וכל הגרסאות שלה?')) return;
+        if (!(await confirmDialog('למחוק את הזווית וכל הגרסאות שלה?', { danger: true }))) return;
         await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         $('#genDlg').close();
         await reload();
@@ -1949,14 +1968,14 @@ function wireManage(ro) {
 
   $$('#manage [data-del-user]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את המשתמש?')) return;
+      if (!(await confirmDialog('למחוק את המשתמש?', { danger: true }))) return;
       await api(`/users/${b.dataset.delUser}`, { method: 'DELETE' });
       await reload();
     })));
 
   $$('#manage [data-del-endpoint]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את נקודת הקצה? כל הקמפיינים והתוכן שלה יימחקו איתה.')) return;
+      if (!(await confirmDialog('למחוק את נקודת הקצה? כל הקמפיינים והתוכן שלה יימחקו איתה.', { danger: true }))) return;
       await api(`/endpoints/${b.dataset.delEndpoint}`,
         { method: 'DELETE', body: { week: state.week } });
       await reload();
@@ -1964,7 +1983,7 @@ function wireManage(ro) {
 
   $$('#manage [data-del-channel]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!confirm('למחוק את הערוץ? כל השיבוצים בו יימחקו.')) return;
+      if (!(await confirmDialog('למחוק את הערוץ? כל השיבוצים בו יימחקו.', { danger: true }))) return;
       await api(`/channels/${b.dataset.delChannel}`,
         { method: 'DELETE', body: { week: state.week } });
       await reload();
