@@ -130,6 +130,20 @@ for (const file of files) {
     if (n > 1) problems.push(`${rel(file)}: מוגדר ${n} פעמים ברמה העליונה: ${name}`);
   }
 
+  /* --- 3ב. אותו שם פעמיים באותה שורת import --- */
+  // `import { $, $ }` הוא SyntaxError בדפדפן, אבל שם באותיות קטנות לא
+  // נתפס בבדיקת הקבועים שלמעלה. זה קרה בפועל כששכתוב אוטומטי פירש
+  // "$$" כתו בריחה והשאיר "$" — הבדיקה הזו זולה ותופסת בדיוק את זה.
+  for (const m of src.matchAll(/import\s+\{([^}]*)\}/g)) {
+    const seen = new Set();
+    for (const part of m[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (!name) continue;
+      if (seen.has(name)) problems.push(`${rel(file)}: "${name}" מיובא פעמיים באותה שורה`);
+      seen.add(name);
+    }
+  }
+
   /* --- 3. 'async' יתום --- */
   if (/^async\s*$/m.test(src)) {
     problems.push(`${rel(file)}: נשארה שורת 'async' יתומה — הערכת המודול תיפול שם`);
