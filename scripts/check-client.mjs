@@ -42,6 +42,23 @@ const rel = (p) => relative(ROOT, p);
 
 /* ========================= ניתוח קובץ בודד ========================= */
 
+/** מה שקובץ מייצא — כדי לוודא שכל יבוא בשם באמת מוצא אותו שם בצד השני */
+function parseExports(src) {
+  const names = new Set();
+  for (const m of src.matchAll(
+    /^export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/gm
+  )) names.add(m[1]);
+  // export { a, b as c }
+  for (const m of src.matchAll(/^export\s*\{([^}]*)\}/gm)) {
+    for (const part of m[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name) names.add(name);
+    }
+  }
+  if (/^export\s+default\b/m.test(src)) names.add('default');
+  return names;
+}
+
 /** שמות שיובאו לקובץ — הם "מוצהרים" לצורך הבדיקה, בדיוק כמו הצהרה מקומית */
 function parseImports(src) {
   const names = new Set();
@@ -49,15 +66,19 @@ function parseImports(src) {
   // import ... from '...'  /  import '...'
   const RE = /import\s+(?:([\s\S]*?)\s+from\s+)?['"]([^'"]+)['"]/g;
   for (const m of src.matchAll(RE)) {
-    specs.push(m[2]);
+    const named = new Set();
+    specs.push({ spec: m[2], named });
     const clause = m[1];
     if (!clause) continue;
-    // { a, b as c }
+    // { a, b as c } — נשמר גם המקור, כדי לאמת מול הייצוא בצד השני
     const braces = clause.match(/\{([\s\S]*?)\}/);
     if (braces) {
       for (const part of braces[1].split(',')) {
-        const name = part.trim().split(/\s+as\s+/).pop()?.trim();
-        if (name) names.add(name);
+        const raw = part.trim();
+        if (!raw) continue;
+        const [source, alias] = raw.split(/\s+as\s+/).map((x) => x.trim());
+        named.add(source);
+        names.add(alias || source);
       }
     }
     // * as ns  /  default
@@ -65,7 +86,7 @@ function parseImports(src) {
     if (star) names.add(star[1]);
     const def = clause.replace(/\{[\s\S]*?\}/, '').replace(/\*\s+as\s+[\w$]+/, '')
       .split(',')[0]?.trim();
-    if (def && /^[A-Za-z_$][\w$]*$/.test(def)) names.add(def);
+    if (def && /^[A-Za-z_$][\w$]*$/.test(def)) { names.add(def); named.add('default'); }
   }
   return { names, specs };
 }
@@ -86,11 +107,15 @@ for (const file of files) {
   const { names: imported, specs } = parseImports(src);
   const declared = new Set([...src.matchAll(DECL_RE)].map((m) => m[1]));
   const known = new Set([...declared, ...imported]);
-  analyzed.push({ file, src, known });
+  analyzed.push({ file, src, known, exports: parseExports(src), imports: [] });
 
   /* --- 1. קבוע בשימוש שלא הוגדר ולא יובא --- */
-  // <code> הוא טקסט שמוצג למשתמש, לא קוד
-  const scanned = src.replace(/<code>[\s\S]*?<\/code>/g, '');
+  // מסירים מה שאינו קוד לפני הסריקה: <code> הוא טקסט שמוצג למשתמש,
+  // והערות יכולות להזכיר מונחים באותיות גדולות (DOM, API) שאינם מזהים.
+  const scanned = src
+    .replace(/<code>[\s\S]*?<\/code>/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');   // לא נוגע ב-https://
   for (const m of scanned.matchAll(/(?<![.\w])([A-Z][A-Z0-9_]{2,})\b/g)) {
     const name = m[1];
     if (!known.has(name) && !IGNORE.has(name) && !/^T\d/.test(name)) {
@@ -112,7 +137,7 @@ for (const file of files) {
 
   /* --- 5. יבוא לקובץ שלא קיים --- */
   const deps = [];
-  for (const spec of specs) {
+  for (const { spec, named } of specs) {
     if (!spec.startsWith('.') && !spec.startsWith('/')) continue;   // חיצוני
     const target = spec.startsWith('/')
       ? resolve(ROOT, `.${spec}`)
@@ -122,8 +147,25 @@ for (const file of files) {
       continue;
     }
     deps.push(target);
+    analyzed.at(-1).imports.push({ target, named, spec });
   }
   graph.set(file, deps);
+}
+
+/* --- 8. שם מיובא שלא באמת מיוצא --- */
+// בדפדפן זו SyntaxError בזמן קישור, כלומר כל האפליקציה לא עולה. זו בדיוק
+// הטעות שקל לעשות בהעברת קוד בין קבצים, ולכן היא נתפסת כאן.
+const exportsOf = new Map(analyzed.map((a) => [a.file, a.exports]));
+for (const { file, imports } of analyzed) {
+  for (const { target, named, spec } of imports) {
+    const avail = exportsOf.get(target);
+    if (!avail) continue;
+    for (const name of named) {
+      if (!avail.has(name)) {
+        problems.push(`${rel(file)}: מייבא "${name}" מ-${spec}, אבל הוא לא מיוצא שם`);
+      }
+    }
+  }
 }
 
 /* --- 4. רנדרר שמוזכר ב-RENDERERS וחסר --- */

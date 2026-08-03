@@ -1,187 +1,13 @@
 /* Mission Control — הלקוח. כל הנתונים מגיעים מ-/api. */
 
-/* ========================= עזרי בסיס ========================= */
-
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-
-const esc = (v) =>
-  String(v ?? '').replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-async function api(path, options = {}) {
-  const res = await fetch(`/api${path}`, {
-    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  if (res.status === 401) {
-    location.href = '/login.html';
-    throw new Error('נדרשת התחברות');
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    // גוף התשובה נשמר על השגיאה: יש נתיבים שמחזירים אזהרה שאפשר לאשר
-    const err = new Error(data.error || 'הפעולה נכשלה');
-    err.status = res.status;
-    err.payload = data;
-    throw err;
-  }
-  return data;
-}
-
-let toastTimer;
-function toast(msg, isError = false) {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.classList.toggle('err', isError);
-  t.style.display = 'block';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.style.display = 'none'), 3200);
-}
-
-/** עוטף פעולה כך ששגיאת שרת תוצג כטוסט במקום להיעלם בקונסול */
-const run = (fn) => async (...args) => {
-  try { await fn(...args); }
-  catch (e) { toast(e.message, true); }
-};
-
-const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
-
-/**
- * אישור/ביטול בתוך האפליקציה — לא confirm() של הדפדפן. מחזיר Promise
- * שנפתר ל-true/false, כדי שאפשר יהיה לכתוב `if (!await confirmDialog(...))`
- * בדיוק כמו שהיה עם confirm() הרגיל.
- */
-function confirmDialog(message, { okLabel = 'אישור', danger = false } = {}) {
-  return new Promise((resolve) => {
-    const dlg = $('#confirmDlg');
-    const okBtn = $('#confirmOk');
-    $('#confirmMsg').textContent = message;
-    okBtn.textContent = okLabel;
-    okBtn.classList.toggle('primary', !danger);
-    okBtn.classList.toggle('crit', danger);
-
-    let decided = false;
-    const finish = (result) => {
-      if (decided) return;
-      decided = true;
-      dlg.removeEventListener('close', onClose);
-      resolve(result);
-    };
-    const onOk = () => { finish(true); dlg.close(); };
-    const onCancel = () => { finish(false); dlg.close(); };
-    const onClose = () => finish(false);
-
-    okBtn.addEventListener('click', onOk, { once: true });
-    $('#confirmCancel').addEventListener('click', onCancel, { once: true });
-    dlg.addEventListener('close', onClose);
-    dlg.showModal();
-  });
-}
-
-/**
- * שיבוץ שהשרת מזהיר עליו כצמוד מדי. האזהרה אינה חסימה: מציגים מה
- * שהשרת יודע ושואלים, ומי שמאשר שולח שוב עם confirm_gap.
- */
-async function postWithGapCheck(path, body, method = 'PATCH') {
-  try {
-    return await api(path, { method, body });
-  } catch (e) {
-    if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
-    const w = e.payload.warning;
-    if (!(await confirmDialog(`${w.message}\n\nלשבץ בכל זאת?`))) return null;
-    return api(path, { method, body: { ...body, confirm_gap: true } });
-  }
-}
-
-function fillSelect(sel, items, labelKey, emptyLabel) {
-  sel.innerHTML =
-    (emptyLabel ? `<option value="">${esc(emptyLabel)}</option>` : '') +
-    items.map((i) => `<option value="${i.id}">${esc(i[labelKey])}</option>`).join('');
-}
-
-// זיהוי סוג קובץ ותצוגת גודל — בשימוש גם בלוח וגם במסך התוכן
-const isImage = (mime) => typeof mime === 'string' && mime.startsWith('image/');
-const isVideo = (mime) => typeof mime === 'string' && mime.startsWith('video/');
-const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
-
-const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
-
-const KIND_HE = { promo: 'מכירתי', value: 'ערך', hybrid: 'משולב' };
-const KIND_VAR = { promo: 'var(--leg-promo)', value: 'var(--leg-value)', hybrid: 'var(--leg-hybrid)' };
-
-// הקבועים שמשמשים יותר מסעיף אחד יושבים כאן ולא בתוך סעיף,
-// כדי ששכתוב של סעיף שלם לא ימחק אותם ממי שעדיין צריך אותם.
-
-/** מצב הקמפיין → מחלקת הצבע של השבב */
-const TONE_CLASS = { good: 'on', warn: '', bad: 'bad', muted: '' };
-
-/** מצב תא ברשת התוכן */
-const CELL = {
-  ready:        { label: 'מוכן',       cls: 'ok'    },
-  draft:        { label: 'טיוטה',      cls: 'draft' },
-  empty:        { label: 'חסר',        cls: 'gap'   },
-  not_relevant: { label: 'לא רלוונטי', cls: 'na'    },
-  not_needed:   { label: '',           cls: 'na'    },
-};
-
-/**
- * צבע לכל נקודת קצה.
- *
- * לפי המיקום במיון לפי מזהה — לא לפי id % palette, שיכול לתת לשתי נקודות
- * את אותו צבע, ולא לפי המיקום ברשימה המוצגת, שמשתנה כשמשנים משקל.
- * המזהה לא זז לעולם, ולכן הצבע גם יציב וגם ייחודי.
- */
-const EP_COLORS = ['#4da3ff', '#1baf7a', '#eb6834', '#a06cd5', '#f0b429',
-                   '#2ec5c0', '#e5679a', '#8bc34a', '#ff8f5c', '#7c8cff'];
-
-let epColors = new Map();
-function rebuildEpColors() {
-  epColors = new Map();
-  [...state.endpoints]
-    .sort((a, b) => a.id - b.id)
-    .forEach((e, i) => epColors.set(e.id, EP_COLORS[i % EP_COLORS.length]));
-}
-const epColor = (id) => epColors.get(Number(id)) ?? 'var(--muted)';
-
-/** טקסט כהה או בהיר, לפי בהירות הרקע — צהוב ולבן לא נקראים יחד */
-function inkOn(bg) {
-  const m = /^#([0-9a-f]{6})$/i.exec(bg);
-  if (!m) return '#fff';
-  const n = parseInt(m[1], 16);
-  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
-  return lum > 0.6 ? '#14161a' : '#fff';
-}
-
-const ymd = (d) => {
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-};
-const hhmm = (iso) => new Date(iso).toTimeString().slice(0, 5);
-
-/* ========================= מצב ========================= */
-
-const TABS = ['board', 'strategy', 'plan', 'tasks', 'data', 'manage'];
-
-const state = {
-  me: null,
-  week: null,          // תאריך עוגן לשבוע המוצג
-  channels: [],
-  endpoints: [],
-  users: [],
-  campaigns: [],
-  planEndpoint: null,      // נקודת הקצה שנבחרה בדרילדאון
-  planCampaign: null,      // הקמפיין שנבחר בתוכה
-  planBackground: false,   // האם מציגים את התוכן השוטף של הנקודה
-  dataPeriod: '30',        // התקופה בטאב הנתונים: מספר ימים או 'custom'
-  dataFrom: null,
-  dataTo: null,
-  dataVia: '',             // סינון היומן לפי מקור הפעולה
-  tab: 'board',
-};
-
-const can = (perm) => !!state.me && (state.me.is_owner || state.me[`perm_${perm}`]);
+import { $, $$, esc, toast, run, fillSelect } from './js/core/dom.js';
+import { api, postWithGapCheck } from './js/core/api.js';
+import { confirmDialog } from './js/core/confirm.js';
+import {
+  numOrNull, isImage, isVideo, kb, ymd, hhmm, fmtDate,
+  HE_DAYS, KIND_HE, KIND_VAR, TONE_CLASS, CELL, inkOn,
+} from './js/core/format.js';
+import { TABS, state, can, rebuildEpColors, epColor } from './js/core/state.js';
 
 /* ========================= טעינה ראשונית ========================= */
 
@@ -1707,11 +1533,6 @@ function assetLine(a, ownOnly) {
        style="color:var(--st-crit);margin-inline-start:auto">הסר</button>` : ''}
   </div>`;
 }
-
-const fmtDate = (d) => {
-  const x = new Date(typeof d === 'string' && d.length === 10 ? d + 'T00:00:00' : d);
-  return `${x.getDate()}.${x.getMonth() + 1}`;
-};
 
 /* ========================= ניהול ========================= */
 
