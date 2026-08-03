@@ -85,6 +85,24 @@
 <dialog id="postDlg">
   <h3 id="postDlgTitle"></h3>
   <div id="postPreview"></div>
+
+  <!-- תוצאות בפועל — מוצג רק לפוסט שכבר פורסם -->
+  <div id="pResults" hidden>
+    <h4 class="res-head">מה זה עשה בפועל</h4>
+    <p class="res-hint">ממלאים רק את מה שיש. שדה ריק נשמר כ"לא נמדד" ולא כאפס — הוא פשוט לא ייכנס לחישוב.</p>
+    <div class="res-grid">
+      <label>חשיפות<input type="number" min="0" id="rReach" placeholder="לא נמדד"></label>
+      <label>מעורבות<input type="number" min="0" id="rEngagement" placeholder="לא נמדד"></label>
+      <label>קליקים<input type="number" min="0" id="rClicks" placeholder="לא נמדד"></label>
+      <label>לידים<input type="number" min="0" id="rLeads" placeholder="לא נמדד"></label>
+    </div>
+    <input type="text" id="rNote" class="res-note" placeholder="הערה (אופציונלי)">
+    <div class="res-actions">
+      <button class="btn small" id="rClear" hidden style="color:var(--st-crit)">מחק מדידה</button>
+      <button class="btn small primary" id="rSave">שמור תוצאות</button>
+    </div>
+  </div>
+
   <div class="dactions">
     <button class="btn" id="pOpenContent" style="margin-inline-end:auto">פתח בתוכן</button>
     <button class="btn" id="pPublish" style="color:var(--st-good)" hidden></button>

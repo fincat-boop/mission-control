@@ -13,6 +13,7 @@ export const TABLES = [
   'content_variants',
   'content_assets',
   'posts',
+  'post_results',
   'strategy_milestones',
   'tasks',
   'engine_settings',

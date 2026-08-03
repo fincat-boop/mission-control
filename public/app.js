@@ -546,6 +546,34 @@ function wirePostDialog() {
     await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
   }));
 
+  // תוצאות בפועל — שדה ריק נשלח כ-null מפורש, לא כאפס
+  $('#rSave').addEventListener('click', run(async () => {
+    if (!previewPost) return;
+    const val = (id) => {
+      const raw = $(id).value.trim();
+      return raw === '' ? null : Number(raw);
+    };
+    await api(`/posts/${previewPost.id}/results`, {
+      method: 'PUT',
+      body: {
+        reach: val('#rReach'), engagement: val('#rEngagement'),
+        clicks: val('#rClicks'), leads: val('#rLeads'),
+        note: $('#rNote').value.trim() || null,
+      },
+    });
+    $('#rClear').hidden = false;
+    toast('התוצאות נשמרו.');
+  }));
+
+  $('#rClear').addEventListener('click', run(async () => {
+    if (!previewPost) return;
+    if (!(await confirmDialog('למחוק את המדידה של הפוסט הזה?', { danger: true }))) return;
+    await api(`/posts/${previewPost.id}/results`, { method: 'DELETE' });
+    for (const id of ['#rReach', '#rEngagement', '#rClicks', '#rLeads', '#rNote']) $(id).value = '';
+    $('#rClear').hidden = true;
+    toast('המדידה נמחקה.');
+  }));
+
   // מהלוח אל התוכן — שם עורכים את הטקסט, ולא בלוח
   $('#pOpenContent').addEventListener('click', run(async () => {
     if (!previewPost?.content_id) return toast('לשיבוץ הזה אין תוכן משויך.', true);
@@ -564,14 +592,28 @@ async function openPostPreview(postId) {
   $('#postDlgTitle').textContent = 'טוען…';
   $('#postPreview').innerHTML = '';
   $('#pPublish').hidden = true;
+  $('#pResults').hidden = true;
   $('#postDlg').showModal();
 
-  const { post, variant, assets } = await api(`/posts/${postId}/preview`);
+  const { post, variant, assets, results } = await api(`/posts/${postId}/preview`);
   previewPost = post;
 
   const pubBtn = $('#pPublish');
   pubBtn.hidden = !(can('content') && ['scheduled', 'published'].includes(post.status));
   pubBtn.textContent = post.status === 'published' ? 'בטל פרסום' : 'סמן כפורסם';
+
+  // תוצאות נמדדות רק למה שכבר יצא לאוויר
+  const showResults = can('content') && post.status === 'published';
+  $('#pResults').hidden = !showResults;
+  if (showResults) {
+    const set = (id, v) => { $(id).value = v ?? ''; };
+    set('#rReach', results?.reach);
+    set('#rEngagement', results?.engagement);
+    set('#rClicks', results?.clicks);
+    set('#rLeads', results?.leads);
+    set('#rNote', results?.note);
+    $('#rClear').hidden = !results;
+  }
 
   const when = new Date(post.scheduled_at)
     .toLocaleString('he-IL', { dateStyle: 'full', timeStyle: 'short' });
@@ -1862,6 +1904,16 @@ function systemGroup(users, settings, backups) {
           </div>
           ${eng('"משולב" נספר כמכירתי', 'hybrid_weight', s.hybrid_weight, '0.1')}
           ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
+          <div class="prow">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="engUsePerf" ${s.use_performance ? 'checked' : ''}>
+              לתת ליעילות הנמדדת להשפיע על השיבוץ
+            </label>
+          </div>
+          <div class="fhint" style="margin-top:-8px">
+            כבוי = המערכת רק אוספת ומציגה את התוצאות בטאב "נתונים", בלי לגעת בלוח.
+            כדאי להדליק רק אחרי שיש מספיק מדידות והמספרים שם נראים לך הגיוניים.
+          </div>
         </div>
       </details>
       ${backups ? `<details class="item">
@@ -1953,6 +2005,15 @@ function wireManage(ro) {
       toast(engineToast('נשמר.', res));
       await renderBoard();
     })));
+
+  $('#engUsePerf')?.addEventListener('change', run(async (e) => {
+    const on = e.target.checked;
+    const res = await api('/settings',
+      { method: 'PATCH', body: { use_performance: on, week: state.week } });
+    toast(engineToast(on ? 'נשמר — היעילות הנמדדת משפיעה עכשיו על השיבוץ.'
+                         : 'נשמר — היעילות רק נמדדת, בלי להשפיע על הלוח.', res));
+    await renderBoard();
+  }));
 
   // יחס ערך/מכירתי אופציונלי — 0 אומר למנוע לא לאכוף אותו בכלל
   $('#engRatioOn')?.addEventListener('change', run(async (e) => {
@@ -2092,14 +2153,99 @@ async function renderData() {
   }
 
   const qs = `?from=${from}&to=${to}`;
-  const [stats, activity] = await Promise.all([
+  const [stats, activity, perf] = await Promise.all([
     api(`/stats${qs}`),
     api(`/activity${qs}${state.dataVia ? `&via=${state.dataVia}` : ''}&limit=200`),
+    api(`/performance${qs}`),
   ]);
 
   $('#data').innerHTML =
-    dataToolbar(stats.period) + statCards(stats) + statTables(stats) + activityPanel(activity);
+    dataToolbar(stats.period) + statCards(stats) + statTables(stats)
+    + performancePanel(perf) + activityPanel(activity);
   wireData();
+}
+
+/* ---------- יעילות נמדדת ---------- */
+
+/**
+ * הציון מרוכז סביב 1.0: מעל = עבד טוב יותר מהממוצע, מתחת = פחות.
+ * הפס מציג את הסטייה משני צדי אמצע, ולא מילוי מ-0 — כי 0 חסר משמעות כאן.
+ */
+function effBar(score) {
+  const dev = Math.max(-1, Math.min(1, score - 1));   // -1..+1
+  const half = Math.abs(dev) * 50;
+  const color = dev >= 0 ? 'var(--st-good)' : 'var(--st-warn)';
+  const style = dev >= 0
+    ? `inset-inline-start:50%;width:${half}%`
+    : `inset-inline-start:${50 - half}%;width:${half}%`;
+  return `<span class="effbar"><i style="${style};background:${color}"></i><span class="mid"></span></span>`;
+}
+
+function effRows(list, labelKey) {
+  return list.map((x) => `<tr>
+    <td>${esc(x[labelKey])}</td>
+    <td>${effBar(x.score)}</td>
+    <td class="effscore">${x.n ? x.score.toFixed(2) : '—'}</td>
+    <td class="effn">${x.n ? `${x.n} פוסטים` : 'אין מדידות'}</td>
+  </tr>`).join('');
+}
+
+function performancePanel(p) {
+  const head = `<tr><th>שם</th><th></th><th>ציון</th><th>מדגם</th></tr>`;
+  const table = (title, list, labelKey) => `
+    <div class="subsec"><h2>${esc(title)}</h2><div class="panel">
+      <table class="stattable"><thead>${head}</thead>
+      <tbody>${effRows(list, labelKey)}</tbody></table>
+    </div></div>`;
+
+  if (!p.measured) {
+    return `<div class="subsec"><h2>יעילות נמדדת</h2><div class="panel">
+      <div class="empty">עוד אין תוצאות מוזנות בתקופה הזו.
+      פותחים פוסט שפורסם בלוח וממלאים כמה מספרים — אחרי כמה פוסטים יופיע כאן מדד יעילות.</div>
+    </div></div>`;
+  }
+
+  const combos = p.combos.length
+    ? `<div class="subsec"><h2>שילובים שנמדדו בפועל</h2><div class="panel">
+        <table class="stattable">
+          <thead><tr><th>מדיה</th><th>מתי</th><th></th><th>ציון</th><th>מדגם</th></tr></thead>
+          <tbody>${p.combos.map((c) => `<tr>
+            <td>${esc(c.channel_name)}</td>
+            <td>${esc(c.dow_label)} · ${esc(c.bucket_label)}</td>
+            <td>${effBar(c.score)}</td>
+            <td class="effscore">${c.score.toFixed(2)}</td>
+            <td class="effn">${c.n} פוסטים</td>
+          </tr>`).join('')}</tbody>
+        </table></div></div>`
+    : `<div class="subsec"><h2>שילובים שנמדדו בפועל</h2><div class="panel">
+        <div class="empty">עוד אין שילוב אחד עם מספיק מדידות (צריך 3 לפחות לאותו מדיה·יום·שעה).</div>
+      </div></div>`;
+
+  const pending = p.pending.length
+    ? `<div class="subsec"><h2>ממתינים להזנת תוצאות</h2><div class="panel">
+        <table class="stattable">
+          <thead><tr><th>פוסט</th><th>מדיה</th><th>נקודת קצה</th><th>פורסם</th><th></th></tr></thead>
+          <tbody>${p.pending.map((x) => `<tr>
+            <td>${esc(x.title)}</td>
+            <td>${esc(x.channel_name ?? '—')}</td>
+            <td>${esc(x.endpoint_name ?? '—')}</td>
+            <td>${esc(ymd(new Date(x.published_at)))}</td>
+            <td><button class="btn small" data-fill-post="${x.id}">הזן</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div></div>`
+    : '';
+
+  return `<div class="subsec"><h2>יעילות נמדדת</h2>
+      <p class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px">
+        1.00 = ממוצע. הציון מנורמל בתוך כל מדיה ומכווץ לפי גודל המדגם,
+        כך שפוסט בודד מוצלח לא קובע. ${p.measured} פוסטים נמדדו בתקופה.
+      </p></div>
+    ${table('לפי נקודת קצה', p.endpoints, 'name')}
+    ${table('לפי מדיה', p.channels, 'name')}
+    ${table('לפי יום בשבוע', p.days, 'label')}
+    ${table('לפי שעה ביום', p.buckets, 'label')}
+    ${combos}
+    ${pending}`;
 }
 
 function dataToolbar(period) {
@@ -2229,6 +2375,13 @@ function wireData() {
       await renderData();
     }));
   }
+
+  // "הזן" מרשימת הממתינים — פותח את אותו דיאלוג פוסט, ומרענן בסגירה
+  $$('#data [data-fill-post]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      await openPostPreview(b.dataset.fillPost);
+      $('#postDlg').addEventListener('close', run(renderData), { once: true });
+    })));
 }
 
 /* ========================= ייבוא תוכן מטבלה ========================= */

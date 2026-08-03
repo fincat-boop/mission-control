@@ -12,6 +12,7 @@ import { planWeek, applyWeek, withEngineLock } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
 import { buildStats, readActivity } from '../stats.js';
+import { buildPerformance, parseMetric } from '../performance.js';
 import { gapWarning } from '../gap.js';
 import { analyzeImport, runImport } from '../import.js';
 import { extract } from '../extract.js';
@@ -205,7 +206,45 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
         [p.content_id, variant?.id ?? null])
     : [];
 
-  res.json({ post: p, variant, assets });
+  // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה
+  const results = await one('select * from post_results where post_id = $1', [p.id]);
+
+  res.json({ post: p, variant, assets, results });
+}));
+
+/**
+ * הזנת התוצאות בפועל. שדה ריק נשמר כ-null ("לא נמדד") ולא כאפס —
+ * ההבחנה הזו היא הבסיס לכל חישוב היעילות (ראו src/performance.js).
+ */
+r.put('/posts/:id/results', requirePerm('content'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  const post = await one('select id from posts where id = $1', [req.params.id]);
+  if (!post) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+
+  let vals;
+  try {
+    vals = [parseMetric(b.reach), parseMetric(b.engagement),
+            parseMetric(b.clicks), parseMetric(b.leads)];
+  } catch (e) {
+    return bad(res, e.message);
+  }
+
+  const results = await one(
+    `insert into post_results (post_id, reach, engagement, clicks, leads, note)
+     values ($1,$2,$3,$4,$5,$6)
+     on conflict (post_id) do update set
+       reach = excluded.reach, engagement = excluded.engagement,
+       clicks = excluded.clicks, leads = excluded.leads,
+       note = excluded.note, updated_at = now()
+     returning *`,
+    [req.params.id, ...vals, b.note?.trim() || null]
+  );
+  res.json({ results });
+}));
+
+r.delete('/posts/:id/results', requirePerm('content'), wrap(async (req, res) => {
+  await query('delete from post_results where post_id = $1', [req.params.id]);
+  res.json({ ok: true });
 }));
 
 r.delete('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
@@ -1010,7 +1049,7 @@ r.get('/settings', wrap(async (_req, res) => {
 r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
   const s = await updateById('engine_settings',
     ['min_gap_days', 'max_promo_per_day', 'hybrid_weight', 'content_alert_hours',
-     'min_value_per_promo'],
+     'min_value_per_promo', 'use_performance'],
     1, req.body);
   const engine = await autoFill(req.body?.week);
   res.json({ settings: s, engine });
@@ -1086,6 +1125,15 @@ r.delete('/users/:id', requirePerm('users'), wrap(async (req, res) => {
 r.get('/stats', wrap(async (req, res) => {
   try {
     res.json(await buildStats(req.query.from, req.query.to));
+  } catch (e) {
+    return bad(res, e.message);
+  }
+}));
+
+/** יעילות נמדדת: טבלאות לפי ממד + הפוסטים שממתינים להזנת תוצאות */
+r.get('/performance', wrap(async (req, res) => {
+  try {
+    res.json(await buildPerformance(req.query.from, req.query.to));
   } catch (e) {
     return bad(res, e.message);
   }

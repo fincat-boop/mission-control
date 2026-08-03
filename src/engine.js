@@ -1,5 +1,6 @@
 import { one, rows, query } from './db.js';
 import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
+import { performanceMultipliers, hourBucket } from './performance.js';
 
 /**
  * מנוע השיבוץ.
@@ -16,6 +17,9 @@ import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 const W_STALENESS = 1.0;  // כמה זמן עבר מאז שהנקודה פורסמה, ביחס לקצב שהוגדר לה
 const W_STRATEGY  = 0.8;  // כמה היא מפגרת אחרי יעד האסטרטגיה
 const W_IMPORTANCE = 0.5; // החשיבות הידנית שהוגדרה לה
+// יעילות שנמדדה בפועל. פועל רק כשהמתג use_performance דלוק, ובכוונה
+// נמוך מהוותק — מה שעבד טוב מקבל דחיפה, אבל נקודה חלשה לא נעלמת מהלוח.
+const W_PERFORMANCE = 0.6;
 
 const DEFAULT_HOUR = 10;
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -78,7 +82,11 @@ export async function planWeek(anchorDate) {
   if (endpoints.length === 0) notes.push('אין נקודות קצה פעילות.');
   if (content.length === 0) notes.push('אין תוכן מוכן — המנוע יסמן חורים בלבד.');
 
-  const debts = await computeDebts(endpoints, settings);
+  // יעילות נמדדת מתוצאות אמיתיות. נטענת רק כשהמתג דלוק — כשהוא כבוי
+  // אין אפילו שאילתה, והמנוע מתנהג בדיוק כמו לפני הפיצ'ר.
+  const perf = settings?.use_performance ? await performanceMultipliers() : null;
+
+  const debts = await computeDebts(endpoints, settings, perf);
 
   // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון.
   const usage = buildUsage(channels, existing, settings);
@@ -107,7 +115,7 @@ export async function planWeek(anchorDate) {
   const placements = [];
 
   // כל שילוב (ערוץ, יום) שעוד יש בו מקום — מסודר כך שימים ריקים נתפסים ראשונים
-  const slots = buildSlots(week, channels, usage);
+  const slots = buildSlots(week, channels, usage, perf);
 
   for (const slot of slots) {
     if (!usage.channelHasRoom(slot.channel_id)) continue;
@@ -221,7 +229,7 @@ export async function applyWeek(anchorDate) {
 
 /* ========================= חוב אוויר ========================= */
 
-async function computeDebts(endpoints, settings) {
+async function computeDebts(endpoints, settings, perf = null) {
   const lastPublished = await rows(
     `select endpoint_id, max(published_at) as last_at
        from posts where status = 'published' and endpoint_id is not null
@@ -276,7 +284,14 @@ async function computeDebts(endpoints, settings) {
     const actual = actualPct.get(e.id) ?? 0;
     const deficit = Math.max(0, target - actual) / 100;
 
-    parts.set(e.id, { staleness, deficit, importance: e.importance / 10, daysSince });
+    // המכפיל מרוכז סביב 1.0 (ניטרלי). מחסרים 1 כדי שנקודה בלי נתונים
+    // תתרום בדיוק 0 לציון, נקודה מוצלחת תוסיף, וחלשה תוריד מעט.
+    const perfMult = perf?.endpoint.get(e.id) ?? 1;
+
+    parts.set(e.id, {
+      staleness, deficit, importance: e.importance / 10, daysSince,
+      performance: perf ? perfMult : null,
+    });
   }
 
   return {
@@ -288,6 +303,7 @@ async function computeDebts(endpoints, settings) {
       return W_STALENESS * p.staleness
            + W_STRATEGY * p.deficit
            + W_IMPORTANCE * p.importance
+           + (p.performance == null ? 0 : W_PERFORMANCE * (p.performance - 1))
            - already * 0.6;
     },
     parts: (id) => parts.get(id),
@@ -407,23 +423,34 @@ function buildUsage(channels, existing, settings) {
  * כל המשבצות האפשריות, ממוינות כך שהמנוע ממלא קודם ימים ריקים —
  * ככה השבוע יוצא מפוזר ולא נערם על יום אחד.
  *
- * שובר שוויון שני: יעילות המדיה (channels.efficiency, אופציונלי).
- * בין שתי משבצות עם אותה עומס בדיוק, המדיה היעילה יותר נבחרת קודם —
- * כך שכשיש כמה מדיות פנויות באותה מידה, התוכן עם החוב הגבוה ביותר
- * (הכי "חשוב" ברגע הזה, לפי computeDebts) הוא זה שמגיע לבמה הטובה,
- * לפני שהוא מאבד עדיפות בגלל שכבר שובץ במקום אחר באותה ריצה.
+ * שובר שוויון שני: איכות המשבצת. בין שתי משבצות עם אותו עומס בדיוק,
+ * הטובה יותר נבחרת קודם — כך שהתוכן עם החוב הגבוה ביותר (הכי "חשוב"
+ * ברגע הזה, לפי computeDebts) הוא זה שמגיע לבמה הטובה, לפני שהוא מאבד
+ * עדיפות בגלל שכבר שובץ במקום אחר באותה ריצה.
+ *
+ * האיכות נגזרת מיעילות שנמדדה בפועל (ערוץ × יום × חלון שעות) כשהמתג
+ * דלוק ויש מספיק דגימות; אחרת נופלים חזרה לדירוג הידני channels.efficiency.
  */
-function buildSlots(week, channels, usage) {
+function buildSlots(week, channels, usage, perf = null) {
   const slots = [];
   for (const ch of channels) {
     for (const day of week.days) {
+      const date = new Date(`${day.date}T00:00:00`);
+      // הנמדד מנורמל סביב 1.0 והידני הוא 1–10 — מיישרים אותו לאותו סולם
+      // כדי ששני המקורות יהיו בני-השוואה במיון אחד.
+      const measured = perf
+        ? (perf.channel.get(ch.id) ?? 1)
+            * (perf.dow.get(date.getDay()) ?? 1)
+            * (perf.bucket.get(hourBucket(DEFAULT_HOUR)) ?? 1)
+        : null;
+
       slots.push({
         channel_id: ch.id,
         channel_name: ch.name,
-        date: new Date(`${day.date}T00:00:00`),
+        date,
         dateKey: day.date,
         label: day.label,
-        efficiency: ch.efficiency ?? 5,
+        efficiency: measured != null ? measured * 5 : (ch.efficiency ?? 5),
       });
     }
   }
@@ -502,6 +529,12 @@ function chooseForSlot(ctx) {
   if (p.deficit > 0.05) bits.push(`מפגרת ${Math.round(p.deficit * 100)} נק' אחרי יעד הרבעון`);
   if (best.inCampaign) bits.push('קמפיין רץ');
   if (best.draft) bits.push('התוכן עוד בטיוטה — צריך לכתוב את הניסוח הסופי');
+  // רק כשהיעילות הנמדדת באמת הזיזה משהו — 1.0 הוא ניטרלי ולא מעניין
+  if (p.performance != null && Math.abs(p.performance - 1) >= 0.08) {
+    bits.push(p.performance > 1
+      ? `יעילות נמדדת גבוהה (${p.performance.toFixed(2)})`
+      : `יעילות נמדדת נמוכה (${p.performance.toFixed(2)})`);
+  }
   bits.push(`חשיבות ${best.endpoint.importance}`);
 
   return { ...best, reason: bits.join(' · ') };

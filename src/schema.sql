@@ -183,6 +183,24 @@ create table if not exists posts (
 create index if not exists posts_scheduled_at_idx on posts (scheduled_at);
 create index if not exists posts_channel_idx      on posts (channel_id);
 create index if not exists posts_endpoint_idx     on posts (endpoint_id);
+-- צבירת היעילות מסננת על published_at, ולכן הוא צריך אינדקס משלו
+create index if not exists posts_published_at_idx on posts (published_at);
+
+-- ========================= תוצאות בפועל =========================
+-- מה באמת קרה לפוסט אחרי שיצא. שורה אחת לפוסט (מפתח ראשי על post_id).
+--
+-- כל המדדים nullable בכוונה: ריק פירושו "לא נמדד", לא "אפס". מדד חסר
+-- לא נכנס לחישוב היעילות — לא למונה ולא למכנה — כך שאפשר למלא רק את
+-- מה שבאמת יש בלי לעוות את התוצאה. ראו src/performance.js.
+create table if not exists post_results (
+  post_id     int primary key references posts(id) on delete cascade,
+  reach       int check (reach >= 0),
+  engagement  int check (engagement >= 0),
+  clicks      int check (clicks >= 0),
+  leads       int check (leads >= 0),
+  note        text,
+  updated_at  timestamptz not null default now()
+);
 
 -- strategy_allocations הוסרה. התוכן שלה עבר ל-campaigns.
 -- ראה src/migrations/001-campaigns-absorb-strategy.js
@@ -229,6 +247,12 @@ create table if not exists engine_settings (
 -- כמה פוסטי ערך נדרשים על כל פוסט מכירתי. המנוע לא יחרוג מזה.
 alter table engine_settings
   add column if not exists min_value_per_promo numeric(3,1) not null default 3;
+
+-- האם היעילות הנמדדת (post_results) משפיעה בפועל על השיבוץ.
+-- כבוי כברירת מחדל: קודם אוספים נתונים ורואים שהם הגיוניים, ורק אז
+-- נותנים להם להזיז את הלוח.
+alter table engine_settings
+  add column if not exists use_performance boolean not null default false;
 
 insert into engine_settings (id) values (1) on conflict (id) do nothing;
 
