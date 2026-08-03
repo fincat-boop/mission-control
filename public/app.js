@@ -8,8 +8,26 @@ import {
   HE_DAYS, KIND_HE, KIND_VAR, TONE_CLASS, CELL, inkOn,
 } from './js/core/format.js';
 import { TABS, state, can, rebuildEpColors, epColor } from './js/core/state.js';
+import {
+  registerRefreshers, refreshBoard, refreshTaskBadge, refreshAlerts,
+  refreshCurrentTab, refreshAfterPostChange,
+} from './js/ui/refresh.js';
 
 /* ========================= טעינה ראשונית ========================= */
+
+// הרנדררים נרשמים לפני כל רינדור, כדי ששום פעולה לא תקרא לרענון
+// שעוד לא קיים. מכאן והלאה אף מודול לא צריך להכיר רנדרר של מודול אחר.
+registerRefreshers({
+  board: () => renderBoard(),
+  plan: () => renderPlan(),
+  strategy: () => renderStrategy(),
+  manage: () => renderManage(),
+  data: () => renderData(),
+  tasks: () => renderTasks(),
+  taskBadge: () => refreshTaskBadgeImpl(),
+  alerts: () => refreshAlertsImpl(),
+  currentTab: () => renderTab(state.tab),
+});
 
 boot();
 
@@ -35,7 +53,7 @@ async function boot() {
   rebuildEpColors();
   state.users = users;
 
-  await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+  await refreshAfterPostChange();
 }
 
 const RENDERERS = {
@@ -58,7 +76,7 @@ async function showTab(tab) {
 }
 
 /** מונה ההתראות בפעמון. נקרא אחרי כל פעולה שעשויה לשנות את המצב. */
-async function refreshAlerts() {
+async function refreshAlertsImpl() {
   const { alerts, counts } = await api('/alerts');
   state.alerts = alerts;
   const badge = $('#alertBadge');
@@ -108,7 +126,7 @@ function wireChrome() {
   wireImportDialog();
 }
 
-async function refreshTaskBadge() {
+async function refreshTaskBadgeImpl() {
   const { open_count } = await api('/tasks');
   const badge = $('#taskBadge');
   badge.hidden = open_count === 0;
@@ -206,11 +224,11 @@ async function renderBoard() {
   $$('#board [data-week]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
       state.week = btn.dataset.week;
-      await renderBoard();
+      await refreshBoard();
     })));
   $('#thisWeek').addEventListener('click', run(async () => {
     state.week = null;
-    await renderBoard();
+    await refreshBoard();
   }));
   $('#runEngine')?.addEventListener('click', run(openEngine));
 
@@ -278,7 +296,7 @@ function wireBoardDrag() {
         { scheduled_at: at.toISOString(), channel_id: channelId });
       if (!moved) return;   // המשתמש ביטל אחרי האזהרה
       toast('השיבוץ הוזז.');
-      await Promise.all([renderBoard(), refreshAlerts()]);
+      await Promise.all([refreshBoard(), refreshAlerts()]);
     }));
   });
 }
@@ -358,7 +376,7 @@ function wirePostDialog() {
     const res = await api(`/posts/${previewPost.id}`, { method: 'DELETE', body: { week: state.week } });
     $('#postDlg').close();
     toast('השיבוץ הוסר.' + (res.engine?.placed ? ` המנוע מילא את המקום שהתפנה.` : ''));
-    await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+    await refreshAfterPostChange();
   }));
 
   // כפתור יחיד שמתנהג לפי מצב הפוסט: מתוכנן → מסמן פורסם, פורסם → מבטל
@@ -369,7 +387,7 @@ function wirePostDialog() {
     await api(`/posts/${previewPost.id}/${path}`, { method: 'POST' });
     $('#postDlg').close();
     toast(wasPublished ? 'הפרסום בוטל, השיבוץ חזר למתוכנן.' : 'סומן כפורסם.');
-    await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+    await refreshAfterPostChange();
   }));
 
   // תוצאות בפועל — שדה ריק נשלח כ-null מפורש, לא כאפס
@@ -524,7 +542,7 @@ async function submitManualPost(reorganizeAfter) {
 
   $('#addPostDlg').close();
   toast('הפוסט נוסף ללוח.');
-  await Promise.all([renderBoard(), refreshTaskBadge(), refreshAlerts()]);
+  await refreshAfterPostChange();
 
   if (reorganizeAfter) await openEngine();
 }
@@ -598,7 +616,7 @@ async function commitUrgent() {
   toast(res.pending
     ? 'נשלח לאישור — מופיע במשימות.'
     : `שובץ ב-${res.posts.length} ערוצים. הלוח עודכן.`);
-  await Promise.all([renderBoard(), refreshTaskBadge()]);
+  await Promise.all([refreshBoard(), refreshTaskBadge()]);
 }
 
 /* ========================= מנוע השיבוץ ========================= */
@@ -609,7 +627,7 @@ function wireEngineDialog() {
     const res = await api('/engine/apply', { method: 'POST', body: { week: state.week } });
     $('#engineDlg').close();
     toast(`שובצו ${res.placed} פרסומים${res.holes ? ` · ${res.holes} חורים סומנו` : ''}.`);
-    await Promise.all([renderBoard(), refreshTaskBadge()]);
+    await Promise.all([refreshBoard(), refreshTaskBadge()]);
   }));
 }
 
@@ -888,7 +906,7 @@ function wireStrategy() {
           ? ` · המנוע מילא ${res.engine.placed} משבצות פנויות` : '';
         toast((steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
                            : `הקמפיין הוזז ב-${steps} חצאי חודש.`) + moved + filled);
-        await Promise.all([renderStrategy(), renderBoard()]);
+        await Promise.all([renderStrategy(), refreshBoard()]);
       });
 
       el.addEventListener('pointermove', move);
@@ -1085,7 +1103,7 @@ function campaignItem(c) {
 
 function wirePlan(campaign, endpointId, content) {
   const reload = run(async () => {
-    await Promise.all([renderPlan(), renderBoard(), refreshAlerts()]);
+    await Promise.all([renderPlan(), refreshBoard(), refreshAlerts()]);
   });
 
   $$('#plan [data-crumb]').forEach((b) =>
@@ -1757,7 +1775,7 @@ function systemGroup(users, settings, backups) {
 }
 
 function wireManage(ro) {
-  const reload = run(async () => { await renderManage(); await renderBoard(); });
+  const reload = run(async () => { await renderManage(); await refreshBoard(); });
 
   const engineToast = (base, res) =>
     base + (res.engine?.placed ? ` המנוע מילא ${res.engine.placed} משבצות פנויות.` : '');
@@ -1768,7 +1786,7 @@ function wireManage(ro) {
       const res = await api(`/endpoints/${inp.dataset.id}`,
         { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value), week: state.week } });
       toast(engineToast('נשמר.', res));
-      await renderBoard();
+      await refreshBoard();
     })));
 
   // אוטומטי/קבוע לקצב הפרסום — לא שני שדות שיכולים לסתור זה את זה
@@ -1781,7 +1799,7 @@ function wireManage(ro) {
         const res = await api(`/endpoints/${id}`,
           { method: 'PATCH', body: { min_days_between: null, week: state.week } });
         toast(engineToast('נשמר — הקצב יחושב אוטומטית לפי החשיבות.', res));
-        await renderBoard();
+        await refreshBoard();
       } else {
         input.disabled = false;
         input.focus();
@@ -1794,7 +1812,7 @@ function wireManage(ro) {
       const res = await api(`/endpoints/${inp.dataset.id}`,
         { method: 'PATCH', body: { min_days_between: val, week: state.week } });
       toast(engineToast('נשמר.', res));
-      await renderBoard();
+      await refreshBoard();
     })));
 
   $$('#manage [data-ch-field]').forEach((inp) =>
@@ -1804,7 +1822,7 @@ function wireManage(ro) {
         { method: 'PATCH',
           body: { [inp.dataset.chField]: raw === '' ? null : Number(raw), week: state.week } });
       toast(engineToast('נשמר.', res));
-      await renderBoard();
+      await refreshBoard();
     })));
 
   // הימים החסומים נשמרים כקבוצה, כי הם מערך אחד ולא שדה בודד
@@ -1816,7 +1834,7 @@ function wireManage(ro) {
         { method: 'PATCH', body: { blocked_days: days, week: state.week } });
       toast(engineToast(days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.`
                         : 'כל הימים פתוחים.', res));
-      await renderBoard();
+      await refreshBoard();
     })));
 
   $$('#manage [data-engine]').forEach((inp) =>
@@ -1824,7 +1842,7 @@ function wireManage(ro) {
       const res = await api('/settings',
         { method: 'PATCH', body: { [inp.dataset.engine]: Number(inp.value), week: state.week } });
       toast(engineToast('נשמר.', res));
-      await renderBoard();
+      await refreshBoard();
     })));
 
   $('#engUsePerf')?.addEventListener('change', run(async (e) => {
@@ -1833,7 +1851,7 @@ function wireManage(ro) {
       { method: 'PATCH', body: { use_performance: on, week: state.week } });
     toast(engineToast(on ? 'נשמר — היעילות הנמדדת משפיעה עכשיו על השיבוץ.'
                          : 'נשמר — היעילות רק נמדדת, בלי להשפיע על הלוח.', res));
-    await renderBoard();
+    await refreshBoard();
   }));
 
   // יחס ערך/מכירתי אופציונלי — 0 אומר למנוע לא לאכוף אותו בכלל
@@ -1845,7 +1863,7 @@ function wireManage(ro) {
     const res = await api('/settings',
       { method: 'PATCH', body: { min_value_per_promo: value, week: state.week } });
     toast(engineToast(enforcing ? 'נשמר — היחס נאכף שוב.' : 'נשמר — היחס לא נאכף יותר.', res));
-    await renderBoard();
+    await refreshBoard();
   }));
 
   $$('#manage [data-user][data-perm]').forEach((cb) =>
@@ -2576,7 +2594,7 @@ async function refreshAfterAI() {
   state.endpoints = endpoints;
   state.channels = channels;
   rebuildEpColors();
-  await Promise.all([renderTab(state.tab), refreshTaskBadge(), refreshAlerts()]);
+  await Promise.all([refreshCurrentTab(), refreshTaskBadge(), refreshAlerts()]);
 }
 
 /* ========================= דיאלוג כללי ========================= */
@@ -2744,14 +2762,14 @@ async function renderTasks() {
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.approve}/approve`, { method: 'POST' });
       toast('אושר. השיבוץ נכנס ללוח.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), renderBoard()]);
+      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
     })));
 
   $$('#tasks [data-publish]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.publish}/publish`, { method: 'POST' });
       toast('סומן כפורסם.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), renderBoard()]);
+      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
     })));
 
   // הצעת החלפת תוכן: מעדכן את השיבוץ עם התוכן המוצע וסוגר את המשימה
@@ -2770,7 +2788,7 @@ async function renderTasks() {
       });
       await api(`/tasks/${b.dataset.swapTask}`, { method: 'PATCH', body: { done: true } });
       toast('הוחלף. השיבוץ מציג עכשיו את התוכן המוצע.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), renderBoard()]);
+      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
     })));
 }
 
