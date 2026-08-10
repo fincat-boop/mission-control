@@ -1,5 +1,6 @@
 import { one, query, rows } from './db.js';
 import { buildDump } from './backup.js';
+import { offsiteBackup } from './offsite-backup.js';
 import { weekMeta } from './board.js';
 
 /**
@@ -43,6 +44,9 @@ export async function backupNow() {
   console.log(`גיבוי אוטומטי נשמר: ${rowCount} שורות` +
     (pruned.length ? `, ${pruned.length} גיבויים ישנים נמחקו` : ''));
   await logSystem('create', 'backup', null, `גיבוי אוטומטי — ${rowCount} שורות`);
+
+  // כשל כאן לא אמור למנוע את הגיבוי הפנימי שכבר הצליח ונשמר למעלה
+  await offsiteBackup(dump).catch((e) => console.error('גיבוי חיצוני ל-Drive נכשל:', e.message));
 }
 
 /**
