@@ -135,7 +135,7 @@ function gantt(data) {
   }).join('');
 
   return `<div class="gantt2">${header}${rows}
-    <div class="gnote">קפסולה נגררת בקפיצות של חודש. המנוע מפזר את הפוסטים
+    <div class="gnote">קפסולה נגררת בקפיצות של חצי חודש. המנוע מפזר את הפוסטים
       על המדיות לפי המשקל של נקודת הקצה.</div>
   </div>`;
 }
