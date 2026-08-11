@@ -47,8 +47,12 @@ async function boot() {
     return void (location.href = '/login.html');
   }
 
-  $('#userBadge').innerHTML =
-    `<b>${esc(state.me.name)}</b>${state.me.is_owner ? ' <span class="owner-tag">בעלים</span>' : ''}`;
+  const initial = (state.me.name || '?').trim().charAt(0).toUpperCase();
+  $('#btnProfile').textContent = initial;
+  $('#btnProfile').title = state.me.name;
+  $('#pName').innerHTML =
+    `${esc(state.me.name)}${state.me.is_owner ? ' <span class="owner-tag">בעלים</span>' : ''}`;
+  $('#pEmail').textContent = state.me.email ?? '';
 
   wireChrome();
 
@@ -104,6 +108,23 @@ function wireChrome() {
   })));
 
   $('#btnAlerts').addEventListener('click', run(() => showTab('tasks')));
+
+  const profileBtn = $('#btnProfile');
+  const profileMenu = $('#profileMenu');
+  const setProfileOpen = (open) => {
+    profileMenu.hidden = !open;
+    profileBtn.setAttribute('aria-expanded', String(open));
+  };
+  profileBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setProfileOpen(profileMenu.hidden);
+  });
+  document.addEventListener('click', (e) => {
+    if (!profileMenu.hidden && !$('#profile').contains(e.target)) setProfileOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setProfileOpen(false);
+  });
 
   $('#btnLogout').addEventListener('click', run(async () => {
     await api('/auth/logout', { method: 'POST' });
