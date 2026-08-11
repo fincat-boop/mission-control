@@ -289,3 +289,16 @@ create table if not exists backups (
 );
 
 create index if not exists backups_created_at_idx on backups (created_at desc);
+
+-- ========================= הגבלת קצב בהתחברות =========================
+-- ניסיונות התחברות כושלים, להגנה מפני brute-force. מבוסס-DB ולא מונה
+-- בזיכרון — כדי שיהיה עמיד ל-req.ip לא יציב מאחורי הפרוקסי ולריבוי
+-- instances. ממופתח לפי אימייל (היעד של המתקפה); מתאפס בהתחברות מוצלחת.
+create table if not exists login_attempts (
+  id    serial primary key,
+  email text not null,
+  ip    text,
+  at    timestamptz not null default now()
+);
+
+create index if not exists login_attempts_email_idx on login_attempts (email, at desc);

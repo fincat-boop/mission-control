@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { one } from './db.js';
+import { one, query } from './db.js';
 
 const SECRET = process.env.SESSION_SECRET;
 if (!SECRET || SECRET.length < 16) {
@@ -54,44 +54,40 @@ export async function loadUser(req, _res, next) {
 /* ========================= הגבלת קצב בהתחברות ========================= */
 
 /**
- * מגן מפני brute-force על הסיסמאות. סופר *כישלונות* בלבד לפי IP+אימייל
- * בחלון זמן; מעל התקרה — 429 עד שהחלון נגמר. התחברות מוצלחת מאפסת את המונה.
- * בזיכרון התהליך, כמו שאר המצב הרץ (טיימרים, הצעות העוזר) — מספיק כל עוד יש
- * instance אחד.
+ * מגן מפני brute-force על הסיסמאות. סופר *כישלונות* לפי אימייל בחלון זמן;
+ * מעל התקרה — 429 עד שהחלון נגמר. התחברות מוצלחת מאפסת את המונה.
+ *
+ * מבוסס-DB ולא מונה בזיכרון: req.ip לא יציב מאחורי הפרוקסי של Railway, ומונה
+ * בזיכרון גם לא היה שורד ריבוי instances. ממופתח לפי אימייל — היעד של המתקפה
+ * (המחיר: אפשר לנעול חשבון ידוע ע"י הצפה, מקובל בכלי פנימי קטן).
  */
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_WINDOW = '15 minutes';
 const LOGIN_MAX_FAILS = 5;
-const loginFails = new Map(); // key -> { count, first }
 
-const loginKey = (req) =>
-  `${req.ip}|${String(req.body?.email ?? '').trim().toLowerCase()}`;
+const emailOf = (req) => String(req.body?.email ?? '').trim().toLowerCase();
 
-export function loginLimiter(req, res, next) {
-  const rec = loginFails.get(loginKey(req));
-  if (rec && Date.now() - rec.first < LOGIN_WINDOW_MS && rec.count >= LOGIN_MAX_FAILS) {
-    const mins = Math.ceil((LOGIN_WINDOW_MS - (Date.now() - rec.first)) / 60000);
-    return res.status(429).json({ error: `יותר מדי ניסיונות התחברות. נסה שוב בעוד ${mins} דקות.` });
+export async function loginLimiter(req, res, next) {
+  const email = emailOf(req);
+  if (!email) return next();
+  const row = await one(
+    `select count(*)::int as n from login_attempts
+      where email = $1 and at > now() - interval '${LOGIN_WINDOW}'`,
+    [email]
+  );
+  if (row.n >= LOGIN_MAX_FAILS) {
+    return res.status(429).json({ error: 'יותר מדי ניסיונות התחברות. נסה שוב בעוד כמה דקות.' });
   }
   next();
 }
 
-export function recordLoginFailure(req) {
-  const key = loginKey(req);
-  const rec = loginFails.get(key);
-  if (!rec || Date.now() - rec.first >= LOGIN_WINDOW_MS) {
-    loginFails.set(key, { count: 1, first: Date.now() });
-  } else {
-    rec.count += 1;
-  }
-  // ניקוי עצל של רשומות שפג תוקפן, כדי שהמפה לא תגדל בלי גבול
-  if (loginFails.size > 500) {
-    const now = Date.now();
-    for (const [k, v] of loginFails) if (now - v.first >= LOGIN_WINDOW_MS) loginFails.delete(k);
-  }
+export async function recordLoginFailure(req) {
+  await query('insert into login_attempts (email, ip) values ($1, $2)', [emailOf(req), req.ip ?? null]);
+  // ניקוי גורף של רשומות ישנות — נדיר וזול, שומר את הטבלה קטנה
+  await query(`delete from login_attempts where at < now() - interval '${LOGIN_WINDOW}'`);
 }
 
-export function resetLoginAttempts(req) {
-  loginFails.delete(loginKey(req));
+export async function resetLoginAttempts(req) {
+  await query('delete from login_attempts where email = $1', [emailOf(req)]);
 }
 
 /** חוסם בקשות ללא התחברות */
