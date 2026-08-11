@@ -17,7 +17,7 @@ export function issueSession(res, user) {
   const token = jwt.sign({ uid: user.id }, SECRET, { expiresIn: '30d' });
   res.cookie(COOKIE, token, {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: 'strict',
     secure: process.env.NODE_ENV === 'production',
     maxAge: MAX_AGE_MS,
   });
@@ -26,7 +26,7 @@ export function issueSession(res, user) {
 export function clearSession(res) {
   res.clearCookie(COOKIE, {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: 'strict',
     secure: process.env.NODE_ENV === 'production',
   });
 }

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "test": "node --test",
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
