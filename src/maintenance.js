@@ -1,6 +1,7 @@
 import { one, query, rows } from './db.js';
 import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
+import { fullBackup } from './full-backup.js';
 import { weekMeta } from './board.js';
 
 /**
@@ -47,6 +48,8 @@ export async function backupNow() {
 
   // כשל כאן לא אמור למנוע את הגיבוי הפנימי שכבר הצליח ונשמר למעלה
   await offsiteBackup(dump).catch((e) => console.error('גיבוי חיצוני ל-Drive נכשל:', e.message));
+  // גיבוי מלא (כולל בייטים) ל-R2 — אותה חוסן: כשל לא מפיל את מה שכבר נשמר
+  await fullBackup(dump).catch((e) => console.error('גיבוי מלא ל-R2 נכשל:', e.message));
 }
 
 /**

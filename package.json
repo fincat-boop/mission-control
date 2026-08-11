@@ -14,7 +14,9 @@
     "seed": "node src/seed.js",
     "backup": "node src/backup.js",
     "backup:offsite": "node src/offsite-backup.js",
+    "backup:full": "node src/full-backup.js",
     "restore": "node src/restore.js",
+    "restore:r2": "node src/restore-r2.js",
     "demo": "node src/demo.js",
     "check": "node scripts/check-client.mjs",
     "fix-clashes": "node src/fix-clashes.js"

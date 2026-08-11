@@ -139,17 +139,23 @@ npm install && npm run seed && npm run dev
 
 ## גיבוי
 
-שלוש שכבות, כל אחת מגנה מפני משהו אחר:
+ארבע שכבות, כל אחת מגנה מפני משהו אחר:
 
 1. **תקופתי בתוך ה-DB** (`src/maintenance.js` → `backupNow`) — כל 24 שעות, שומר
    14 אחרונים בטבלת `backups`. מגן מטעות ברמת אפליקציה (מחיקה בטעות וכו'),
-   לא מאובדן הדיסק עצמו — לזה יש את השכבה הבאה.
+   לא מאובדן הדיסק עצמו — לזה יש את השכבות הבאות.
 2. **חיצוני ל-Google Drive** (`src/offsite-backup.js`, רץ אוטומטית בתוך אותה
    `backupNow`) — עותק מחוץ ל-Railway לגמרי. שלוש רמות רוטציה תחת אותה תיקיית
    שורש: `daily` (7 אחרונים), `weekly` (בימי שני, 5 אחרונים), `monthly`
    (ב-1 לחודש, נשמר לנצח). בלי בייטים של קבצים מצורפים, כמו בגיבוי הפנימי.
    אם המשתנים למטה לא מוגדרים — פשוט מדולג, לא שובר כלום.
-3. **הגיבוי המובנה של Railway ל-Postgres** — ברמת הדיסק עצמו, כולל בייטים של
+3. **גיבוי מלא ל-Cloudflare R2** (`src/full-backup.js`, רץ אוטומטית בתוך אותה
+   `backupNow`) — **כולל הבייטים של הקבצים המצורפים**, ולכן זו השכבה היחידה
+   שמאפשרת שחזור מלא (טבלאות + קבצים) ממקום אחד מחוץ ל-Railway. אותן שלוש רמות
+   רוטציה: `daily/<stamp>/` (7 אחרונים), `weekly/<stamp>/` (בימי שני, 5), `monthly/<stamp>/`
+   (ב-1 לחודש, לנצח). כל גיבוי הוא prefix ובו `dump.json` + `assets/<id>`.
+   אם משתני `R2_*` לא מוגדרים — מדולג, לא שובר כלום.
+4. **הגיבוי המובנה של Railway ל-Postgres** — ברמת הדיסק עצמו, כולל בייטים של
    קבצים מצורפים. מוגדר מתוך ה-dashboard, לא מקוד:
    Railway → שירות ה-Postgres → **Settings → Backups** → להפעיל גיבוי מתוזמן
    (בתוכניות בתשלום יש גם PITR). זה השכבה שמגנה מאובדן הדיסק בפועל.
@@ -172,7 +178,40 @@ GOOGLE_SERVICE_ACCOUNT_KEY=...
    מזהה התיקייה (מהכתובת URL) כ-`GOOGLE_DRIVE_FOLDER_ID`.
 5. `npm run backup:offsite` — בדיקה ידנית שההעלאה עובדת.
 
+### הגדרת הגיבוי המלא ל-R2
+
+```
+R2_ACCOUNT_ID=...
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_BUCKET=...
+```
+
+1. **Cloudflare dashboard → R2** → ליצור bucket (למשל `merkaz-bakara-backup`).
+2. **R2 → Manage API Tokens → Create API Token** בהרשאת **Object Read & Write**
+   על ה-bucket. מקבלים `Access Key ID` ו-`Secret Access Key`.
+3. `R2_ACCOUNT_ID` הוא מזהה החשבון (מופיע ב-URL של ה-dashboard ובכתובת ה-endpoint
+   `<account>.r2.cloudflarestorage.com`).
+4. `npm run backup:full` — בדיקה ידנית שההעלאה עובדת (מעלה לפי אותה רוטציה).
+
+הקוד ב-`src/r2.js` — לקוח R2 מינימלי עם חתימת SigV4 על `node:crypto`, בלי `aws-sdk`.
+
 ### שחזור
+
+**מ-R2 (מלא, כולל קבצים מצורפים):**
+
+```bash
+npm run restore:r2
+```
+
+בלי ארגומנט — מדפיס את רשימת הגיבויים הזמינים לכל רמה. לשחזור אמיתי מעבירים prefix
+ואת `--yes`:
+
+```bash
+node src/restore-r2.js daily/2026-08-11T08-07-42 --yes
+```
+
+**מקובץ מקומי (Drive/גיבוי ידני):**
 
 ```bash
 node src/restore.js backups/backup-....json --yes
