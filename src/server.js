@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
 import express from 'express';
+import helmet from 'helmet';
 import { migrate, pool } from './db.js';
 import { loadUser } from './auth.js';
 import { audit } from './audit.js';
@@ -14,6 +15,24 @@ const publicDir = join(here, '..', 'public');
 
 const app = express();
 app.set('trust proxy', 1); // Railway מגיש דרך פרוקסי — נחוץ ל-secure cookies
+
+// כותרות אבטחה. CSP מכוון לאפליקציה: הכול מאותו מקור, בלי hosts חיצוניים.
+// 'unsafe-inline' רק ל-style — יש בהצגה מאפייני style="" (הסקריפטים כולם בקבצים).
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+}));
 
 // טבלת תוכן לשנה שלמה, מודבקת מ-Excel, עוברת בקלות את 256kb
 app.use(express.json({ limit: '4mb' }));

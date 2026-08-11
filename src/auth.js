@@ -51,6 +51,49 @@ export async function loadUser(req, _res, next) {
   next();
 }
 
+/* ========================= הגבלת קצב בהתחברות ========================= */
+
+/**
+ * מגן מפני brute-force על הסיסמאות. סופר *כישלונות* בלבד לפי IP+אימייל
+ * בחלון זמן; מעל התקרה — 429 עד שהחלון נגמר. התחברות מוצלחת מאפסת את המונה.
+ * בזיכרון התהליך, כמו שאר המצב הרץ (טיימרים, הצעות העוזר) — מספיק כל עוד יש
+ * instance אחד.
+ */
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS = 5;
+const loginFails = new Map(); // key -> { count, first }
+
+const loginKey = (req) =>
+  `${req.ip}|${String(req.body?.email ?? '').trim().toLowerCase()}`;
+
+export function loginLimiter(req, res, next) {
+  const rec = loginFails.get(loginKey(req));
+  if (rec && Date.now() - rec.first < LOGIN_WINDOW_MS && rec.count >= LOGIN_MAX_FAILS) {
+    const mins = Math.ceil((LOGIN_WINDOW_MS - (Date.now() - rec.first)) / 60000);
+    return res.status(429).json({ error: `יותר מדי ניסיונות התחברות. נסה שוב בעוד ${mins} דקות.` });
+  }
+  next();
+}
+
+export function recordLoginFailure(req) {
+  const key = loginKey(req);
+  const rec = loginFails.get(key);
+  if (!rec || Date.now() - rec.first >= LOGIN_WINDOW_MS) {
+    loginFails.set(key, { count: 1, first: Date.now() });
+  } else {
+    rec.count += 1;
+  }
+  // ניקוי עצל של רשומות שפג תוקפן, כדי שהמפה לא תגדל בלי גבול
+  if (loginFails.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of loginFails) if (now - v.first >= LOGIN_WINDOW_MS) loginFails.delete(k);
+  }
+}
+
+export function resetLoginAttempts(req) {
+  loginFails.delete(loginKey(req));
+}
+
 /** חוסם בקשות ללא התחברות */
 export function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'נדרשת התחברות' });

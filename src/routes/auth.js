@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { bad, wrap } from './_shared.js';
 import { one } from '../db.js';
-import { checkPassword, clearSession, issueSession } from '../auth.js';
+import {
+  checkPassword, clearSession, issueSession,
+  loginLimiter, recordLoginFailure, resetLoginAttempts,
+} from '../auth.js';
 
 const r = Router();
 
@@ -11,15 +14,17 @@ const r = Router();
  * יהיה גלוי במקום אחד ולא יסתמך על סדר הרישום בתוך ראוטר.
  */
 
-r.post('/auth/login', wrap(async (req, res) => {
+r.post('/auth/login', loginLimiter, wrap(async (req, res) => {
   const email = String(req.body?.email ?? '').trim().toLowerCase();
   const password = String(req.body?.password ?? '');
   if (!email || !password) return bad(res, 'צריך אימייל וסיסמה');
 
   const user = await one('select * from users where lower(email) = $1', [email]);
   if (!user || !(await checkPassword(password, user.password_hash))) {
+    recordLoginFailure(req);
     return bad(res, 'אימייל או סיסמה לא נכונים', 401);
   }
+  resetLoginAttempts(req);
   issueSession(res, user);
   const { password_hash, ...safe } = user;
   res.json({ user: safe });
