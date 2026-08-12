@@ -98,7 +98,7 @@ export async function buildBoard(anchorDate) {
       [from, to]
     ),
     rows('select * from endpoints where active = true order by importance desc, id'),
-    one('select * from engine_settings where id = 1'),
+    one('select * from engine_settings limit 1'),
   ]);
 
   const hybridWeight = Number(settings?.hybrid_weight ?? 0.5);

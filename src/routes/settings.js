@@ -8,14 +8,21 @@ const r = Router();
 /* ========================= כללי המנוע ========================= */
 
 r.get('/settings', wrap(async (_req, res) => {
-  res.json({ settings: await one('select * from engine_settings where id = 1') });
+  res.json({ settings: await one('select * from engine_settings limit 1') });
 }));
 
 r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
-  const s = await updateById('engine_settings',
-    ['min_gap_days', 'max_promo_per_day', 'hybrid_weight', 'content_alert_hours',
-     'min_value_per_promo', 'use_performance'],
-    1, req.body);
+  // שורת engine_settings אחת לכל ארגון, ו-RLS כבר מסנן אליה — אין צורך ב-where.
+  const allowed = ['min_gap_days', 'max_promo_per_day', 'hybrid_weight',
+    'content_alert_hours', 'min_value_per_promo', 'use_performance'];
+  const entries = Object.entries(req.body ?? {}).filter(([k]) => allowed.includes(k));
+  let s;
+  if (entries.length === 0) {
+    s = await one('select * from engine_settings limit 1');
+  } else {
+    const sets = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
+    s = await one(`update engine_settings set ${sets} returning *`, entries.map(([, v]) => v));
+  }
   const engine = await autoFill(req.body?.week);
   res.json({ settings: s, engine });
 }));

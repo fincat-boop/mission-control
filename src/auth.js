@@ -32,18 +32,21 @@ export function clearSession(res) {
 }
 
 const PUBLIC_USER_COLS = `
-  id, name, email, is_owner,
+  id, name, email, is_owner, org_id,
   perm_content, perm_settings, perm_approve, perm_users
 `;
 
 /** טוען את המשתמש מהקוקי לתוך req.user (או null). לא חוסם. */
 export async function loadUser(req, _res, next) {
   req.user = null;
+  req.org = null;
   const token = req.cookies?.[COOKIE];
   if (token) {
     try {
       const { uid } = jwt.verify(token, SECRET);
+      // רץ על ה-pool (מחוץ להקשר טננט) — bootstrap שמגלה לאיזה org המשתמש שייך.
       req.user = await one(`select ${PUBLIC_USER_COLS} from users where id = $1`, [uid]);
+      req.org = req.user?.org_id ?? null;
     } catch {
       /* טוקן פג או לא תקין — נשארים אנונימיים */
     }

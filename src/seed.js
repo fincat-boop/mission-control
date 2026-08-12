@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { migrate, one, pool, query, rows } from './db.js';
+import { migrate, one, pool, query, rows, tenantContext } from './db.js';
 import { hashPassword } from './auth.js';
 import { weekStart, ymd } from './board.js';
 
@@ -21,6 +21,26 @@ if (!OWNER_EMAIL || OWNER_PASSWORD.length < 8) {
   process.exit(1);
 }
 
+// ארגון ברירת-מחדל, ואז נכנסים להקשר שלו לכל שאר ה-seed. enterWith מגדיר
+// את ה-store להמשך הריצה בלי לעטוף בקולבק; role+GUC מוגדרים ברמת session
+// (autocommit לכל statement) כדי שהיציאה המוקדמת ("כבר יש נתונים") לא תאבד
+// את מה שכבר נוצר. כל insert מקבל org_id אוטומטית מה-GUC.
+let org = await one('select id from orgs order by id limit 1');
+if (!org) {
+  org = await one("insert into orgs (name) values ('ארגון ראשי') returning id");
+  console.log(`נוצר ארגון ברירת-מחדל id=${org.id}`);
+}
+const seedClient = await pool.connect();
+await seedClient.query('set role app_user');
+await seedClient.query("select set_config('app.current_org', $1, false)", [String(org.id)]);
+tenantContext.enterWith({ client: seedClient, orgId: org.id });
+
+// כללי מנוע לארגון (בעבר שורה גלובלית יחידה)
+if (!(await one('select 1 from engine_settings limit 1'))) {
+  await query('insert into engine_settings default values');
+  console.log('נוצרו כללי מנוע לארגון');
+}
+
 let owner = await one('select * from users where lower(email) = $1', [OWNER_EMAIL]);
 if (!owner) {
   owner = await one(
@@ -37,6 +57,8 @@ if (!owner) {
 const existing = await one('select count(*)::int as n from endpoints');
 if (existing.n > 0) {
   console.log('כבר יש נתונים — מדלג על מילוי נתוני הפתיחה.');
+  await seedClient.query('reset all');
+  seedClient.release();
   await pool.end();
   process.exit(0);
 }
@@ -215,4 +237,6 @@ if (pending) {
 }
 
 console.log('נתוני הפתיחה נטענו.');
+await seedClient.query('reset all');
+seedClient.release();
 await pool.end();

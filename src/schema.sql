@@ -264,7 +264,8 @@ alter table engine_settings
 alter table engine_settings
   add column if not exists use_performance boolean not null default false;
 
-insert into engine_settings (id) values (1) on conflict (id) do nothing;
+-- (בעבר: insert גלובלי של שורת engine_settings יחידה id=1. במולטי-טננט יש
+-- שורה לכל org, נוצרת בהקמת הארגון. ראו סעיף המולטי-טננט בתחתית הקובץ.)
 
 -- ========================= יומן פעולות =========================
 -- מי עשה מה ומתי. נכתב אוטומטית לכל בקשה שמשנה נתונים, כולל פעולות
@@ -345,3 +346,53 @@ create index if not exists campaigns_org_idx         on campaigns (org_id);
 create index if not exists endpoints_org_idx         on endpoints (org_id);
 create index if not exists channels_org_idx          on channels (org_id);
 create index if not exists tasks_org_idx             on tasks (org_id);
+
+-- ========================= מולטי-טננט שלב 2: RLS =========================
+-- שלב 2b: הבידוד יורד ל-DB. שלוש אבני יסוד:
+--   1. engine_settings הופכת מסינגלטון (id=1) לשורה-לכל-ארגון (PK org_id).
+--   2. role ייעודי app_user בלי superuser — כי superuser עוקף RLS גם עם FORCE.
+--      האפליקציה מריצה 'set local role app_user' בתוך withOrg (ראו db.js).
+--   3. policy org_isolation + default של org_id מה-GUC, לכל טבלת-דומיין.
+-- ראו docs/multi-tenant-plan.md.
+
+-- --- engine_settings: סינגלטון -> שורה-לכל-ארגון ---
+alter table engine_settings drop constraint if exists engine_settings_id_check;
+alter table engine_settings drop constraint if exists engine_settings_pkey;
+alter table engine_settings drop column if exists id;
+do $$ begin
+  alter table engine_settings add constraint engine_settings_pkey primary key (org_id);
+exception when duplicate_table then null; when invalid_table_definition then null; end $$;
+
+-- --- role ייעודי לאכיפת RLS ---
+do $$ begin
+  create role app_user nosuperuser nobypassrls nologin;
+exception when duplicate_object then null; end $$;
+grant usage on schema public to app_user;
+grant select, insert, update, delete on all tables in schema public to app_user;
+grant usage, select on all sequences in schema public to app_user;
+-- כדי שהמשתמש המתחבר (גם אם אינו superuser) יוכל 'set role app_user'
+do $$ begin execute format('grant app_user to %I', current_user); exception when others then null; end $$;
+
+-- --- default של org_id מה-GUC + RLS policy לכל טבלת-דומיין ---
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'users','endpoints','channels','campaigns','campaign_channels',
+    'content_items','content_variants','content_assets','posts',
+    'post_results','strategy_milestones','tasks','engine_settings','activity_log'
+  ] loop
+    -- insert בלי org_id מקבל אוטומטית את הארגון הפעיל
+    execute format(
+      'alter table %I alter column org_id set default nullif(current_setting(''app.current_org'', true), '''')::int', t);
+    execute format('alter table %I enable row level security', t);
+    execute format('alter table %I force row level security', t);
+    begin
+      execute format(
+        'create policy org_isolation on %I '
+        || 'using (org_id = nullif(current_setting(''app.current_org'', true), '''')::int) '
+        || 'with check (org_id = nullif(current_setting(''app.current_org'', true), '''')::int)', t);
+    exception when duplicate_object then null;
+    end;
+  end loop;
+end $$;

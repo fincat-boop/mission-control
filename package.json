@@ -20,6 +20,7 @@
     "restore:r2": "node src/restore-r2.js",
     "demo": "node src/demo.js",
     "check": "node scripts/check-client.mjs",
+    "guard:tenant": "node scripts/guard-tenant.mjs",
     "fix-clashes": "node src/fix-clashes.js"
   },
   "dependencies": {

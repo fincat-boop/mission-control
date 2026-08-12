@@ -70,6 +70,9 @@ export async function withOrg(orgId, fn) {
   const client = await pool.connect();
   try {
     await client.query('begin');
+    // role בלי superuser — הכרחי כדי ש-RLS ייאכף (superuser עוקף גם עם FORCE).
+    // מקומי לטרנזקציה, ולכן חוזר ל-role המקורי בסופה.
+    await client.query('set local role app_user');
     // set_config עם is_local=true — תחום לטרנזקציה, מתאפס בסופה ולכן לא
     // דולף לבקשה הבאה שתקבל את אותו חיבור מה-pool.
     await client.query("select set_config('app.current_org', $1, true)", [String(orgId)]);

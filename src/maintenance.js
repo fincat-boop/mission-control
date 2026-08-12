@@ -1,8 +1,21 @@
-import { one, query, rows } from './db.js';
+import { one, query, rows, withOrg } from './db.js';
 import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
 import { weekMeta } from './board.js';
+
+/**
+ * מריץ fn פעם אחת לכל ארגון, בתוך הקשר הטננט שלו. עבודות רקע לא נובעות
+ * מבקשה, ולכן אין להן org מובלע — בלי זה הן היו רצות על ה-pool (superuser,
+ * עוקף RLS) ומערבבות ארגונים. רשימת הארגונים נשלפת על ה-pool בכוונה.
+ */
+async function forEachOrg(fn) {
+  const orgs = await rows('select id from orgs order by id');
+  for (const { id } of orgs) {
+    await withOrg(id, () => fn(id)).catch((e) =>
+      console.error(`עבודת רקע נכשלה לארגון ${id}:`, e.message));
+  }
+}
 
 /**
  * משימות תחזוקה שרצות ברקע, לא בתגובה לבקשת משתמש. נרשמות ליומן
@@ -58,21 +71,23 @@ export async function backupNow() {
  * פנויה לשווא, ועדיף לשחרר אותה מאשר להשאיר "רפאים" על הלוח.
  */
 export async function cleanupStaleUrgent() {
-  const stale = await rows(
-    `delete from posts
-      where urgent = true
-        and status in ('scheduled','pending_approval')
-        and scheduled_at < now() - ($1 || ' hours')::interval
-      returning id, title, channel_id`,
-    [URGENT_GRACE_HOURS]
-  );
+  await forEachOrg(async () => {
+    const stale = await rows(
+      `delete from posts
+        where urgent = true
+          and status in ('scheduled','pending_approval')
+          and scheduled_at < now() - ($1 || ' hours')::interval
+        returning id, title, channel_id`,
+      [URGENT_GRACE_HOURS]
+    );
 
-  if (!stale.length) return;
-  console.log(`${stale.length} שיבוצי מבצע דחוף בלי תוכן נמחקו אוטומטית (עברו ${URGENT_GRACE_HOURS} שעות בלי סימון פרסום)`);
-  for (const p of stale) {
-    await logSystem('delete', 'posts', String(p.id),
-      `נמחק אוטומטית — מבצע דחוף "${p.title}" עבר ${URGENT_GRACE_HOURS} שעות בלי סימון כפורסם`);
-  }
+    if (!stale.length) return;
+    console.log(`${stale.length} שיבוצי מבצע דחוף בלי תוכן נמחקו אוטומטית (עברו ${URGENT_GRACE_HOURS} שעות בלי סימון פרסום)`);
+    for (const p of stale) {
+      await logSystem('delete', 'posts', String(p.id),
+        `נמחק אוטומטית — מבצע דחוף "${p.title}" עבר ${URGENT_GRACE_HOURS} שעות בלי סימון כפורסם`);
+    }
+  });
 }
 
 /**
@@ -82,6 +97,7 @@ export async function cleanupStaleUrgent() {
  * מאשר בעצמו דרך הכפתור בטאב "משימות" (ראו taskRow ב-app.js).
  */
 export async function suggestContentSwaps() {
+  await forEachOrg(async () => {
   const candidates = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.scheduled_at, e.name as endpoint_name
        from posts p
@@ -134,4 +150,5 @@ export async function suggestContentSwaps() {
     );
     console.log(`הצעת החלפה נוצרה לפוסט #${post.id} (${post.endpoint_name ?? 'ללא נקודת קצה'}) — מוצע: "${suggestion.title}"`);
   }
+  });
 }

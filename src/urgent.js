@@ -32,7 +32,7 @@ export async function planUrgent(input) {
     return { ok: false, errors: ['התאריך שנבחר כבר עבר'], placements: [], warnings: [], displaced: [] };
   }
 
-  const settings = await one('select * from engine_settings where id = 1');
+  const settings = await one('select * from engine_settings limit 1');
   const maxPromoPerDay = settings?.max_promo_per_day ?? 1;
 
   const channels = await rows(
