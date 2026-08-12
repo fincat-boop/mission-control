@@ -46,7 +46,7 @@ button.btn:disabled { opacity: .5; cursor: not-allowed; }
 .avatar:hover { background: var(--border); }
 .avatar[aria-expanded="true"] { border-color: var(--accent); }
 .pmenu {
-  position: absolute; top: calc(100% + 8px); inset-inline-start: 0; z-index: 40;
+  position: absolute; top: calc(100% + 8px); inset-inline-end: 0; z-index: 40;
   min-width: 200px; padding: 6px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--panel); box-shadow: 0 8px 24px rgba(0,0,0,.4);
 }
