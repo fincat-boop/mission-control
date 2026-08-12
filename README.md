@@ -236,6 +236,26 @@ npm run backup
 
 **פרסום אמיתי.** המשימות נותנות "העתק טקסט" — אין אינטגרציה שמפרסמת לערוצים.
 
+## התחברות דרך Google
+
+בנוסף לסיסמה, אפשר להתחבר עם Google (OAuth server-side, בלי סקריפט של גוגל
+בדף — ולכן בלי ריפוף CSP). **מי מורשה: רק email שכבר קיים כמשתמש** — הבעלים
+מאשר ע"י הוספת המשתמש ב**ניהול → משתמשים**. Google מאמת את הזהות בלבד; אימייל
+שלא קיים כמשתמש נדחה (`?error=not_approved`).
+
+הגדרה:
+
+1. **Google Cloud Console → APIs & Services → Credentials → Create OAuth client
+   ID → Web application**.
+2. תחת **Authorized redirect URIs** להוסיף את `<origin>/api/auth/google/callback`
+   — גם לפרוד (`https://merkaz-bakara-production.up.railway.app/api/auth/google/callback`)
+   וגם למקומי (`http://localhost:3000/api/auth/google/callback`).
+3. להגדיר ב-Railway את `GOOGLE_CLIENT_ID` ו-`GOOGLE_CLIENT_SECRET`. הכפתור
+   מופיע אוטומטית כשהם מוגדרים (`/api/auth/config`).
+
+`src/google-auth.js` מחליף את ה-code בשרת (מאומת ב-client_secret), מוודא
+`aud`/`iss`/`email_verified`, ו-state חתום מגן מפני CSRF.
+
 ## אבטחה
 
 **כבר קיים:**

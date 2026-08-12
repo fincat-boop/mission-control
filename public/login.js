@@ -2,6 +2,28 @@ const form = document.querySelector('#loginForm');
 const err = document.querySelector('#err');
 const btn = document.querySelector('#submitBtn');
 
+// הודעת שגיאה שחזרה מזרימת Google (redirect עם ?error=...)
+const ERRORS = {
+  not_approved: 'האימייל שלך לא מאושר להתחברות. פנה למנהל המערכת.',
+  google: 'ההתחברות דרך Google נכשלה. נסה שוב.',
+};
+const reason = new URLSearchParams(location.search).get('error');
+if (reason) {
+  err.textContent = ERRORS[reason] ?? 'ההתחברות נכשלה.';
+  history.replaceState(null, '', location.pathname);
+}
+
+// כפתור Google מוצג רק אם השרת מוגדר לכך
+fetch('/api/auth/config')
+  .then((r) => r.json())
+  .then(({ google }) => {
+    if (google) {
+      document.querySelector('#googleBtn').hidden = false;
+      document.querySelector('#googleWrap').hidden = false;
+    }
+  })
+  .catch(() => {});
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   err.textContent = '';

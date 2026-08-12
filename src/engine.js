@@ -114,10 +114,12 @@ export async function planWeek(anchorDate) {
 
   const placements = [];
 
-  // כל שילוב (ערוץ, יום) שעוד יש בו מקום — מסודר כך שימים ריקים נתפסים ראשונים
-  const slots = buildSlots(week, channels, usage, perf);
+  // כל שילוב (ערוץ, יום) אפשרי. הסדר נקבע תוך כדי, לא מראש — ראו nextSlot.
+  const pending = new Set(buildSlots(week, channels, perf));
 
-  for (const slot of slots) {
+  while (pending.size) {
+    const slot = nextSlot(pending, usage, week);
+    pending.delete(slot);
     if (!usage.channelHasRoom(slot.channel_id)) continue;
 
     const pick = chooseForSlot({
@@ -316,7 +318,7 @@ async function computeDebts(endpoints, settings, perf = null) {
 
 /* ========================= קיבולת ========================= */
 
-function buildUsage(channels, existing, settings) {
+export function buildUsage(channels, existing, settings) {
   const byChannel = new Map();
   for (const ch of channels) {
     // חלק מהקיבולת נשמר לדברים דחופים ולכן המנוע לא נוגע בו
@@ -332,6 +334,7 @@ function buildUsage(channels, existing, settings) {
   }
 
   const promoPerDay = new Map(); // dateKey -> count (חוצה ערוצים)
+  const allPerDay = new Map();   // dateKey -> count בכל הערוצים, לפיזור בין ערוצים
   const weekKind = { promo: 0, value: 0, hybrid: 0 }; // סך השבוע בכל הערוצים
   let promoBlocked = 0; // כמה פעמים שער היחס חסם מכירתי
 
@@ -347,6 +350,7 @@ function buildUsage(channels, existing, settings) {
     if (p.kind === 'promo') {
       promoPerDay.set(dateKey, (promoPerDay.get(dateKey) ?? 0) + 1);
     }
+    allPerDay.set(dateKey, (allPerDay.get(dateKey) ?? 0) + 1);
     weekKind[p.kind] = (weekKind[p.kind] ?? 0) + 1;
   }
 
@@ -364,6 +368,7 @@ function buildUsage(channels, existing, settings) {
       return !!u && u.used < u.budget;
     },
     dayCount: (channelId, dateKey) => byChannel.get(channelId)?.perDay.get(dateKey) ?? 0,
+    dayTotal: (dateKey) => allPerDay.get(dateKey) ?? 0,
     hourTaken: (channelId, dateKey, hour) =>
       byChannel.get(channelId)?.hours.has(`${channelId}:${dateKey}:${hour}`) ?? false,
 
@@ -400,6 +405,7 @@ function buildUsage(channels, existing, settings) {
       u.byKind[kind] = (u.byKind[kind] ?? 0) + 1;
       u.perDay.set(dateKey, (u.perDay.get(dateKey) ?? 0) + 1);
       u.hours.add(`${channelId}:${dateKey}:${hour}`);
+      allPerDay.set(dateKey, (allPerDay.get(dateKey) ?? 0) + 1);
       if (kind === 'promo') promoPerDay.set(dateKey, (promoPerDay.get(dateKey) ?? 0) + 1);
       weekKind[kind] = (weekKind[kind] ?? 0) + 1;
     },
@@ -420,22 +426,23 @@ function buildUsage(channels, existing, settings) {
 }
 
 /**
- * כל המשבצות האפשריות, ממוינות כך שהמנוע ממלא קודם ימים ריקים —
- * ככה השבוע יוצא מפוזר ולא נערם על יום אחד.
+ * כל המשבצות האפשריות (ערוץ × יום), בלי סדר. הסדר נקבע דינמית ב-nextSlot,
+ * כי סדר שנקבע מראש לא יודע איפה כבר נחתו שיבוצים באותה ריצה — וזה בדיוק
+ * מה שגרם למנוע לדחוס את כל השבוע לימים הראשונים עד גמר תקציב הערוץ.
  *
- * שובר שוויון שני: איכות המשבצת. בין שתי משבצות עם אותו עומס בדיוק,
- * הטובה יותר נבחרת קודם — כך שהתוכן עם החוב הגבוה ביותר (הכי "חשוב"
- * ברגע הזה, לפי computeDebts) הוא זה שמגיע לבמה הטובה, לפני שהוא מאבד
- * עדיפות בגלל שכבר שובץ במקום אחר באותה ריצה.
+ * ימים שהערוץ חסם לגמרי לא נכנסים בכלל, כדי שחישוב המרווח לא יתייחס אליהם
+ * כמקום פנוי אפשרי.
  *
- * האיכות נגזרת מיעילות שנמדדה בפועל (ערוץ × יום × חלון שעות) כשהמתג
- * דלוק ויש מספיק דגימות; אחרת נופלים חזרה לדירוג הידני channels.efficiency.
+ * efficiency = איכות המשבצת: יעילות שנמדדה בפועל (ערוץ × יום × חלון שעות)
+ * כשהמתג דלוק ויש מספיק דגימות; אחרת דירוג ידני channels.efficiency.
  */
-function buildSlots(week, channels, usage, perf = null) {
+export function buildSlots(week, channels, perf = null) {
   const slots = [];
   for (const ch of channels) {
-    for (const day of week.days) {
+    week.days.forEach((day, index) => {
       const date = new Date(`${day.date}T00:00:00`);
+      if ((ch.blocked_days ?? []).includes(date.getDay())) return;
+
       // הנמדד מנורמל סביב 1.0 והידני הוא 1–10 — מיישרים אותו לאותו סולם
       // כדי ששני המקורות יהיו בני-השוואה במיון אחד.
       const measured = perf
@@ -449,18 +456,63 @@ function buildSlots(week, channels, usage, perf = null) {
         channel_name: ch.name,
         date,
         dateKey: day.date,
+        index,
         label: day.label,
         efficiency: measured != null ? measured * 5 : (ch.efficiency ?? 5),
       });
+    });
+  }
+  return slots;
+}
+
+/**
+ * המשבצת הבאה שתקבל הצעה. נבחרת מחדש בכל צעד לפי מצב הלוח *העדכני*, ולא
+ * לפי מיון שנעשה פעם אחת בהתחלה.
+ *
+ * הכלל: המשבצת הרחוקה ביותר ממה שכבר תפוס באותו ערוץ. כך שיבוץ ראשון נוחת
+ * באמצע השבוע, השני קופץ לקצה, השלישי נכנס בין שניהם — התוכן נפרש על כל
+ * השבוע ומצטופף רק כשהתקציב באמת מחייב את זה.
+ *
+ * שוברי שוויון, לפי הסדר: יום עמוס פחות בכל הערוצים (שלא ייווצר יום שכולם
+ * מפרסמים בו), אחר כך איכות המשבצת, ולבסוף התאריך — כדי שהתוצאה תהיה יציבה.
+ */
+export function nextSlot(pending, usage, week) {
+  let best = null;
+  let bestKey = null;
+
+  for (const slot of pending) {
+    const key = [
+      -spreadDistance(slot, usage, week),
+      usage.dayTotal(slot.dateKey),
+      Math.abs(slot.index - (week.days.length - 1) / 2), // עוגן ראשון = אמצע השבוע
+      -slot.efficiency,
+      slot.dateKey,
+    ];
+    if (!bestKey || compareKeys(key, bestKey) < 0) {
+      best = slot;
+      bestKey = key;
     }
   }
-  return slots.sort((a, b) => {
-    const busyA = usage.dayCount(a.channel_id, a.dateKey);
-    const busyB = usage.dayCount(b.channel_id, b.dateKey);
-    if (busyA !== busyB) return busyA - busyB;
-    if (a.efficiency !== b.efficiency) return b.efficiency - a.efficiency;
-    return a.dateKey.localeCompare(b.dateKey);
+  return best;
+}
+
+/** המרחק בימים מהיום התפוס הקרוב ביותר באותו ערוץ. ערוץ ריק = מרחק מקסימלי. */
+function spreadDistance(slot, usage, week) {
+  let nearest = Infinity;
+  week.days.forEach((day, i) => {
+    if (usage.dayCount(slot.channel_id, day.date) > 0) {
+      nearest = Math.min(nearest, Math.abs(i - slot.index));
+    }
   });
+  return nearest === Infinity ? week.days.length : nearest;
+}
+
+function compareKeys(a, b) {
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] === b[i]) continue;
+    return typeof a[i] === 'string' ? a[i].localeCompare(b[i]) : a[i] - b[i];
+  }
+  return 0;
 }
 
 /* ========================= בחירה למשבצת ========================= */
@@ -557,15 +609,20 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
 
     const hasAnyContent = content.some((c) => c.endpoint_id === e.id);
 
-    // ערוץ שיש בו מקום — שם נשבץ בלי תוכן. גם טיוטה כבר נבדקה ונפסלה
+    // הערוץ הכי פנוי — שם נשבץ בלי תוכן. גם טיוטה כבר נבדקה ונפסלה
     // למעלה בלולאת ה-slots הרגילה, אז אם הגענו לכאן — באמת אין כלום.
-    const target = channels.find((ch) => usage.remaining(ch.id) > 0);
+    const target = channels
+      .filter((ch) => usage.remaining(ch.id) > 0)
+      .sort((a, b) => usage.remaining(b.id) - usage.remaining(a.id))[0];
     if (!target) continue;
 
-    // אמצע השבוע, כדי שיישאר זמן לכתוב. תופסים בפועל את המקום כדי
-    // ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת הזו עדיין פנויה.
-    const day = week.days[3] ?? week.days[0];
-    usage.take(target.id, day.date, 'value', 12);
+    // לא בתחילת השבוע, כדי שיישאר זמן לכתוב; ומתוך מה שנשאר — היום שהכי
+    // רחוק ממה שכבר תפוס באותו ערוץ, כדי שהחורים לא ייערמו כולם על יום אחד.
+    const day = pickHoleDay(week, target, usage);
+    let hour = 12;
+    while (usage.hourTaken(target.id, day.date, hour) && hour < 22) hour += 1;
+    // תופסים בפועל את המקום כדי ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת פנויה.
+    usage.take(target.id, day.date, 'value', hour);
 
     holes.push({
       channel_id: target.id,
@@ -575,7 +632,7 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
       kind: 'value',
       date: day.date,
       day_label: day.label,
-      scheduled_at: new Date(`${day.date}T12:00:00`).toISOString(),
+      scheduled_at: new Date(`${day.date}T${String(hour).padStart(2, '0')}:00:00`).toISOString(),
       reason: hasAnyContent
         ? 'יש תוכן לנקודה הזו, אבל אף גרסה לא מתאימה לערוץ פנוי כרגע'
         : 'אין שום תוכן (גם לא טיוטה) לנקודה הזו',
@@ -584,6 +641,27 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
   }
 
   return holes;
+}
+
+/** היום שבו יישב חור: לא בתחילת השבוע, ורחוק ככל האפשר משאר הלוח של הערוץ. */
+function pickHoleDay(week, channel, usage) {
+  const usable = week.days
+    .map((day, index) => ({ day, index }))
+    .filter(({ day, index }) => {
+      if (index < 2) return false; // צריך זמן לכתוב
+      const dow = new Date(`${day.date}T00:00:00`).getDay();
+      return !(channel.blocked_days ?? []).includes(dow);
+    });
+  if (usable.length === 0) return week.days[3] ?? week.days[0];
+
+  return usable.sort((a, b) => {
+    const key = ({ day, index }) => [
+      -spreadDistance({ channel_id: channel.id, index }, usage, week),
+      usage.dayTotal(day.date),
+      index,
+    ];
+    return compareKeys(key(a), key(b));
+  })[0].day;
 }
 
 /**
