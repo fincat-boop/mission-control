@@ -20,7 +20,7 @@ const LIVE = "('scheduled','published','pending_approval')";
 export async function gapWarning({ endpointId, channelId, when, excludePostId = null }) {
   if (!endpointId || !channelId || !when) return null;
 
-  const settings = await one('select min_gap_days from engine_settings where id = 1');
+  const settings = await one('select min_gap_days from engine_settings limit 1');
   const min = settings?.min_gap_days ?? 7;
   if (min <= 0) return null;
 

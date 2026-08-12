@@ -36,7 +36,7 @@ export async function planWeek(anchorDate) {
   to.setHours(23, 59, 59, 999);
 
   const [settings, channels, endpoints, content, existing, campaigns] = await Promise.all([
-    one('select * from engine_settings where id = 1'),
+    one('select * from engine_settings limit 1'),
     rows('select * from channels where active = true order by sort_order, id'),
     rows('select * from endpoints where active = true'),
     // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.

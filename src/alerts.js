@@ -13,7 +13,7 @@ const DAY = 86400000;
 const UPCOMING_WINDOW_DAYS = 7; // מתי מתחילים להתריע על קמפיין שעומד להתחיל
 
 export async function buildAlerts() {
-  const settings = await one('select * from engine_settings where id = 1');
+  const settings = await one('select * from engine_settings limit 1');
   const alertHours = settings?.content_alert_hours ?? 48;
 
   const [campaigns, endpoints, holes, pending, soonWithoutContent] = await Promise.all([

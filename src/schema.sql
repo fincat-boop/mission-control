@@ -1,6 +1,16 @@
 -- מרכז בקרה פרסומי — סכימה
 -- הקובץ ניתן להרצה חוזרת (idempotent): כל create הוא if not exists.
 
+-- ========================= מולטי-טננט =========================
+-- ארגון = טננט. כל טבלת-דומיין נושאת org_id (ראו הסעיף בתחתית הקובץ).
+-- שלב 1 הוא אדיטיבי: org_id nullable, ה-backfill והמעבר ל-NOT NULL + RLS
+-- באים בשלבים הבאים. ראו docs/multi-tenant-plan.md.
+create table if not exists orgs (
+  id         serial primary key,
+  name       text not null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists users (
   id            serial primary key,
   name          text not null,
@@ -254,7 +264,8 @@ alter table engine_settings
 alter table engine_settings
   add column if not exists use_performance boolean not null default false;
 
-insert into engine_settings (id) values (1) on conflict (id) do nothing;
+-- (בעבר: insert גלובלי של שורת engine_settings יחידה id=1. במולטי-טננט יש
+-- שורה לכל org, נוצרת בהקמת הארגון. ראו סעיף המולטי-טננט בתחתית הקובץ.)
 
 -- ========================= יומן פעולות =========================
 -- מי עשה מה ומתי. נכתב אוטומטית לכל בקשה שמשנה נתונים, כולל פעולות
@@ -302,3 +313,86 @@ create table if not exists login_attempts (
 );
 
 create index if not exists login_attempts_email_idx on login_attempts (email, at desc);
+
+-- ========================= org_id לכל טבלת-דומיין =========================
+-- שלב 1 (אדיטיבי): העמודה nullable, מסונכרנת ל-org בברירת מחדל דרך
+-- src/migrations/003-multi-tenant-base.js. המעבר ל-NOT NULL + FORCE RLS
+-- מתבצע בשלב מאוחר יותר, אחרי שהאפליקציה כותבת org_id בכל insert.
+-- ראו docs/multi-tenant-plan.md.
+--
+-- טבלאות שורש + בנות (org_id denormalized גם בבנות, כדי ש-policy ה-RLS
+-- יהיה אחיד ופשוט).
+alter table users               add column if not exists org_id int references orgs(id);
+alter table endpoints           add column if not exists org_id int references orgs(id);
+alter table channels            add column if not exists org_id int references orgs(id);
+alter table campaigns           add column if not exists org_id int references orgs(id);
+alter table campaign_channels   add column if not exists org_id int references orgs(id);
+alter table content_items       add column if not exists org_id int references orgs(id);
+alter table content_variants    add column if not exists org_id int references orgs(id);
+alter table content_assets      add column if not exists org_id int references orgs(id);
+alter table posts               add column if not exists org_id int references orgs(id);
+alter table post_results        add column if not exists org_id int references orgs(id);
+alter table strategy_milestones add column if not exists org_id int references orgs(id);
+alter table tasks               add column if not exists org_id int references orgs(id);
+alter table activity_log        add column if not exists org_id int references orgs(id);
+-- engine_settings: היום סינגלטון (check id=1). בשלב 1 רק מוסיפים org_id;
+-- המעבר ל-PK per-org והחלפת where id=1 בקוד באים בשלב מאוחר יותר.
+alter table engine_settings     add column if not exists org_id int references orgs(id);
+
+-- אינדקסים מורכבים עם org_id מוביל, על הנתיבים החמים.
+create index if not exists posts_org_scheduled_idx   on posts (org_id, scheduled_at);
+create index if not exists content_org_campaign_idx  on content_items (org_id, campaign_id);
+create index if not exists campaigns_org_idx         on campaigns (org_id);
+create index if not exists endpoints_org_idx         on endpoints (org_id);
+create index if not exists channels_org_idx          on channels (org_id);
+create index if not exists tasks_org_idx             on tasks (org_id);
+
+-- ========================= מולטי-טננט שלב 2: RLS =========================
+-- שלב 2b: הבידוד יורד ל-DB. שלוש אבני יסוד:
+--   1. engine_settings הופכת מסינגלטון (id=1) לשורה-לכל-ארגון (PK org_id).
+--   2. role ייעודי app_user בלי superuser — כי superuser עוקף RLS גם עם FORCE.
+--      האפליקציה מריצה 'set local role app_user' בתוך withOrg (ראו db.js).
+--   3. policy org_isolation + default של org_id מה-GUC, לכל טבלת-דומיין.
+-- ראו docs/multi-tenant-plan.md.
+
+-- --- engine_settings: סינגלטון -> שורה-לכל-ארגון ---
+alter table engine_settings drop constraint if exists engine_settings_id_check;
+alter table engine_settings drop constraint if exists engine_settings_pkey;
+alter table engine_settings drop column if exists id;
+do $$ begin
+  alter table engine_settings add constraint engine_settings_pkey primary key (org_id);
+exception when duplicate_table then null; when invalid_table_definition then null; end $$;
+
+-- --- role ייעודי לאכיפת RLS ---
+do $$ begin
+  create role app_user nosuperuser nobypassrls nologin;
+exception when duplicate_object then null; end $$;
+grant usage on schema public to app_user;
+grant select, insert, update, delete on all tables in schema public to app_user;
+grant usage, select on all sequences in schema public to app_user;
+-- כדי שהמשתמש המתחבר (גם אם אינו superuser) יוכל 'set role app_user'
+do $$ begin execute format('grant app_user to %I', current_user); exception when others then null; end $$;
+
+-- --- default של org_id מה-GUC + RLS policy לכל טבלת-דומיין ---
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'users','endpoints','channels','campaigns','campaign_channels',
+    'content_items','content_variants','content_assets','posts',
+    'post_results','strategy_milestones','tasks','engine_settings','activity_log'
+  ] loop
+    -- insert בלי org_id מקבל אוטומטית את הארגון הפעיל
+    execute format(
+      'alter table %I alter column org_id set default nullif(current_setting(''app.current_org'', true), '''')::int', t);
+    execute format('alter table %I enable row level security', t);
+    execute format('alter table %I force row level security', t);
+    begin
+      execute format(
+        'create policy org_isolation on %I '
+        || 'using (org_id = nullif(current_setting(''app.current_org'', true), '''')::int) '
+        || 'with check (org_id = nullif(current_setting(''app.current_org'', true), '''')::int)', t);
+    exception when duplicate_object then null;
+    end;
+  end loop;
+end $$;

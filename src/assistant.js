@@ -84,7 +84,7 @@ async function snapshot() {
                  (select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
                     from campaign_channels cc where cc.campaign_id = c.id) as channel_ids
             from campaigns c order by c.starts_on nulls last, c.id`),
-    one('select * from engine_settings where id = 1'),
+    one('select * from engine_settings limit 1'),
     one(`select
            (select count(*)::int from content_items) as content,
            (select count(*)::int from posts where status in ('scheduled','pending_approval')) as scheduled,

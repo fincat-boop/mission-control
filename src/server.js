@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import helmet from 'helmet';
-import { migrate, pool } from './db.js';
+import { migrate, pool, withOrg } from './db.js';
 import { loadUser } from './auth.js';
 import { csrfGuard } from './csrf.js';
 import { audit } from './audit.js';
@@ -41,7 +41,20 @@ app.use(cookieParser());
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-app.use('/api', csrfGuard, loadUser, audit, api);
+// כל בקשה מאומתת רצה בתוך הקשר הטננט של המשתמש (withOrg): set role app_user
+// + app.current_org, וכל השאילתות בבקשה מסוננות ע"י RLS. בקשות אנונימיות
+// (login/logout/me — req.org ריק) רצות על ה-pool כרגיל, וזה גם ה-bootstrap
+// שמגלה את הארגון של המשתמש.
+function tenantScope(req, res, next) {
+  if (!req.org) return next();
+  withOrg(req.org, () => new Promise((resolve) => {
+    res.on('finish', resolve);
+    res.on('close', resolve);
+    next();
+  })).catch(next);
+}
+
+app.use('/api', csrfGuard, loadUser, tenantScope, audit, api);
 
 // נתיב /api שלא נתפס הוא שגיאה, לא בקשה לדף
 app.use('/api', (_req, res) => res.status(404).json({ error: 'לא נמצא' }));
