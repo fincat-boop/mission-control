@@ -22,7 +22,8 @@
     "demo": "node src/demo.js",
     "check": "node scripts/check-client.mjs",
     "guard:tenant": "node scripts/guard-tenant.mjs",
-    "fix-clashes": "node src/fix-clashes.js"
+    "fix-clashes": "node src/fix-clashes.js",
+    "respace": "node src/respace.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
