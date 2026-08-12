@@ -1,6 +1,16 @@
 -- מרכז בקרה פרסומי — סכימה
 -- הקובץ ניתן להרצה חוזרת (idempotent): כל create הוא if not exists.
 
+-- ========================= מולטי-טננט =========================
+-- ארגון = טננט. כל טבלת-דומיין נושאת org_id (ראו הסעיף בתחתית הקובץ).
+-- שלב 1 הוא אדיטיבי: org_id nullable, ה-backfill והמעבר ל-NOT NULL + RLS
+-- באים בשלבים הבאים. ראו docs/multi-tenant-plan.md.
+create table if not exists orgs (
+  id         serial primary key,
+  name       text not null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists users (
   id            serial primary key,
   name          text not null,
@@ -302,3 +312,36 @@ create table if not exists login_attempts (
 );
 
 create index if not exists login_attempts_email_idx on login_attempts (email, at desc);
+
+-- ========================= org_id לכל טבלת-דומיין =========================
+-- שלב 1 (אדיטיבי): העמודה nullable, מסונכרנת ל-org בברירת מחדל דרך
+-- src/migrations/003-multi-tenant-base.js. המעבר ל-NOT NULL + FORCE RLS
+-- מתבצע בשלב מאוחר יותר, אחרי שהאפליקציה כותבת org_id בכל insert.
+-- ראו docs/multi-tenant-plan.md.
+--
+-- טבלאות שורש + בנות (org_id denormalized גם בבנות, כדי ש-policy ה-RLS
+-- יהיה אחיד ופשוט).
+alter table users               add column if not exists org_id int references orgs(id);
+alter table endpoints           add column if not exists org_id int references orgs(id);
+alter table channels            add column if not exists org_id int references orgs(id);
+alter table campaigns           add column if not exists org_id int references orgs(id);
+alter table campaign_channels   add column if not exists org_id int references orgs(id);
+alter table content_items       add column if not exists org_id int references orgs(id);
+alter table content_variants    add column if not exists org_id int references orgs(id);
+alter table content_assets      add column if not exists org_id int references orgs(id);
+alter table posts               add column if not exists org_id int references orgs(id);
+alter table post_results        add column if not exists org_id int references orgs(id);
+alter table strategy_milestones add column if not exists org_id int references orgs(id);
+alter table tasks               add column if not exists org_id int references orgs(id);
+alter table activity_log        add column if not exists org_id int references orgs(id);
+-- engine_settings: היום סינגלטון (check id=1). בשלב 1 רק מוסיפים org_id;
+-- המעבר ל-PK per-org והחלפת where id=1 בקוד באים בשלב מאוחר יותר.
+alter table engine_settings     add column if not exists org_id int references orgs(id);
+
+-- אינדקסים מורכבים עם org_id מוביל, על הנתיבים החמים.
+create index if not exists posts_org_scheduled_idx   on posts (org_id, scheduled_at);
+create index if not exists content_org_campaign_idx  on content_items (org_id, campaign_id);
+create index if not exists campaigns_org_idx         on campaigns (org_id);
+create index if not exists endpoints_org_idx         on endpoints (org_id);
+create index if not exists channels_org_idx          on channels (org_id);
+create index if not exists tasks_org_idx             on tasks (org_id);
