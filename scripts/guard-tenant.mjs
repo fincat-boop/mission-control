@@ -17,7 +17,7 @@ const SRC = new URL('../src/', import.meta.url).pathname;
 const ALLOW = new Set([
   'db.js', 'server.js', 'backup.js', 'restore.js', 'restore-r2.js',
   'full-backup.js', 'offsite-backup.js', 'seed.js', 'demo.js', 'new-org.js',
-  'set-password.js', 'fix-clashes.js', 'migrate.js', 'maintenance.js',
+  'set-password.js', 'fix-clashes.js', 'migrate.js', 'maintenance.js', 'respace.js',
 ]);
 
 function walk(dir) {
