@@ -16,7 +16,11 @@
 * { box-sizing: border-box; margin: 0; }
 body {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--page);
+  background:
+    linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px),
+    var(--page);
+  background-size: 40px 40px, 40px 40px, auto;
   color: var(--ink-1); padding: 0 0 48px; min-height: 100vh; font-size: 14px;
 }
 header { background: var(--page); border-bottom: 1px solid var(--border); padding: 16px 28px 0; position: sticky; top: 0; z-index: 20; }
