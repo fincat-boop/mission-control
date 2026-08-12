@@ -13,6 +13,7 @@
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
+    "new-org": "node src/new-org.js",
     "backup": "node src/backup.js",
     "backup:offsite": "node src/offsite-backup.js",
     "backup:full": "node src/full-backup.js",

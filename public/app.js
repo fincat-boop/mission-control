@@ -53,6 +53,11 @@ async function boot() {
   $('#pName').innerHTML =
     `${esc(state.me.name)}${state.me.is_owner ? ' <span class="owner-tag">בעלים</span>' : ''}`;
   $('#pEmail').textContent = state.me.email ?? '';
+  if (state.me.org_name) {
+    const org = $('#pOrg');
+    org.textContent = state.me.org_name;
+    org.hidden = false;
+  }
 
   wireChrome();
 

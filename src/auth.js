@@ -45,7 +45,15 @@ export async function loadUser(req, _res, next) {
     try {
       const { uid } = jwt.verify(token, SECRET);
       // רץ על ה-pool (מחוץ להקשר טננט) — bootstrap שמגלה לאיזה org המשתמש שייך.
-      req.user = await one(`select ${PUBLIC_USER_COLS} from users where id = $1`, [uid]);
+      // מצרף את שם הארגון להצגה בממשק.
+      req.user = await one(
+        `select u.id, u.name, u.email, u.is_owner, u.org_id,
+                u.perm_content, u.perm_settings, u.perm_approve, u.perm_users,
+                o.name as org_name
+           from users u left join orgs o on o.id = u.org_id
+          where u.id = $1`,
+        [uid]
+      );
       req.org = req.user?.org_id ?? null;
     } catch {
       /* טוקן פג או לא תקין — נשארים אנונימיים */

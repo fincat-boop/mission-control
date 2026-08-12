@@ -16,7 +16,7 @@ const SRC = new URL('../src/', import.meta.url).pathname;
 // מותר להם pool ישירות
 const ALLOW = new Set([
   'db.js', 'server.js', 'backup.js', 'restore.js', 'restore-r2.js',
-  'full-backup.js', 'offsite-backup.js', 'seed.js', 'demo.js',
+  'full-backup.js', 'offsite-backup.js', 'seed.js', 'demo.js', 'new-org.js',
   'set-password.js', 'fix-clashes.js', 'migrate.js', 'maintenance.js',
 ]);
 

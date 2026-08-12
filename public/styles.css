@@ -54,6 +54,7 @@ button.btn:disabled { opacity: .5; cursor: not-allowed; }
 .pinfo { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
 .pname { font-weight: 650; font-size: 13px; }
 .pemail { color: var(--muted); font-size: 12px; word-break: break-all; }
+.porg { margin-top: 6px; font-size: 11px; color: var(--ink-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; align-self: flex-start; }
 .pitem {
   display: flex; align-items: center; gap: 8px; width: 100%;
   font: inherit; font-size: 13px; text-align: start; padding: 8px 10px;
