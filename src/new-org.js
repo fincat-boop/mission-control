@@ -16,12 +16,13 @@ import { hashPassword } from './auth.js';
 const [orgName, ownerEmailRaw, ownerName, password] = process.argv.slice(2);
 const ownerEmail = String(ownerEmailRaw ?? '').trim().toLowerCase();
 
-if (!orgName || !ownerEmail || !ownerName || !password) {
-  console.error('שימוש: node src/new-org.js "<שם הארגון>" <owner-email> "<שם הבעלים>" <סיסמה>');
+if (!orgName || !ownerEmail || !ownerName) {
+  console.error('שימוש: node src/new-org.js "<שם הארגון>" <owner-email> "<שם הבעלים>" [סיסמה]');
+  console.error('בלי סיסמה — הבעלים מתחבר דרך Google בלבד.');
   process.exit(1);
 }
-if (password.length < 8) {
-  console.error('הסיסמה חייבת להיות באורך 8 תווים לפחות.');
+if (password && password.length < 8) {
+  console.error('הסיסמה חייבת להיות באורך 8 תווים לפחות (או להשמיט אותה למשתמש Google בלבד).');
   process.exit(1);
 }
 
@@ -48,7 +49,7 @@ try {
       `insert into users (name, email, password_hash, is_owner,
                           perm_content, perm_settings, perm_approve, perm_users)
        values ($1,$2,$3,true,true,true,true,true) returning id`,
-      [ownerName, ownerEmail, await hashPassword(password)]
+      [ownerName, ownerEmail, password ? await hashPassword(password) : null]
     );
   });
   console.log(`נוצר ארגון "${orgName}" (id=${org.id}) עם בעלים ${ownerEmail}.`);

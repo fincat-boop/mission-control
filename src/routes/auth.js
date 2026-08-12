@@ -23,7 +23,8 @@ r.post('/auth/login', wrap(loginLimiter), wrap(async (req, res) => {
   if (!email || !password) return bad(res, 'צריך אימייל וסיסמה');
 
   const user = await one('select * from users where lower(email) = $1', [email]);
-  if (!user || !(await checkPassword(password, user.password_hash))) {
+  // משתמש בלי password_hash מאושר ל-Google בלבד — התחברות סיסמה נחסמת עבורו.
+  if (!user || !user.password_hash || !(await checkPassword(password, user.password_hash))) {
     await recordLoginFailure(req);
     return bad(res, 'אימייל או סיסמה לא נכונים', 401);
   }

@@ -46,8 +46,10 @@ r.get('/users', wrap(async (_req, res) => {
 r.post('/users', requirePerm('users'), wrap(async (req, res) => {
   const b = req.body ?? {};
   const email = String(b.email ?? '').trim().toLowerCase();
-  if (!b.name || !email || !b.password) return bad(res, 'צריך שם, אימייל וסיסמה');
-  if (String(b.password).length < 8) return bad(res, 'הסיסמה חייבת להיות באורך 8 תווים לפחות');
+  if (!b.name || !email) return bad(res, 'צריך שם ואימייל');
+  // סיסמה אופציונלית — בלעדיה המשתמש מתחבר דרך Google בלבד
+  const password = b.password ? String(b.password) : null;
+  if (password !== null && password.length < 8) return bad(res, 'הסיסמה חייבת להיות באורך 8 תווים לפחות');
 
   const exists = await one('select id from users where lower(email) = $1', [email]);
   if (exists) return bad(res, 'כבר קיים משתמש עם האימייל הזה');
@@ -56,7 +58,7 @@ r.post('/users', requirePerm('users'), wrap(async (req, res) => {
     `insert into users (name, email, password_hash, perm_content, perm_settings, perm_approve, perm_users)
      values ($1,$2,$3,coalesce($4,true),coalesce($5,false),coalesce($6,false),coalesce($7,false))
      returning ${PUBLIC_USER_COLS}`,
-    [b.name, email, await hashPassword(String(b.password)),
+    [b.name, email, password ? await hashPassword(password) : null,
      b.perm_content ?? null, b.perm_settings ?? null, b.perm_approve ?? null, b.perm_users ?? null]
   );
   res.status(201).json({ user: u });

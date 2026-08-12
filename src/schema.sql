@@ -24,6 +24,10 @@ create table if not exists users (
   created_at    timestamptz not null default now()
 );
 
+-- password_hash יכול להיות ריק: משתמש שמאושר להתחבר דרך Google בלבד
+-- (הבעלים הוסיף אותו לפי email, בלי סיסמה). התחברות סיסמה נחסמת עבורו.
+alter table users alter column password_hash drop not null;
+
 create table if not exists endpoints (
   id               serial primary key,
   name             text not null,

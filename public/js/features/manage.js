@@ -408,7 +408,7 @@ function wireManage(ro) {
     fields: [
       { name: 'name', label: 'שם', type: 'text' },
       { name: 'email', label: 'אימייל', type: 'email' },
-      { name: 'password', label: 'סיסמה (8 תווים לפחות)', type: 'password' },
+      { name: 'password', label: 'סיסמה (ריק = התחברות דרך Google בלבד)', type: 'password' },
       { name: 'perm_content', label: 'תוכן ושיבוץ', type: 'checkbox', value: true },
       { name: 'perm_settings', label: 'הגדרות', type: 'checkbox' },
       { name: 'perm_approve', label: 'אישור דחוף־דורס', type: 'checkbox' },
