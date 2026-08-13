@@ -234,6 +234,18 @@ function wireManage(ro) {
   const engineToast = (base, res) =>
     base + (res.engine?.placed ? ` המנוע מילא ${res.engine.placed} משבצות פנויות.` : '');
 
+  // חסימת יום מפנה את מי שכבר יושב עליו. מי שלא נמצא לו יום חוקי נשאר על
+  // היום החסום — וזה חייב להיאמר כאן ולא רק בהתראות.
+  const blockedToast = (base, res) => {
+    const r = res.relocated;
+    if (!r) return base;
+    const moved = r.moved ? ` הוזזו ${r.moved} פוסטים מהימים שנחסמו.` : '';
+    const stuck = r.stuck?.length
+      ? ` ⚠ ${r.stuck.length} פוסטים נשארו על יום חסום (אין להם יום פנוי) — צריך להזיז ידנית.`
+      : '';
+    return base + moved + stuck;
+  };
+
   // עריכת שדה בשדה — נשמר ביציאה מהשדה
   $$('#manage [data-ep-field]').forEach((inp) =>
     inp.addEventListener('change', run(async () => {
@@ -286,8 +298,10 @@ function wireManage(ro) {
       const days = $$(`[data-blocked="${id}"]:checked`).map((i) => Number(i.value));
       const res = await api(`/channels/${id}`,
         { method: 'PATCH', body: { blocked_days: days, week: state.week } });
-      toast(engineToast(days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.`
-                        : 'כל הימים פתוחים.', res));
+      toast(blockedToast(
+        engineToast(days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.`
+                    : 'כל הימים פתוחים.', res),
+        res));
       await refreshBoard();
     })));
 

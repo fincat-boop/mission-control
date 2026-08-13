@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { autoFill, bad, updateById, wrap } from './_shared.js';
+import { autoFill, bad, evictBlocked, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
 
@@ -28,8 +28,12 @@ r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
 r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   const c = await updateById('channels', CHANNEL_FIELDS, req.params.id, req.body);
   if (!c) return bad(res, 'לא נמצא ערוץ כזה', 404);
+
+  // קודם מפנים מה שנעשה לא חוקי, ורק אז ממלאים — אחרת המילוי תופס את
+  // הימים שהפוסטים המפונים אמורים לעבור אליהם.
+  const relocated = 'blocked_days' in (req.body ?? {}) ? await evictBlocked() : null;
   const engine = await autoFill(req.body?.week);
-  res.json({ channel: c, engine });
+  res.json({ channel: c, engine, relocated });
 }));
 
 r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {

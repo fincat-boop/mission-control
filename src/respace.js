@@ -1,41 +1,49 @@
+// נטען גם כאן ולא רק ב-server.js, כי הקובץ רץ גם כ-CLI עצמאי
 import 'dotenv/config';
-import { pool, rows, one, query, withOrg } from './db.js';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { pool, rows, one, query } from './db.js';
 import { weekMeta, ymd } from './board.js';
-import { buildSlots, buildUsage, nextSlot } from './engine.js';
+import { buildSlots, buildUsage, nextSlot, withEngineLock } from './engine.js';
 
 /**
  * מרווח מחדש שבוע שכבר משובץ.
  *
- * המנוע לא נוגע במה שכבר על הלוח — ולכן שבוע שנבנה לפני תיקון הפיזור נשאר
- * דחוס גם אחרי שהמנוע השתנה. הסקריפט הזה מזיז את הפוסטים הקיימים לימים
- * שהמנוע החדש היה בוחר להם, באותו סדר בחירה בדיוק (nextSlot): הכי רחוק
- * ממה שכבר תפוס באותו ערוץ, ואז היום הכי פחות עמוס בכל הערוצים.
+ * המנוע לא נוגע במה שכבר על הלוח — הוא רק ממלא שטח פנוי. לכן שבוע שנבנה
+ * לפני תיקון הפיזור נשאר דחוס, ופוסט שיושב על יום שנחסם *אחרי* ששובץ נשאר
+ * שם לנצח. שתי הבעיות נפתרות כאן: הזזה של פוסטים קיימים לימים שהמנוע החדש
+ * היה בוחר להם, דרך אותו nextSlot בדיוק. שום פוסט לא נמחק ולא נוצר.
  *
- * מה לא זז לעולם: פוסט שכבר פורסם, פוסט שממתין לאישור, יום שהערוץ חסם,
- * ויום שכבר עבר. שום פוסט לא נמחק ולא נוצר — רק scheduled_at משתנה.
+ * שני מצבי עבודה:
+ *   מלא (onlyIllegal=false)  — כל השבוע נפרש מחדש. ידני, דרך ה-CLI.
+ *   ממוקד (onlyIllegal=true) — רק פוסטים שיושבים על יום חסום זזים, וכל השאר
+ *                              קפוא במקומו. זה מה שרץ אוטומטית כשחוסמים יום,
+ *                              כדי ששינוי הגדרה לא יזיז לוח שסודר ביד.
  *
- * כללים שנאכפים על היעד: אותה נקודת קצה לא מקבלת שני פוסטים באותה מדיה
- * באותו יום · max_promo_per_day · min_gap_days מול פוסטים בשבועות סמוכים.
- * פוסט שאין לו יום חוקי נשאר בדיוק איפה שהוא, ומדווח.
+ * מה לא זז לעולם: פוסט שפורסם, פוסט שממתין לאישור, ויום שכבר עבר.
  *
- *   node src/respace.js                    הרצה יבשה על השבוע הנוכחי
- *   node src/respace.js 2026-08-16         הרצה יבשה על השבוע של התאריך
- *   node src/respace.js 2026-08-16 --yes   הזזה בפועל
- *   node src/respace.js --org 2            ארגון אחר (ברירת מחדל 1)
+ * כללים שנאכפים על היעד: יום חסום בערוץ · אותה נקודת קצה לא מקבלת שני
+ * פוסטים באותה מדיה באותו יום · max_promo_per_day · min_gap_days מול
+ * פוסטים בשבועות הסמוכים. פוסט שאין לו יום חוקי נשאר במקום ומדווח.
  */
 
-const argv = process.argv.slice(2);
-const apply = argv.includes('--yes');
-const orgIdx = argv.indexOf('--org');
-const orgId = orgIdx >= 0 ? Number(argv[orgIdx + 1]) : 1;
-const anchor = argv.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a)) ?? new Date();
-
-const MOVABLE = 'scheduled';
 const ON_BOARD = ['scheduled', 'published', 'pending_approval'];
+const MOVABLE = 'scheduled';
+// כמה קדימה סורקים פוסטים על ימים חסומים. הלוח מתוכנן חודשים מראש,
+// ופוסט על יום חסום בעוד רבעון הוא בדיוק אותה תקלה.
+const HORIZON_WEEKS = 26;
 
-await withOrg(orgId, run).finally(() => pool.end());
+/** האם הפוסט יושב על יום שהערוץ שלו חסם */
+export function onBlockedDay(post, channel) {
+  return (channel?.blocked_days ?? []).includes(new Date(post.scheduled_at).getDay());
+}
 
-async function run() {
+/**
+ * מתכנן הזזות. לא כותב כלום.
+ * @param {string|Date} [anchor] תאריך כלשהו בשבוע המבוקש
+ * @param {{onlyIllegal?: boolean}} [opts]
+ */
+export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   const week = weekMeta(anchor);
   const from = week.startDate;
   const to = new Date(week.endDate);
@@ -49,7 +57,7 @@ async function run() {
               p.channel_id, p.endpoint_id,
               c.name as channel_name, e.name as endpoint_name
          from posts p
-         join channels c   on c.id = p.channel_id
+         join channels c       on c.id = p.channel_id
          left join endpoints e on e.id = p.endpoint_id
         where p.scheduled_at >= $1 and p.scheduled_at <= $2
           and p.status = any($3)
@@ -58,17 +66,15 @@ async function run() {
     ),
   ]);
 
-  console.log(`שבוע ${week.label} · ארגון ${orgId} · ${posts.length} פוסטים על הלוח`);
-  if (posts.length === 0) return;
+  const byId = new Map(channels.map((c) => [c.id, c]));
+  const illegal = (p) => onBlockedDay(p, byId.get(p.channel_id));
 
-  const active = new Set(channels.map((c) => c.id));
-  const movable = posts.filter((p) => p.status === MOVABLE && active.has(p.channel_id));
+  const canMove = (p) => p.status === MOVABLE && byId.has(p.channel_id);
+  const movable = posts.filter((p) => canMove(p) && (!onlyIllegal || illegal(p)));
   const anchored = posts.filter((p) => !movable.includes(p));
 
-  if (movable.length === 0) {
-    console.log('אין פוסטים שאפשר להזיז (הכול פורסם / ממתין לאישור).');
-    return;
-  }
+  const result = { week, moves: [], stuck: [], posts: posts.length };
+  if (movable.length === 0) return result;
 
   const minGap = settings?.min_gap_days ?? 7;
   const maxPromoPerDay = settings?.max_promo_per_day ?? 1;
@@ -81,7 +87,7 @@ async function run() {
       .map((p) => `${p.endpoint_id}:${p.channel_id}:${ymd(new Date(p.scheduled_at))}`)
   );
   const promoPerDay = new Map();
-  for (const p of anchored.filter((p) => p.kind === 'promo')) {
+  for (const p of anchored.filter((x) => x.kind === 'promo')) {
     const d = ymd(new Date(p.scheduled_at));
     promoPerDay.set(d, (promoPerDay.get(d) ?? 0) + 1);
   }
@@ -96,10 +102,10 @@ async function run() {
     queues.get(p.channel_id).push(p);
   }
 
+  // buildSlots כבר מסנן ימים חסומים בערוץ; כאן מסננים גם ימים שעברו
   const pending = new Set(
     buildSlots(week, channels, null).filter((s) => s.dateKey >= today)
   );
-  const moves = [];
 
   while (pending.size && [...queues.values()].some((q) => q.length)) {
     const slot = nextSlot(pending, usage, week);
@@ -116,36 +122,34 @@ async function run() {
     let hour = new Date(post.scheduled_at).getHours();
     while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
 
-    const at = new Date(`${slot.dateKey}T${String(hour).padStart(2, '0')}:00:00`);
     usage.take(slot.channel_id, slot.dateKey, post.kind, hour);
-    if (post.endpoint_id) sameDay.add(`${post.endpoint_id}:${slot.channel_id}:${slot.dateKey}`);
-    if (post.kind === 'promo') {
-      promoPerDay.set(slot.dateKey, (promoPerDay.get(slot.dateKey) ?? 0) + 1);
-    }
     if (post.endpoint_id) {
+      sameDay.add(`${post.endpoint_id}:${slot.channel_id}:${slot.dateKey}`);
       const key = `${post.endpoint_id}:${post.channel_id}`;
       neighbours.set(key, [...(neighbours.get(key) ?? []), slot.dateKey]);
     }
+    if (post.kind === 'promo') {
+      promoPerDay.set(slot.dateKey, (promoPerDay.get(slot.dateKey) ?? 0) + 1);
+    }
 
-    moves.push({ post, to: at, dateKey: slot.dateKey });
+    result.moves.push({
+      post,
+      dateKey: slot.dateKey,
+      hour,
+      to: new Date(`${slot.dateKey}T${String(hour).padStart(2, '0')}:00:00`),
+      from: ymd(new Date(post.scheduled_at)),
+      wasIllegal: illegal(post),
+    });
   }
 
-  const stuck = [...queues.values()].flat();
-  report(moves, stuck);
+  // מי שלא מצא יום. ההבחנה חשובה: פוסט שנשאר על יום חסום הוא תקלה פתוחה,
+  // ופוסט שפשוט לא היה טעם להזיז אותו הוא לא.
+  result.stuck = [...queues.values()].flat().map((post) => ({
+    post,
+    illegal: illegal(post),
+  }));
 
-  if (!apply) {
-    console.log('\nהרצה יבשה. להזזה בפועל: הוסיפו --yes');
-    return;
-  }
-
-  let changed = 0;
-  for (const m of moves) {
-    if (ymd(m.to) === ymd(new Date(m.post.scheduled_at))
-        && m.to.getHours() === new Date(m.post.scheduled_at).getHours()) continue;
-    await query('update posts set scheduled_at = $1 where id = $2', [m.to, m.post.id]);
-    changed += 1;
-  }
-  console.log(`\nהוזזו ${changed} פוסטים.`);
+  return result;
 
   /** האם מותר להעביר את הפוסט ליום הזה */
   function fits(post, dateKey) {
@@ -161,6 +165,67 @@ async function run() {
     if (post.kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
     return true;
   }
+}
+
+/** כותב את ההזזות. מחזיר כמה פוסטים באמת זזו. */
+export async function applyRespace(moves) {
+  let changed = 0;
+  for (const m of moves) {
+    const was = new Date(m.post.scheduled_at);
+    if (m.from === m.dateKey && was.getHours() === m.hour) continue;
+    await query('update posts set scheduled_at = $1 where id = $2', [m.to, m.post.id]);
+    changed += 1;
+  }
+  return changed;
+}
+
+/**
+ * מפנה פוסטים שיושבים על ימים שנחסמו לערוץ שלהם. רץ אחרי כל שינוי הגדרות
+ * ערוץ — חסימת יום היא הצהרה על הלוח כולו, לא רק על שיבוצים עתידיים.
+ *
+ * ממוקד בכוונה: רק הפוסטים הלא-חוקיים זזים, השאר לא מרגישים כלום.
+ * פוסט שלא נמצא לו יום חוקי נשאר במקום ומדווח — וגם מקבל התראת crit
+ * (postsOnBlockedDays נקראת מ-alerts.js), כדי שלא ייעלם בשקט.
+ *
+ * @param {{weeks?: number}} [opts] כמה שבועות קדימה לסרוק
+ * @returns {Promise<{moved: number, stuck: object[]}>}
+ */
+export function relocateBlocked({ weeks = HORIZON_WEEKS } = {}) {
+  // דרך אותה שרשרת של המנוע, כדי שפינוי והמילוי האוטומטי לא ירוצו זה על זה
+  return withEngineLock(async () => {
+    const stranded = await postsOnBlockedDays(weeks);
+    if (stranded.length === 0) return { moved: 0, stuck: [] };
+
+    const anchors = [...new Set(stranded.map((p) => weekMeta(p.scheduled_at).start))];
+
+    let moved = 0;
+    const stuck = [];
+    for (const anchor of anchors) {
+      const plan = await planRespace(anchor, { onlyIllegal: true });
+      moved += await applyRespace(plan.moves);
+      stuck.push(...plan.stuck.filter((s) => s.illegal).map((s) => s.post));
+    }
+    return { moved, stuck };
+  });
+}
+
+/** פוסטים עתידיים שיושבים על יום חסום לערוץ שלהם */
+export async function postsOnBlockedDays(weeks = HORIZON_WEEKS) {
+  const until = new Date();
+  until.setDate(until.getDate() + weeks * 7);
+
+  const r = await rows(
+    `select p.id, p.title, p.status, p.scheduled_at, p.channel_id,
+            c.name as channel_name, c.blocked_days
+       from posts p
+       join channels c on c.id = p.channel_id
+      where p.status in ('scheduled','pending_approval')
+        and p.scheduled_at >= date_trunc('day', now())
+        and p.scheduled_at <= $1
+      order by p.scheduled_at`,
+    [until]
+  );
+  return r.filter((p) => onBlockedDay(p, p));
 }
 
 /** ימים תפוסים לכל נקודה+ערוץ מחוץ לשבוע, בטווח שרלוונטי ל-min_gap_days */
@@ -186,26 +251,87 @@ async function neighbourDays(from, to, minGap) {
   return map;
 }
 
-function report(moves, stuck) {
-  const actual = moves.filter(
-    (m) => m.dateKey !== ymd(new Date(m.post.scheduled_at))
-  );
+/* ========================= CLI ========================= */
 
-  if (actual.length === 0) console.log('\nהשבוע כבר מפוזר לפי המנוע — אין מה להזיז.');
+/**
+ *   node src/respace.js                     הרצה יבשה על השבוע הנוכחי
+ *   node src/respace.js 2026-08-16          הרצה יבשה על השבוע של התאריך
+ *   node src/respace.js 2026-08-16 --yes    הזזה בפועל
+ *   node src/respace.js --blocked           רק פוסטים על ימים חסומים, כל השבועות
+ *   node src/respace.js --org 2             ארגון אחר (ברירת מחדל 1)
+ */
+const runAsCli = process.argv[1]
+  && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+
+if (runAsCli) {
+  const { withOrg } = await import('./db.js');
+
+  const argv = process.argv.slice(2);
+  const apply = argv.includes('--yes');
+  const blockedOnly = argv.includes('--blocked');
+  const orgIdx = argv.indexOf('--org');
+  const orgId = orgIdx >= 0 ? Number(argv[orgIdx + 1]) : 1;
+  const anchor = argv.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a)) ?? new Date();
+
+  await withOrg(orgId, () => (blockedOnly ? cliBlocked(apply) : cliWeek(anchor, apply, orgId)))
+    .finally(() => pool.end());
+}
+
+async function cliWeek(anchor, apply, orgId) {
+  const plan = await planRespace(anchor);
+  console.log(`שבוע ${plan.week.label} · ארגון ${orgId} · ${plan.posts} פוסטים על הלוח`);
+  if (plan.posts === 0) return;
+
+  report(plan);
+  if (!apply) return console.log('\nהרצה יבשה. להזזה בפועל: הוסיפו --yes');
+
+  console.log(`\nהוזזו ${await applyRespace(plan.moves)} פוסטים.`);
+}
+
+async function cliBlocked(apply) {
+  const stranded = await postsOnBlockedDays();
+  if (stranded.length === 0) return console.log('אין פוסטים על ימים חסומים.');
+
+  console.log(`${stranded.length} פוסטים יושבים על ימים חסומים:`);
+  for (const p of stranded) console.log(`  ${line(p)}`);
+
+  if (!apply) return console.log('\nהרצה יבשה. לפינוי בפועל: הוסיפו --yes');
+
+  const { moved, stuck } = await relocateBlocked();
+  console.log(`\nפונו ${moved} פוסטים.`);
+  if (stuck.length) {
+    console.log(`⚠ ${stuck.length} לא נמצא להם יום חוקי — צריך טיפול ידני:`);
+    for (const p of stuck) console.log(`  ${line(p)}`);
+  }
+}
+
+function line(p) {
+  return `${p.channel_name} · ${p.title} · ${ymd(new Date(p.scheduled_at))}`;
+}
+
+function report(plan) {
+  const moves = plan.moves.filter((m) => m.from !== m.dateKey);
+  if (moves.length === 0) console.log('\nהשבוע כבר מפוזר לפי המנוע — אין מה להזיז.');
   else {
-    console.log(`\n${actual.length} פוסטים יזוזו:\n`);
-    for (const m of actual) {
-      const wasDay = ymd(new Date(m.post.scheduled_at));
-      const hour = String(m.to.getHours()).padStart(2, '0');
+    console.log(`\n${moves.length} פוסטים יזוזו:\n`);
+    for (const m of moves) {
+      const flag = m.wasIllegal ? '  (היה על יום חסום)' : '';
       console.log(`  ${m.post.channel_name} · ${m.post.title}`);
-      console.log(`     ${wasDay}  ⟵ במקום ⟶  ${m.dateKey} ${hour}:00`);
+      console.log(`     ${m.from}  ⟵ במקום ⟶  ${m.dateKey} ` +
+                  `${String(m.hour).padStart(2, '0')}:00${flag}`);
     }
   }
 
-  if (stuck.length) {
-    console.log(`\n${stuck.length} פוסטים נשארים במקום (אין להם יום חוקי בשבוע):`);
-    for (const p of stuck) {
-      console.log(`  ${p.channel_name} · ${p.title} · ${ymd(new Date(p.scheduled_at))}`);
-    }
+  const blocked = plan.stuck.filter((s) => s.illegal);
+  const fine = plan.stuck.filter((s) => !s.illegal);
+
+  if (blocked.length) {
+    console.log(`\n⚠ ${blocked.length} פוסטים נשארים על יום חסום — אין להם יום חוקי בשבוע.`);
+    console.log('   צריך להזיז אותם ידנית לשבוע אחר, או לפנות להם מקום:');
+    for (const s of blocked) console.log(`     ${line(s.post)}`);
+  }
+  if (fine.length) {
+    console.log(`\n${fine.length} פוסטים נשארים במקום (לא נמצא להם יום טוב יותר):`);
+    for (const s of fine) console.log(`     ${line(s.post)}`);
   }
 }

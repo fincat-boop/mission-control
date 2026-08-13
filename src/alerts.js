@@ -1,6 +1,9 @@
 import { one, rows } from './db.js';
 import { effectiveCadenceDays, ymd } from './board.js';
 import { campaignsWithHealth } from './campaigns.js';
+import { postsOnBlockedDays } from './respace.js';
+
+const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
 /**
  * מרכז ההתראות. הכול מחושב בזמן קריאה — אין טבלת התראות,
@@ -160,6 +163,22 @@ export async function buildAlerts() {
       title: `אין טקסט לפוסט שמתפרסם בקרוב`,
       detail: `${p.title} · ${p.channel_name} · ` +
               `${new Date(p.scheduled_at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}`,
+      tab: 'board',
+      post_id: p.id,
+    });
+  }
+
+  // פוסט שיושב על יום שהערוץ חסם. חסימת יום מפנה אוטומטית את מי שאפשר
+  // (relocateBlocked), אבל פוסט שלא נמצא לו יום חוקי נשאר במקום — וזה חייב
+  // להיראות, אחרת הוא יוצא לאוויר ביום שהוגדר סגור.
+  for (const p of await postsOnBlockedDays()) {
+    const d = new Date(p.scheduled_at);
+    alerts.push({
+      id: `blocked-day-${p.id}`,
+      level: 'crit',
+      title: `פוסט על יום חסום — ${p.channel_name}`,
+      detail: `${p.title} · ${HE_DAYS[d.getDay()]} ${d.toLocaleDateString('he-IL')} · ` +
+              'צריך להזיז אותו ידנית או לפתוח את היום',
       tab: 'board',
       post_id: p.id,
     });

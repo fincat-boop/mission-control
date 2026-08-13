@@ -1,6 +1,7 @@
 import multer from 'multer';
 import { one } from '../db.js';
 import { applyWeek, withEngineLock } from '../engine.js';
+import { relocateBlocked } from '../respace.js';
 
 /**
  * עזרים שכל קובצי הנתיבים נשענים עליהם.
@@ -27,6 +28,30 @@ export async function autoFill(week) {
   } catch (e) {
     console.error('autoFill נכשל:', e);
     return { placed: 0, holes: 0 };
+  }
+}
+
+/**
+ * מפנה פוסטים שיושבים על ימים שנחסמו לערוץ שלהם. רץ אחרי שינוי הגדרות
+ * ערוץ, כי חסימת יום היא הצהרה על כל הלוח ולא רק על שיבוצים עתידיים —
+ * בלי זה פוסט שכבר שובץ נשאר על היום החסום לנצח.
+ *
+ * fail-soft כמו autoFill: השמירה עצמה חשובה יותר מהפינוי שאחריה. פוסט
+ * שלא נמצא לו יום חוקי חוזר ב-stuck, וגם מופיע כהתראה קבועה ב-alerts.js.
+ */
+export async function evictBlocked() {
+  try {
+    const { moved, stuck } = await relocateBlocked();
+    return {
+      moved,
+      stuck: stuck.map((p) => ({
+        id: p.id, title: p.title,
+        channel_name: p.channel_name, scheduled_at: p.scheduled_at,
+      })),
+    };
+  } catch (e) {
+    console.error('פינוי ימים חסומים נכשל:', e);
+    return { moved: 0, stuck: [] };
   }
 }
 
