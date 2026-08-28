@@ -48,7 +48,7 @@ export async function planUrgent(input) {
   const existing = await rows(
     `select id, channel_id, endpoint_id, kind, scheduled_at
        from posts
-      where status in ('scheduled','published','pending_approval')
+      where status in ('scheduled','approved','publishing','failed','published','pending_approval')
         and scheduled_at >= $1 and scheduled_at <= $2`,
     [countFrom, lastDay]
   );

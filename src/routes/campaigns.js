@@ -86,7 +86,7 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
            from content_items ci
           where ci.id = p.content_id
             and ci.campaign_id = $2
-            and p.status in ('scheduled','pending_approval','hole')
+            and p.status in ('scheduled','approved','failed','pending_approval','hole')
             and p.scheduled_at >= now()
           returning p.id`,
         [days, c.id]

@@ -183,7 +183,7 @@ export async function campaignsWithHealth() {
     const grid = gridFor(c, shaped, myChannels, today, list);
 
     const scheduled = myPosts.filter(
-      (p) => p.status === 'scheduled' || p.status === 'pending_approval').length;
+      (p) => ['scheduled', 'approved', 'publishing', 'failed', 'pending_approval'].includes(p.status)).length;
     const published = myPosts.filter((p) => p.status === 'published').length;
 
     // מה שהמערכת גוזרת בעצמה. נשלח תמיד — גם כשיש ערך ידני — כדי

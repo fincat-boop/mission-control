@@ -87,7 +87,7 @@ async function snapshot() {
     one('select * from engine_settings limit 1'),
     one(`select
            (select count(*)::int from content_items) as content,
-           (select count(*)::int from posts where status in ('scheduled','pending_approval')) as scheduled,
+           (select count(*)::int from posts where status in ('scheduled','approved','publishing','failed','pending_approval')) as scheduled,
            (select count(*)::int from posts where status = 'hole') as holes,
            (select count(*)::int from tasks where done = false) as open_tasks`),
   ]);
@@ -404,7 +404,7 @@ const WRITE_TOOLS = {
       if (c.paused_at) return { error: `הקמפיין "${c.name}" כבר מושהה` };
       const held = await one(
         `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
-          where ci.campaign_id = $1 and p.status in ('scheduled','pending_approval','hole')
+          where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
             and p.scheduled_at >= now()`, [a.campaign_id]);
       return { warnings: held.n ? [`${held.n} שיבוצים עתידיים ייעלמו מהלוח עד להפעלה מחדש`] : [] };
     },
@@ -689,7 +689,7 @@ async function checkCampaignUpdate(a) {
   if (a.starts_on && c.starts_on && String(a.starts_on).slice(0, 10) !== String(c.starts_on).slice(0, 10)) {
     const moving = await one(
       `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
-        where ci.campaign_id = $1 and p.status in ('scheduled','pending_approval','hole')
+        where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
           and p.scheduled_at >= now()`, [c.id]);
     if (moving.n) warnings.push(`${moving.n} שיבוצים עתידיים יזוזו יחד עם הקמפיין`);
   }
@@ -711,7 +711,7 @@ async function checkChannelUpdate(a) {
     if (added.length) {
       const clash = await rows(
         `select id, title, scheduled_at from posts
-          where channel_id = $1 and status in ('scheduled','pending_approval','hole')
+          where channel_id = $1 and status in ('scheduled','approved','failed','pending_approval','hole')
             and scheduled_at >= now()
             and extract(dow from scheduled_at)::int = any($2::int[])`,
         [a.channel_id, added]);

@@ -32,6 +32,38 @@ export function wirePostDialog() {
     await refreshAfterPostChange();
   }));
 
+  // אישור/ביטול שליחה אוטומטית — פר-פוסט, הרשאת approve
+  $('#pApprove').addEventListener('click', run(async () => {
+    if (!previewPost) return;
+    const approving = previewPost.status !== 'approved';
+    const path = approving ? 'approve-publish' : 'unapprove-publish';
+    await api(`/posts/${previewPost.id}/${path}`, { method: 'POST' });
+    $('#postDlg').close();
+    toast(approving
+      ? 'אושר — הפוסט יישלח אוטומטית במועד שנקבע. ⚡'
+      : 'האישור בוטל — הפוסט חזר למתוכנן ולא יישלח.');
+    await refreshAfterPostChange();
+  }));
+
+  // שליחה מיידית — בלי לחכות לשעה המתוזמנת
+  $('#pPublishNow').addEventListener('click', run(async () => {
+    if (!previewPost) return;
+    if (!(await confirmDialog('לפרסם את הפוסט עכשיו, ישירות לערוץ? הפעולה מיידית.'))) return;
+    const btn = $('#pPublishNow');
+    btn.disabled = true;
+    btn.textContent = 'שולח…';
+    try {
+      const res = await api(`/posts/${previewPost.id}/publish-now`, { method: 'POST' });
+      $('#postDlg').close();
+      // ניוזלטר: ה-HUB קיבל ושולח אצלו — הפוסט ייסגר ל"פורסם" כשהשליחה תושלם
+      toast(res.pending ? 'נשלח ל-HUB ✓ — הפוסט יסומן "פורסם" כשהשליחה תושלם שם.' : 'פורסם! ✓');
+      await refreshAfterPostChange();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'פרסם עכשיו';
+    }
+  }));
+
   // תוצאות בפועל — שדה ריק נשלח כ-null מפורש, לא כאפס
   $('#rSave').addEventListener('click', run(async () => {
     if (!previewPost) return;
@@ -85,8 +117,20 @@ export async function openPostPreview(postId) {
   previewPost = post;
 
   const pubBtn = $('#pPublish');
-  pubBtn.hidden = !(can('content') && ['scheduled', 'published'].includes(post.status));
+  pubBtn.hidden = !(can('content') && ['scheduled', 'failed', 'published'].includes(post.status));
   pubBtn.textContent = post.status === 'published' ? 'בטל פרסום' : 'סמן כפורסם';
+
+  // מסלול השליחה האוטומטית — ערוץ מטא מחובר או ערוץ מייל (HUB), הרשאת approve
+  const autoCapable = ['facebook', 'instagram', 'newsletter'].includes(post.platform)
+    && post.autopub_connected;
+  const approveBtn = $('#pApprove');
+  approveBtn.hidden = !(can('approve') && autoCapable
+    && ['scheduled', 'failed', 'approved'].includes(post.status));
+  approveBtn.textContent = post.status === 'approved'
+    ? 'בטל אישור שליחה' : 'אשר לשליחה אוטומטית ⚡';
+  approveBtn.style.color = post.status === 'approved' ? 'var(--st-crit)' : 'var(--st-good)';
+  $('#pPublishNow').hidden = !(can('approve') && autoCapable
+    && ['scheduled', 'failed', 'approved'].includes(post.status));
 
   // תוצאות נמדדות רק למה שכבר יצא לאוויר
   const showResults = can('content') && post.status === 'published';
@@ -135,5 +179,20 @@ export async function openPostPreview(postId) {
 
     ${variant && variant.status !== 'ready'
       ? `<div class="pvwarn">הגרסה הזו במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
-         היא לא נחשבת מוכנה לפרסום.</div>` : ''}`;
+         היא לא נחשבת מוכנה לפרסום.</div>` : ''}
+
+    ${post.status === 'approved'
+      ? `<div class="pvauto">⚡ מאושר לשליחה אוטומטית${
+          post.approved_by_name ? ` — אישר: ${esc(post.approved_by_name)}` : ''}.
+          יישלח ב-${esc(when)}.</div>` : ''}
+    ${post.status === 'publishing'
+      ? (post.platform === 'newsletter'
+          ? '<div class="pvauto">📧 התקבל ב-HUB — הניוזלטר בשליחה. הפוסט יסומן "פורסם" אוטומטית כשתושלם.</div>'
+          : '<div class="pvauto">🚀 נשלח לערוץ ממש עכשיו…</div>') : ''}
+    ${post.status === 'failed'
+      ? `<div class="pvwarn"><b>הפרסום האוטומטי נכשל:</b> ${esc(post.publish_error ?? 'ללא פירוט')}
+         <br>אפשר לתקן ולאשר שוב, לפרסם עכשיו, או לפרסם ידנית ולסמן "פורסם".</div>` : ''}
+    ${post.status === 'published' && post.external_url
+      ? `<div class="pvauto">✓ פורסם אוטומטית —
+         <a href="${esc(post.external_url)}" target="_blank" rel="noopener">לצפייה בפוסט</a></div>` : ''}`;
 }

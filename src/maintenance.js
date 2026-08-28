@@ -9,7 +9,7 @@ import { weekMeta } from './board.js';
  * מבקשה, ולכן אין להן org מובלע — בלי זה הן היו רצות על ה-pool (superuser,
  * עוקף RLS) ומערבבות ארגונים. רשימת הארגונים נשלפת על ה-pool בכוונה.
  */
-async function forEachOrg(fn) {
+export async function forEachOrg(fn) {
   const orgs = await rows('select id from orgs order by id');
   for (const { id } of orgs) {
     await withOrg(id, () => fn(id)).catch((e) =>
@@ -123,7 +123,7 @@ export async function suggestContentSwaps() {
           and not exists (
             select 1 from posts p2
              where p2.content_id = ci.id and p2.channel_id = $1
-               and p2.status in ('scheduled','published','pending_approval')
+               and p2.status in ('scheduled','approved','publishing','failed','published','pending_approval')
                and p2.scheduled_at >= $2 and p2.scheduled_at <= $3
           )
         order by e.importance desc, ci.created_at asc

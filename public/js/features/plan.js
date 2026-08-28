@@ -567,9 +567,24 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
 }
 
 /** הגרסה: הניסוח של זווית מסוימת למדיה מסוימת */
-function openVariantForm({ item, channelId, campaign }, reload) {
+async function openVariantForm({ item, channelId, campaign }, reload) {
   const channel = state.channels.find((c) => c.id === channelId);
   const v = item.variants.find((x) => x.channel_id === channelId) ?? null;
+
+  // ערוץ מייל (HUB): נושא + גוף HTML + רשימות יעד. הרשימות מגיעות מה-HUB —
+  // אם הוא לא זמין, הטופס נפתח בלי הבורר עם הסבר, והבחירה הקיימת נשמרת.
+  const isMail = channel?.platform === 'newsletter';
+  const vMeta = v?.meta ?? {};
+  let listOptions = null;
+  let listError = null;
+  if (isMail) {
+    try {
+      const { lists } = await api('/publish/hub-lists');
+      listOptions = lists.map((l) => [l.id, l.name]);
+    } catch (e) {
+      listError = e.message;
+    }
+  }
 
   // הקבצים של המדיה הזו בלבד, ולצידם מה שמשותף לכל המדיות של הזווית
   const mine = (item.variant_assets ?? []).filter((a) => a.variant_id === v?.id);
@@ -583,8 +598,18 @@ function openVariantForm({ item, channelId, campaign }, reload) {
   openGeneric({
     title: `${item.title} — ${channel?.name ?? ''}`,
     fields: [
-      { name: 'body', label: 'הטקסט כפי שהוא ייצא במדיה הזו', type: 'textarea',
-        value: v?.body },
+      ...(isMail ? [{ name: 'subject', label: 'נושא המייל', type: 'text',
+                      value: vMeta.subject,
+                      hint: listError
+                        ? `רשימות היעד לא נטענו (${listError}) — הבחירה הקיימת נשמרת, מנסים שוב כשה-HUB זמין.`
+                        : undefined }] : []),
+      { name: 'body',
+        label: isMail ? 'גוף המייל (HTML)' : 'הטקסט כפי שהוא ייצא במדיה הזו',
+        type: 'textarea', value: v?.body },
+      ...(isMail && listOptions ? [{
+        name: 'list_ids', label: 'רשימות היעד ב-HUB', type: 'multicheck',
+        value: vMeta.list_ids ?? [], options: listOptions,
+      }] : []),
       { name: 'status', label: 'מצב', type: 'select', value: v?.status ?? 'draft',
         options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
                   ['not_relevant', 'לא רלוונטי למדיה הזו']] },
@@ -594,6 +619,16 @@ function openVariantForm({ item, channelId, campaign }, reload) {
     onSave: async (val) => {
       const body = { ...val };
       delete body.__files;
+      if (isMail) {
+        // meta נשלח רק כשיש מה לעדכן — כך כשל טעינת רשימות לא מוחק בחירה קיימת
+        body.meta = {
+          ...vMeta,
+          subject: val.subject ?? null,
+          ...(listOptions ? { list_ids: val.list_ids ?? [] } : {}),
+        };
+        delete body.subject;
+        delete body.list_ids;
+      }
       body.week = state.week;
       await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
 

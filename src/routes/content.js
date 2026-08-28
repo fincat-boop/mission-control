@@ -17,13 +17,16 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
   const b = req.body ?? {};
   const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
 
+  // meta — נושא ורשימות יעד של ערוץ המייל. לא נשלח = לא נוגעים בקיים.
+  const meta = b.meta != null ? JSON.stringify(b.meta) : null;
   const v = await one(
-    `insert into content_variants (content_id, channel_id, body, status)
-     values ($1,$2,coalesce($3,''),$4)
+    `insert into content_variants (content_id, channel_id, body, status, meta)
+     values ($1,$2,coalesce($3,''),$4,$5::jsonb)
      on conflict (content_id, channel_id)
-       do update set body = coalesce($3, content_variants.body), status = $4
+       do update set body = coalesce($3, content_variants.body), status = $4,
+                     meta = coalesce($5::jsonb, content_variants.meta)
      returning *`,
-    [req.params.id, req.params.channelId, b.body ?? null, status]
+    [req.params.id, req.params.channelId, b.body ?? null, status, meta]
   );
   const engine = await autoFill(b.week);
   res.json({ variant: v, engine });
@@ -48,7 +51,7 @@ r.post('/campaigns/:id/pause', requirePerm('settings'), wrap(async (req, res) =>
 
   const held = await one(
     `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
-      where ci.campaign_id = $1 and p.status in ('scheduled','pending_approval','hole')
+      where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
         and p.scheduled_at >= now()`,
     [c.id]
   );
@@ -67,7 +70,7 @@ r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) =
   const cleared = await rows(
     `delete from posts p using content_items ci
       where ci.id = p.content_id and ci.campaign_id = $1
-        and p.status in ('scheduled','pending_approval','hole')
+        and p.status in ('scheduled','approved','failed','pending_approval','hole')
         and p.scheduled_at >= now()
       returning p.id`,
     [c.id]

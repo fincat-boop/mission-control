@@ -25,7 +25,10 @@ function collectValues(fields) {
     if (f.type === 'checkbox') {
       values[f.name] = el.checked;
     } else if (f.type === 'multicheck') {
-      values[f.name] = $$(`[data-multi="${f.name}"]:checked`).map((i) => Number(i.value));
+      // מזהה מספרי חוזר כמספר (ערוצים וכו'); מזהה מחרוזת (UUID של רשימת
+      // קהל ב-HUB) נשאר מחרוזת
+      values[f.name] = $$(`[data-multi="${f.name}"]:checked`)
+        .map((i) => (/^\d+$/.test(i.value) ? Number(i.value) : i.value));
     } else if (f.type === 'auto') {
       // מצב "אוטומטי" נשמר כ-null, וזה מה שגורם לשרת לגזור את הערך בעצמו
       const manual = $(`#gen_${f.name}_mode`).checked;
@@ -69,11 +72,11 @@ function fieldHtml(f) {
     </label></div></div>`;
   }
   if (f.type === 'multicheck') {
-    const chosen = new Set((f.value ?? []).map(Number));
+    const chosen = new Set((f.value ?? []).map(String));
     return `<div class="frow"><label>${esc(f.label)}</label><div class="checks">
       ${f.options.map(([v, l]) =>
-        `<label><input type="checkbox" data-multi="${f.name}" value="${v}"${
-          chosen.has(Number(v)) ? ' checked' : ''}> ${esc(l)}</label>`).join('')}
+        `<label><input type="checkbox" data-multi="${f.name}" value="${esc(v)}"${
+          chosen.has(String(v)) ? ' checked' : ''}> ${esc(l)}</label>`).join('')}
     </div></div>`;
   }
   if (f.type === 'select') {

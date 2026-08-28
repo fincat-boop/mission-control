@@ -36,7 +36,7 @@ export async function buildStats(from, to) {
       one(
         `select
            count(*) filter (where status = 'published')::int      as published,
-           count(*) filter (where status = 'scheduled')::int      as scheduled,
+           count(*) filter (where status in ('scheduled','approved','publishing','failed'))::int as scheduled,
            count(*) filter (where status = 'pending_approval')::int as pending,
            count(*) filter (where status = 'hole'
              or (status = 'scheduled' and content_id is null))::int as holes,

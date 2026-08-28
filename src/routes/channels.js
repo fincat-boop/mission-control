@@ -13,7 +13,7 @@ r.get('/channels', wrap(async (_req, res) => {
 
 const CHANNEL_FIELDS = ['name', 'max_per_week', 'target_per_week', 'max_promo_per_week',
                         'max_hybrid_per_week', 'max_value_per_week', 'urgent_reserve_pct',
-                        'blocked_days', 'active', 'sort_order', 'efficiency'];
+                        'blocked_days', 'active', 'sort_order', 'efficiency', 'platform'];
 
 r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
   if (!req.body?.name) return bad(res, 'צריך שם לערוץ');

@@ -139,6 +139,8 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
 .corner-tag.red    { background: var(--st-crit); }
 .corner-tag.yellow { background: var(--st-warn); }
 .corner-tag.blue   { background: var(--accent); }
+.corner-tag.auto   { background: var(--st-good); }
+.post.failed { outline: 2px solid var(--st-crit); outline-offset: -1px; }
 
 .hole {
   position: relative; border: 1.5px dashed var(--st-crit); border-radius: 7px;
@@ -316,6 +318,8 @@ table.utable { width: 100%; border-collapse: collapse; }
 }
 .pvempty { margin-top: 14px; color: var(--st-warn); font-size: 12.5px; }
 .pvwarn { margin-top: 10px; color: var(--st-warn); font-size: 12px; }
+.pvauto { margin-top: 10px; color: var(--st-good); font-size: 12.5px; }
+.pvauto a { color: inherit; }
 
 /* modal + tooltip + toast */
 dialog {

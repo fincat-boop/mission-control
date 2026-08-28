@@ -1,0 +1,172 @@
+import { Router } from 'express';
+import { bad, wrap } from './_shared.js';
+import { one, query, rows } from '../db.js';
+import { requirePerm } from '../auth.js';
+import { encryptSecret, decryptSecret } from '../publish/crypto.js';
+import { verifyConnection } from '../publish/meta.js';
+import { loadPayload, publishBlocker, publishOne } from '../publish/runner.js';
+import { HubMailError, audienceLists, hubMailReady } from '../hub-mail.js';
+
+const r = Router();
+
+/* ========================= חיבורי ערוצים ========================= */
+
+/**
+ * מצב הפרסום האוטומטי: המתג הגלובלי + החיבור של כל ערוץ.
+ * הטוקן לעולם לא חוזר — רק העובדה שהוא קיים.
+ */
+r.get('/publish/status', wrap(async (_req, res) => {
+  const [settings, connections] = await Promise.all([
+    one('select autopublish_enabled from engine_settings limit 1'),
+    rows(
+      `select cc.channel_id, cc.page_id, cc.ig_user_id, cc.auto_enabled,
+              cc.access_token_enc is not null as has_token,
+              cc.last_check_at, cc.last_check_ok, cc.last_check_note
+         from channel_connections cc`),
+  ]);
+  res.json({
+    autopublish_enabled: settings?.autopublish_enabled ?? false,
+    hub_mail_ready: hubMailReady(),
+    connections,
+  });
+}));
+
+/**
+ * רשימות הקהל מה-HUB — לבורר בעריכת גרסת המייל. שגיאת HUB חוזרת עם
+ * ההודעה הידידותית שלו (העברית של HubMailError), לא כ"משהו נשבר".
+ */
+r.get('/publish/hub-lists', wrap(async (_req, res) => {
+  try {
+    res.json({ lists: await audienceLists() });
+  } catch (e) {
+    if (e instanceof HubMailError) return bad(res, e.message, e.status >= 500 ? 502 : e.status);
+    throw e;
+  }
+}));
+
+/** שמירת חיבור. טוקן שלא נשלח — נשאר כמו שהוא (עריכה בלי להזין מחדש). */
+r.put('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  const channel = await one('select id, platform from channels where id = $1', [req.params.id]);
+  if (!channel) return bad(res, 'לא נמצא ערוץ כזה', 404);
+  if (!['facebook', 'instagram'].includes(channel.platform)) {
+    return bad(res, 'חיבור API רלוונטי רק לערוץ פייסבוק או אינסטגרם — קודם מגדירים פלטפורמה לערוץ');
+  }
+
+  const tokenEnc = b.access_token?.trim() ? encryptSecret(b.access_token.trim()) : null;
+
+  const c = await one(
+    `insert into channel_connections (channel_id, page_id, ig_user_id, access_token_enc, auto_enabled)
+     values ($1,$2,$3,$4,coalesce($5,false))
+     on conflict (channel_id) do update set
+       page_id          = coalesce($2, channel_connections.page_id),
+       ig_user_id       = coalesce($3, channel_connections.ig_user_id),
+       access_token_enc = coalesce($4, channel_connections.access_token_enc),
+       auto_enabled     = coalesce($5, channel_connections.auto_enabled),
+       updated_at       = now()
+     returning channel_id, page_id, ig_user_id, auto_enabled,
+               access_token_enc is not null as has_token`,
+    [channel.id, b.page_id?.trim() || null, b.ig_user_id?.trim() || null,
+     tokenEnc, b.auto_enabled ?? null]
+  );
+  res.json({ connection: c });
+}));
+
+/** בדיקת חיים: קריאה אמיתית ל-Graph עם הטוקן השמור, והתוצאה נשמרת לתצוגה */
+r.post('/channels/:id/connection/verify', requirePerm('settings'), wrap(async (req, res) => {
+  const c = await one(
+    `select cc.*, ch.platform from channel_connections cc
+       join channels ch on ch.id = cc.channel_id
+      where cc.channel_id = $1`,
+    [req.params.id]
+  );
+  if (!c) return bad(res, 'אין עדיין חיבור לערוץ הזה', 404);
+  if (!c.access_token_enc) return bad(res, 'אין טוקן שמור — מזינים אותו קודם');
+
+  let ok = true;
+  let note;
+  try {
+    note = await verifyConnection({
+      platform: c.platform, pageId: c.page_id, igUserId: c.ig_user_id,
+      token: decryptSecret(c.access_token_enc),
+    });
+  } catch (e) {
+    ok = false;
+    note = e.message;
+  }
+
+  await query(
+    `update channel_connections
+        set last_check_at = now(), last_check_ok = $2, last_check_note = $3
+      where channel_id = $1`,
+    [c.channel_id, ok, note]);
+  res.json({ ok, note });
+}));
+
+r.delete('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res) => {
+  await query('delete from channel_connections where channel_id = $1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ========================= אישור ושליחה פר-פוסט ========================= */
+
+/**
+ * אישור שליחה אוטומטית לפוסט בודד. הבדיקות רצות כאן, לא רק בשליחה —
+ * כדי שבעיה תתגלה מול המשתמש שמאשר, לא בלילה מול אף אחד.
+ */
+r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, res) => {
+  const payload = await loadPayload(req.params.id);
+  if (!payload) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  if (!['scheduled', 'failed'].includes(payload.post.status)) {
+    return bad(res, 'אפשר לאשר רק שיבוץ מתוכנן (או כזה שנכשל)');
+  }
+
+  const blocker = publishBlocker(payload);
+  if (blocker) return bad(res, blocker);
+  // ניוזלטר לא צריך channel_connection — החיבור שלו הוא HUB_API_* בסביבה,
+  // ו-publishBlocker כבר בדק אותו
+  if (!payload.post.auto_enabled && payload.post.platform !== 'newsletter') {
+    return bad(res, 'השליחה האוטומטית כבויה לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
+  }
+
+  const post = await one(
+    `update posts set status = 'approved', approved_by = $2, approved_at = now(),
+            publish_error = null
+      where id = $1 returning *`,
+    [payload.post.id, req.user.id]
+  );
+  res.json({ post });
+}));
+
+/** ביטול אישור — חוזר למתוכנן, שום דבר לא נשלח */
+r.post('/posts/:id/unapprove-publish', requirePerm('approve'), wrap(async (req, res) => {
+  const post = await one(
+    `update posts set status = 'scheduled', approved_by = null, approved_at = null
+      where id = $1 and status = 'approved' returning *`,
+    [req.params.id]
+  );
+  if (!post) return bad(res, 'אין שיבוץ שמאושר לשליחה עם המזהה הזה', 404);
+  res.json({ post });
+}));
+
+/** שליחה מיידית, בלי לחכות לטיק — למי שרוצה לראות את זה קורה עכשיו */
+r.post('/posts/:id/publish-now', requirePerm('approve'), wrap(async (req, res) => {
+  const result = await publishOne(req.params.id, {
+    allowedFrom: ['scheduled', 'approved', 'failed'],
+  });
+  if (!result.ok) return bad(res, result.error);
+  // pending — ניוזלטר שהתקבל ב-HUB ועוד נשלח אצלו (הפוסט נשאר publishing)
+  res.json({ post: result.post, pending: result.pending ?? false });
+}));
+
+/** היסטוריית הניסיונות של פוסט — מוצג בדיאלוג הפוסט */
+r.get('/posts/:id/publish-log', wrap(async (req, res) => {
+  res.json({
+    log: await rows(
+      `select id, platform, ok, external_id, error, created_at
+         from publish_log where post_id = $1 order by created_at desc limit 20`,
+      [req.params.id]),
+  });
+}));
+
+export default r;

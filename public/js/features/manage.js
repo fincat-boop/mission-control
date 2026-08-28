@@ -9,9 +9,10 @@ import { openGeneric } from '../ui/dialog.js';
 /* ========================= ניהול ========================= */
 
 export async function renderManage() {
-  const [{ endpoints }, { channels }, { settings }, { users }, backupsRes] = await Promise.all([
+  const [{ endpoints }, { channels }, { settings }, { users }, backupsRes, pub] = await Promise.all([
     api('/endpoints'), api('/channels'), api('/settings'), api('/users'),
     can('settings') ? api('/backups') : Promise.resolve(null),
+    api('/publish/status'),
   ]);
   state.endpoints = endpoints;
   rebuildEpColors();
@@ -19,6 +20,7 @@ export async function renderManage() {
   state.users = users;
 
   const ro = !can('settings'); // read-only
+  const connOf = (id) => pub.connections.find((c) => c.channel_id === id) ?? null;
 
   $('#manage').innerHTML = `
     <div class="setgroup">
@@ -32,7 +34,18 @@ export async function renderManage() {
     <div class="setgroup">
       <h2>ערוצי פרסום</h2>
       <p class="sub">כמה שטח יש בכל ערוץ ומה הכללים שלו.</p>
-      <div class="panel">${channels.map((c) => channelItem(c, ro)).join('')
+      <div class="prow" style="margin-bottom:10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="autopubGlobal" ${pub.autopublish_enabled ? 'checked' : ''}
+                 ${ro ? 'disabled' : ''}>
+          <b>שליחה אוטומטית פעילה</b>
+        </label>
+      </div>
+      <div class="fhint" style="margin-top:-6px;margin-bottom:8px">
+        מתג-העל של כל הפרסום האוטומטי. גם כשהוא דולק — שום פוסט לא נשלח בלי
+        אישור פרטני שלו ("אשר לשליחה אוטומטית" בדיאלוג הפוסט).
+      </div>
+      <div class="panel">${channels.map((c) => channelItem(c, ro, connOf(c.id), pub.hub_mail_ready)).join('')
         || '<div class="empty">אין עדיין ערוצים.</div>'}</div>
       ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
     </div>
@@ -98,7 +111,81 @@ const readyIn = (c, channels) => {
   return names.length ? `— מוכן ל${names.join(', ')}` : '— עוד לא סומן לאף ערוץ';
 };
 
-function channelItem(c, ro) {
+const PLATFORMS = [
+  ['manual',     'ידני — בלי אינטגרציה'],
+  ['facebook',   'פייסבוק (עמוד)'],
+  ['instagram',  'אינסטגרם (חשבון עסקי)'],
+  ['whatsapp',   'וואטסאפ (קבוצה)'],
+  ['newsletter', 'ניוזלטר'],
+];
+
+/** בלוק החיבור לפלטפורמה — מופיע בתוך פרטי הערוץ */
+function connectionBlock(c, conn, ro, hubReady) {
+  const platform = c.platform ?? 'manual';
+
+  const select = `
+    <div class="prow">
+      <label>פלטפורמה — קובעת איך מפרסמים לערוץ</label>
+      <select data-ch-platform="${c.id}" ${ro ? 'disabled' : ''}>
+        ${PLATFORMS.map(([v, l]) =>
+          `<option value="${v}" ${platform === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+    </div>`;
+
+  if (platform === 'whatsapp') {
+    return `${select}<div class="fhint">לקבוצת וואטסאפ אין API רשמי — השליחה חצי-אוטומטית:
+      כשמגיע מועד הפרסום נוצרת משימה דחופה עם הטקסט המוכן להעתקה, ומסמנים "פורסם" אחרי השליחה.</div>`;
+  }
+  if (platform === 'newsletter') {
+    const chip = hubReady
+      ? '<span class="chip on">מחובר ל-HUB</span>'
+      : '<span class="chip bad">לא מחובר</span>';
+    return `${select}
+      <div class="prow"><label>מערכת הדיוור (HUB)</label>${chip}</div>
+      <div class="fhint">${hubReady
+        ? 'הניוזלטר נשלח דרך ה-HUB: נושא, גוף ורשימות יעד נקבעים בעריכת הגרסה של ערוץ המייל בתוכן. שליחה רק אחרי אישור פר-פוסט.'
+        : 'חסרים HUB_API_URL / HUB_API_KEY בשרת (Railway). עד אז הערוץ מושבת לשליחה אוטומטית — אפשר לשבץ ולסמן "פורסם" ידנית.'}</div>`;
+  }
+  if (platform === 'manual') return select;
+
+  const isFb = platform === 'facebook';
+  const status = !conn?.has_token
+    ? '<span class="chip bad">לא מחובר</span>'
+    : conn.last_check_ok === false
+      ? `<span class="chip bad">בעיה בחיבור</span>`
+      : `<span class="chip on">מחובר${conn.auto_enabled ? ' · אוטו׳ פעיל' : ''}</span>`;
+
+  return `${select}
+    <div class="subsec">
+      <h4>חיבור ל-Meta ${status}</h4>
+      ${conn?.last_check_note ? `<div class="fhint">בדיקה אחרונה: ${esc(conn.last_check_note)}</div>` : ''}
+      <div class="prow">
+        <label>${isFb ? 'מזהה העמוד (Page ID)' : 'מזהה חשבון אינסטגרם (IG User ID)'}</label>
+        <input type="text" dir="ltr" value="${esc((isFb ? conn?.page_id : conn?.ig_user_id) ?? '')}"
+               data-conn-id-field="${c.id}" ${ro ? 'disabled' : ''}>
+      </div>
+      <div class="prow">
+        <label>Access Token (${isFb ? 'של העמוד' : 'עם הרשאות instagram_content_publish'})</label>
+        <input type="password" dir="ltr" data-conn-token="${c.id}"
+               placeholder="${conn?.has_token ? 'שמור ✓ — מזינים רק כדי להחליף' : 'מדביקים כאן'}"
+               ${ro ? 'disabled' : ''}>
+      </div>
+      <div class="prow">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" data-conn-auto="${c.id}"
+                 ${conn?.auto_enabled ? 'checked' : ''} ${ro || !conn?.has_token ? 'disabled' : ''}>
+          שליחה אוטומטית לערוץ הזה
+        </label>
+      </div>
+      ${ro ? '' : `<div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn small primary" data-conn-save="${c.id}">שמור חיבור</button>
+        ${conn?.has_token ? `<button class="btn small" data-conn-verify="${c.id}">בדוק חיבור</button>
+        <button class="btn small" style="color:var(--st-crit)" data-conn-del="${c.id}">נתק</button>` : ''}
+      </div>`}
+    </div>`;
+}
+
+function channelItem(c, ro, conn, hubReady) {
   const num = (label, field, value, note = '', max = '') => `
     <div class="prow">
       <label>${note}${label}</label>
@@ -127,6 +214,8 @@ function channelItem(c, ro) {
         ריק = ניטרלי. כשמוגדר, המנוע מנסה למלא קודם משבצות במדיות עם יעילות גבוהה יותר,
         כדי שתוכן חשוב יגיע לבמה הכי טובה קודם.
       </div>
+
+      ${connectionBlock(c, conn, ro, hubReady)}
 
       <div class="prow" style="align-items:flex-start">
         <label>ימים שבהם המדיה לא מקבלת תוכן</label>
@@ -289,6 +378,71 @@ function wireManage(ro) {
           body: { [inp.dataset.chField]: raw === '' ? null : Number(raw), week: state.week } });
       toast(engineToast('נשמר.', res));
       await refreshBoard();
+    })));
+
+  /* ---------- פרסום אוטומטי ---------- */
+
+  $('#autopubGlobal')?.addEventListener('change', run(async (e) => {
+    await api('/settings', { method: 'PATCH', body: { autopublish_enabled: e.target.checked } });
+    toast(e.target.checked
+      ? 'השליחה האוטומטית פעילה — יישלחו רק פוסטים שאושרו פרטנית.'
+      : 'השליחה האוטומטית כבויה — שום דבר לא יישלח.');
+  }));
+
+  $$('#manage [data-ch-platform]').forEach((sel) =>
+    sel.addEventListener('change', run(async () => {
+      await api(`/channels/${sel.dataset.chPlatform}`,
+        { method: 'PATCH', body: { platform: sel.value, week: state.week } });
+      toast('הפלטפורמה עודכנה.');
+      await reload();
+    })));
+
+  const connBody = (id) => {
+    const b = {};
+    const idField = $(`[data-conn-id-field="${id}"]`)?.value.trim();
+    const ch = state.channels.find((c) => c.id === Number(id));
+    if (idField != null) b[ch?.platform === 'instagram' ? 'ig_user_id' : 'page_id'] = idField;
+    const token = $(`[data-conn-token="${id}"]`)?.value.trim();
+    if (token) b.access_token = token;   // ריק = לא נוגעים בטוקן השמור
+    b.auto_enabled = $(`[data-conn-auto="${id}"]`)?.checked ?? false;
+    return b;
+  };
+
+  $$('#manage [data-conn-save]').forEach((btn) =>
+    btn.addEventListener('click', run(async () => {
+      const id = btn.dataset.connSave;
+      await api(`/channels/${id}/connection`, { method: 'PUT', body: connBody(id) });
+      toast('החיבור נשמר. כדאי ללחוץ "בדוק חיבור" לוודא שהוא חי.');
+      await reload();
+    })));
+
+  $$('#manage [data-conn-auto]').forEach((cb) =>
+    cb.addEventListener('change', run(async () => {
+      const id = cb.dataset.connAuto;
+      await api(`/channels/${id}/connection`,
+        { method: 'PUT', body: { auto_enabled: cb.checked } });
+      toast(cb.checked ? 'השליחה האוטומטית הודלקה לערוץ.' : 'השליחה האוטומטית כובתה לערוץ.');
+    })));
+
+  $$('#manage [data-conn-verify]').forEach((btn) =>
+    btn.addEventListener('click', run(async () => {
+      btn.disabled = true;
+      btn.textContent = 'בודק…';
+      try {
+        const { ok, note } = await api(`/channels/${btn.dataset.connVerify}/connection/verify`,
+          { method: 'POST' });
+        toast(ok ? `החיבור תקין ✓ ${note}` : `החיבור לא עובד: ${note}`, !ok);
+      } finally {
+        await reload();
+      }
+    })));
+
+  $$('#manage [data-conn-del]').forEach((btn) =>
+    btn.addEventListener('click', run(async () => {
+      if (!(await confirmDialog('לנתק את הערוץ? הטוקן יימחק ותצטרך להזין אותו מחדש כדי לחבר.', { danger: true }))) return;
+      await api(`/channels/${btn.dataset.connDel}/connection`, { method: 'DELETE' });
+      toast('הערוץ נותק.');
+      await reload();
     })));
 
   // הימים החסומים נשמרים כקבוצה, כי הם מערך אחד ולא שדה בודד

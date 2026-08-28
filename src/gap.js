@@ -12,7 +12,7 @@
 import { one } from './db.js';
 import { ymd } from './board.js';
 
-const LIVE = "('scheduled','published','pending_approval')";
+const LIVE = "('scheduled','approved','publishing','failed','published','pending_approval')";
 
 /**
  * @returns {null | {days:number, min:number, other:object, channel_name:string, message:string}}

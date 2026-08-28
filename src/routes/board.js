@@ -5,6 +5,8 @@ import { requirePerm } from '../auth.js';
 import { gapWarning } from '../gap.js';
 import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
+import { hubMailReady } from '../hub-mail.js';
+import { emitPostEvent } from '../publish/runner.js';
 
 const r = Router();
 
@@ -107,19 +109,29 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
  */
 r.get('/posts/:id/preview', wrap(async (req, res) => {
   const p = await one(
-    `select p.*, c.name as channel_name, e.name as endpoint_name,
+    `select p.*, c.name as channel_name, c.platform, e.name as endpoint_name,
             u.name as assignee_name, ci.title as content_title, ci.kind as content_kind,
-            ci.evergreen, ca.name as campaign_name
+            ci.evergreen, ca.name as campaign_name, au.name as approved_by_name,
+            cc.auto_enabled as autopub_enabled,
+            cc.access_token_enc is not null as autopub_connected
        from posts p
        left join channels c       on c.id = p.channel_id
+       left join channel_connections cc on cc.channel_id = p.channel_id
        left join endpoints e      on e.id = p.endpoint_id
        left join users u          on u.id = p.assignee_id
+       left join users au         on au.id = p.approved_by
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
       where p.id = $1`,
     [req.params.id]
   );
   if (!p) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+
+  // ערוץ המייל: ה"חיבור" שלו הוא משתני HUB_API_* בשרת, לא channel_connection
+  if (p.platform === 'newsletter') {
+    p.autopub_connected = hubMailReady();
+    p.autopub_enabled = hubMailReady();
+  }
 
   const variant = p.content_id
     ? await one('select * from content_variants where content_id = $1 and channel_id = $2',
@@ -194,6 +206,11 @@ r.post('/posts/:id/publish', requirePerm('content'), wrap(async (req, res) => {
     `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
     [post.id]
   );
+  // אירוע ל-HUB גם על פרסום ידני — אותו id כמו במסלול האוטומטי, לא נרשם פעמיים
+  const ch = await one('select name, platform from channels where id = $1', [post.channel_id]);
+  await emitPostEvent('post_published', {
+    ...post, channel_name: ch?.name, platform: ch?.platform,
+  });
   res.json({ post });
 }));
 

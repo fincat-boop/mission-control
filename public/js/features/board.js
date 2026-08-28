@@ -175,6 +175,13 @@ function wireBoardDrag() {
   });
 }
 
+// מצבי מסלול השליחה האוטומטית — תג במקום תגית התוכן, כי הם חזקים ממנה
+const AUTO_TAG = {
+  approved:   { cls: 'auto', label: '⚡ לשליחה אוטו׳' },
+  publishing: { cls: 'auto', label: '🚀 שולח…' },
+  failed:     { cls: 'red',  label: '✗ שליחה נכשלה' },
+};
+
 function postCard(p) {
   const who = p.assignee_name ? ` · ${esc(p.assignee_name)}` : '';
   const payload = esc(JSON.stringify(p));
@@ -227,9 +234,11 @@ function postCard(p) {
       ? { cls: 'blue', label: 'יש תוכן' }
       : { cls: 'yellow', label: 'יש טיוטה' };
 
-  return `<div class="post" ${clickable} data-tt="${esc(tip)}"
+  const tag = AUTO_TAG[p.status] ?? contentTag;
+
+  return `<div class="post${p.status === 'failed' ? ' failed' : ''}" ${clickable} data-tt="${esc(tip)}"
     style="background:${bg};color:${inkOn(bg)}">
-    <span class="corner-tag ${contentTag.cls}">${contentTag.label}</span>
+    <span class="corner-tag ${tag.cls}">${tag.label}</span>
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>

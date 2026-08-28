@@ -17,4 +17,6 @@ export const TABLES = [
   'strategy_milestones',
   'tasks',
   'engine_settings',
+  'channel_connections',
+  'publish_log',
 ];

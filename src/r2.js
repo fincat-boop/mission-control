@@ -19,13 +19,17 @@ export const r2Ready = () =>
   !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID &&
      process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET);
 
-function config() {
+function config(bucketOverride) {
   const {
     R2_ACCOUNT_ID: account, R2_ACCESS_KEY_ID: accessKey,
     R2_SECRET_ACCESS_KEY: secretKey, R2_BUCKET: bucket,
   } = process.env;
   if (!r2Ready()) throw new Error('R2 לא מוגדר — חסר אחד ממשתני R2_*');
-  return { account, accessKey, secretKey, bucket, host: `${account}.r2.cloudflarestorage.com` };
+  return {
+    account, accessKey, secretKey,
+    bucket: bucketOverride ?? bucket,
+    host: `${account}.r2.cloudflarestorage.com`,
+  };
 }
 
 const sha256hex = (data) => createHash('sha256').update(data).digest('hex');
@@ -46,8 +50,8 @@ const stamp = () => new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
  * מבצע בקשה חתומה ל-R2. body הוא Buffer/מחרוזת (או null לבקשות בלי גוף).
  * מחזיר את ה-Response של fetch.
  */
-async function r2Request(method, { key = '', query = {}, body = null, contentType } = {}) {
-  const { accessKey, secretKey, bucket, host } = config();
+async function r2Request(method, { key = '', query = {}, body = null, contentType, bucket: bucketOverride } = {}) {
+  const { accessKey, secretKey, bucket, host } = config(bucketOverride);
 
   const amzDate = stamp();
   const dateOnly = amzDate.slice(0, 8);
@@ -94,8 +98,8 @@ async function r2Request(method, { key = '', query = {}, body = null, contentTyp
   return fetch(url, { method, headers, body: body ?? undefined });
 }
 
-export async function putObject(key, body, contentType = 'application/octet-stream') {
-  const res = await r2Request('PUT', { key, body, contentType });
+export async function putObject(key, body, contentType = 'application/octet-stream', bucket) {
+  const res = await r2Request('PUT', { key, body, contentType, bucket });
   if (!res.ok) throw new Error(`R2 PUT ${key} נכשל: ${res.status} ${await res.text()}`);
 }
 
@@ -105,8 +109,8 @@ export async function getObject(key) {
   return Buffer.from(await res.arrayBuffer());
 }
 
-export async function deleteObject(key) {
-  const res = await r2Request('DELETE', { key });
+export async function deleteObject(key, bucket) {
+  const res = await r2Request('DELETE', { key, bucket });
   if (!res.ok && res.status !== 404) throw new Error(`R2 DELETE ${key} נכשל: ${res.status}`);
 }
 

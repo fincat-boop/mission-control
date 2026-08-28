@@ -27,8 +27,8 @@ import { buildSlots, buildUsage, nextSlot, withEngineLock } from './engine.js';
  * פוסטים בשבועות הסמוכים. פוסט שאין לו יום חוקי נשאר במקום ומדווח.
  */
 
-const ON_BOARD = ['scheduled', 'published', 'pending_approval'];
-const MOVABLE = 'scheduled';
+const ON_BOARD = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
+const MOVABLE = ['scheduled', 'approved', 'failed'];
 // כמה קדימה סורקים פוסטים על ימים חסומים. הלוח מתוכנן חודשים מראש,
 // ופוסט על יום חסום בעוד רבעון הוא בדיוק אותה תקלה.
 const HORIZON_WEEKS = 26;
@@ -69,7 +69,7 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   const byId = new Map(channels.map((c) => [c.id, c]));
   const illegal = (p) => onBlockedDay(p, byId.get(p.channel_id));
 
-  const canMove = (p) => p.status === MOVABLE && byId.has(p.channel_id);
+  const canMove = (p) => MOVABLE.includes(p.status) && byId.has(p.channel_id);
   const movable = posts.filter((p) => canMove(p) && (!onlyIllegal || illegal(p)));
   const anchored = posts.filter((p) => !movable.includes(p));
 

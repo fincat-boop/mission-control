@@ -70,7 +70,7 @@ export async function planWeek(anchorDate) {
          left join content_items ci on ci.id = p.content_id
          left join campaigns ca     on ca.id = ci.campaign_id
         where p.scheduled_at >= $1 and p.scheduled_at <= $2
-          and p.status in ('scheduled','published','pending_approval')
+          and p.status in ('scheduled','approved','publishing','failed','published','pending_approval')
           and (ca.paused_at is null or p.status = 'published')`,
       [from, to]
     ),
@@ -689,7 +689,7 @@ async function contentHistory() {
     `select content_id, channel_id, max(scheduled_at) as last_at
        from posts
       where content_id is not null
-        and status in ('scheduled','published','pending_approval')
+        and status in ('scheduled','approved','publishing','failed','published','pending_approval')
       group by content_id, channel_id`
   );
   const map = new Map();
@@ -705,7 +705,7 @@ async function lastPostPerEndpointChannel() {
   const r = await rows(
     `select endpoint_id, channel_id, max(scheduled_at) as last_at
        from posts
-      where endpoint_id is not null and status in ('scheduled','published','pending_approval')
+      where endpoint_id is not null and status in ('scheduled','approved','publishing','failed','published','pending_approval')
       group by endpoint_id, channel_id`
   );
   return new Map(r.map((x) => [`${x.endpoint_id}:${x.channel_id}`, ymd(new Date(x.last_at))]));

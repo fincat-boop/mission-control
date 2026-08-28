@@ -138,7 +138,7 @@ export async function buildAlerts() {
        from posts p
        join endpoints e on e.id = p.endpoint_id
        join channels c  on c.id = p.channel_id
-      where p.status in ('scheduled','pending_approval')
+      where p.status in ('scheduled','approved','publishing','failed','pending_approval')
         and p.scheduled_at >= now() - interval '1 day'
       group by e.name, c.name, p.scheduled_at::date
      having count(*) > 1`

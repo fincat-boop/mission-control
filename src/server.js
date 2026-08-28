@@ -8,7 +8,8 @@ import { migrate, pool, withOrg } from './db.js';
 import { loadUser } from './auth.js';
 import { csrfGuard } from './csrf.js';
 import { audit } from './audit.js';
-import { backupNow, cleanupStaleUrgent, suggestContentSwaps } from './maintenance.js';
+import { backupNow, cleanupStaleUrgent, forEachOrg, suggestContentSwaps } from './maintenance.js';
+import { publishTickForOrg, refreshNewsletterMetrics } from './publish/runner.js';
 import api from './routes/api.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +96,17 @@ const timers = [
   setInterval(() => { cleanupStaleUrgent().catch((e) => console.error('ניקוי מבצעים דחופים נכשל:', e)); }, 6 * HOUR),
   setTimeout(() => { suggestContentSwaps().catch((e) => console.error('הצעת החלפת תוכן נכשלה:', e)); }, 3 * 60000),
   setInterval(() => { suggestContentSwaps().catch((e) => console.error('הצעת החלפת תוכן נכשלה:', e)); }, HOUR),
+  // פרסום אוטומטי: כל דקה, לכל ארגון. הטיק עצמו בודק את מתג-העל של הארגון
+  // ויוצא מיד כשהוא כבוי — הריצה הריקה זולה.
+  setInterval(() => {
+    forEachOrg(() => publishTickForOrg())
+      .catch((e) => console.error('טיק הפרסום האוטומטי נכשל:', e));
+  }, 60000),
+  // מדדי ניוזלטר (פתיחות/קליקים) ממשיכים להצטבר אחרי השליחה — רענון שעתי
+  setInterval(() => {
+    forEachOrg(() => refreshNewsletterMetrics())
+      .catch((e) => console.error('רענון מדדי ניוזלטר נכשל:', e));
+  }, HOUR),
 ];
 
 for (const sig of ['SIGTERM', 'SIGINT']) {

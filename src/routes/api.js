@@ -12,6 +12,7 @@ import strategyRoutes from './strategy.js';
 import taskRoutes from './tasks.js';
 import settingsRoutes from './settings.js';
 import statsRoutes from './stats.js';
+import publishRoutes from './publish.js';
 
 /**
  * הרכבת ה-API. הקובץ הזה לא מגדיר אף נתיב בעצמו — כל אחד מהראוטרים
@@ -37,5 +38,6 @@ r.use(strategyRoutes);
 r.use(taskRoutes);
 r.use(settingsRoutes);
 r.use(statsRoutes);
+r.use(publishRoutes);
 
 export default r;

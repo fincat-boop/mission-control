@@ -318,6 +318,67 @@ create table if not exists login_attempts (
 
 create index if not exists login_attempts_email_idx on login_attempts (email, at desc);
 
+-- ========================= פרסום אוטומטי =========================
+-- ערוץ מקבל פלטפורמה: היא קובעת איך מפרסמים אליו בפועל.
+-- manual = אין אינטגרציה, מסמנים "פורסם" ביד (ברירת המחדל, ההתנהגות הקיימת).
+alter table channels add column if not exists platform text not null default 'manual';
+do $$ begin
+  alter table channels add constraint channels_platform_check
+    check (platform in ('facebook','instagram','whatsapp','newsletter','manual'));
+exception when duplicate_object then null; end $$;
+
+-- חיבור של ערוץ לפלטפורמה שלו. הטוקן מוצפן (AES-GCM, מפתח נגזר מ-
+-- SESSION_SECRET) כדי שגיבויים — שמכילים את כל הטבלאות — לא ידלפו אותו.
+create table if not exists channel_connections (
+  channel_id       int primary key references channels(id) on delete cascade,
+  page_id          text,                 -- פייסבוק: מזהה העמוד
+  ig_user_id       text,                 -- אינסטגרם: מזהה החשבון העסקי
+  access_token_enc text,                 -- טוקן מוצפן, לעולם לא חוזר ב-API
+  auto_enabled     boolean not null default false,
+  last_check_at    timestamptz,
+  last_check_ok    boolean,
+  last_check_note  text,                 -- שם העמוד/החשבון שאומת, או השגיאה
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+-- כל ניסיון פרסום נרשם — הצלחה וכשל — כדי שכשל מול פייסבוק לא ייעלם בשקט
+create table if not exists publish_log (
+  id          bigserial primary key,
+  post_id     int references posts(id) on delete cascade,
+  channel_id  int references channels(id) on delete set null,
+  platform    text not null,
+  ok          boolean not null,
+  external_id text,
+  error       text,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists publish_log_post_idx on publish_log (post_id, created_at desc);
+
+-- שדות מסלול הפרסום האוטומטי על הפוסט עצמו
+alter table posts
+  add column if not exists external_id   text,        -- מזהה הפוסט בפלטפורמה
+  add column if not exists external_url  text,        -- קישור לפוסט שפורסם
+  add column if not exists publish_error text,        -- הכשל האחרון, לתצוגה
+  add column if not exists approved_by   int references users(id) on delete set null,
+  add column if not exists approved_at   timestamptz;
+
+-- סטטוסים חדשים למסלול: approved (אושר לשליחה אוטומטית) → publishing → published,
+-- וכשל הופך ל-failed (נשאר על הלוח עד טיפול, לא נעלם).
+alter table posts drop constraint if exists posts_status_check;
+alter table posts add constraint posts_status_check
+  check (status in ('scheduled','approved','publishing','published','failed','pending_approval','hole'));
+
+-- מתג-על: כל השליחה האוטומטית כבויה כברירת מחדל, גם כשיש חיבורים
+alter table engine_settings
+  add column if not exists autopublish_enabled boolean not null default false;
+
+-- ערוץ המייל (HUB): נושא ורשימות היעד יושבים על הגרסה של ערוץ המייל —
+-- {subject, list_ids: [...], segment_ids: [...]}. גוף ה-HTML הוא body הרגיל.
+alter table content_variants
+  add column if not exists meta jsonb;
+
 -- ========================= org_id לכל טבלת-דומיין =========================
 -- שלב 1 (אדיטיבי): העמודה nullable, מסונכרנת ל-org בברירת מחדל דרך
 -- src/migrations/003-multi-tenant-base.js. המעבר ל-NOT NULL + FORCE RLS
@@ -339,6 +400,8 @@ alter table post_results        add column if not exists org_id int references o
 alter table strategy_milestones add column if not exists org_id int references orgs(id);
 alter table tasks               add column if not exists org_id int references orgs(id);
 alter table activity_log        add column if not exists org_id int references orgs(id);
+alter table channel_connections add column if not exists org_id int references orgs(id);
+alter table publish_log         add column if not exists org_id int references orgs(id);
 -- engine_settings: היום סינגלטון (check id=1). בשלב 1 רק מוסיפים org_id;
 -- המעבר ל-PK per-org והחלפת where id=1 בקוד באים בשלב מאוחר יותר.
 alter table engine_settings     add column if not exists org_id int references orgs(id);
@@ -384,7 +447,8 @@ begin
   foreach t in array array[
     'users','endpoints','channels','campaigns','campaign_channels',
     'content_items','content_variants','content_assets','posts',
-    'post_results','strategy_milestones','tasks','engine_settings','activity_log'
+    'post_results','strategy_milestones','tasks','engine_settings','activity_log',
+    'channel_connections','publish_log'
   ] loop
     -- insert בלי org_id מקבל אוטומטית את הארגון הפעיל
     execute format(
