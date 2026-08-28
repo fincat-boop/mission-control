@@ -6,6 +6,7 @@ import {
   loginLimiter, recordLoginFailure, resetLoginAttempts,
 } from '../auth.js';
 import { authUrl, exchangeCode, googleReady, signState, verifyState } from '../google-auth.js';
+import { hubSsoReady, verifyHubSsoToken } from '../hub-sso.js';
 
 const r = Router();
 
@@ -78,6 +79,27 @@ r.get('/auth/google/callback', wrap(async (req, res) => {
   if (!ok || !email) return res.redirect('/login.html?error=google');
 
   // ה-allowlist: רק email שכבר קיים כמשתמש (הבעלים אישר אותו).
+  const user = await one('select * from users where lower(email) = $1', [email]);
+  if (!user) return res.redirect('/login.html?error=not_approved');
+
+  issueSession(res, user);
+  res.redirect('/');
+}));
+
+/* ========================= כניסת SSO מ-HUB ========================= */
+
+/**
+ * ניווט שמגיע מכפתור "בקרת שיגור" ב-HUB עם טוקן חתום (60 שניות).
+ * אותו allowlist כמו Google: רק email שכבר קיים כמשתמש. הקוקי נקבע כאן,
+ * וההפניה ל-'/' עובדת גם עם sameSite:strict כי הדף עצמו סטטי — האימות
+ * בפועל קורה ב-fetch של /api/me מתוך הדף (בקשה same-site).
+ */
+r.get('/auth/sso', wrap(async (req, res) => {
+  if (!hubSsoReady()) return bad(res, 'כניסת SSO לא מוגדרת', 503);
+
+  const email = verifyHubSsoToken(String(req.query.token ?? ''));
+  if (!email) return res.redirect('/login.html?error=sso');
+
   const user = await one('select * from users where lower(email) = $1', [email]);
   if (!user) return res.redirect('/login.html?error=not_approved');
 

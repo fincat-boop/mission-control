@@ -6,6 +6,7 @@ const btn = document.querySelector('#submitBtn');
 const ERRORS = {
   not_approved: 'האימייל שלך לא מאושר להתחברות. פנה למנהל המערכת.',
   google: 'ההתחברות דרך Google נכשלה. נסה שוב.',
+  sso: 'הכניסה מ-HUB נכשלה (קישור פג או פסול). נסה שוב מהכפתור ב-HUB.',
 };
 const reason = new URLSearchParams(location.search).get('error');
 if (reason) {
