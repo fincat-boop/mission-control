@@ -1,10 +1,7 @@
 import { Router } from 'express';
 import { bad, wrap } from './_shared.js';
 import { one } from '../db.js';
-import {
-  checkPassword, clearSession, issueSession,
-  loginLimiter, recordLoginFailure, resetLoginAttempts,
-} from '../auth.js';
+import { clearSession, issueSession } from '../auth.js';
 import { authUrl, exchangeCode, googleReady, signState, verifyState } from '../google-auth.js';
 import { hubSsoReady, verifyHubSsoToken } from '../hub-sso.js';
 
@@ -16,24 +13,10 @@ const G_STATE = 'g_state';
  * נתיבים פתוחים — לפני שער ההתחברות.
  * requireAuth עצמו מופעל ב-api.js בין הראוטר הזה לשאר, כדי שסדר השער
  * יהיה גלוי במקום אחד ולא יסתמך על סדר הרישום בתוך ראוטר.
+ *
+ * התחברות שם-משתמש+סיסמה בוטלה — הכניסה היחידה היא דרך Google (או SSO מ-HUB).
+ * מורשה להתחבר רק email שכבר קיים כמשתמש (מנהל המערכת מוסיף אותו מראש).
  */
-
-r.post('/auth/login', wrap(loginLimiter), wrap(async (req, res) => {
-  const email = String(req.body?.email ?? '').trim().toLowerCase();
-  const password = String(req.body?.password ?? '');
-  if (!email || !password) return bad(res, 'צריך אימייל וסיסמה');
-
-  const user = await one('select * from users where lower(email) = $1', [email]);
-  // משתמש בלי password_hash מאושר ל-Google בלבד — התחברות סיסמה נחסמת עבורו.
-  if (!user || !user.password_hash || !(await checkPassword(password, user.password_hash))) {
-    await recordLoginFailure(req);
-    return bad(res, 'אימייל או סיסמה לא נכונים', 401);
-  }
-  await resetLoginAttempts(req);
-  issueSession(res, user);
-  const { password_hash, ...safe } = user;
-  res.json({ user: safe });
-}));
 
 r.post('/auth/logout', (req, res) => {
   clearSession(res);

@@ -575,8 +575,7 @@ function wireManage(ro) {
     title: 'משתמש חדש',
     fields: [
       { name: 'name', label: 'שם', type: 'text' },
-      { name: 'email', label: 'אימייל', type: 'email' },
-      { name: 'password', label: 'סיסמה (ריק = התחברות דרך Google בלבד)', type: 'password' },
+      { name: 'email', label: 'אימייל (חשבון Google — איתו הוא נכנס)', type: 'email' },
       { name: 'perm_content', label: 'תוכן ושיבוץ', type: 'checkbox', value: true },
       { name: 'perm_settings', label: 'הגדרות', type: 'checkbox' },
       { name: 'perm_approve', label: 'אישור דחוף־דורס', type: 'checkbox' },

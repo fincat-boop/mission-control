@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { one, query } from './db.js';
+import { one } from './db.js';
 
 const SECRET = process.env.SESSION_SECRET;
 if (!SECRET || SECRET.length < 16) {
@@ -10,8 +10,9 @@ if (!SECRET || SECRET.length < 16) {
 const COOKIE = 'mb_session';
 const MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30; // 30 יום
 
+// hashPassword נשאר בשימוש ביצירת משתמשים (seed / new-org / ניהול). התחברות
+// בסיסמה בוטלה, ולכן אין יותר checkPassword — הכניסה היחידה היא Google/SSO.
 export const hashPassword = (plain) => bcrypt.hash(plain, 10);
-export const checkPassword = (plain, hash) => bcrypt.compare(plain, hash);
 
 export function issueSession(res, user) {
   const token = jwt.sign({ uid: user.id }, SECRET, { expiresIn: '30d' });
@@ -60,45 +61,6 @@ export async function loadUser(req, _res, next) {
     }
   }
   next();
-}
-
-/* ========================= הגבלת קצב בהתחברות ========================= */
-
-/**
- * מגן מפני brute-force על הסיסמאות. סופר *כישלונות* לפי אימייל בחלון זמן;
- * מעל התקרה — 429 עד שהחלון נגמר. התחברות מוצלחת מאפסת את המונה.
- *
- * מבוסס-DB ולא מונה בזיכרון: req.ip לא יציב מאחורי הפרוקסי של Railway, ומונה
- * בזיכרון גם לא היה שורד ריבוי instances. ממופתח לפי אימייל — היעד של המתקפה
- * (המחיר: אפשר לנעול חשבון ידוע ע"י הצפה, מקובל בכלי פנימי קטן).
- */
-const LOGIN_WINDOW = '15 minutes';
-const LOGIN_MAX_FAILS = 5;
-
-const emailOf = (req) => String(req.body?.email ?? '').trim().toLowerCase();
-
-export async function loginLimiter(req, res, next) {
-  const email = emailOf(req);
-  if (!email) return next();
-  const row = await one(
-    `select count(*)::int as n from login_attempts
-      where email = $1 and at > now() - interval '${LOGIN_WINDOW}'`,
-    [email]
-  );
-  if (row.n >= LOGIN_MAX_FAILS) {
-    return res.status(429).json({ error: 'יותר מדי ניסיונות התחברות. נסה שוב בעוד כמה דקות.' });
-  }
-  next();
-}
-
-export async function recordLoginFailure(req) {
-  await query('insert into login_attempts (email, ip) values ($1, $2)', [emailOf(req), req.ip ?? null]);
-  // ניקוי גורף של רשומות ישנות — נדיר וזול, שומר את הטבלה קטנה
-  await query(`delete from login_attempts where at < now() - interval '${LOGIN_WINDOW}'`);
-}
-
-export async function resetLoginAttempts(req) {
-  await query('delete from login_attempts where email = $1', [emailOf(req)]);
 }
 
 /** חוסם בקשות ללא התחברות */
