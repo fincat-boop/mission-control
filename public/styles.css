@@ -381,6 +381,26 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
   #genDlg.with-live-preview { display: block; }
 }
 
+/* ממלא התבניות — פורט של המסך מה-HUB: שדות מימין, מייל חי משמאל */
+.filler-dlg { width: min(1400px, 97vw); height: 92vh; max-height: 92vh; padding: 18px 22px; display: flex; flex-direction: column; }
+.filler-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.filler-head h3 { margin: 0; }
+.filler-head .d { color: var(--muted); font-size: 11.5px; }
+.filler-actions { margin-inline-start: auto; display: flex; gap: 8px; }
+.filler-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 18px; flex: 1; min-height: 0; }
+.filler-fields { overflow-y: auto; min-height: 0; padding-inline-end: 4px; }
+.filler-row { margin-bottom: 12px; }
+.filler-row-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.filler-row-head label { color: var(--ink-2); font-size: 12px; }
+.filler-tools { margin-inline-start: auto; display: flex; gap: 4px; opacity: .35; transition: opacity .15s; }
+.filler-row:focus-within .filler-tools, .filler-row:hover .filler-tools { opacity: 1; }
+.btn.tiny { padding: 1px 7px; font-size: 11px; }
+.filler-row input, .filler-row textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--ink-1); }
+.filler-count { font-size: 11px; color: var(--muted); }
+.filler-preview { min-height: 0; }
+.filler-preview iframe { width: 100%; height: 100%; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+@media (max-width: 900px) { .filler-cols { display: block; overflow-y: auto; } .filler-preview iframe { height: 50vh; } }
+
 .confirm-dlg { width: min(380px, 92vw); }
 .confirm-dlg #confirmMsg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 16px; }
 .confirm-dlg .btn.crit { color: var(--st-crit); }

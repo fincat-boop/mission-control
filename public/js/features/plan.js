@@ -1,6 +1,7 @@
 import { api } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
+import { openTemplateFiller } from '../ui/templateFiller.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openGeneric } from '../ui/dialog.js';
@@ -742,7 +743,7 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       if (v?.status !== 'ready') {
         btns.push('<button type="button" class="btn small" id="markReady" style="color:var(--st-good)">⚡ מוכן לשליחה</button>');
       }
-      if (isMail && template?.fill_url) {
+      if (isMail && template?.html) {
         btns.push('<button type="button" class="btn small primary" id="openFiller">✨ מילוי התוכן</button>');
       }
       return btns.length
@@ -800,25 +801,23 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
         ? mountLivePreview({ tplFields, title: item.title, values: () => externalValues })
         : null;
 
-      // הממלא של ה-HUB: טאב חדש; ready ← שולחים את הערכים; save ← קולטים
-      // ומרעננים. ההודעות נעולות ל-origin של ה-HUB משני הכיוונים.
+      // ממלא התבניות המקומי — אותו מסך כמו ב-HUB, רץ כאן. שדות ריקים
+      // לא נשמרים: הם חוזרים למילוי האוטומטי של ה-HUB (תאריך וכו').
       $('#openFiller')?.addEventListener('click', () => {
-        const hubOrigin = new URL(template.fill_url).origin;
-        const child = window.open(template.fill_url, 'mcFill');
-        if (!child) return toast('הדפדפן חסם את פתיחת הממלא — אפשר חלונות קופצים לאתר הזה');
-        const onMsg = (e) => {
-          if (e.origin !== hubOrigin) return;
-          if (e.data?.type === 'mc-fill-ready') {
-            child.postMessage({ type: 'mc-fill-init', values: externalValues }, hubOrigin);
-          } else if (e.data?.type === 'mc-fill-save') {
+        openTemplateFiller({
+          html: template.html,
+          fields: template.fields ?? [],
+          values: externalValues,
+          title: `מילוי תוכן — ${item.title}`,
+          onSave: (vals) => {
             Object.keys(externalValues).forEach((k) => delete externalValues[k]);
-            Object.assign(externalValues, e.data.values ?? {});
-            toast('התוכן נקלט מהממלא.');
+            for (const [k, val] of Object.entries(vals)) {
+              if (String(val ?? '').trim()) externalValues[k] = val;
+            }
+            toast('התוכן נשמר בגרסה — אל תשכח לשמור את הדיאלוג.');
             preview?.refresh();
-          }
-        };
-        window.addEventListener('message', onMsg);
-        $('#genDlg').addEventListener('close', () => window.removeEventListener('message', onMsg), { once: true });
+          },
+        });
       });
     },
   });
