@@ -38,17 +38,61 @@ export function wireMailPreview() {
 }
 
 /** מציג את ה-HTML שה-HUB רינדר ב-iframe מבודד (בלי סקריפטים) */
-function showMailPreview({ html, unsafe_vars }) {
-  const warn = $('#previewWarn');
-  if (unsafe_vars?.length) {
-    warn.hidden = false;
-    warn.textContent = `שים לב — משתנים שנשארו בלי ערך: ${unsafe_vars.join(', ')}`;
-  } else {
-    warn.hidden = true;
-    warn.textContent = '';
-  }
-  $('#previewFrame').srcdoc = html ?? '';
-  $('#previewDlg').showModal();
+/**
+ * עמודת התצוגה החיה בדיאלוג גרסת המייל: iframe מבודד (בלי סקריפטים)
+ * שמתרענן ~600 מ"ש אחרי ההקלדה האחרונה. מונה ריצות מגן מפני מרוץ —
+ * תשובה איטית של בקשה ישנה לא דורסת חדשה.
+ */
+function mountLivePreview({ tplFields, title }) {
+  const dlg = $('#genDlg');
+  dlg.classList.add('with-live-preview');
+
+  const pane = document.createElement('div');
+  pane.id = 'livePreviewPane';
+  pane.innerHTML = `
+    <div class="lp-head">תצוגה חיה — כך ייראה המייל אצל הנמען</div>
+    <div class="lp-warn" id="lpWarn" hidden></div>
+    <iframe id="lpFrame" sandbox="" title="תצוגה מקדימה של המייל"></iframe>`;
+  dlg.insertBefore(pane, dlg.querySelector('.dactions'));
+
+  let seq = 0;
+  let timer = null;
+
+  const refresh = async () => {
+    const my = ++seq;
+    const fieldValues = {};
+    for (const f of tplFields) fieldValues[f.name] = $(`#gen_fv_${f.name}`)?.value ?? '';
+    try {
+      const preview = await api('/publish/newsletter-preview', {
+        method: 'POST',
+        body: {
+          subject: $('#gen_subject')?.value ?? '',
+          htmlBody: $('#gen_body')?.value ?? '',
+          name: title,
+          fieldValues,
+        },
+      });
+      if (my !== seq) return;
+      $('#lpFrame').srcdoc = preview.html ?? '';
+      const warn = $('#lpWarn');
+      if (preview.unsafe_vars?.length) {
+        warn.hidden = false;
+        warn.textContent = `שים לב — משתנים שנשארו בלי ערך: ${preview.unsafe_vars.join(', ')}`;
+      } else {
+        warn.hidden = true;
+      }
+    } catch (e) {
+      if (my !== seq) return;
+      const warn = $('#lpWarn');
+      warn.hidden = false;
+      warn.textContent = `התצוגה לא נטענה: ${e.message}`;
+    }
+  };
+  const queue = () => { clearTimeout(timer); timer = setTimeout(refresh, 600); };
+
+  ['#gen_subject', '#gen_body', ...tplFields.map((f) => `#gen_fv_${f.name}`)]
+    .forEach((sel) => $(sel)?.addEventListener('input', queue));
+  refresh();
 }
 
 /* ========================= קמפיינים ותוכן ========================= */
@@ -657,8 +701,9 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
         label: isMail ? 'גוף המייל (HTML)' : 'הטקסט כפי שהוא ייצא במדיה הזו',
         type: 'textarea', value: v?.body },
       ...(isMail && listOptions ? [{
-        name: 'list_ids', label: 'רשימות היעד ב-HUB', type: 'multicheck',
-        value: vMeta.list_ids ?? [], options: listOptions,
+        name: 'list_id', label: 'רשימת היעד ב-HUB', type: 'select',
+        value: (vMeta.list_ids ?? [])[0] ?? '',
+        options: [['', '— בחר רשימה —'], ...listOptions],
       }] : []),
       // שדות התבנית של ה-HUB — name מקבל קידומת fv_ כדי לאסוף אותם ל-meta
       ...tplFields.map((f) => ({
@@ -680,9 +725,6 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       if (v?.status !== 'ready') {
         btns.push('<button type="button" class="btn small" id="markReady" style="color:var(--st-good)">⚡ מוכן לשליחה</button>');
       }
-      if (isMail) {
-        btns.push('<button type="button" class="btn small" id="previewMail">👁 תצוגה מקדימה</button>');
-      }
       return btns.length
         ? `<span style="margin-inline-end:auto;display:flex;gap:8px">${btns.join('')}</span>`
         : '';
@@ -702,11 +744,11 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
         body.meta = {
           ...vMeta,
           subject: val.subject ?? null,
-          ...(listOptions ? { list_ids: val.list_ids ?? [] } : {}),
+          ...(listOptions ? { list_ids: val.list_id ? [val.list_id] : [] } : {}),
           ...(template ? { field_values: fieldValues } : {}),
         };
         delete body.subject;
-        delete body.list_ids;
+        delete body.list_id;
       }
       body.week = state.week;
       await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
@@ -737,28 +779,9 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
         $('#gen_status').value = 'ready';
         $('#genSave').click();
       });
-      // תצוגה מקדימה — שולח את הערכים הנוכחיים ל-HUB ומציג את מה שחזר
-      $('#previewMail')?.addEventListener('click', run(async () => {
-        const fieldValues = {};
-        for (const f of tplFields) {
-          fieldValues[f.name] = $(`#gen_fv_${f.name}`)?.value ?? '';
-        }
-        const btn = $('#previewMail');
-        btn.disabled = true;
-        try {
-          const preview = await api('/publish/newsletter-preview', {
-            method: 'POST',
-            body: {
-              subject: $('#gen_subject')?.value ?? '',
-              htmlBody: $('#gen_body')?.value ?? '',
-              fieldValues,
-            },
-          });
-          showMailPreview(preview);
-        } finally {
-          btn.disabled = false;
-        }
-      }));
+      // תצוגה חיה — עמודה צמודה משמאל שמתעדכנת תוך כדי הקלדה. הרינדור
+      // כולו ב-HUB (newsletter-preview); כאן רק debounce ותצוגת התוצאה.
+      if (isMail) mountLivePreview({ tplFields, title: item.title });
     },
   });
 }

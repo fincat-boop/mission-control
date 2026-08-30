@@ -124,6 +124,10 @@ function fieldHtml(f) {
  */
 export function openGeneric(spec) {
   genSpec = spec;
+  // הדיאלוג משותף לכל הישויות — קישוטי התצוגה החיה של גרסת המייל
+  // (עמודה + class) מוסרים לפני כל פתיחה, שלא ידבקו לטופס הבא.
+  $('#genDlg').classList.remove('with-live-preview');
+  $('#livePreviewPane')?.remove();
   $('#genTitle').textContent = spec.title;
   $('#genBody').innerHTML = spec.fields.map(fieldHtml).join('');
 
