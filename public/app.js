@@ -15,7 +15,7 @@ import { renderStrategy } from './js/features/strategy.js';
 import { wireAIWidget } from './js/features/assistant.js';
 import { renderTasks } from './js/features/tasks.js';
 import { renderData } from './js/features/data.js';
-import { renderPlan } from './js/features/plan.js';
+import { renderPlan, wireMailPreview } from './js/features/plan.js';
 import { renderManage } from './js/features/manage.js';
 import { renderBoard } from './js/features/board.js';
 
@@ -157,6 +157,7 @@ function wireChrome() {
   wireGenericDialog();
   wireAIWidget();
   wireImportDialog();
+  wireMailPreview();
 }
 
 async function refreshTaskBadgeImpl() {

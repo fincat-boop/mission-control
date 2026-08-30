@@ -253,9 +253,10 @@ details.item[open] summary::after { transform: rotate(-90deg); }
 details.item summary b { font-weight: 600; }
 details.item summary .info { color: var(--muted); font-size: 12px; }
 details.item .ibody { padding: 2px 16px 16px; }
-.chip { font-size: 11px; border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; color: var(--ink-2); }
-.chip.on { color: var(--st-good); border-color: var(--st-good); }
-.chip.bad { color: var(--st-crit); border-color: var(--st-crit); }
+.chip { font-size: 11px; font-weight: 500; color: var(--ink-2); }
+.chip.on { color: var(--st-good); }
+.chip.bad { color: var(--st-crit); }
+details.item summary .info { flex: 1; }
 .prow { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; gap: 12px; }
 .prow:last-child { border-bottom: none; }
 .prow label { color: var(--ink-2); }
@@ -353,6 +354,15 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .effscore { font-variant-numeric: tabular-nums; font-weight: 600; }
 .effn { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .thin { color: var(--muted); font-style: italic; }
+
+/* תצוגה מקדימה של ניוזלטר */
+.preview-dlg { width: min(680px, 94vw); }
+.preview-dlg .dhead { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.preview-dlg .dhead h3 { margin: 0; }
+#previewFrame {
+  width: 100%; height: min(70vh, 620px); border: 1px solid var(--border);
+  border-radius: 10px; background: #fff;
+}
 
 .confirm-dlg { width: min(380px, 92vw); }
 .confirm-dlg #confirmMsg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 16px; }

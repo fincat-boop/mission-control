@@ -6,6 +6,7 @@ import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
+import { confirmDialog } from '../core/confirm.js';
 
 /* ========================= הלוח ========================= */
 
@@ -78,6 +79,7 @@ export async function renderBoard() {
       </div>
       <button class="btn small" id="thisWeek">השבוע</button>
       ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
+      ${can('approve') ? '<button class="btn small" id="approveWeek">⚡ שלח מוכנים אוטומטית</button>' : ''}
       <div class="spacer"></div>
       <div class="legend">
         <span>הסוג מסומן בתג בכל פוסט · ⚡ דחוף · ✓ פורסם</span>
@@ -105,6 +107,28 @@ export async function renderBoard() {
     await refreshBoard();
   }));
   $('#runEngine')?.addEventListener('click', run(openEngine));
+
+  // אישור מרוכז — כל המוכנים לשליחה אוטומטית של השבוע עוברים ל-approved,
+  // וכל אחד נשלח במועד שנקבע לו. לא שולח מיד.
+  $('#approveWeek')?.addEventListener('click', run(async () => {
+    if (!(await confirmDialog('לאשר לשליחה אוטומטית את כל הפוסטים המוכנים של השבוע? כל אחד יישלח במועד שנקבע לו.'))) return;
+    const btn = $('#approveWeek');
+    btn.disabled = true;
+    btn.textContent = 'מאשר…';
+    try {
+      const res = await api('/publish/approve-week', { method: 'POST', body: { week: state.week } });
+      if (!res.approved) {
+        toast(res.skipped ? 'אין פוסטים מוכנים לאישור — כולם חסרים תוכן, חיבור או שליחה אוטומטית.' : 'אין פוסטים לאשר השבוע.', true);
+      } else {
+        toast(`אושרו ${res.approved} פוסטים לשליחה אוטומטית ⚡${res.skipped ? ` · ${res.skipped} דולגו (לא מוכנים)` : ''}` +
+          (res.autopublish_enabled ? '' : ' — שימו לב: מתג השליחה האוטומטית כבוי, לא ייצא כלום עד שמדליקים אותו בניהול.'));
+      }
+      await Promise.all([refreshBoard(), refreshAlerts()]);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '⚡ שלח מוכנים אוטומטית';
+    }
+  }));
 
   // לחיצה מציגה את הפוסט כפי שהוא ייצא. גם למי שאין לו הרשאת עריכה.
   $$('#board [data-post-id]').forEach((el) =>

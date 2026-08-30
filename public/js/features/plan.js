@@ -7,6 +7,50 @@ import { openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
 
+/* ========================= ניוזלטר: תבנית המילוי ========================= */
+
+// תבנית המילוי של ה-HUB, בקאש קצר כדי לא לשאול בכל פתיחת טופס
+let tplCache = null; // { at:number, value }
+async function newsletterTemplate() {
+  const now = Date.now();
+  if (tplCache && now - tplCache.at < 60000) return tplCache.value;
+  try {
+    const { template } = await api('/publish/newsletter-template');
+    tplCache = { at: now, value: template };
+    return template;
+  } catch {
+    return null; // תקלת HUB לא תשבור את טופס העריכה — נופלים לממשק הבסיסי
+  }
+}
+
+// שדות שהמילוי האוטומטי של ה-HUB מכסה (תוכן/כותרת/תאריך) — לא מציגים בטופס,
+// הם נגזרים מהתוכן, מהפוסט ומהתאריך
+const AUTO_FILLED = new Set(
+  ['תוכן', 'גוף הגיליון', 'גוף ההודעה', 'כותרת', 'תאריך',
+   'content', 'body', 'title', 'subject', 'date'].map((s) => s.toLowerCase()));
+const isAutoFilled = (f) =>
+  AUTO_FILLED.has((f.label ?? '').trim().toLowerCase()) ||
+  AUTO_FILLED.has((f.name ?? '').trim().toLowerCase());
+
+/** מחווט פעם אחת מ-app.js — סגירת דיאלוג התצוגה המקדימה */
+export function wireMailPreview() {
+  $('#previewClose').addEventListener('click', () => $('#previewDlg').close());
+}
+
+/** מציג את ה-HTML שה-HUB רינדר ב-iframe מבודד (בלי סקריפטים) */
+function showMailPreview({ html, unsafe_vars }) {
+  const warn = $('#previewWarn');
+  if (unsafe_vars?.length) {
+    warn.hidden = false;
+    warn.textContent = `שים לב — משתנים שנשארו בלי ערך: ${unsafe_vars.join(', ')}`;
+  } else {
+    warn.hidden = true;
+    warn.textContent = '';
+  }
+  $('#previewFrame').srcdoc = html ?? '';
+  $('#previewDlg').showModal();
+}
+
 /* ========================= קמפיינים ותוכן ========================= */
 
 export async function renderPlan() {
@@ -586,6 +630,12 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
     }
   }
 
+  // תבנית המילוי של ה-HUB: אם יש, מוסיפים טופס שדות. אין תבנית (null) —
+  // הממשק הבסיסי בלבד. שדות שהמילוי האוטומטי מכסה מסוננים החוצה.
+  const template = isMail ? await newsletterTemplate() : null;
+  const tplFields = template ? (template.fields ?? []).filter((f) => !isAutoFilled(f)) : [];
+  const savedValues = vMeta.field_values ?? {};
+
   // הקבצים של המדיה הזו בלבד, ולצידם מה שמשותף לכל המדיות של הזווית
   const mine = (item.variant_assets ?? []).filter((a) => a.variant_id === v?.id);
   const shared = item.assets ?? [];
@@ -610,21 +660,50 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
         name: 'list_ids', label: 'רשימות היעד ב-HUB', type: 'multicheck',
         value: vMeta.list_ids ?? [], options: listOptions,
       }] : []),
+      // שדות התבנית של ה-HUB — name מקבל קידומת fv_ כדי לאסוף אותם ל-meta
+      ...tplFields.map((f) => ({
+        name: `fv_${f.name}`,
+        label: f.label || f.name,
+        type: f.multiline ? 'textarea' : 'text',
+        max: f.max,
+        value: savedValues[f.name] ?? '',
+      })),
       { name: 'status', label: 'מצב', type: 'select', value: v?.status ?? 'draft',
         options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
                   ['not_relevant', 'לא רלוונטי למדיה הזו']] },
       { name: '__files', label: `תמונות וסרטונים ל${channel?.name ?? 'מדיה הזו'}`,
         type: 'files', existing: files },
     ],
+    // כפתורי קיצור משמאל: "מוכן לשליחה" (כל מדיה) ו"תצוגה מקדימה" (מייל)
+    extraActions: (() => {
+      const btns = [];
+      if (v?.status !== 'ready') {
+        btns.push('<button type="button" class="btn small" id="markReady" style="color:var(--st-good)">⚡ מוכן לשליחה</button>');
+      }
+      if (isMail) {
+        btns.push('<button type="button" class="btn small" id="previewMail">👁 תצוגה מקדימה</button>');
+      }
+      return btns.length
+        ? `<span style="margin-inline-end:auto;display:flex;gap:8px">${btns.join('')}</span>`
+        : '';
+    })(),
     onSave: async (val) => {
       const body = { ...val };
       delete body.__files;
       if (isMail) {
+        // איסוף שדות התבנית ל-meta.field_values, וניקוי הקידומת מהגוף
+        const fieldValues = {};
+        for (const f of tplFields) {
+          const key = `fv_${f.name}`;
+          fieldValues[f.name] = val[key] ?? '';
+          delete body[key];
+        }
         // meta נשלח רק כשיש מה לעדכן — כך כשל טעינת רשימות לא מוחק בחירה קיימת
         body.meta = {
           ...vMeta,
           subject: val.subject ?? null,
           ...(listOptions ? { list_ids: val.list_ids ?? [] } : {}),
+          ...(template ? { field_values: fieldValues } : {}),
         };
         delete body.subject;
         delete body.list_ids;
@@ -652,6 +731,34 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
           b.closest('.fileline').remove();
           toast('הקובץ הוסר.');
         })));
+      // "מוכן לשליחה" — מעביר את שדה המצב ל"מוכן" ומפעיל את השמירה הרגילה,
+      // כך שכל הלוגיקה (קבצים, meta של מייל) רצה כמו בשמירה ידנית.
+      $('#markReady')?.addEventListener('click', () => {
+        $('#gen_status').value = 'ready';
+        $('#genSave').click();
+      });
+      // תצוגה מקדימה — שולח את הערכים הנוכחיים ל-HUB ומציג את מה שחזר
+      $('#previewMail')?.addEventListener('click', run(async () => {
+        const fieldValues = {};
+        for (const f of tplFields) {
+          fieldValues[f.name] = $(`#gen_fv_${f.name}`)?.value ?? '';
+        }
+        const btn = $('#previewMail');
+        btn.disabled = true;
+        try {
+          const preview = await api('/publish/newsletter-preview', {
+            method: 'POST',
+            body: {
+              subject: $('#gen_subject')?.value ?? '',
+              htmlBody: $('#gen_body')?.value ?? '',
+              fieldValues,
+            },
+          });
+          showMailPreview(preview);
+        } finally {
+          btn.disabled = false;
+        }
+      }));
     },
   });
 }

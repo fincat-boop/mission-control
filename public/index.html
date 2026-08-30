@@ -208,6 +208,17 @@
   </div>
 </dialog>
 
+<!-- תצוגה מקדימה של ניוזלטר — ה-HUB מרנדר, אנחנו רק מציגים ב-iframe מבודד -->
+<dialog id="previewDlg" class="preview-dlg">
+  <div class="dhead">
+    <h3>תצוגה מקדימה</h3>
+    <div class="spacer"></div>
+    <button class="btn" id="previewClose">סגור</button>
+  </div>
+  <div id="previewWarn" class="pvwarn" hidden></div>
+  <iframe id="previewFrame" title="תצוגה מקדימה" sandbox></iframe>
+</dialog>
+
 <!-- אישור/ביטול כללי — במקום confirm() של הדפדפן -->
 <dialog id="confirmDlg" class="confirm-dlg">
   <p id="confirmMsg"></p>

@@ -5,7 +5,9 @@ import { requirePerm } from '../auth.js';
 import { encryptSecret, decryptSecret } from '../publish/crypto.js';
 import { verifyConnection } from '../publish/meta.js';
 import { loadPayload, publishBlocker, publishOne } from '../publish/runner.js';
-import { HubMailError, audienceLists, hubMailReady } from '../hub-mail.js';
+import { HubMailError, audienceLists, hubMailReady,
+         newsletterTemplate, newsletterPreview } from '../hub-mail.js';
+import { weekMeta } from '../board.js';
 
 const r = Router();
 
@@ -38,6 +40,39 @@ r.get('/publish/status', wrap(async (_req, res) => {
 r.get('/publish/hub-lists', wrap(async (_req, res) => {
   try {
     res.json({ lists: await audienceLists() });
+  } catch (e) {
+    if (e instanceof HubMailError) return bad(res, e.message, e.status >= 500 ? 502 : e.status);
+    throw e;
+  }
+}));
+
+/**
+ * תבנית הניוזלטר שמוגדרת ב-HUB — מזינה את טופס המילוי בעריכת גרסת המייל.
+ * null = אין תבנית, הלוח מציג רק נושא+תוכן+רשימה.
+ */
+r.get('/publish/newsletter-template', wrap(async (_req, res) => {
+  try {
+    res.json({ template: await newsletterTemplate() });
+  } catch (e) {
+    if (e instanceof HubMailError) return bad(res, e.message, e.status >= 500 ? 502 : e.status);
+    throw e;
+  }
+}));
+
+/**
+ * תצוגה מקדימה — ה-HUB מרנדר את מה שהנמען יראה, והלוח רק מציג את ה-HTML
+ * שחוזר. unsafe_vars = משתנים שנשארו בלי ערך, מוצגים כאזהרה.
+ */
+r.post('/publish/newsletter-preview', wrap(async (req, res) => {
+  const b = req.body ?? {};
+  try {
+    res.json(await newsletterPreview({
+      subject: b.subject,
+      htmlBody: b.htmlBody,
+      name: b.name,
+      scheduledAt: b.scheduledAt,
+      fieldValues: b.fieldValues ?? {},
+    }));
   } catch (e) {
     if (e instanceof HubMailError) return bad(res, e.message, e.status >= 500 ? 502 : e.status);
     throw e;
@@ -136,6 +171,55 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, re
     [payload.post.id, req.user.id]
   );
   res.json({ post });
+}));
+
+/**
+ * אישור מרוכז לכל השבוע: כל השיבוצים שמוכנים ואפשר לשלוח אותם
+ * אוטומטית (תוכן מוכן, ערוץ מחובר, שליחה אוטומטית דלוקה) עוברים ל-approved
+ * בבת אחת. שום דבר לא נשלח מיד — הרַנֶר שולח כל אחד במועד שנקבע לו.
+ * מה שלא עומד בתנאים נספר ומדווח, לא נופל בשקט.
+ */
+r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) => {
+  const week = weekMeta(req.body?.week);
+  const from = week.startDate;
+  const to = new Date(week.endDate);
+  to.setHours(23, 59, 59, 999);
+
+  const candidates = await rows(
+    `select p.id from posts p
+       join channels c on c.id = p.channel_id
+      where p.scheduled_at >= $1 and p.scheduled_at <= $2
+        and p.status in ('scheduled', 'failed')
+        and c.platform in ('facebook', 'instagram', 'newsletter')
+      order by p.scheduled_at`,
+    [from, to]
+  );
+
+  const eligible = [];
+  let skipped = 0;
+  for (const { id } of candidates) {
+    const payload = await loadPayload(id);
+    if (!payload) { skipped++; continue; }
+    const autoOk = payload.post.auto_enabled || payload.post.platform === 'newsletter';
+    if (!autoOk || publishBlocker(payload)) { skipped++; continue; }
+    eligible.push(id);
+  }
+
+  if (eligible.length) {
+    await query(
+      `update posts set status = 'approved', approved_by = $2, approved_at = now(),
+              publish_error = null
+        where id = any($1)`,
+      [eligible, req.user.id]
+    );
+  }
+
+  const settings = await one('select autopublish_enabled from engine_settings limit 1');
+  res.json({
+    approved: eligible.length,
+    skipped,
+    autopublish_enabled: settings?.autopublish_enabled ?? false,
+  });
 }));
 
 /** ביטול אישור — חוזר למתוכנן, שום דבר לא נשלח */

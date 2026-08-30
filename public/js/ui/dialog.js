@@ -104,7 +104,7 @@ function fieldHtml(f) {
   }
   if (f.type === 'textarea') {
     return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
-      <textarea id="${id}">${esc(f.value ?? '')}</textarea></div>`;
+      <textarea id="${id}"${f.max ? ` maxlength="${f.max}"` : ''}>${esc(f.value ?? '')}</textarea></div>`;
   }
   if (f.type === 'files') {
     return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
@@ -114,7 +114,7 @@ function fieldHtml(f) {
     </div>`;
   }
   return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
-    <input id="${id}" type="${f.type}" value="${esc(f.value ?? '')}">
+    <input id="${id}" type="${f.type}" value="${esc(f.value ?? '')}"${f.max ? ` maxlength="${f.max}"` : ''}>
     ${f.hint ? `<div class="fhint">${esc(f.hint)}</div>` : ''}</div>`;
 }
 

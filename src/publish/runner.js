@@ -185,6 +185,7 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
         listIds: m.list_ids ?? [],
         segmentIds: m.segment_ids ?? [],
         name: post.title,
+        fieldValues: m.field_values ?? {},
       });
       if (r.status !== 'sent') {
         // ה-HUB קיבל והשליחה אסינכרונית אצלו — נשארים publishing,
