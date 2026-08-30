@@ -49,33 +49,45 @@ function mountLivePreview({ tplFields, title }) {
 
   const pane = document.createElement('div');
   pane.id = 'livePreviewPane';
-  // הטעינה בטופס נסתר שמכוון ל-iframe (target) ולא ב-srcdoc: עמוד srcdoc
-  // יורש את ה-CSP הקשוח של האפליקציה ותמונות התבנית נחסמות; הנתיב
-  // newsletter-preview-frame מגיש את המייל עם CSP משלו שמתיר אותן.
   pane.innerHTML = `
     <div class="lp-head">תצוגה חיה — כך ייראה המייל אצל הנמען</div>
-    <form id="lpForm" method="post" action="/api/publish/newsletter-preview-frame"
-          target="lpFrame" hidden>
-      <input type="hidden" name="subject">
-      <input type="hidden" name="htmlBody">
-      <input type="hidden" name="name">
-      <input type="hidden" name="fieldValues">
-    </form>
-    <iframe id="lpFrame" name="lpFrame" sandbox="allow-forms" title="תצוגה מקדימה של המייל"></iframe>`;
+    <div class="lp-warn" id="lpWarn" hidden></div>
+    <div id="lpFrameWrap"></div>`;
   dlg.insertBefore(pane, dlg.querySelector('.dactions'));
 
+  let seq = 0;
   let timer = null;
-  const refresh = () => {
+
+  const refresh = async () => {
+    const my = ++seq;
     const fieldValues = {};
     for (const f of tplFields) fieldValues[f.name] = $(`#gen_fv_${f.name}`)?.value ?? '';
-    const form = $('#lpForm');
-    // דרך elements — גישה כמו form.name מתנגשת עם התכונות המובנות של הטופס
-    const el = (n) => form.elements.namedItem(n);
-    el('subject').value = $('#gen_subject')?.value ?? '';
-    el('htmlBody').value = $('#gen_body')?.value ?? '';
-    el('name').value = title ?? '';
-    el('fieldValues').value = JSON.stringify(fieldValues);
-    form.submit();
+    try {
+      const preview = await api('/publish/newsletter-preview', {
+        method: 'POST',
+        body: {
+          subject: $('#gen_subject')?.value ?? '',
+          htmlBody: $('#gen_body')?.value ?? '',
+          name: title,
+          fieldValues,
+        },
+      });
+      if (my !== seq) return;
+      $('#lpWarn').hidden = true;
+      // iframe חדש בכל רענון (במקום להחליף src): ניווט של iframe קיים
+      // נערם בהיסטוריית הדפדפן, וכפתור "אחורה" היה מדפדף בין תצוגות.
+      const frame = document.createElement('iframe');
+      frame.id = 'lpFrame';
+      frame.title = 'תצוגה מקדימה של המייל';
+      frame.setAttribute('sandbox', '');
+      frame.src = `/api/publish/newsletter-frame/${preview.frame_token}`;
+      $('#lpFrameWrap').replaceChildren(frame);
+    } catch (e) {
+      if (my !== seq) return;
+      const warn = $('#lpWarn');
+      warn.hidden = false;
+      warn.textContent = `התצוגה לא נטענה: ${e.message}`;
+    }
   };
   const queue = () => { clearTimeout(timer); timer = setTimeout(refresh, 600); };
 

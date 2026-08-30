@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { Router } from 'express';
 import { bad, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
@@ -68,39 +69,34 @@ r.get('/publish/newsletter-template', wrap(async (_req, res) => {
 }));
 
 /**
- * מסגרת התצוגה החיה — הדיאלוג שולח לכאן טופס (target=iframe) ומקבל את
- * ה-HTML המרונדר כעמוד שלם. נתיב נפרד ולא srcdoc: iframe של srcdoc יורש
- * את ה-CSP הקשוח של האפליקציה (הכול מאותו מקור) ותמונות התבנית נחסמות;
- * כאן העמוד מקבל CSP משלו — תוכן סטטי בלבד, תמונות/סגנונות מותרים,
- * סקריפטים לא. אזהרת משתנים חסרים מוזרקת כבאנר בראש העמוד.
+ * מסגרת התצוגה החיה — שני שלבים: POST newsletter-preview מרנדר ב-HUB,
+ * שומר את התוצאה במטמון קצר-חיים ומחזיר frame_token; ה-iframe נטען
+ * ב-GET newsletter-frame/:token. למה לא srcdoc/טופס-אל-מסגרת: srcdoc
+ * יורש את ה-CSP הקשוח של האפליקציה (תמונות נחסמות), ושליחת טופס אל
+ * iframe עם sandbox נחסמת בחלק מהדפדפנים. עמוד ה-GET מקבל CSP משלו —
+ * תמונות/סגנונות כן, סקריפטים לא. מטמון בזיכרון התהליך — עוד תלות
+ * ב-instance יחיד, כמו הטיימרים (מתועד ב-README).
  */
-r.post('/publish/newsletter-preview-frame',
-  express.urlencoded({ extended: false, limit: '1mb' }),
-  wrap(async (req, res) => {
-    const b = req.body ?? {};
-    let fieldValues = {};
-    try { fieldValues = JSON.parse(b.fieldValues || '{}'); } catch { /* טופס פגום — ממשיכים בלי */ }
+const previewCache = new Map(); // token -> { html, at }
+const PREVIEW_TTL_MS = 2 * 60 * 1000;
 
-    res.set('Content-Security-Policy',
-      "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https:; font-src https: data:");
-    res.type('html');
+function stashPreview(html) {
+  const now = Date.now();
+  for (const [t, e] of previewCache) if (now - e.at > PREVIEW_TTL_MS) previewCache.delete(t);
+  const token = crypto.randomUUID();
+  previewCache.set(token, { html, at: now });
+  return token;
+}
 
-    try {
-      const { html, unsafe_vars } = await newsletterPreview({
-        subject: b.subject ?? '',
-        htmlBody: b.htmlBody ?? '',
-        name: b.name || undefined,
-        fieldValues,
-      });
-      const warn = unsafe_vars?.length
-        ? `<div style="position:sticky;top:0;background:#7a1f1f;color:#fff;font:12px sans-serif;padding:6px 10px;direction:rtl">שים לב — משתנים שנשארו בלי ערך: ${unsafe_vars.map((v) => String(v).replace(/</g, '&lt;')).join(', ')}</div>`
-        : '';
-      res.send(warn + html);
-    } catch (e) {
-      const msg = (e instanceof HubMailError ? e.message : 'התצוגה לא נטענה').replace(/</g, '&lt;');
-      res.send(`<div style="font:13px sans-serif;direction:rtl;padding:20px;color:#7a1f1f">${msg}</div>`);
-    }
-  }));
+r.get('/publish/newsletter-frame/:token', (req, res) => {
+  const entry = previewCache.get(req.params.token);
+  if (!entry || Date.now() - entry.at > PREVIEW_TTL_MS) {
+    return res.status(404).type('html').send('<div style="font:13px sans-serif;direction:rtl;padding:20px">התצוגה פגה — הקלד משהו כדי לרענן.</div>');
+  }
+  res.set('Content-Security-Policy',
+    "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https:; font-src https: data:");
+  res.type('html').send(entry.html);
+});
 
 /**
  * תצוגה מקדימה — ה-HUB מרנדר את מה שהנמען יראה, והלוח רק מציג את ה-HTML
@@ -109,13 +105,17 @@ r.post('/publish/newsletter-preview-frame',
 r.post('/publish/newsletter-preview', wrap(async (req, res) => {
   const b = req.body ?? {};
   try {
-    res.json(await newsletterPreview({
+    const preview = await newsletterPreview({
       subject: b.subject,
       htmlBody: b.htmlBody,
       name: b.name,
       scheduledAt: b.scheduledAt,
       fieldValues: b.fieldValues ?? {},
-    }));
+    });
+    const warn = preview.unsafe_vars?.length
+      ? `<div style="position:sticky;top:0;background:#7a1f1f;color:#fff;font:12px sans-serif;padding:6px 10px;direction:rtl">שים לב — משתנים שנשארו בלי ערך: ${preview.unsafe_vars.map((v) => String(v).replace(/</g, '&lt;')).join(', ')}</div>`
+      : '';
+    res.json({ ...preview, frame_token: stashPreview(warn + (preview.html ?? '')) });
   } catch (e) {
     if (e instanceof HubMailError) {
       const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;

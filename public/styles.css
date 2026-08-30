@@ -373,7 +373,7 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 #livePreviewPane { min-width: 0; }
 #livePreviewPane .lp-head { color: var(--ink-2); font-size: 12px; margin-bottom: 6px; }
 #livePreviewPane .lp-warn { color: var(--st-crit); font-size: 12px; margin-bottom: 6px; }
-#livePreviewPane iframe {
+#lpFrameWrap iframe {
   width: 100%; height: min(66vh, 680px); border: 1px solid var(--border);
   border-radius: 10px; background: #fff;
 }
