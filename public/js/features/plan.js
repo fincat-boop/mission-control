@@ -61,7 +61,7 @@ function mountLivePreview({ tplFields, title }) {
       <input type="hidden" name="name">
       <input type="hidden" name="fieldValues">
     </form>
-    <iframe id="lpFrame" name="lpFrame" sandbox="" title="תצוגה מקדימה של המייל"></iframe>`;
+    <iframe id="lpFrame" name="lpFrame" sandbox="allow-forms" title="תצוגה מקדימה של המייל"></iframe>`;
   dlg.insertBefore(pane, dlg.querySelector('.dactions'));
 
   let timer = null;
