@@ -57,7 +57,12 @@ r.get('/publish/hub-lists', wrap(async (_req, res) => {
  */
 r.get('/publish/newsletter-template', wrap(async (_req, res) => {
   try {
-    res.json({ template: await newsletterTemplate() });
+    // fill_url — הממלא המלא ב-HUB (נפתח בטאב, מחזיר ערכים ב-postMessage)
+    const hubBase = String(process.env.HUB_API_URL ?? '').trim().replace(/\/+$/, '');
+    res.json({
+      template: await newsletterTemplate(),
+      fill_url: hubBase ? `${hubBase}/dashboard/mission-control/fill` : null,
+    });
   } catch (e) {
     if (e instanceof HubMailError) {
       const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;

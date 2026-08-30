@@ -15,9 +15,10 @@ async function newsletterTemplate() {
   const now = Date.now();
   if (tplCache && now - tplCache.at < 60000) return tplCache.value;
   try {
-    const { template } = await api('/publish/newsletter-template');
-    tplCache = { at: now, value: template };
-    return template;
+    const { template, fill_url } = await api('/publish/newsletter-template');
+    const value = template ? { ...template, fill_url } : template;
+    tplCache = { at: now, value };
+    return value;
   } catch {
     return null; // תקלת HUB לא תשבור את טופס העריכה — נופלים לממשק הבסיסי
   }
@@ -44,7 +45,7 @@ export function wireMailPreview() {
  * שמתרענן ~600 מ"ש אחרי ההקלדה האחרונה. מונה ריצות מגן מפני מרוץ —
  * תשובה איטית של בקשה ישנה לא דורסת חדשה.
  */
-function mountLivePreview({ tplFields, title }) {
+function mountLivePreview({ tplFields, title, values }) {
   const dlg = $('#genDlg');
   dlg.classList.add('with-live-preview');
 
@@ -61,8 +62,12 @@ function mountLivePreview({ tplFields, title }) {
 
   const refresh = async () => {
     const my = ++seq;
-    const fieldValues = {};
-    for (const f of tplFields) fieldValues[f.name] = $(`#gen_fv_${f.name}`)?.value ?? '';
+    // הערכים מהממלא של ה-HUB (values), או משדות fv_ מקומיים אם קיימים
+    const fieldValues = { ...(values ? values() : {}) };
+    for (const f of tplFields) {
+      const el = $(`#gen_fv_${f.name}`);
+      if (el) fieldValues[f.name] = el.value;
+    }
     try {
       const preview = await api('/publish/newsletter-preview', {
         method: 'POST',
@@ -98,6 +103,7 @@ function mountLivePreview({ tplFields, title }) {
   ['#gen_subject', '#gen_body', ...tplFields.map((f) => `#gen_fv_${f.name}`)]
     .forEach((sel) => $(sel)?.addEventListener('input', queue));
   refresh();
+  return { refresh };
 }
 
 /* ========================= קמפיינים ותוכן ========================= */
@@ -683,7 +689,17 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
   // הממשק הבסיסי בלבד. שדות שהמילוי האוטומטי מכסה מסוננים החוצה.
   const template = isMail ? await newsletterTemplate() : null;
   const tplFields = template ? (template.fields ?? []).filter((f) => !isAutoFilled(f)) : [];
-  const savedValues = vMeta.field_values ?? {};
+
+  // הערכים חיים אצלנו; המילוי עצמו נעשה בממלא של ה-HUB (טאב + postMessage).
+  // תאימות אחורה: גוף שנכתב לפני המעבר נזרע לשדה התוכן של התבנית.
+  const externalValues = { ...(vMeta.field_values ?? {}) };
+  if (template && v?.body?.trim()) {
+    const contentField = (template.fields ?? []).find((f) =>
+      ['תוכן', 'גוף הגיליון', 'גוף ההודעה'].includes(f.name));
+    if (contentField && !String(externalValues[contentField.name] ?? '').trim()) {
+      externalValues[contentField.name] = v.body;
+    }
+  }
 
   // הקבצים של המדיה הזו בלבד, ולצידם מה שמשותף לכל המדיות של הזווית
   const mine = (item.variant_assets ?? []).filter((a) => a.variant_id === v?.id);
@@ -707,19 +723,13 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
         value: (vMeta.list_ids ?? [])[0] ?? '',
         options: [['', '— בחר רשימה —'], ...listOptions],
       }] : []),
-      { name: 'body',
-        label: !isMail ? 'הטקסט כפי שהוא ייצא במדיה הזו'
-             : template ? 'תוכן הניוזלטר (נכנס לשדה התוכן של התבנית)'
-             : 'גוף המייל (HTML)',
-        type: 'textarea', value: v?.body },
-      // שדות התבנית של ה-HUB — name מקבל קידומת fv_ כדי לאסוף אותם ל-meta
-      ...tplFields.map((f) => ({
-        name: `fv_${f.name}`,
-        label: f.label || f.name,
-        type: f.multiline ? 'textarea' : 'text',
-        max: f.max,
-        value: savedValues[f.name] ?? '',
-      })),
+      // עם תבנית — כל התוכן ממולא בממלא של ה-HUB (הכפתור למטה); בלי
+      // תבנית — כותבים גוף חופשי כאן.
+      ...(template ? [] : [{
+        name: 'body',
+        label: isMail ? 'גוף המייל (HTML)' : 'הטקסט כפי שהוא ייצא במדיה הזו',
+        type: 'textarea', value: v?.body,
+      }]),
       { name: 'status', label: 'מצב', type: 'select', value: v?.status ?? 'draft',
         options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
                   ['not_relevant', 'לא רלוונטי למדיה הזו']] },
@@ -732,6 +742,9 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       if (v?.status !== 'ready') {
         btns.push('<button type="button" class="btn small" id="markReady" style="color:var(--st-good)">⚡ מוכן לשליחה</button>');
       }
+      if (isMail && template?.fill_url) {
+        btns.push('<button type="button" class="btn small primary" id="openFiller">✨ מילוי התוכן</button>');
+      }
       return btns.length
         ? `<span style="margin-inline-end:auto;display:flex;gap:8px">${btns.join('')}</span>`
         : '';
@@ -740,22 +753,17 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       const body = { ...val };
       delete body.__files;
       if (isMail) {
-        // איסוף שדות התבנית ל-meta.field_values, וניקוי הקידומת מהגוף
-        const fieldValues = {};
-        for (const f of tplFields) {
-          const key = `fv_${f.name}`;
-          fieldValues[f.name] = val[key] ?? '';
-          delete body[key];
-        }
         // meta נשלח רק כשיש מה לעדכן — כך כשל טעינת רשימות לא מוחק בחירה קיימת
         body.meta = {
           ...vMeta,
           subject: val.subject ?? null,
           ...(listOptions ? { list_ids: val.list_id ? [val.list_id] : [] } : {}),
-          ...(template ? { field_values: fieldValues } : {}),
+          ...(template ? { field_values: externalValues } : {}),
         };
         delete body.subject;
         delete body.list_id;
+        // עם תבנית אין textarea גוף — התוכן חי ב-field_values
+        if (template) body.body = v?.body ?? null;
       }
       body.week = state.week;
       await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
@@ -788,7 +796,30 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       });
       // תצוגה חיה — עמודה צמודה משמאל שמתעדכנת תוך כדי הקלדה. הרינדור
       // כולו ב-HUB (newsletter-preview); כאן רק debounce ותצוגת התוצאה.
-      if (isMail) mountLivePreview({ tplFields, title: item.title });
+      const preview = isMail
+        ? mountLivePreview({ tplFields, title: item.title, values: () => externalValues })
+        : null;
+
+      // הממלא של ה-HUB: טאב חדש; ready ← שולחים את הערכים; save ← קולטים
+      // ומרעננים. ההודעות נעולות ל-origin של ה-HUB משני הכיוונים.
+      $('#openFiller')?.addEventListener('click', () => {
+        const hubOrigin = new URL(template.fill_url).origin;
+        const child = window.open(template.fill_url, 'mcFill');
+        if (!child) return toast('הדפדפן חסם את פתיחת הממלא — אפשר חלונות קופצים לאתר הזה');
+        const onMsg = (e) => {
+          if (e.origin !== hubOrigin) return;
+          if (e.data?.type === 'mc-fill-ready') {
+            child.postMessage({ type: 'mc-fill-init', values: externalValues }, hubOrigin);
+          } else if (e.data?.type === 'mc-fill-save') {
+            Object.keys(externalValues).forEach((k) => delete externalValues[k]);
+            Object.assign(externalValues, e.data.values ?? {});
+            toast('התוכן נקלט מהממלא.');
+            preview?.refresh();
+          }
+        };
+        window.addEventListener('message', onMsg);
+        $('#genDlg').addEventListener('close', () => window.removeEventListener('message', onMsg), { once: true });
+      });
     },
   });
 }

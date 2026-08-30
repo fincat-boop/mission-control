@@ -94,8 +94,13 @@ export function publishBlocker({ post, variant, assets }) {
     if (!hubMailReady()) return 'חיבור ה-HUB לא מוגדר (HUB_API_URL / HUB_API_KEY בשרת)';
     if (!post.content_id) return 'אין תוכן משויך לשיבוץ';
     if (!variant || variant.status !== 'ready') return 'הגרסה למדיה הזו עוד לא מסומנת "מוכן"';
-    if (!variant.body?.trim()) return 'אין גוף למייל — כותבים אותו בעריכת התוכן';
     const m = variant.meta ?? {};
+    // התוכן חי או בגוף הגרסה או במילוי הממלא של ה-HUB (שדה תוכן בתבנית)
+    const hasFilledContent = Object.entries(m.field_values ?? {}).some(
+      ([k, val]) => ['תוכן', 'גוף הגיליון', 'גוף ההודעה'].includes(k) && String(val ?? '').trim());
+    if (!variant.body?.trim() && !hasFilledContent) {
+      return 'אין תוכן למייל — ממלאים בעריכת הגרסה (כפתור המילוי או שדה התוכן)';
+    }
     if (!m.subject?.trim()) return 'חסר נושא למייל — ממלאים בעריכת הגרסה של ערוץ המייל';
     if (!(m.list_ids?.length || m.segment_ids?.length)) {
       return 'לא נבחרה רשימת יעד — בוחרים בעריכת הגרסה של ערוץ המייל';
