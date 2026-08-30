@@ -79,7 +79,10 @@ function mountLivePreview({ tplFields, title }) {
       const frame = document.createElement('iframe');
       frame.id = 'lpFrame';
       frame.title = 'תצוגה מקדימה של המייל';
-      frame.setAttribute('sandbox', '');
+      // allow-same-origin בלבד (בלי allow-scripts): sandbox ריק = מקור
+      // אטום, והדפדפן לא שולח את קוקי ה-session — הנתיב מחזיר 401.
+      // סקריפטים נשארים חסומים, וה-CSP של העמוד חוסם אותם גם כך.
+      frame.setAttribute('sandbox', 'allow-same-origin');
       frame.src = `/api/publish/newsletter-frame/${preview.frame_token}`;
       $('#lpFrameWrap').replaceChildren(frame);
     } catch (e) {
