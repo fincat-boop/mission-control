@@ -118,32 +118,41 @@ function ensureDialog() {
 /**
  * @param {{html:string, fields:Array<{name:string,label?:string,multiline:boolean,max?:number}>,
  *          values:Record<string,string>, title?:string,
- *          onSave:(values:Record<string,string>)=>void}} spec
+ *          subject?:string, readyButton?:boolean,
+ *          onSave:(values:Record<string,string>, extra:{subject:string, ready:boolean})=>void}} spec
+ * subject !== undefined — שדה נושא בראש הרשימה; readyButton — כפתור
+ * "שמור וסמן מוכן" לצד השמירה הרגילה.
  */
-export function openTemplateFiller({ html, fields, values, title = 'מילוי תוכן', onSave }) {
+export function openTemplateFiller({ html, fields, values, title = 'מילוי תוכן', subject, readyButton = false, onSave }) {
   const dlg = ensureDialog();
   const current = { ...values };
 
   dlg.innerHTML = `
     <div class="filler-head">
       <h3>${esc(title)}</h3>
-      <span class="d">מה שרואים כאן הוא מה שיישלח — ההדגשות: **מודגש**, _נטוי_, [טקסט](קישור)</span>
+      <span class="filler-tools">
+        <button type="button" class="btn tiny" data-em="**" title="הדגש מסומן (או הקלד **סביב**)"><b>B</b></button>
+        <button type="button" class="btn tiny" data-em="_" title="הטה מסומן"><i>I</i></button>
+        <button type="button" class="btn tiny" data-link="1" title="הפוך מסומן לקישור">🔗</button>
+      </span>
+      <span class="d">מה שרואים כאן הוא מה שיישלח</span>
       <span class="filler-actions">
         <button type="button" class="btn" id="fillerCancel">ביטול</button>
-        <button type="button" class="btn primary" id="fillerSave">שמור תוכן לשליחה</button>
+        ${readyButton ? '<button type="button" class="btn" id="fillerReady" style="color:var(--st-good)">⚡ שמור וסמן מוכן</button>' : ''}
+        <button type="button" class="btn primary" id="fillerSave">שמירה</button>
       </span>
     </div>
     <div class="filler-cols">
       <div class="filler-fields">
+        ${subject !== undefined ? `
+          <div class="filler-row filler-subject">
+            <div class="filler-row-head"><label for="fl__subject">נושא המייל</label></div>
+            <input id="fl__subject" value="${esc(subject ?? '')}" placeholder='"פרסומת" תתווסף אוטומטית אם חסר'>
+          </div>` : ''}
         ${fields.map((f) => `
           <div class="filler-row" data-row="${esc(f.name)}">
             <div class="filler-row-head">
               <label for="fl_${esc(f.name)}">${esc(f.label || f.name)}</label>
-              <span class="filler-tools">
-                <button type="button" class="btn tiny" data-em="**" data-f="${esc(f.name)}" title="הדגש מסומן"><b>B</b></button>
-                <button type="button" class="btn tiny" data-em="_" data-f="${esc(f.name)}" title="הטה מסומן"><i>I</i></button>
-                <button type="button" class="btn tiny" data-link="${esc(f.name)}" title="הפוך מסומן לקישור">🔗</button>
-              </span>
             </div>
             ${f.multiline
               ? `<textarea id="fl_${esc(f.name)}" rows="3"${f.max ? ` maxlength="${f.max}"` : ''}>${esc(current[f.name] ?? '')}</textarea>`
@@ -156,6 +165,9 @@ export function openTemplateFiller({ html, fields, values, title = 'מילוי �
 
   const frame = dlg.querySelector('iframe');
   const input = (name) => dlg.querySelector(`#fl_${CSS.escape(name)}`);
+
+  // הסרגל בראש פועל על השדה האחרון שהיה בפוקוס
+  let activeField = null;
 
   /* תצוגה: כתיבה פעם אחת, אחר-כך החלפת body בלבד — הגלילה נשמרת. */
   let painted = false;
@@ -196,26 +208,38 @@ export function openTemplateFiller({ html, fields, values, title = 'מילוי �
   fields.forEach((f) => {
     const el = input(f.name);
     el?.addEventListener('input', () => { current[f.name] = el.value; paint(); counters(); });
-    el?.addEventListener('focus', () => mark(f.name, true));
+    el?.addEventListener('focus', () => { activeField = f.name; mark(f.name, true); });
     el?.addEventListener('blur', () => mark(f.name, false));
   });
 
-  dlg.querySelectorAll('[data-em]').forEach((b) => b.addEventListener('click', () => {
-    const el = input(b.dataset.f);
-    const next = el && wrapSelection(el, b.dataset.em);
-    if (next) { el.value = next.value; current[b.dataset.f] = next.value; paint(); }
+  const applyToActive = (fn) => {
+    if (!activeField) return toast('היכנס קודם לשדה שרוצים לעצב.');
+    const el = input(activeField);
+    const next = el && fn(el);
+    if (next) { el.value = next.value; current[activeField] = next.value; paint(); }
     el?.focus();
-  }));
-  dlg.querySelectorAll('[data-link]').forEach((b) => b.addEventListener('click', () => {
-    const el = input(b.dataset.link);
-    const next = el && wrapSelectionAsLink(el);
-    if (next) { el.value = next.value; current[b.dataset.link] = next.value; paint(); }
-    el?.focus();
-  }));
+  };
+  dlg.querySelectorAll('[data-em]').forEach((b) =>
+    // mousedown ולא click — לחיצה רגילה מפילה קודם את הפוקוס והבחירה מהשדה
+    b.addEventListener('mousedown', (e) => { e.preventDefault(); applyToActive((el) => wrapSelection(el, b.dataset.em)); }));
+  dlg.querySelector('[data-link]')?.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    applyToActive((el) => wrapSelectionAsLink(el));
+  });
 
+  const collect = () => ({
+    values: { ...current },
+    subject: dlg.querySelector('#fl__subject')?.value?.trim() ?? '',
+  });
   dlg.querySelector('#fillerCancel').addEventListener('click', () => dlg.close());
   dlg.querySelector('#fillerSave').addEventListener('click', () => {
-    onSave({ ...current });
+    const { values: v, subject: subj } = collect();
+    onSave(v, { subject: subj, ready: false });
+    dlg.close();
+  });
+  dlg.querySelector('#fillerReady')?.addEventListener('click', () => {
+    const { values: v, subject: subj } = collect();
+    onSave(v, { subject: subj, ready: true });
     dlg.close();
   });
 

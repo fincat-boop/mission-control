@@ -26,7 +26,9 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", 'data:'],
+      // https: — תצוגות המייל (ממלא התבניות והתצוגה החיה) מציגות תבניות
+      // עם תמונות מדומיינים חיצוניים; iframe שנכתב מהדף יורש את ה-CSP הזה.
+      imgSrc: ["'self'", 'https:', 'data:'],
       connectSrc: ["'self'"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],

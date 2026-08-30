@@ -102,9 +102,7 @@ export function publishBlocker({ post, variant, assets }) {
       return 'אין תוכן למייל — ממלאים בעריכת הגרסה (כפתור המילוי או שדה התוכן)';
     }
     if (!m.subject?.trim()) return 'חסר נושא למייל — ממלאים בעריכת הגרסה של ערוץ המייל';
-    if (!(m.list_ids?.length || m.segment_ids?.length)) {
-      return 'לא נבחרה רשימת יעד — בוחרים בעריכת הגרסה של ערוץ המייל';
-    }
+    // בלי רשימה — ה-HUB שולח לרשימת העל (ברירת המחדל שלו); אין חסימה.
     return null;
   }
 

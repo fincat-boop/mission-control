@@ -675,16 +675,6 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
   // אם הוא לא זמין, הטופס נפתח בלי הבורר עם הסבר, והבחירה הקיימת נשמרת.
   const isMail = channel?.platform === 'newsletter';
   const vMeta = v?.meta ?? {};
-  let listOptions = null;
-  let listError = null;
-  if (isMail) {
-    try {
-      const { lists } = await api('/publish/hub-lists');
-      listOptions = lists.map((l) => [l.id, l.name]);
-    } catch (e) {
-      listError = e.message;
-    }
-  }
 
   // תבנית המילוי של ה-HUB: אם יש, מוסיפים טופס שדות. אין תבנית (null) —
   // הממשק הבסיסי בלבד. שדות שהמילוי האוטומטי מכסה מסוננים החוצה.
@@ -702,6 +692,43 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
     }
   }
 
+  // ניוזלטר עם תבנית: ממלא התבניות הוא המסך — נפתח ישר, בלי דיאלוג
+  // ביניים. הרשימה תמיד רשימת העל (ברירת המחדל של ה-HUB) — אין בורר.
+  if (isMail && template?.html) {
+    openTemplateFiller({
+      html: template.html,
+      fields: template.fields ?? [],
+      values: externalValues,
+      subject: vMeta.subject ?? '',
+      readyButton: v?.status !== 'ready',
+      title: `מילוי תוכן — ${item.title}`,
+      onSave: (vals, { subject, ready }) => {
+        const cleaned = {};
+        for (const [k, val] of Object.entries(vals)) {
+          if (String(val ?? '').trim()) cleaned[k] = val;
+        }
+        (async () => {
+          try {
+            await api(`/content/${item.id}/variants/${channelId}`, {
+              method: 'PUT',
+              body: {
+                body: v?.body ?? null,
+                status: ready ? 'ready' : (v?.status ?? 'draft'),
+                meta: { ...vMeta, subject: subject || null, field_values: cleaned },
+                week: state.week,
+              },
+            });
+            toast(ready ? 'נשמר וסומן מוכן לשליחה.' : 'התוכן נשמר.');
+            await reload();
+          } catch (e) {
+            toast(`השמירה נכשלה: ${e.message}`);
+          }
+        })();
+      },
+    });
+    return;
+  }
+
   // הקבצים של המדיה הזו בלבד, ולצידם מה שמשותף לכל המדיות של הזווית
   const mine = (item.variant_assets ?? []).filter((a) => a.variant_id === v?.id);
   const shared = item.assets ?? [];
@@ -716,14 +743,7 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
     fields: [
       ...(isMail ? [{ name: 'subject', label: 'נושא המייל', type: 'text',
                       value: vMeta.subject,
-                      hint: listError
-                        ? `רשימות היעד לא נטענו (${listError}) — הבחירה הקיימת נשמרת, מנסים שוב כשה-HUB זמין.`
-                        : undefined }] : []),
-      ...(isMail && listOptions ? [{
-        name: 'list_id', label: 'רשימת היעד ב-HUB', type: 'select',
-        value: (vMeta.list_ids ?? [])[0] ?? '',
-        options: [['', '— בחר רשימה —'], ...listOptions],
-      }] : []),
+                      hint: 'הניוזלטר נשלח לרשימה הכללית (רשימת העל) ב-HUB' }] : []),
       // עם תבנית — כל התוכן ממולא בממלא של ה-HUB (הכפתור למטה); בלי
       // תבנית — כותבים גוף חופשי כאן.
       ...(template ? [] : [{
@@ -743,9 +763,6 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       if (v?.status !== 'ready') {
         btns.push('<button type="button" class="btn small" id="markReady" style="color:var(--st-good)">⚡ מוכן לשליחה</button>');
       }
-      if (isMail && template?.html) {
-        btns.push('<button type="button" class="btn small primary" id="openFiller">✨ מילוי התוכן</button>');
-      }
       return btns.length
         ? `<span style="margin-inline-end:auto;display:flex;gap:8px">${btns.join('')}</span>`
         : '';
@@ -755,16 +772,8 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       delete body.__files;
       if (isMail) {
         // meta נשלח רק כשיש מה לעדכן — כך כשל טעינת רשימות לא מוחק בחירה קיימת
-        body.meta = {
-          ...vMeta,
-          subject: val.subject ?? null,
-          ...(listOptions ? { list_ids: val.list_id ? [val.list_id] : [] } : {}),
-          ...(template ? { field_values: externalValues } : {}),
-        };
+        body.meta = { ...vMeta, subject: val.subject ?? null };
         delete body.subject;
-        delete body.list_id;
-        // עם תבנית אין textarea גוף — התוכן חי ב-field_values
-        if (template) body.body = v?.body ?? null;
       }
       body.week = state.week;
       await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
@@ -801,24 +810,7 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
         ? mountLivePreview({ tplFields, title: item.title, values: () => externalValues })
         : null;
 
-      // ממלא התבניות המקומי — אותו מסך כמו ב-HUB, רץ כאן. שדות ריקים
-      // לא נשמרים: הם חוזרים למילוי האוטומטי של ה-HUB (תאריך וכו').
-      $('#openFiller')?.addEventListener('click', () => {
-        openTemplateFiller({
-          html: template.html,
-          fields: template.fields ?? [],
-          values: externalValues,
-          title: `מילוי תוכן — ${item.title}`,
-          onSave: (vals) => {
-            Object.keys(externalValues).forEach((k) => delete externalValues[k]);
-            for (const [k, val] of Object.entries(vals)) {
-              if (String(val ?? '').trim()) externalValues[k] = val;
-            }
-            toast('התוכן נשמר בגרסה — אל תשכח לשמור את הדיאלוג.');
-            preview?.refresh();
-          },
-        });
-      });
+
     },
   });
 }
