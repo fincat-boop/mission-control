@@ -49,44 +49,33 @@ function mountLivePreview({ tplFields, title }) {
 
   const pane = document.createElement('div');
   pane.id = 'livePreviewPane';
+  // הטעינה בטופס נסתר שמכוון ל-iframe (target) ולא ב-srcdoc: עמוד srcdoc
+  // יורש את ה-CSP הקשוח של האפליקציה ותמונות התבנית נחסמות; הנתיב
+  // newsletter-preview-frame מגיש את המייל עם CSP משלו שמתיר אותן.
   pane.innerHTML = `
     <div class="lp-head">תצוגה חיה — כך ייראה המייל אצל הנמען</div>
-    <div class="lp-warn" id="lpWarn" hidden></div>
-    <iframe id="lpFrame" sandbox="" title="תצוגה מקדימה של המייל"></iframe>`;
+    <form id="lpForm" method="post" action="/api/publish/newsletter-preview-frame"
+          target="lpFrame" hidden>
+      <input type="hidden" name="subject">
+      <input type="hidden" name="htmlBody">
+      <input type="hidden" name="name">
+      <input type="hidden" name="fieldValues">
+    </form>
+    <iframe id="lpFrame" name="lpFrame" sandbox="" title="תצוגה מקדימה של המייל"></iframe>`;
   dlg.insertBefore(pane, dlg.querySelector('.dactions'));
 
-  let seq = 0;
   let timer = null;
-
-  const refresh = async () => {
-    const my = ++seq;
+  const refresh = () => {
     const fieldValues = {};
     for (const f of tplFields) fieldValues[f.name] = $(`#gen_fv_${f.name}`)?.value ?? '';
-    try {
-      const preview = await api('/publish/newsletter-preview', {
-        method: 'POST',
-        body: {
-          subject: $('#gen_subject')?.value ?? '',
-          htmlBody: $('#gen_body')?.value ?? '',
-          name: title,
-          fieldValues,
-        },
-      });
-      if (my !== seq) return;
-      $('#lpFrame').srcdoc = preview.html ?? '';
-      const warn = $('#lpWarn');
-      if (preview.unsafe_vars?.length) {
-        warn.hidden = false;
-        warn.textContent = `שים לב — משתנים שנשארו בלי ערך: ${preview.unsafe_vars.join(', ')}`;
-      } else {
-        warn.hidden = true;
-      }
-    } catch (e) {
-      if (my !== seq) return;
-      const warn = $('#lpWarn');
-      warn.hidden = false;
-      warn.textContent = `התצוגה לא נטענה: ${e.message}`;
-    }
+    const form = $('#lpForm');
+    // דרך elements — גישה כמו form.name מתנגשת עם התכונות המובנות של הטופס
+    const el = (n) => form.elements.namedItem(n);
+    el('subject').value = $('#gen_subject')?.value ?? '';
+    el('htmlBody').value = $('#gen_body')?.value ?? '';
+    el('name').value = title ?? '';
+    el('fieldValues').value = JSON.stringify(fieldValues);
+    form.submit();
   };
   const queue = () => { clearTimeout(timer); timer = setTimeout(refresh, 600); };
 
@@ -697,14 +686,16 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
                       hint: listError
                         ? `רשימות היעד לא נטענו (${listError}) — הבחירה הקיימת נשמרת, מנסים שוב כשה-HUB זמין.`
                         : undefined }] : []),
-      { name: 'body',
-        label: isMail ? 'גוף המייל (HTML)' : 'הטקסט כפי שהוא ייצא במדיה הזו',
-        type: 'textarea', value: v?.body },
       ...(isMail && listOptions ? [{
         name: 'list_id', label: 'רשימת היעד ב-HUB', type: 'select',
         value: (vMeta.list_ids ?? [])[0] ?? '',
         options: [['', '— בחר רשימה —'], ...listOptions],
       }] : []),
+      { name: 'body',
+        label: !isMail ? 'הטקסט כפי שהוא ייצא במדיה הזו'
+             : template ? 'תוכן הניוזלטר (נכנס לשדה התוכן של התבנית)'
+             : 'גוף המייל (HTML)',
+        type: 'textarea', value: v?.body },
       // שדות התבנית של ה-HUB — name מקבל קידומת fv_ כדי לאסוף אותם ל-meta
       ...tplFields.map((f) => ({
         name: `fv_${f.name}`,

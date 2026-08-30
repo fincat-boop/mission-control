@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { bad, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
@@ -66,6 +66,41 @@ r.get('/publish/newsletter-template', wrap(async (_req, res) => {
     throw e;
   }
 }));
+
+/**
+ * מסגרת התצוגה החיה — הדיאלוג שולח לכאן טופס (target=iframe) ומקבל את
+ * ה-HTML המרונדר כעמוד שלם. נתיב נפרד ולא srcdoc: iframe של srcdoc יורש
+ * את ה-CSP הקשוח של האפליקציה (הכול מאותו מקור) ותמונות התבנית נחסמות;
+ * כאן העמוד מקבל CSP משלו — תוכן סטטי בלבד, תמונות/סגנונות מותרים,
+ * סקריפטים לא. אזהרת משתנים חסרים מוזרקת כבאנר בראש העמוד.
+ */
+r.post('/publish/newsletter-preview-frame',
+  express.urlencoded({ extended: false, limit: '1mb' }),
+  wrap(async (req, res) => {
+    const b = req.body ?? {};
+    let fieldValues = {};
+    try { fieldValues = JSON.parse(b.fieldValues || '{}'); } catch { /* טופס פגום — ממשיכים בלי */ }
+
+    res.set('Content-Security-Policy',
+      "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https:; font-src https: data:");
+    res.type('html');
+
+    try {
+      const { html, unsafe_vars } = await newsletterPreview({
+        subject: b.subject ?? '',
+        htmlBody: b.htmlBody ?? '',
+        name: b.name || undefined,
+        fieldValues,
+      });
+      const warn = unsafe_vars?.length
+        ? `<div style="position:sticky;top:0;background:#7a1f1f;color:#fff;font:12px sans-serif;padding:6px 10px;direction:rtl">שים לב — משתנים שנשארו בלי ערך: ${unsafe_vars.map((v) => String(v).replace(/</g, '&lt;')).join(', ')}</div>`
+        : '';
+      res.send(warn + html);
+    } catch (e) {
+      const msg = (e instanceof HubMailError ? e.message : 'התצוגה לא נטענה').replace(/</g, '&lt;');
+      res.send(`<div style="font:13px sans-serif;direction:rtl;padding:20px;color:#7a1f1f">${msg}</div>`);
+    }
+  }));
 
 /**
  * תצוגה מקדימה — ה-HUB מרנדר את מה שהנמען יראה, והלוח רק מציג את ה-HTML
