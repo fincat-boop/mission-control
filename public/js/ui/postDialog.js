@@ -134,8 +134,6 @@ const STATUS_CHIP = {
 export async function openPostPreview(postId) {
   $('#postDlgTitle').textContent = 'טוען…';
   $('#postPreview').innerHTML = '';
-  $('#pPrimary').hidden = true;
-  $('#pSecondary').hidden = true;
   $('#pMoreBtn').hidden = true;
   $('#pResults').hidden = true;
   $('#postDlg').showModal();
@@ -144,53 +142,24 @@ export async function openPostPreview(postId) {
   previewPost = post;
 
   /*
-   * חלוקת הפעולות: ראשית אחת (מה שהמצב מבקש), משנית אחת, והשאר בתפריט
-   * "עוד" — במקום שורה של שישה כפתורים שקשה לבחור מהם.
+   * כל הפעולות הרלוונטיות למצב — בתפריט "פעולות" אחד. הסדר: קודם מה
+   * שהמצב מזמין, עריכה באמצע, הסרה אחרונה אחרי מפריד.
    */
   const autoCapable = ['facebook', 'instagram', 'newsletter'].includes(post.platform)
     && post.autopub_connected;
-  const ready = variant?.status === 'ready';
-  const meta0 = variant?.meta ?? {};
-  const hasContent = !!(variant?.body?.trim()
-    || ['תוכן', 'גוף הגיליון', 'גוף ההודעה'].some((k) => String(meta0.field_values?.[k] ?? '').trim()));
-
-  let primary = null;
-  let secondary = null;
   const menu = [];
 
-  if (post.status === 'published') {
-    // הפעולה הראשית היא טופס התוצאות שמוצג ממילא
-    if (can('content')) { secondary = 'openContent'; menu.push('unpublish'); }
-  } else if (post.status === 'publishing') {
-    // באמצע שליחה — אין מה ללחוץ
-  } else if (!hasContent || !ready) {
-    // חסר תוכן או עדיין טיוטה — קודם משלימים
-    primary = 'openContent';
+  if (['scheduled', 'failed'].includes(post.status)) {
+    if (can('approve') && autoCapable) menu.push('approve', 'publishNow');
     if (can('content')) menu.push('markPublished');
-  } else if (can('approve') && autoCapable && ['scheduled', 'failed'].includes(post.status)) {
-    primary = 'approve';
-    secondary = 'openContent';
-    menu.push('publishNow', 'markPublished');
   } else if (post.status === 'approved') {
-    secondary = 'openContent';
     if (can('approve')) menu.push('unapprove', 'publishNow');
     if (can('content')) menu.push('markPublished');
-  } else if (can('content')) {
-    // ערוץ ידני עם תוכן מוכן — הפעולה היא לסמן שפורסם
-    primary = 'markPublished';
-    secondary = 'openContent';
-  } else {
-    secondary = 'openContent';
+  } else if (post.status === 'published') {
+    if (can('content')) menu.push('unpublish');
   }
-  if (can('content')) menu.push('remove');
-
-  const setBtn = (id, key) => {
-    const el = $(id);
-    el.hidden = !key;
-    if (key) { el.textContent = ACT[key].label; el.onclick = run(() => runAction(key)); }
-  };
-  setBtn('#pPrimary', primary);
-  setBtn('#pSecondary', secondary);
+  menu.push('openContent');
+  if (can('content') && post.status !== 'publishing') menu.push('remove');
 
   const menuEl = $('#pMenu');
   menuEl.hidden = true;

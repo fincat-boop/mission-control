@@ -313,9 +313,7 @@ table.utable { width: 100%; border-collapse: collapse; }
 .pchip[data-tone="good"] { color: var(--st-good); border-color: color-mix(in srgb, var(--st-good) 45%, transparent); }
 .pchip[data-tone="warn"] { color: var(--st-warn); border-color: color-mix(in srgb, var(--st-warn) 45%, transparent); }
 .pchip[data-tone="crit"] { color: var(--st-crit); border-color: color-mix(in srgb, var(--st-crit) 45%, transparent); }
-/* פוטר הפעולות: ראשית ← משנית ← "עוד" ← סגור בקצה */
 #postDlg .pfoot { border-top: 1px solid var(--border); padding-top: 12px; }
-#postDlg .pfoot #pClose { margin-inline-start: auto; }
 .pmore { position: relative; }
 .pmenu {
   position: absolute; bottom: calc(100% + 6px); inset-inline-start: 0; z-index: 5;
