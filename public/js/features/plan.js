@@ -1,5 +1,5 @@
 import { api } from '../core/api.js';
-import { can, epColor, state } from '../core/state.js';
+import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { openTemplateFiller } from '../ui/templateFiller.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
@@ -110,6 +110,7 @@ function mountLivePreview({ tplFields, title, values }) {
 /* ========================= קמפיינים ותוכן ========================= */
 
 export async function renderPlan() {
+  persistView(); // הדרילדאון (נקודת קצה/קמפיין) נשמר ב-hash — שורד רענון
   const [{ campaigns }, { content }] = await Promise.all([
     api('/campaigns'), api('/content'),
   ]);

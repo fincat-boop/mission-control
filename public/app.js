@@ -3,7 +3,7 @@
 import { $, $$, esc, run } from './js/core/dom.js';
 import { api } from './js/core/api.js';
 
-import { TABS, state, rebuildEpColors } from './js/core/state.js';
+import { TABS, state, rebuildEpColors, persistView, restoreView } from './js/core/state.js';
 import { registerRefreshers, refreshAfterPostChange, goToTab } from './js/ui/refresh.js';
 import { wireGenericDialog } from './js/ui/dialog.js';
 import { wireEngineDialog } from './js/ui/engineDialog.js';
@@ -60,6 +60,10 @@ async function boot() {
   }
 
   wireChrome();
+  // שחזור התצוגה מה-hash — לפני הרינדור הראשון, כדי שרענון לא יחזיר לדף הבית
+  restoreView();
+  $$('.tab').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.t === state.tab)));
+  for (const key of TABS) $(`#${key}`).hidden = key !== state.tab;
 
   const [{ channels }, { endpoints }, { users }] = await Promise.all([
     api('/channels'), api('/endpoints'), api('/users'),
@@ -88,6 +92,7 @@ async function showTab(tab) {
   state.tab = tab;
   $$('.tab').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.t === tab)));
   for (const key of TABS) $(`#${key}`).hidden = key !== tab;
+  persistView();
   await renderTab(tab);
 }
 
@@ -103,14 +108,7 @@ async function refreshAlertsImpl() {
 }
 
 function wireChrome() {
-  $$('.tab').forEach((t) => t.addEventListener('click', run(async () => {
-    state.tab = t.dataset.t;
-    $$('.tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
-    for (const key of TABS) {
-      $(`#${key}`).hidden = key !== state.tab;
-    }
-    await renderTab(state.tab);
-  })));
+  $$('.tab').forEach((t) => t.addEventListener('click', run(() => showTab(t.dataset.t))));
 
   $('#btnAlerts').addEventListener('click', run(() => showTab('tasks')));
 
