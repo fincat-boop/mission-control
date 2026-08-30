@@ -70,7 +70,10 @@ export async function loadUser(req, _res, next) {
 
 /** חוסם בקשות ללא התחברות */
 export function requireAuth(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: 'נדרשת התחברות' });
+  if (!req.user) {
+    console.log(`[auth] 401 על ${req.method} ${req.originalUrl} — cookies: [${Object.keys(req.cookies ?? {}).join(', ')}]`);
+    return res.status(401).json({ error: 'נדרשת התחברות' });
+  }
   next();
 }
 
