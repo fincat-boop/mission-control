@@ -95,7 +95,10 @@
 
 <!-- תצוגה מקדימה של פוסט מהלוח -->
 <dialog id="postDlg">
-  <h3 id="postDlgTitle"></h3>
+  <div class="phead">
+    <h3 id="postDlgTitle"></h3>
+    <span id="pStatusChip" class="pchip" hidden></span>
+  </div>
   <div id="postPreview"></div>
 
   <!-- תוצאות בפועל — מוצג רק לפוסט שכבר פורסם -->
@@ -115,17 +118,15 @@
     </div>
   </div>
 
-  <!-- שורה ראשונה: מה עושים עם הפוסט (מוצגת רק כשיש פעולות למצב הזה) -->
-  <div class="dactions pmain" id="pMainRow" hidden>
-    <button class="btn" id="pApprove" hidden></button>
-    <button class="btn" id="pPublishNow" hidden>פרסם עכשיו</button>
-    <button class="btn" id="pPublish" style="color:var(--st-good)" hidden></button>
-  </div>
-  <!-- שורה שנייה: ניווט וניהול -->
-  <div class="dactions psub">
-    <button class="btn small" id="pOpenContent">✏️ פתח בתוכן</button>
-    <button class="btn small" id="pDelete" style="color:var(--st-crit)">הסר מהלוח</button>
-    <button class="btn primary" id="pClose">סגור</button>
+  <!-- פעולה ראשית אחת לפי מצב הפוסט, משנית אחת, והשאר בתפריט "עוד" -->
+  <div class="dactions pfoot">
+    <button class="btn primary" id="pPrimary" hidden></button>
+    <button class="btn" id="pSecondary" hidden></button>
+    <span class="pmore">
+      <button class="btn" id="pMoreBtn" hidden>עוד ⌄</button>
+      <div class="pmenu" id="pMenu" hidden></div>
+    </span>
+    <button class="btn" id="pClose">סגור</button>
   </div>
 </dialog>
 

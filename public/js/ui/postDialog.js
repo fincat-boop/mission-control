@@ -9,60 +9,88 @@ import { isImage, isVideo } from '../core/format.js';
 
 let previewPost = null;
 
+/* פעולות הפוסט — פונקציות במפה אחת; הפוטר בוחר מי ראשית, מי משנית ומה בתפריט */
+const ACT = {
+  approve: {
+    label: 'אשר לשליחה אוטומטית ⚡',
+    run: async (post) => {
+      await api(`/posts/${post.id}/approve-publish`, { method: 'POST' });
+      toast('אושר — הפוסט יישלח אוטומטית במועד שנקבע. ⚡');
+    },
+  },
+  unapprove: {
+    label: 'בטל אישור שליחה',
+    run: async (post) => {
+      await api(`/posts/${post.id}/unapprove-publish`, { method: 'POST' });
+      toast('האישור בוטל — הפוסט חזר למתוכנן ולא יישלח.');
+    },
+  },
+  publishNow: {
+    label: 'פרסם עכשיו',
+    run: async (post) => {
+      if (!(await confirmDialog('לפרסם את הפוסט עכשיו, ישירות לערוץ? הפעולה מיידית.'))) return false;
+      const res = await api(`/posts/${post.id}/publish-now`, { method: 'POST' });
+      toast(res.pending ? 'נשלח ל-HUB ✓ — הפוסט יסומן "פורסם" כשהשליחה תושלם שם.' : 'פורסם! ✓');
+    },
+  },
+  markPublished: {
+    label: 'סמן כפורסם',
+    run: async (post) => {
+      await api(`/posts/${post.id}/publish`, { method: 'POST' });
+      toast('סומן כפורסם.');
+    },
+  },
+  unpublish: {
+    label: 'בטל סימון פורסם',
+    run: async (post) => {
+      await api(`/posts/${post.id}/unpublish`, { method: 'POST' });
+      toast('הפרסום בוטל, השיבוץ חזר למתוכנן.');
+    },
+  },
+  openContent: {
+    label: '✏️ פתח בתוכן',
+    keepOpen: true,
+    run: async (post) => {
+      if (!post.content_id) return toast('לשיבוץ הזה אין תוכן משויך.', true);
+      $('#postDlg').close();
+      const { content } = await api('/content');
+      const item = content.find((c) => c.id === post.content_id);
+      state.planCampaign = item?.campaign_id ?? null;
+      state.planEndpoint = item?.endpoint_id ?? null;
+      state.planBackground = !item?.campaign_id;
+      await goToTab('plan');
+      return false; // הניווט כבר קרה — בלי רענון לוח מיותר
+    },
+  },
+  remove: {
+    label: 'הסר מהלוח',
+    danger: true,
+    run: async (post) => {
+      if (!(await confirmDialog('להסיר את השיבוץ מהלוח? התוכן עצמו יישאר.', { danger: true }))) return false;
+      const res = await api(`/posts/${post.id}`, { method: 'DELETE', body: { week: state.week } });
+      toast('השיבוץ הוסר.' + (res.engine?.placed ? ' המנוע מילא את המקום שהתפנה.' : ''));
+    },
+  },
+};
+
+async function runAction(key) {
+  if (!previewPost) return;
+  const done = await ACT[key].run(previewPost);
+  if (done === false) return;
+  $('#postDlg').close();
+  $('#pMenu').hidden = true;
+  await refreshAfterPostChange();
+}
+
 export function wirePostDialog() {
   $('#pClose').addEventListener('click', () => $('#postDlg').close());
 
-  $('#pDelete').addEventListener('click', run(async () => {
-    if (!previewPost) return;
-    if (!(await confirmDialog('להסיר את השיבוץ מהלוח? התוכן עצמו יישאר.', { danger: true }))) return;
-    const res = await api(`/posts/${previewPost.id}`, { method: 'DELETE', body: { week: state.week } });
-    $('#postDlg').close();
-    toast('השיבוץ הוסר.' + (res.engine?.placed ? ` המנוע מילא את המקום שהתפנה.` : ''));
-    await refreshAfterPostChange();
-  }));
-
-  // כפתור יחיד שמתנהג לפי מצב הפוסט: מתוכנן → מסמן פורסם, פורסם → מבטל
-  $('#pPublish').addEventListener('click', run(async () => {
-    if (!previewPost) return;
-    const wasPublished = previewPost.status === 'published';
-    const path = wasPublished ? 'unpublish' : 'publish';
-    await api(`/posts/${previewPost.id}/${path}`, { method: 'POST' });
-    $('#postDlg').close();
-    toast(wasPublished ? 'הפרסום בוטל, השיבוץ חזר למתוכנן.' : 'סומן כפורסם.');
-    await refreshAfterPostChange();
-  }));
-
-  // אישור/ביטול שליחה אוטומטית — פר-פוסט, הרשאת approve
-  $('#pApprove').addEventListener('click', run(async () => {
-    if (!previewPost) return;
-    const approving = previewPost.status !== 'approved';
-    const path = approving ? 'approve-publish' : 'unapprove-publish';
-    await api(`/posts/${previewPost.id}/${path}`, { method: 'POST' });
-    $('#postDlg').close();
-    toast(approving
-      ? 'אושר — הפוסט יישלח אוטומטית במועד שנקבע. ⚡'
-      : 'האישור בוטל — הפוסט חזר למתוכנן ולא יישלח.');
-    await refreshAfterPostChange();
-  }));
-
-  // שליחה מיידית — בלי לחכות לשעה המתוזמנת
-  $('#pPublishNow').addEventListener('click', run(async () => {
-    if (!previewPost) return;
-    if (!(await confirmDialog('לפרסם את הפוסט עכשיו, ישירות לערוץ? הפעולה מיידית.'))) return;
-    const btn = $('#pPublishNow');
-    btn.disabled = true;
-    btn.textContent = 'שולח…';
-    try {
-      const res = await api(`/posts/${previewPost.id}/publish-now`, { method: 'POST' });
-      $('#postDlg').close();
-      // ניוזלטר: ה-HUB קיבל ושולח אצלו — הפוסט ייסגר ל"פורסם" כשהשליחה תושלם
-      toast(res.pending ? 'נשלח ל-HUB ✓ — הפוסט יסומן "פורסם" כשהשליחה תושלם שם.' : 'פורסם! ✓');
-      await refreshAfterPostChange();
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'פרסם עכשיו';
-    }
-  }));
+  $('#pMoreBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('#pMenu').hidden = !$('#pMenu').hidden;
+  });
+  // לחיצה בכל מקום אחר סוגרת את תפריט "עוד"
+  document.addEventListener('click', () => { $('#pMenu').hidden = true; });
 
   // תוצאות בפועל — שדה ריק נשלח כ-null מפורש, לא כאפס
   $('#rSave').addEventListener('click', run(async () => {
@@ -91,50 +119,93 @@ export function wirePostDialog() {
     $('#rClear').hidden = true;
     toast('המדידה נמחקה.');
   }));
-
-  // מהלוח אל התוכן — שם עורכים את הטקסט, ולא בלוח
-  $('#pOpenContent').addEventListener('click', run(async () => {
-    if (!previewPost?.content_id) return toast('לשיבוץ הזה אין תוכן משויך.', true);
-    $('#postDlg').close();
-    const { content } = await api('/content');
-    const item = content.find((c) => c.id === previewPost.content_id);
-    state.planCampaign = item?.campaign_id ?? null;
-    state.planEndpoint = item?.endpoint_id ?? null;
-    state.planBackground = !item?.campaign_id;
-    await goToTab('plan');
-  }));
 }
+
+/** צ'יפ הסטטוס בכותרת */
+const STATUS_CHIP = {
+  scheduled: ['מתוכנן', ''],
+  approved: ['⚡ מאושר לשליחה', 'good'],
+  publishing: ['בשליחה…', 'good'],
+  published: ['פורסם ✓', 'good'],
+  failed: ['נכשל', 'crit'],
+};
 
 /** מה שאמור לצאת: הטקסט של המדיה הזו והקבצים שלה */
 export async function openPostPreview(postId) {
   $('#postDlgTitle').textContent = 'טוען…';
   $('#postPreview').innerHTML = '';
-  $('#pPublish').hidden = true;
+  $('#pPrimary').hidden = true;
+  $('#pSecondary').hidden = true;
+  $('#pMoreBtn').hidden = true;
   $('#pResults').hidden = true;
   $('#postDlg').showModal();
 
   const { post, variant, assets, results } = await api(`/posts/${postId}/preview`);
   previewPost = post;
 
-  const pubBtn = $('#pPublish');
-  pubBtn.hidden = !(can('content') && ['scheduled', 'failed', 'published'].includes(post.status));
-  pubBtn.textContent = post.status === 'published' ? 'בטל פרסום' : 'סמן כפורסם';
-
-  // מסלול השליחה האוטומטית — ערוץ מטא מחובר או ערוץ מייל (HUB), הרשאת approve
+  /*
+   * חלוקת הפעולות: ראשית אחת (מה שהמצב מבקש), משנית אחת, והשאר בתפריט
+   * "עוד" — במקום שורה של שישה כפתורים שקשה לבחור מהם.
+   */
   const autoCapable = ['facebook', 'instagram', 'newsletter'].includes(post.platform)
     && post.autopub_connected;
-  const approveBtn = $('#pApprove');
-  approveBtn.hidden = !(can('approve') && autoCapable
-    && ['scheduled', 'failed', 'approved'].includes(post.status));
-  approveBtn.textContent = post.status === 'approved'
-    ? 'בטל אישור שליחה' : 'אשר לשליחה אוטומטית ⚡';
-  approveBtn.style.color = post.status === 'approved' ? 'var(--st-crit)' : 'var(--st-good)';
-  $('#pPublishNow').hidden = !(can('approve') && autoCapable
-    && ['scheduled', 'failed', 'approved'].includes(post.status));
+  const ready = variant?.status === 'ready';
+  const meta0 = variant?.meta ?? {};
+  const hasContent = !!(variant?.body?.trim()
+    || ['תוכן', 'גוף הגיליון', 'גוף ההודעה'].some((k) => String(meta0.field_values?.[k] ?? '').trim()));
 
-  // שורת פעולות המצב מוצגת רק כשיש בה לפחות כפתור אחד — בלי פס ריק
-  $('#pMainRow').hidden = ['#pApprove', '#pPublishNow', '#pPublish']
-    .every((id) => $(id).hidden);
+  let primary = null;
+  let secondary = null;
+  const menu = [];
+
+  if (post.status === 'published') {
+    // הפעולה הראשית היא טופס התוצאות שמוצג ממילא
+    if (can('content')) { secondary = 'openContent'; menu.push('unpublish'); }
+  } else if (post.status === 'publishing') {
+    // באמצע שליחה — אין מה ללחוץ
+  } else if (!hasContent || !ready) {
+    // חסר תוכן או עדיין טיוטה — קודם משלימים
+    primary = 'openContent';
+    if (can('content')) menu.push('markPublished');
+  } else if (can('approve') && autoCapable && ['scheduled', 'failed'].includes(post.status)) {
+    primary = 'approve';
+    secondary = 'openContent';
+    menu.push('publishNow', 'markPublished');
+  } else if (post.status === 'approved') {
+    secondary = 'openContent';
+    if (can('approve')) menu.push('unapprove', 'publishNow');
+    if (can('content')) menu.push('markPublished');
+  } else if (can('content')) {
+    // ערוץ ידני עם תוכן מוכן — הפעולה היא לסמן שפורסם
+    primary = 'markPublished';
+    secondary = 'openContent';
+  } else {
+    secondary = 'openContent';
+  }
+  if (can('content')) menu.push('remove');
+
+  const setBtn = (id, key) => {
+    const el = $(id);
+    el.hidden = !key;
+    if (key) { el.textContent = ACT[key].label; el.onclick = run(() => runAction(key)); }
+  };
+  setBtn('#pPrimary', primary);
+  setBtn('#pSecondary', secondary);
+
+  const menuEl = $('#pMenu');
+  menuEl.hidden = true;
+  $('#pMoreBtn').hidden = menu.length === 0;
+  menuEl.innerHTML = menu.map((key, i) => `${
+    ACT[key].danger && i > 0 ? '<div class="sep"></div>' : ''
+  }<button type="button" data-act="${key}"${ACT[key].danger ? ' data-danger' : ''}>${esc(ACT[key].label)}</button>`).join('');
+  menuEl.querySelectorAll('[data-act]').forEach((b) =>
+    b.addEventListener('click', run(() => runAction(b.dataset.act))));
+
+  const chip = $('#pStatusChip');
+  const [chipLabel, chipTone] = STATUS_CHIP[post.status] ?? [null, ''];
+  chip.hidden = !chipLabel;
+  chip.textContent = chipLabel ?? '';
+  chip.dataset.tone = chipTone;
 
   // תוצאות נמדדות רק למה שכבר יצא לאוויר
   const showResults = can('content') && post.status === 'published';
@@ -191,9 +262,9 @@ export async function openPostPreview(postId) {
                 ? 'אין עדיין תוכן לניוזלטר — ממלאים דרך "פתח בתוכן".'
                 : 'אין עדיין טקסט לגרסה של המדיה הזו.'}</div>`}
 
-    ${variant && variant.status !== 'ready'
-      ? `<div class="pvwarn">הגרסה הזו במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
-         היא לא נחשבת מוכנה לפרסום.</div>` : ''}
+    ${body && variant && variant.status !== 'ready' && post.status !== 'published'
+      ? `<div class="pvwarn">הגרסה במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
+         מסמנים "מוכן" בעריכת התוכן לפני פרסום.</div>` : ''}
 
     ${post.status === 'approved'
       ? `<div class="pvauto">⚡ מאושר לשליחה אוטומטית${
