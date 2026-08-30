@@ -60,8 +60,9 @@ export async function loadUser(req, _res, next) {
         [uid]
       );
       req.org = req.user?.org_id ?? null;
-    } catch {
+    } catch (e) {
       /* טוקן פג או לא תקין — נשארים אנונימיים */
+      console.warn(`[auth] קוקי session נדחה: ${e.message}`);
     }
   }
   next();

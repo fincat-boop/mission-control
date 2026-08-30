@@ -49,6 +49,7 @@ r.get('/auth/google/callback', wrap(async (req, res) => {
 
   // state חייב להתאים לקוקי (אותו דפדפן) וגם להיות חתום ותקף
   if (!code || !state || state !== cookieState || !verifyState(String(state))) {
+    console.warn(`[auth] Google callback — state נכשל (code=${!!code}, state=${!!state}, cookie=${!!cookieState})`);
     return res.redirect('/login.html?error=google');
   }
 
@@ -63,8 +64,12 @@ r.get('/auth/google/callback', wrap(async (req, res) => {
 
   // ה-allowlist: רק email שכבר קיים כמשתמש (הבעלים אישר אותו).
   const user = await one('select * from users where lower(email) = $1', [email]);
-  if (!user) return res.redirect('/login.html?error=not_approved');
+  if (!user) {
+    console.warn(`[auth] Google ${email} — לא קיים כמשתמש, נדחה`);
+    return res.redirect('/login.html?error=not_approved');
+  }
 
+  console.log(`[auth] Google ${email} — session הונפק (user ${user.id})`);
   issueSession(res, user);
   res.redirect('/');
 }));
