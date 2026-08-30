@@ -1,7 +1,7 @@
 import './_env.js';
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { hubMailReady, createNewsletter, newsletterStatus, audienceLists, HubMailError } from '../src/hub-mail.js';
+import { hubMailReady, createNewsletter, newsletterStatus, audienceLists, newsletterTemplate, newsletterPreview, HubMailError } from '../src/hub-mail.js';
 
 beforeEach(() => {
   process.env.HUB_API_URL = 'https://hub.example.com/';
@@ -81,4 +81,41 @@ test('newsletterStatus — external_ref עם תווים מיוחדים עובר 
 test('audienceLists — מחזיר את המערך עצמו', async () => {
   const f = fakeFetch(200, { ok: true, lists: [{ id: 'l1', name: 'רשימה' }] });
   assert.deepEqual(await audienceLists(f), [{ id: 'l1', name: 'רשימה' }]);
+});
+
+test('createNewsletter — fieldValues עוברים כ-field_values; ריק לא נשלח', async () => {
+  const f = fakeFetch(201, { ok: true, campaign_id: 'c1' });
+  await createNewsletter({
+    externalRef: 'p1', subject: 'א', htmlBody: 'ב', listIds: ['l'],
+    fieldValues: { 'טקסט מקדים': 'שלום' },
+  }, f);
+  assert.deepEqual(JSON.parse(f.calls[0].init.body).field_values, { 'טקסט מקדים': 'שלום' });
+
+  const f2 = fakeFetch(201, { ok: true, campaign_id: 'c2' });
+  await createNewsletter({ externalRef: 'p2', subject: 'א', htmlBody: 'ב', listIds: ['l'], fieldValues: {} }, f2);
+  assert.equal('field_values' in JSON.parse(f2.calls[0].init.body), false);
+});
+
+test('newsletterTemplate — מחזיר את התבנית עצמה (או null)', async () => {
+  const tpl = { id: 't1', name: 'ניוזלטר', fields: [{ name: 'תוכן', multiline: true }] };
+  const f = fakeFetch(200, { ok: true, template: tpl });
+  assert.deepEqual(await newsletterTemplate(f), tpl);
+  assert.ok(f.calls[0].url.endsWith('/api/v1/mission-control/newsletter-template'));
+
+  const f2 = fakeFetch(200, { ok: true, template: null });
+  assert.equal(await newsletterTemplate(f2), null);
+});
+
+test('newsletterPreview — בקשה נכונה ותשובה מלאה', async () => {
+  const f = fakeFetch(200, { ok: true, subject: 'פרסומת: א', html: '<html>x</html>', unsafe_vars: [] });
+  const out = await newsletterPreview({
+    subject: 'א', htmlBody: 'תוכן', name: 'גיליון 5',
+    scheduledAt: '2026-09-01T06:00:00.000Z', fieldValues: { 'פתיחה': 'היי' },
+  }, f);
+  assert.equal(out.html, '<html>x</html>');
+  const body = JSON.parse(f.calls[0].init.body);
+  assert.equal(body.name, 'גיליון 5');
+  assert.equal(body.scheduled_at, '2026-09-01T06:00:00.000Z');
+  assert.deepEqual(body.field_values, { 'פתיחה': 'היי' });
+  assert.ok(f.calls[0].url.endsWith('/api/v1/mission-control/newsletter-preview'));
 });

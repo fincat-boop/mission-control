@@ -53,13 +53,16 @@ async function call(method, path, body, fetchImpl = fetch) {
 
 /**
  * יצירת/תזמון ניוזלטר ב-HUB.
+ * fieldValues — מילוי שדות התבנית מהטופס בלוח ({שם שדה: ערך}); גובר על
+ * המילוי האוטומטי של ה-HUB (תוכן/כותרת/תאריך).
  * @param {{externalRef:string, subject:string, htmlBody:string, listIds?:string[],
- *          segmentIds?:string[], name?:string, scheduledAt?:string|Date}} input
+ *          segmentIds?:string[], name?:string, scheduledAt?:string|Date,
+ *          fieldValues?:Record<string,string>}} input
  * @returns {Promise<{campaign_id:string, status:string, recipient_count?:number,
  *                    scheduled_at:string, idempotent?:boolean}>}
  */
 export async function createNewsletter(input, fetchImpl = fetch) {
-  const { externalRef, subject, htmlBody, listIds = [], segmentIds = [], name, scheduledAt } = input;
+  const { externalRef, subject, htmlBody, listIds = [], segmentIds = [], name, scheduledAt, fieldValues } = input;
   if (!externalRef) throw new HubMailError('externalRef חסר — מזהה הפוסט שלנו', 400);
   return call('POST', '/api/v1/mission-control/newsletters', {
     external_ref: String(externalRef),
@@ -69,6 +72,34 @@ export async function createNewsletter(input, fetchImpl = fetch) {
     segment_ids: segmentIds,
     ...(name ? { name } : {}),
     ...(scheduledAt ? { scheduled_at: new Date(scheduledAt).toISOString() } : {}),
+    ...(fieldValues && Object.keys(fieldValues).length ? { field_values: fieldValues } : {}),
+  }, fetchImpl);
+}
+
+/**
+ * תיאור תבנית הניוזלטר שמוגדרת ב-HUB — מזין את טופס המילוי בלוח.
+ * template=null: לא הוגדרה תבנית, מציגים רק נושא+תוכן.
+ * @returns {Promise<{id:string, name:string,
+ *   fields:Array<{name:string, label?:string, multiline:boolean, max?:number}>} | null>}
+ */
+export const newsletterTemplate = async (fetchImpl = fetch) =>
+  (await call('GET', '/api/v1/mission-control/newsletter-template', null, fetchImpl)).template;
+
+/**
+ * תצוגה מקדימה — ה-HUB מרנדר את מה שהנמען יראה (תבנית, מותג, פוטר,
+ * ערכי דוגמה). הלוח רק מציג את ה-HTML שחוזר (iframe srcdoc).
+ * @param {{subject:string, htmlBody:string, name?:string, scheduledAt?:string|Date,
+ *          fieldValues?:Record<string,string>}} input
+ * @returns {Promise<{subject:string, html:string, unsafe_vars:string[]}>}
+ */
+export async function newsletterPreview(input, fetchImpl = fetch) {
+  const { subject, htmlBody, name, scheduledAt, fieldValues } = input;
+  return call('POST', '/api/v1/mission-control/newsletter-preview', {
+    subject,
+    html_body: htmlBody,
+    ...(name ? { name } : {}),
+    ...(scheduledAt ? { scheduled_at: new Date(scheduledAt).toISOString() } : {}),
+    ...(fieldValues && Object.keys(fieldValues).length ? { field_values: fieldValues } : {}),
   }, fetchImpl);
 }
 
