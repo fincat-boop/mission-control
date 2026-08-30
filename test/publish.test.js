@@ -121,13 +121,11 @@ test('publishBlocker — ניוזלטר בלי נושא נחסם', () => {
   assert.match(publishBlocker(p), /נושא/);
 });
 
-test('publishBlocker — ניוזלטר בלי רשימת יעד נחסם, ו-segment לבדו מספיק', () => {
+test('publishBlocker — ניוזלטר בלי רשימת יעד עובר (ה-HUB שולח לרשימת העל)', () => {
   process.env.HUB_API_URL = 'https://hub.example.com';
   process.env.HUB_API_KEY = 'k';
   const p = mailBase();
   p.variant.meta.list_ids = [];
-  assert.match(publishBlocker(p), /רשימת יעד/);
-  p.variant.meta.segment_ids = ['s1'];
   assert.equal(publishBlocker(p), null);
 });
 
