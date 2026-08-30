@@ -17,7 +17,7 @@ export const hubSsoReady = () => !!(process.env.HUB_SSO_SECRET && process.env.HU
  * אלגוריתם ננעל ל-HS256 — מונע בלבול-אלגוריתם; purpose ייעודי — טוקן
  * שנחתם לכל מטרה אחרת באותו סוד לא יעבוד כאן.
  */
-export function verifyHubSsoToken(token, secret = process.env.HUB_SSO_SECRET) {
+export function verifyHubSsoToken(token, secret = (process.env.HUB_SSO_SECRET ?? '').trim()) {
   try {
     const claims = jwt.verify(token, secret, { algorithms: ['HS256'] });
     if (claims.purpose !== 'hub-sso' || !claims.sub) return null;

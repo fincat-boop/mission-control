@@ -35,7 +35,7 @@ async function call(method, path, body, fetchImpl = fetch) {
     res = await fetchImpl(`${base()}${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${process.env.HUB_API_KEY}`,
+        Authorization: `Bearer ${(process.env.HUB_API_KEY ?? '').trim()}`,
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,

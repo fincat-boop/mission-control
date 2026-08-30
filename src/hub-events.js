@@ -31,7 +31,7 @@ export async function emitHubEvent(input, fetchImpl = fetch) {
   const res = await fetchImpl(`${base()}/api/v1/mission-control/events`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${process.env.HUB_API_KEY}`,
+      Authorization: `Bearer ${(process.env.HUB_API_KEY ?? '').trim()}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
