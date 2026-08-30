@@ -16,9 +16,13 @@ export const hashPassword = (plain) => bcrypt.hash(plain, 10);
 
 export function issueSession(res, user) {
   const token = jwt.sign({ uid: user.id }, SECRET, { expiresIn: '30d' });
+  // sameSite:lax ולא strict — קוקי strict לא נשלח בניווטים שמגיעים מאתר
+  // אחר (חזרה מ-Google OAuth, כניסת SSO מ-HUB), ובספארי גם ה-fetch של
+  // /api/me מיד אחרי ניווט כזה מגיע בלי הקוקי — לולאת login. ההגנה מפני
+  // CSRF לא נשענת על זה: csrf.js בודק Origin על כל בקשה משנת-מצב.
   res.cookie(COOKIE, token, {
     httpOnly: true,
-    sameSite: 'strict',
+    sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     maxAge: MAX_AGE_MS,
   });
@@ -27,7 +31,7 @@ export function issueSession(res, user) {
 export function clearSession(res) {
   res.clearCookie(COOKIE, {
     httpOnly: true,
-    sameSite: 'strict',
+    sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
   });
 }
