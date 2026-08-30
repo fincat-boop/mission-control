@@ -23,11 +23,12 @@ async function newsletterTemplate() {
   }
 }
 
-// שדות שהמילוי האוטומטי של ה-HUB מכסה (תוכן/כותרת/תאריך) — לא מציגים בטופס,
-// הם נגזרים מהתוכן, מהפוסט ומהתאריך
+// שדות שהמילוי האוטומטי של ה-HUB מכסה (תוכן/תאריך) — לא מציגים בטופס.
+// "כותרת" בכוונה לא כאן: ממלאים אותה ידנית בטופס (הוחלט 30.8.2026) —
+// הערך שנשלח ב-field_values גובר על ברירת המחדל של ה-HUB (שם הפוסט).
 const AUTO_FILLED = new Set(
-  ['תוכן', 'גוף הגיליון', 'גוף ההודעה', 'כותרת', 'תאריך',
-   'content', 'body', 'title', 'subject', 'date'].map((s) => s.toLowerCase()));
+  ['תוכן', 'גוף הגיליון', 'גוף ההודעה', 'תאריך',
+   'content', 'body', 'subject', 'date'].map((s) => s.toLowerCase()));
 const isAutoFilled = (f) =>
   AUTO_FILLED.has((f.label ?? '').trim().toLowerCase()) ||
   AUTO_FILLED.has((f.name ?? '').trim().toLowerCase());
