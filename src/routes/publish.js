@@ -41,7 +41,11 @@ r.get('/publish/hub-lists', wrap(async (_req, res) => {
   try {
     res.json({ lists: await audienceLists() });
   } catch (e) {
-    if (e instanceof HubMailError) return bad(res, e.message, e.status >= 500 ? 502 : e.status);
+    if (e instanceof HubMailError) {
+      const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
+      const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
+      return bad(res, msg, status);
+    }
     throw e;
   }
 }));
@@ -54,7 +58,11 @@ r.get('/publish/newsletter-template', wrap(async (_req, res) => {
   try {
     res.json({ template: await newsletterTemplate() });
   } catch (e) {
-    if (e instanceof HubMailError) return bad(res, e.message, e.status >= 500 ? 502 : e.status);
+    if (e instanceof HubMailError) {
+      const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
+      const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
+      return bad(res, msg, status);
+    }
     throw e;
   }
 }));
@@ -74,7 +82,11 @@ r.post('/publish/newsletter-preview', wrap(async (req, res) => {
       fieldValues: b.fieldValues ?? {},
     }));
   } catch (e) {
-    if (e instanceof HubMailError) return bad(res, e.message, e.status >= 500 ? 502 : e.status);
+    if (e instanceof HubMailError) {
+      const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
+      const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
+      return bad(res, msg, status);
+    }
     throw e;
   }
 }));

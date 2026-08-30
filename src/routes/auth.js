@@ -23,14 +23,7 @@ r.post('/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-r.get('/me', (req, res) => {
-  if (!req.user) {
-    console.log(`[auth] /me בלי session — cookies שהגיעו: [${Object.keys(req.cookies ?? {}).join(', ')}] · UA: ${String(req.headers['user-agent'] ?? '').slice(0, 60)}`);
-  } else {
-    console.log(`[auth] /me תקין — user ${req.user.id}`);
-  }
-  res.json({ user: req.user });
-});
+r.get('/me', (req, res) => res.json({ user: req.user }));
 
 /** לממשק — אילו שיטות התחברות זמינות (כדי להציג/להסתיר כפתור Google) */
 r.get('/auth/config', (_req, res) => res.json({ google: googleReady() }));
@@ -76,7 +69,6 @@ r.get('/auth/google/callback', wrap(async (req, res) => {
     return res.redirect('/login.html?error=not_approved');
   }
 
-  console.log(`[auth] Google ${email} — session הונפק (user ${user.id})`);
   issueSession(res, user);
   res.redirect('/');
 }));
