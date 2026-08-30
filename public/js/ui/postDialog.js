@@ -132,6 +132,10 @@ export async function openPostPreview(postId) {
   $('#pPublishNow').hidden = !(can('approve') && autoCapable
     && ['scheduled', 'failed', 'approved'].includes(post.status));
 
+  // שורת פעולות המצב מוצגת רק כשיש בה לפחות כפתור אחד — בלי פס ריק
+  $('#pMainRow').hidden = ['#pApprove', '#pPublishNow', '#pPublish']
+    .every((id) => $(id).hidden);
+
   // תוצאות נמדדות רק למה שכבר יצא לאוויר
   const showResults = can('content') && post.status === 'published';
   $('#pResults').hidden = !showResults;
@@ -159,7 +163,14 @@ export async function openPostPreview(postId) {
       📄 ${esc(a.filename)}</a>`;
   }).join('');
 
-  const body = variant?.body?.trim();
+  // ניוזלטר עם תבנית: התוכן חי ב-meta.field_values (ממלא התבניות),
+  // לא בגוף הגרסה — מציגים אותו משם, יחד עם הנושא.
+  const vMeta = variant?.meta ?? {};
+  const filledContent = ['תוכן', 'גוף הגיליון', 'גוף ההודעה']
+    .map((k) => String(vMeta.field_values?.[k] ?? '').trim()).find(Boolean);
+  const body = variant?.body?.trim() || filledContent;
+  const subjectLine = post.platform === 'newsletter' && vMeta.subject
+    ? `<div class="pvmeta" style="margin-top:10px">✉️ נושא: <b>${esc(vMeta.subject)}</b></div>` : '';
 
   $('#postDlgTitle').textContent = post.title;
   $('#postPreview').innerHTML = `
@@ -172,10 +183,13 @@ export async function openPostPreview(postId) {
     <div class="pvwhen">${esc(when)}${
       post.assignee_name ? ` · אחראי: ${esc(post.assignee_name)}` : ''}</div>
 
+    ${subjectLine}
     ${media ? `<div class="pvmedia">${media}</div>` : ''}
 
     ${body ? `<div class="pvbody">${esc(body)}</div>`
-            : '<div class="pvempty">אין עדיין טקסט לגרסה של המדיה הזו.</div>'}
+            : `<div class="pvempty">${post.platform === 'newsletter'
+                ? 'אין עדיין תוכן לניוזלטר — ממלאים דרך "פתח בתוכן".'
+                : 'אין עדיין טקסט לגרסה של המדיה הזו.'}</div>`}
 
     ${variant && variant.status !== 'ready'
       ? `<div class="pvwarn">הגרסה הזו במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
