@@ -62,7 +62,13 @@ app.use('/api', csrfGuard, loadUser, tenantScope, audit, api);
 // נתיב /api שלא נתפס הוא שגיאה, לא בקשה לדף
 app.use('/api', (_req, res) => res.status(404).json({ error: 'לא נמצא' }));
 
-app.use(express.static(publicDir, { extensions: ['html'] }));
+// no-cache = הדפדפן חייב לאמת מול השרת בכל טעינה (ETag ⇒ 304 זול כשאין
+// שינוי). בלי זה ספארי שמר קבצים ישנים אחרי דיפלוי וערבב גרסאות —
+// HTML חדש עם JS/CSS ישנים — וכל עדכון ממשק "לא הגיע" עד רענון עמוק.
+app.use(express.static(publicDir, {
+  extensions: ['html'],
+  setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
+}));
 app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 
 // eslint-disable-next-line no-unused-vars -- express מזהה error handler לפי 4 ארגומנטים
