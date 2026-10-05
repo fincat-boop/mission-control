@@ -207,11 +207,17 @@ function endpointList(campaigns) {
   }
   const cards = state.endpoints.map((e) => {
     const mine = campaigns.filter((c) => c.endpoint_id === e.id);
-    const missing = mine.reduce((s, c) => s + c.missing_content, 0);
+    // בקמפיין מוכן אין משבצות ריקות — מה שלא מוכן בו הוא טיוטות, לא חוסר
+    const missing = mine.filter((c) => !c.complete).reduce((s, c) => s + c.missing_content, 0);
+    const drafts = mine.filter((c) => c.complete).reduce((s, c) => s + c.missing_content, 0);
+    const draftsLabel = drafts === 1 ? 'טיוטה אחת' : `${drafts} טיוטות`;
+    const chip = missing
+      ? `<span class="chip bad">חסרים ${missing}${drafts ? ` · ${draftsLabel}` : ''}</span>`
+      : drafts ? `<span class="chip">${draftsLabel}</span>` : '<span class="chip on">מלא</span>';
     return `<button class="epick" data-pick-endpoint="${e.id}">
       <span class="nm"><i class="dot" style="background:${epColor(e.id)}"></i>${esc(e.name)}</span>
       <span class="sub">${mine.length} קמפיינים · חשיבות ${e.importance}</span>
-      <span class="chip ${missing ? 'bad' : 'on'}">${missing ? `חסרים ${missing}` : 'מלא'}</span>
+      ${chip}
     </button>`;
   }).join('');
   return `<div class="eplist">${cards}</div>`;
