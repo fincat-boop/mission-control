@@ -184,7 +184,7 @@ export async function analyzeImport(campaignId, text) {
   }
   if (notInCampaign.length) {
     warnings.push(`הערוצים ${notInCampaign.join(', ')} לא משויכים לקמפיין — ` +
-                  'הניסוחים ייכתבו, אבל המנוע לא ישבץ אליהן עד שיתווספו');
+                  'הניסוחים ייכתבו, אבל המנוע לא ישבץ אליהם עד שיתווספו');
   }
   if (!channelCols.length) {
     warnings.push('אין עמודות ערוץ — ייווצרו זוויות בלי ניסוחים, ותצטרך לכתוב אותם ידנית');
