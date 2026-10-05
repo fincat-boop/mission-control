@@ -117,3 +117,13 @@ test('nextFullHour — שעה עגולה, לפחות רבע שעה קדימה', 
   assert.equal(at('2026-10-05T10:50:00+03:00').toISOString(), new Date('2026-10-05T12:00:00+03:00').toISOString());
   assert.equal(at('2026-10-05T10:45:00+03:00').toISOString(), new Date('2026-10-05T11:00:00+03:00').toISOString());
 });
+
+test('defaultUrgentTime — 10:00, או השעה העגולה הבאה כשכבר מאוחר מזה היום', async () => {
+  const { defaultUrgentTime } = await import('../public/js/core/postActions.js');
+  const t = (s) => defaultUrgentTime(new Date(s));
+  assert.equal(t('2026-10-05T08:20:00+03:00'), '10:00');
+  // 09:50 — עשר דקות לפני 10:00 זה צפוף מדי; לפחות רבע שעה קדימה → 11:00
+  assert.equal(t('2026-10-05T09:50:00+03:00'), '11:00');
+  assert.equal(t('2026-10-05T15:20:00+03:00'), '16:00');
+  assert.equal(t('2026-10-05T21:30:00+03:00'), '10:00'); // מאוחר מדי — מחר
+});

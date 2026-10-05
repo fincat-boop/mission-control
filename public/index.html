@@ -64,6 +64,11 @@
     <input id="uUntil" type="date">
   </div>
   <div class="frow">
+    <label for="uTime">שעה</label>
+    <input id="uTime" type="time" value="10:00">
+    <div class="fhint">היום, אם השעה כבר עברה — השעה העגולה הבאה.</div>
+  </div>
+  <div class="frow">
     <label>איפה</label>
     <div class="checks" id="uChannels"></div>
   </div>
@@ -74,7 +79,7 @@
   <label class="ack-row">
     <input type="checkbox" id="uAck">
     <span>ידוע לי שזו רק כותרת קצרה בלי טקסט מלא, שזה תופס משבצת פנויה בלוח,
-      ושאם לא יתווסף תוכן עד מועד הפרסום — השיבוץ יימחק אוטומטית.</span>
+      ושאם הפוסט לא יסומן כפורסם עד 24 שעות אחרי המועד — הוא יימחק מהלוח אוטומטית.</span>
   </label>
   <div class="dactions">
     <button class="btn" id="uCancel">ביטול</button>

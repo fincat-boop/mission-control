@@ -107,3 +107,14 @@ export function nextFullHour(now = new Date()) {
   if (d.getMinutes() || d.getSeconds() || d.getMilliseconds()) d.setHours(d.getHours() + 1, 0, 0, 0);
   return d;
 }
+
+/**
+ * ברירת המחדל לשעה בחלון "מבצע דחוף": 10:00, או — כשזה כבר מאוחר מזה
+ * היום — השעה העגולה הבאה (עד 21:00; אחר כך שוב 10:00, למחר).
+ */
+export function defaultUrgentTime(now = new Date()) {
+  const next = nextFullHour(now);
+  const sameDay = next.getDate() === now.getDate();
+  const h = next.getHours();
+  return sameDay && h > 10 && h <= 21 ? `${String(h).padStart(2, '0')}:00` : '10:00';
+}
