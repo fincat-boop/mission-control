@@ -836,3 +836,52 @@ button.btn.bell .badge {
 .choice-dlg { width: min(440px, 92vw); }
 .choice-dlg .choice-msg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 16px; }
 .choice-dlg .btn.crit { color: var(--st-crit); }
+
+/* ========================= גל 2: מילוי מרוסן, חסר תוכן, שיוך תוכן ========================= */
+
+/* טוסט עם פעולה ("בטל" על מילוי של המנוע) — אותו טוסט, עם כפתור בסופו */
+#toast .toast-act {
+  margin-inline-start: 12px; background: none; border: 1px solid var(--border);
+  color: var(--accent); font: inherit; font-weight: 600; border-radius: 7px;
+  padding: 3px 10px; cursor: pointer;
+}
+#toast .toast-act:hover, #toast .toast-act:focus-visible { border-color: var(--accent); }
+
+/* פוסט חסר תוכן: הכרטיס הרגיל בצבע הנקודה, במסגרת מקווקוות */
+.post.missing { outline: 2px dashed var(--st-crit); outline-offset: -2px; }
+.post .hint {
+  font-style: normal; font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px;
+  background: var(--st-warn); color: #1a1a1a;
+}
+
+/* חלון "מלא את השבוע" — כל פריט עם תיבת סימון */
+.eng-intro { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+.eng-item { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.eng-item > input { margin-top: 3px; flex-shrink: 0; }
+.eng-item .eng-body { display: block; min-width: 0; }
+.eng-item .eng-reason { display: block; margin-top: 4px; }
+.eng-item.missing { border-color: var(--st-crit); }
+.eng-item:has(> input:not(:checked)) { opacity: .55; }
+.eng-kind { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; background: var(--leg-value); }
+.eng-kind.promo  { background: var(--leg-promo); }
+.eng-kind.hybrid { background: var(--leg-hybrid); }
+.eng-missing { color: var(--st-crit); }
+.eng-ratio { margin: 10px 0 0; }
+
+/* בחירת תוכן לפוסט ("שייך תוכן" בחלון הפוסט) */
+.pick-list { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 280px; overflow-y: auto; }
+.pick-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: start;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 11px; color: var(--ink-1); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.pick-item:hover, .pick-item:focus-visible { border-color: var(--accent); }
+.pick-item .pick-title { flex: 1; min-width: 0; font-weight: 600; }
+.pick-item .pick-meta { color: var(--muted); font-size: 11.5px; }
+.pick-item .pick-st { font-size: 11px; white-space: nowrap; }
+.pick-item .pick-st.ready { color: var(--st-good); }
+.pick-item .pick-st.draft { color: var(--st-warn); }
+.pick-empty { margin-top: 12px; color: var(--muted); font-size: 12.5px; }
+.pick-empty .btn { margin-top: 8px; }
+.pvattach { margin-top: 12px; }
+#addPostDlg .ap-hint { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
