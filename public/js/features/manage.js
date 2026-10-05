@@ -317,11 +317,11 @@ function systemGroup(users, settings, backups, ro) {
         <summary><b>משתמשים והרשאות</b>
           <span class="info">${users.length} משתמשים</span></summary>
         <div class="ibody">
-          <table class="utable">
+          <div class="tablewrap"><table class="utable">
             <thead><tr><th>משתמש</th><th>תוכן ושיבוץ</th><th>הגדרות</th>
               <th title="${esc(APPROVE_HINT)}">אישור פרסום</th><th>ניהול משתמשים</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
-          </table>
+          </table></div>
           <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
         </div>
       </details>` : ''}

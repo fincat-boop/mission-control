@@ -1043,3 +1043,21 @@ details.item summary .epstate { width: 48px; }
 
 /* הסבר של שורה בכללי המנוע — צמוד לשורה שמעליו */
 .enghint-row { margin: -4px 0 8px; }
+
+/* ============ ניהול במסך צר (גל 5ב) ============ */
+/* טבלה רחבה גוללת בתוך עצמה, לא את כל הדף */
+.tablewrap { overflow-x: auto; }
+.tablewrap .utable th { white-space: nowrap; }
+@media (max-width: 600px) {
+  /* תווית מעל השדה במקום לידו — שדה של 240px לא נכנס ליד תווית ארוכה */
+  .prow { flex-direction: column; align-items: stretch; gap: 6px; }
+  .prow > input, .prow > .chip { align-self: flex-start; }
+  .prow input[type=text], .prow input[type=password], .prow select { width: 100%; }
+  .prow .checks { justify-content: flex-start; }
+  details.item summary { flex-wrap: wrap; row-gap: 4px; padding: 12px 14px; }
+  details.item summary .info { flex-basis: 100%; order: 1; }
+  details.item .ibody { padding: 2px 14px 14px; }
+  .setupcard { padding: 16px; }
+  .setupline { flex-wrap: wrap; }
+  .setupline .btn { margin-inline-start: 20px; }
+}
