@@ -1,4 +1,4 @@
-import { $, copyLinkButton, esc, run, toast, wireCopyLinks } from '../core/dom.js';
+import { $, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { confirmDialog } from '../core/confirm.js';
 import { api } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
@@ -224,7 +224,8 @@ export async function openPostPreview(postId) {
     ${subjectLine}
     ${media ? `<div class="pvmedia">${media}</div>` : ''}
 
-    ${body ? `<div class="pvbody">${esc(body)}</div>`
+    ${body ? `<div class="pvbody">${esc(body)}</div>
+              <div class="pvcopy"><button type="button" class="btn small" id="pCopyBody">העתק טקסט</button></div>`
             : `<div class="pvempty">${post.platform === 'newsletter'
                 ? 'אין עדיין תוכן לניוזלטר — ממלאים דרך "פתח בתוכן".'
                 : 'אין עדיין טקסט לגרסה של המדיה הזו.'}</div>`}
@@ -248,4 +249,10 @@ export async function openPostPreview(postId) {
       ? `<div class="pvauto">✓ פורסם אוטומטית —
          <a href="${esc(post.external_url)}" target="_blank" rel="noopener">לצפייה בפוסט</a></div>` : ''}`;
   wireCopyLinks($('#postPreview'));
+  // מעתיק בדיוק את מה שהתצוגה מראה — לשליחה ידנית (וואטסאפ) או להדבקה
+  const copyBtn = $('#pCopyBody');
+  copyBtn?.addEventListener('click', run(async () => {
+    await copyText(body, copyBtn.parentElement);
+    toast('הטקסט הועתק.');
+  }));
 }

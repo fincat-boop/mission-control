@@ -13,7 +13,7 @@ import { wireAddPostDialog } from './js/ui/addPost.js';
 import { wirePostDialog } from './js/ui/postDialog.js';
 import { renderStrategy } from './js/features/strategy.js';
 import { wireAIWidget } from './js/features/assistant.js';
-import { renderTasks } from './js/features/tasks.js';
+import { paintTaskBadge, renderTasks } from './js/features/tasks.js';
 import { renderData } from './js/features/data.js';
 import { renderPlan, wireMailPreview } from './js/features/plan.js';
 import { renderManage } from './js/features/manage.js';
@@ -32,6 +32,10 @@ registerRefreshers({
   tasks: () => renderTasks(),
   taskBadge: () => refreshTaskBadgeImpl(),
   alerts: () => refreshAlertsImpl(),
+  attention: () => refreshAttentionImpl(),
+  // טאב הנתונים מציג פוסטים (ביצועים) — אחרי שינוי בפוסט הוא מתעדכן אם מוצג.
+  // התוכן לא: יש בו עורכים פתוחים, ו"פתח בתוכן" ממילא מנווט אליו מחדש.
+  postViews: () => (state.tab === 'data' ? renderData() : undefined),
   currentTab: () => renderTab(state.tab),
   goToTab: (tab) => showTab(tab),
 });
@@ -75,6 +79,7 @@ async function boot() {
   state.users = users;
 
   await refreshAfterPostChange();
+  wirePolling();
 }
 
 const RENDERERS = {
@@ -160,8 +165,46 @@ function wireChrome() {
 }
 
 async function refreshTaskBadgeImpl() {
-  const { open_count } = await api('/tasks');
-  const badge = $('#taskBadge');
-  badge.hidden = open_count === 0;
-  badge.textContent = open_count;
+  const { open_count } = await api('/tasks/count');
+  paintTaskBadge(open_count);
+}
+
+/** התגיות והפעמון; בטאב המשימות — הרשימה עצמה, שמעדכנת את שניהם בדרך */
+async function refreshAttentionImpl() {
+  if (state.tab === 'tasks') return renderTasks();
+  await Promise.all([refreshTaskBadgeImpl(), refreshAlertsImpl()]);
+}
+
+/* ========================= רענון תקופתי ========================= */
+
+/**
+ * משימת וואטסאפ או כשל פרסום נוצרים בשרת בלי שאף אחד לחץ על כלום — בלי
+ * רענון, התגיות נשארות על מה שהיה בטעינה. כל 90 שניות כשהדף גלוי, ומיד
+ * כשחוזרים אליו. רק תשומת הלב: הלוח לא מצויר מחדש מתחת לידיים של המשתמש.
+ */
+const POLL_MS = 90000;
+const POLL_MIN_GAP_MS = 5000; // focus ו-visibilitychange מגיעים כמעט יחד
+let lastPoll = 0;
+let polling = false;
+
+async function pollAttention() {
+  if (document.visibilityState !== 'visible' || polling) return;
+  if (Date.now() - lastPoll < POLL_MIN_GAP_MS) return;
+  polling = true;
+  lastPoll = Date.now();
+  try {
+    await refreshAttentionImpl();
+  } catch (e) {
+    // בלי טוסט כל דקה וחצי — הפעולה הבאה של המשתמש תציג את השגיאה
+    console.warn('רענון תקופתי נכשל:', e.message);
+  } finally {
+    polling = false;
+  }
+}
+
+function wirePolling() {
+  lastPoll = Date.now(); // הטעינה עצמה היא הרענון הראשון
+  setInterval(pollAttention, POLL_MS);
+  document.addEventListener('visibilitychange', pollAttention);
+  window.addEventListener('focus', pollAttention);
 }

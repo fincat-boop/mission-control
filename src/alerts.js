@@ -19,7 +19,7 @@ export async function buildAlerts() {
   const settings = await one('select * from engine_settings limit 1');
   const alertHours = settings?.content_alert_hours ?? 48;
 
-  const [campaigns, endpoints, holes, pending, soonWithoutContent] = await Promise.all([
+  const [campaigns, endpoints, holes, pending, soonWithoutContent, failed, missed] = await Promise.all([
     campaignsWithHealth(),
     endpointsWithoutAir(),
     rows(`select p.id, p.scheduled_at, e.name as endpoint_name, c.name as channel_name
@@ -39,6 +39,19 @@ export async function buildAlerts() {
         order by p.scheduled_at`,
       [alertHours]
     ),
+    // פרסום שנכשל — עד שבועיים אחורה. אחר כך זה כבר היסטוריה, לא מצב.
+    rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name
+            from posts p left join channels c on c.id = p.channel_id
+           where p.status = 'failed' and p.scheduled_at >= now() - interval '14 days'
+           order by p.scheduled_at`),
+    // המועד עבר ואף אחד לא פרסם/סימן. חצי שעה חסד — וואטסאפ נשלח ידנית,
+    // ופרסום אוטומטי עוד יכול להיות בדרך.
+    rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
+            from posts p left join channels c on c.id = p.channel_id
+           where p.status in ('scheduled','approved') and p.published_at is null
+             and p.scheduled_at between now() - interval '7 days'
+                                    and now() - interval '30 minutes'
+           order by p.scheduled_at`),
   ]);
 
   const alerts = [];
@@ -92,6 +105,8 @@ export async function buildAlerts() {
     }
   }
 
+  alerts.push(...failedPostAlerts(failed), ...missedPostAlerts(missed));
+
   for (const e of endpoints) {
     const cadence = effectiveCadenceDays(e);
     alerts.push({
@@ -99,7 +114,7 @@ export async function buildAlerts() {
       level: e.days_over >= cadence ? 'crit' : 'warn',
       title: `${e.name} לא מפרסמת`,
       detail: e.days_since === null
-        ? 'עוד לא פורסם ממנה כלום'
+        ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, הקצב הוא כל ${cadence}`
         : `${e.days_since} ימים בלי פרסום — הקצב ${e.min_days_between == null ? 'האוטומטי' : 'שהוגדר'} הוא כל ${cadence}`,
       tab: 'plan',
       endpoint_id: e.id,
@@ -219,21 +234,60 @@ export async function buildAlerts() {
   };
 }
 
+const shortWhen = (d) =>
+  new Date(d).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
+
+/** התראה חוסמת לכל פוסט שהפרסום שלו נכשל. id יציב לפי הפוסט. */
+export function failedPostAlerts(list) {
+  return list.map((p) => ({
+    id: `post-failed-${p.id}`,
+    level: 'crit',
+    title: `פרסום נכשל: ${p.title}`,
+    detail: [p.channel_name, shortWhen(p.scheduled_at), p.publish_error].filter(Boolean).join(' · '),
+    tab: 'board',
+    post_id: p.id,
+  }));
+}
+
+/** התראה לכל פוסט שהמועד שלו עבר והוא לא פורסם ולא סומן "פורסם" */
+export function missedPostAlerts(list) {
+  return list.map((p) => ({
+    id: `post-missed-${p.id}`,
+    level: 'warn',
+    title: `עבר המועד ולא פורסם: ${p.title}`,
+    detail: [p.channel_name, shortWhen(p.scheduled_at),
+             'מפרסמים ומסמנים "פורסם", או משבצים מחדש'].filter(Boolean).join(' · '),
+    tab: 'board',
+    post_id: p.id,
+  }));
+}
+
+/**
+ * האם נקודת קצה עברה את הקצב שלה בלי פרסום. null = בסדר.
+ * נקודה שעוד לא פורסם ממנה כלום נמדדת מיום שנוספה — אחרת נקודה חדשה
+ * מקבלת "לא מפרסמת" חוסם בדקה הראשונה, לפני שהיה לה בכלל סיכוי.
+ */
+export function endpointAirStatus(e, now = new Date()) {
+  const cadence = effectiveCadenceDays(e);
+  const daysSince = e.last_at ? Math.floor((now - new Date(e.last_at)) / DAY) : null;
+  const daysRef = daysSince ?? (e.created_at ? Math.floor((now - new Date(e.created_at)) / DAY) : 999);
+  if (daysRef <= cadence) return null;
+  return { days_since: daysSince, days_over: daysRef };
+}
+
 /** נקודות קצה שעברו את הקצב שהוגדר להן בלי פרסום */
 async function endpointsWithoutAir() {
   const list = await rows(
-    `select e.id, e.name, e.min_days_between, e.importance,
+    `select e.id, e.name, e.min_days_between, e.importance, e.created_at,
             max(p.published_at) as last_at
        from endpoints e
        left join posts p on p.endpoint_id = e.id and p.status = 'published'
       where e.active = true
-      group by e.id, e.name, e.min_days_between, e.importance`
+      group by e.id, e.name, e.min_days_between, e.importance, e.created_at`
   );
   const now = new Date();
   return list
-    .map((e) => {
-      const daysSince = e.last_at ? Math.floor((now - new Date(e.last_at)) / DAY) : null;
-      return { ...e, days_since: daysSince, days_over: daysSince === null ? 999 : daysSince };
-    })
-    .filter((e) => e.days_since === null || e.days_since > effectiveCadenceDays(e));
+    .map((e) => ({ ...e, status: endpointAirStatus(e, now) }))
+    .filter((e) => e.status)
+    .map(({ status, ...e }) => ({ ...e, ...status }));
 }
