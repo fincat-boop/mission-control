@@ -3,6 +3,8 @@ import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
 import { weekMeta, ymd } from './board.js';
+import { closeResolvedTasks } from './task-lifecycle.js';
+import { recordBackupLayer } from './backup-status.js';
 import {
   TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, mediaSweepEnabled,
   orgMediaPrefix, pickOrphans,
@@ -30,6 +32,7 @@ const SYSTEM_USER_NAME = 'תחזוקה אוטומטית';
 const BACKUP_RETENTION = 14;           // כמה גיבויים תקופתיים לשמור
 const URGENT_GRACE_HOURS = 24;         // כמה זמן אחרי המועד לתת לפני שזורקים
 const SWAP_WINDOW_HOURS = 4;           // כמה זמן לפני הפרסום מציעים חלופה
+const SWAP_REOFFER_DAYS = 7;           // הצעה שנדחתה לא חוזרת לאותו פוסט+תוכן בתקופה הזו
 
 async function logSystem(action, entity, entity_id, summary, meta = null) {
   await query(
@@ -45,28 +48,53 @@ async function logSystem(action, entity, entity_id, summary, meta = null) {
  * ההערה ב-schema.sql. שומר את ה-N האחרונים בלבד.
  */
 export async function backupNow() {
-  const dump = await buildDump();
+  // כל שכבה רושמת את תוצאתה (backup_status) — כשל כבר לא נשאר רק בלוג
+  let dump;
+  try {
+    dump = await buildDump();
+  } catch (e) {
+    // בלי dump אף שכבה לא יכולה לרוץ
+    const why = `שליפת הנתונים לגיבוי נכשלה: ${e.message}`;
+    for (const layer of ['db', 'drive', 'r2']) await recordBackupLayer(layer, 'failed', why);
+    throw e;
+  }
   const rowCount = Object.values(dump.tables).reduce((s, r) => s + r.length, 0);
 
-  await query(
-    `insert into backups (row_count, payload) values ($1, $2)`,
-    [rowCount, JSON.stringify(dump)]
-  );
-  const pruned = await rows(
-    `delete from backups
-      where id not in (select id from backups order by created_at desc limit $1)
-      returning id`,
-    [BACKUP_RETENTION]
-  );
-
-  console.log(`גיבוי אוטומטי נשמר: ${rowCount} שורות` +
-    (pruned.length ? `, ${pruned.length} גיבויים ישנים נמחקו` : ''));
-  await logSystem('create', 'backup', null, `גיבוי אוטומטי — ${rowCount} שורות`);
+  try {
+    await query(
+      `insert into backups (row_count, payload) values ($1, $2)`,
+      [rowCount, JSON.stringify(dump)]
+    );
+    const pruned = await rows(
+      `delete from backups
+        where id not in (select id from backups order by created_at desc limit $1)
+        returning id`,
+      [BACKUP_RETENTION]
+    );
+    console.log(`גיבוי אוטומטי נשמר: ${rowCount} שורות` +
+      (pruned.length ? `, ${pruned.length} גיבויים ישנים נמחקו` : ''));
+    await logSystem('create', 'backup', null, `גיבוי אוטומטי — ${rowCount} שורות`);
+    await recordBackupLayer('db', 'ok');
+  } catch (e) {
+    // הגיבוי הפנימי נכשל, אבל ה-dump קיים — השכבות החיצוניות עדיין רצות
+    console.error('גיבוי פנימי נכשל:', e.message);
+    await recordBackupLayer('db', 'failed', e.message);
+  }
 
   // כשל כאן לא אמור למנוע את הגיבוי הפנימי שכבר הצליח ונשמר למעלה
-  await offsiteBackup(dump).catch((e) => console.error('גיבוי חיצוני ל-Drive נכשל:', e.message));
+  await offsiteBackup(dump)
+    .then((r) => recordBackupLayer('drive', r === 'skipped' ? 'skipped' : 'ok'))
+    .catch(async (e) => {
+      console.error('גיבוי חיצוני ל-Drive נכשל:', e.message);
+      await recordBackupLayer('drive', 'failed', e.message);
+    });
   // גיבוי מלא (כולל בייטים) ל-R2 — אותה חוסן: כשל לא מפיל את מה שכבר נשמר
-  await fullBackup(dump).catch((e) => console.error('גיבוי מלא ל-R2 נכשל:', e.message));
+  await fullBackup(dump)
+    .then((r) => recordBackupLayer('r2', r === 'skipped' ? 'skipped' : 'ok'))
+    .catch(async (e) => {
+      console.error('גיבוי מלא ל-R2 נכשל:', e.message);
+      await recordBackupLayer('r2', 'failed', e.message);
+    });
 }
 
 /**
@@ -103,7 +131,7 @@ export async function cleanupStaleUrgent() {
 export async function suggestContentSwaps() {
   await forEachOrg(async () => {
   const candidates = await rows(
-    `select p.id, p.channel_id, p.endpoint_id, p.scheduled_at, e.name as endpoint_name,
+    `select p.id, p.channel_id, p.endpoint_id, p.scheduled_at, p.assignee_id, e.name as endpoint_name,
             -- היום המקומי של המועד, לא UTC — "היום" במשימות הוא ישראלי
             (p.scheduled_at at time zone 'Asia/Jerusalem')::date as due_on
        from posts p
@@ -132,6 +160,14 @@ export async function suggestContentSwaps() {
           -- תוכן של קמפיין לא מוצע מחוץ לחלון התאריכים שלו
           and (ca.id is null or ((ca.starts_on is null or ca.starts_on <= $4::date)
                              and (ca.ends_on is null or ca.ends_on >= $4::date)))
+          -- הצעה שכבר הוצעה לאותו פוסט (פתוחה, בוצעה או נדחתה) לא חוזרת:
+          -- מי שסימן/מחק את ההצעה לא יקבל אותה שוב בעוד שעה
+          and not exists (
+            select 1 from tasks ts
+             where ts.post_id = $5 and ts.kind = 'swap'
+               and ts.meta->>'suggested_content_id' = ci.id::text
+               and ts.created_at >= now() - make_interval(days => $6)
+          )
           and not exists (
             select 1 from posts p2
              where p2.content_id = ci.id and p2.channel_id = $1
@@ -140,13 +176,14 @@ export async function suggestContentSwaps() {
           )
         order by e.importance desc, ci.created_at asc
         limit 1`,
-      [post.channel_id, week.startDate, week.endDate, ymd(new Date(post.scheduled_at))]
+      [post.channel_id, week.startDate, week.endDate, ymd(new Date(post.scheduled_at)),
+       post.id, SWAP_REOFFER_DAYS]
     );
     if (!suggestion) continue; // אין כרגע שום תוכן מוכן להציע במקומו
 
     await query(
-      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta)
-       values ($1,$2,'swap',$3,$4,true,$5,$6)`,
+      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
+       values ($1,$2,'swap',$3,$4,true,$5,$6,$7)`,
       [
         `הצעה: להחליף תוכן בשיבוץ שמתפרסם בקרוב`,
         `${post.endpoint_name ?? 'ללא נקודת קצה'} עדיין בלי תוכן · הצעה: "${suggestion.title}" ` +
@@ -157,11 +194,27 @@ export async function suggestContentSwaps() {
           suggested_title: suggestion.title,
           suggested_kind: suggestion.kind,
           suggested_endpoint_id: suggestion.endpoint_id,
+          ...(post.assignee_id ? { assignee_auto: true } : {}),
         }),
+        post.assignee_id ?? null,
       ]
     );
     console.log(`הצעת החלפה נוצרה לפוסט #${post.id} (${post.endpoint_name ?? 'ללא נקודת קצה'}) — מוצע: "${suggestion.title}"`);
   }
+  });
+}
+
+/**
+ * משימות שנסגרות לבד (src/task-lifecycle.js) — שעתי, לכל ארגון. אותה
+ * סגירה רצה גם בפתיחת טאב המשימות; כאן היא תופסת את מי שלא פתח אותו.
+ */
+export async function sweepTasks() {
+  await forEachOrg(async (orgId) => {
+    const { closed, assigned } = await closeResolvedTasks();
+    if (closed || assigned) {
+      console.log(`משימות (ארגון ${orgId}): ${closed} נסגרו לבד כי התנאי שלהן נפתר` +
+        (assigned ? `, ${assigned} שויכו לאחראי של הפוסט` : ''));
+    }
   });
 }
 

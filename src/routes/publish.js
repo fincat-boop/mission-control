@@ -5,7 +5,7 @@ import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
 import { encryptSecret, decryptSecret } from '../publish/crypto.js';
 import { verifyConnection } from '../publish/meta.js';
-import { loadPayload, publishBlocker, publishOne } from '../publish/runner.js';
+import { loadPayload, publishBlocker, publishOne, resetPublishing } from '../publish/runner.js';
 import { HubMailError, audienceLists, hubMailReady,
          newsletterTemplate, newsletterPreview } from '../hub-mail.js';
 import { weekMeta } from '../board.js';
@@ -312,6 +312,17 @@ r.post('/posts/:id/publish-now', requirePerm('approve'), wrap(async (req, res) =
   if (!result.ok) return bad(res, result.error);
   // pending — ניוזלטר שהתקבל ב-HUB ועוד נשלח אצלו (הפוסט נשאר publishing)
   res.json({ post: result.post, pending: result.pending ?? false });
+}));
+
+/**
+ * פוסט שתקוע ב-publishing (פרסום שנקטע, ניוזלטר שה-HUB לא סגר) — מעבירים
+ * ידנית ל-failed עם הערה, בלי לחכות לטיק (30 דקות / יממה). הפוסט מקבל
+ * משימת כשל: בודקים בעמוד אם עלה, ואז מסמנים פורסם או מפרסמים שוב.
+ */
+r.post('/posts/:id/reset-publishing', requirePerm('approve'), wrap(async (req, res) => {
+  const post = await resetPublishing(req.params.id, req.user);
+  if (!post) return bad(res, 'הפוסט לא תקוע בפרסום — אין מה לאפס', 409);
+  res.json({ post });
 }));
 
 /** היסטוריית הניסיונות של פוסט — מוצג בדיאלוג הפוסט */

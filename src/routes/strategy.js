@@ -58,8 +58,9 @@ r.get('/strategy', wrap(async (_req, res) => {
  * ההתראות מחושבות בזמן קריאה מהמצב האמיתי, ולא נשמרות בטבלה —
  * ולכן התראה נעלמת מעצמה ברגע שהבעיה נפתרה.
  */
-r.get('/alerts', wrap(async (_req, res) => {
-  res.json(await buildAlerts());
+r.get('/alerts', wrap(async (req, res) => {
+  // התראה שדורשת הרשאה כדי לפעול מוצגת רק למי שיכול (ראו buildAlerts)
+  res.json(await buildAlerts(req.user));
 }));
 
 /* ========================= אבני דרך ========================= */

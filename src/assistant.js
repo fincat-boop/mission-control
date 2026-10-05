@@ -211,7 +211,8 @@ const READ_TOOLS = {
   get_alerts: {
     description: 'ההתראות הפעילות — מחושבות מהמצב האמיתי ברגע זה.',
     input_schema: { type: 'object', properties: {} },
-    run: () => buildAlerts(),
+    // אותן התראות שהמשתמש רואה במסך — לפי ההרשאות והארגון שלו
+    run: (_a, user) => buildAlerts(user),
   },
 
   get_strategy: {
@@ -922,7 +923,7 @@ async function runTool(user, block, proposals) {
   const read = READ_TOOLS[block.name];
   if (read) {
     try {
-      return { value: await read.run(block.input ?? {}) };
+      return { value: await read.run(block.input ?? {}, user) };
     } catch (e) {
       return { value: { error: e.message }, isError: true };
     }
