@@ -438,6 +438,7 @@ export function wirePostDialog() {
     });
     $('#rClear').hidden = false;
     toast('התוצאות נשמרו.');
+    await refreshAfterPostChange(); // התג "לא נמדד" יורד מהכרטיס
   }));
 
   $('#rClear').addEventListener('click', run(async () => {
@@ -447,6 +448,7 @@ export function wirePostDialog() {
     for (const id of ['#rReach', '#rEngagement', '#rClicks', '#rLeads', '#rNote']) $(id).value = '';
     $('#rClear').hidden = true;
     toast('המדידה נמחקה.');
+    await refreshAfterPostChange();
   }));
 }
 

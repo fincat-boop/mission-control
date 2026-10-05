@@ -86,13 +86,16 @@ export async function buildBoard(anchorDate) {
     // v.status — הגרסה הספציפית למדיה שהפוסט הזה משודר בה, כדי שהלוח
     // יוכל להראות "יש תוכן" (מוכן) לעומת "יש טיוטה", לא רק "יש/אין".
     rows(
-      `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status
+      `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status,
+              pr.post_id is not null as has_results
          from posts p
          left join users u          on u.id = p.assignee_id
          left join endpoints e      on e.id = p.endpoint_id
          left join content_items ci on ci.id = p.content_id
          left join campaigns ca     on ca.id = ci.campaign_id
          left join content_variants v on v.content_id = p.content_id and v.channel_id = p.channel_id
+         -- "לא נמדד" על פוסט שפורסם: שורה אחת לפוסט לכל היותר (post_id הוא המפתח)
+         left join post_results pr  on pr.post_id = p.id
         where p.scheduled_at >= $1 and p.scheduled_at <= $2
           and (ca.paused_at is null or p.status = 'published')
         order by p.scheduled_at`,
@@ -201,7 +204,7 @@ export async function buildBoard(anchorDate) {
   };
 }
 
-function shapePost(p) {
+export function shapePost(p) {
   return {
     id: p.id,
     channel_id: p.channel_id,
@@ -220,5 +223,6 @@ function shapePost(p) {
     scheduled_at: p.scheduled_at,
     time: new Date(p.scheduled_at).toTimeString().slice(0, 5),
     published_at: p.published_at,
+    has_results: !!p.has_results,
   };
 }

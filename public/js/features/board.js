@@ -285,7 +285,7 @@ function postCard(p) {
   // פוסט שכבר יצא לאוויר: הכרטיס עצמו נשאר (צבע, כותרת, פרטים), רק
   // דהוי, וחותמת ירוקה גדולה למעלה אומרת שזה כבר קרה.
   if (p.status === 'published') {
-    return `<div class="post published" ${clickable} data-tt="${esc(tip)}"
+    return `<div class="post published" ${clickable} data-tt="${esc(p.has_results ? tip : `לא נמדד · ${tip}`)}"
       style="background:${bg};color:${inkOn(bg)}">
       <span class="pub-stamp">✓ פורסם</span>
       <div class="published-inner">
@@ -295,6 +295,7 @@ function postCard(p) {
           ${esc(p.time)}${who}
         </div>
       </div>
+      ${p.has_results ? '' : '<i class="unmeasured" title="עוד לא הוזנו תוצאות — לוחצים כדי להזין">לא נמדד</i>'}
     </div>`;
   }
 
