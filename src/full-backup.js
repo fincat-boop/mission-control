@@ -26,19 +26,26 @@ const TIERS = {
 
 const stampOf = (dump) => dump.created_at.replace(/[:.]/g, '-').slice(0, 19);
 
-/** מעלה dump.json + כל הבייטים תחת prefix מסוים */
+/**
+ * מעלה את הבייטים ואז dump.json תחת prefix מסוים. קובץ עם storage_key
+ * יושב ב-bucket המדיה (לא משוכפל לגיבוי) — רק השורה שלו נשמרת. הבייטים
+ * קודם, כדי שקובץ שהועבר ל-R2 בין בניית ה-dump לקריאה יירשם ב-dump.json
+ * עם ה-storage_key שלו ולא כ"חסר בייטים".
+ */
 async function uploadFull(prefix, dump) {
-  const meta = { ...dump, assets_dir: 'assets' };
-  await putObject(`${prefix}dump.json`, JSON.stringify(meta), 'application/json');
-
   let bytes = 0;
   for (const a of dump.tables.content_assets ?? []) {
+    if (a.storage_key) continue;
     // בייט לכל קובץ בנפרד — לא טוענים את כל הקבצים לזיכרון בבת אחת
-    const row = await one('select data from content_assets where id = $1', [a.id]);
+    const row = await one('select data, storage_key from content_assets where id = $1', [a.id]);
+    if (row?.storage_key) { a.storage_key = row.storage_key; continue; }
     if (!row?.data) continue;
     await putObject(`${prefix}assets/${a.id}`, row.data);
     bytes += row.data.length;
   }
+
+  const meta = { ...dump, assets_dir: 'assets' };
+  await putObject(`${prefix}dump.json`, JSON.stringify(meta), 'application/json');
   return bytes;
 }
 
@@ -56,7 +63,7 @@ export async function fullBackup(dump) {
 
   const now = new Date(dump.created_at);
   const stamp = stampOf(dump);
-  const assetCount = dump.tables.content_assets?.length ?? 0;
+  const assetCount = (dump.tables.content_assets ?? []).filter((a) => !a.storage_key).length;
 
   for (const [tier, cfg] of Object.entries(TIERS)) {
     if (!cfg.take(now)) continue;
@@ -83,6 +90,7 @@ export async function downloadFull(prefix) {
   const dump = JSON.parse((await getObject(`${p}dump.json`)).toString('utf8'));
   const assets = new Map();
   for (const a of dump.tables.content_assets ?? []) {
+    if (a.storage_key) continue;   // ב-bucket המדיה, לא בגיבוי
     assets.set(a.id, await getObject(`${p}assets/${a.id}`));
   }
   return { dump, assets };

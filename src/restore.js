@@ -44,8 +44,9 @@ await tx(async (client) => {
     const list = dump.tables[t] ?? [];
     for (const row of list) {
       const values = { ...row };
-      // הבייטים של הקבצים יושבים בתיקייה שלצד ה-JSON
-      if (t === 'content_assets') {
+      // הבייטים של הקבצים יושבים בתיקייה שלצד ה-JSON. קובץ עם storage_key
+      // יושב ב-bucket המדיה ב-R2 — רק השורה משוחזרת.
+      if (t === 'content_assets' && !row.storage_key) {
         values.data = await readFile(join(dirname(file), dump.assets_dir, String(row.id)));
       }
       const cols = Object.keys(values);
@@ -75,6 +76,11 @@ await tx(async (client) => {
     }
   }
 });
+
+// קובץ ששוחזר וחי עדיין בסל המחזור של המדיה — חוזר לשימוש, לא יימחק
+await tx((client) => client.query(
+  `delete from media_trash where storage_key in
+     (select storage_key from content_assets where storage_key is not null)`));
 
 console.log('\nהשחזור הושלם.');
 await pool.end();

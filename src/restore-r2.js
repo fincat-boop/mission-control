@@ -52,7 +52,8 @@ await tx(async (client) => {
     const list = dump.tables[t] ?? [];
     for (const row of list) {
       const values = { ...row };
-      if (t === 'content_assets') {
+      // קובץ עם storage_key יושב ב-bucket המדיה — רק השורה משוחזרת
+      if (t === 'content_assets' && !row.storage_key) {
         const data = assets.get(row.id);
         if (!data) throw new Error(`חסר בייטים לקובץ מצורף id=${row.id} בגיבוי`);
         values.data = data;
@@ -82,6 +83,11 @@ await tx(async (client) => {
     }
   }
 });
+
+// קובץ ששוחזר וחי עדיין בסל המחזור של המדיה — חוזר לשימוש, לא יימחק
+await tx((client) => client.query(
+  `delete from media_trash where storage_key in
+     (select storage_key from content_assets where storage_key is not null)`));
 
 console.log('\nהשחזור הושלם.');
 await pool.end();

@@ -17,9 +17,12 @@ import { TABLES } from './tables.js';
 export async function buildDump() {
   const dump = { created_at: new Date().toISOString(), tables: {} };
   for (const t of TABLES) {
-    // הבייטים של הקבצים נשמרים בנפרד, אחרת ה-JSON מתנפח פי כמה
+    // הבייטים של הקבצים נשמרים בנפרד, אחרת ה-JSON מתנפח פי כמה. קובץ עם
+    // storage_key יושב ב-bucket המדיה ב-R2 ואין לו בייטים כאן בכלל.
+    // (variant_id ו-org_id חסרו כאן עד אוקטובר 2026 — שחזור איבד אותם.)
     const cols = t === 'content_assets'
-      ? 'id, content_id, filename, mime, size_bytes, created_at' : '*';
+      ? 'id, content_id, variant_id, org_id, filename, mime, size_bytes, storage_key, created_at'
+      : '*';
     // order by 1 ולא by id: יש טבלאות עם מפתח מורכב ובלי עמודת id
     dump.tables[t] = await rows(`select ${cols} from ${t} order by 1`);
   }
@@ -45,9 +48,12 @@ async function runCli() {
     const assetDir = join(outDir, `assets-${stamp}`);
     await mkdir(assetDir, { recursive: true });
     for (const a of dump.tables.content_assets) {
-      const { data } = await one('select data from content_assets where id = $1', [a.id]);
-      await writeFile(join(assetDir, String(a.id)), data);
-      assetBytes += data.length;
+      if (a.storage_key) continue;               // ב-R2 — אין בייטים לגבות כאן
+      const row = await one('select data, storage_key from content_assets where id = $1', [a.id]);
+      if (row?.storage_key) { a.storage_key = row.storage_key; continue; } // הועבר ל-R2 בינתיים
+      if (!row?.data) continue;                  // נמחק בינתיים
+      await writeFile(join(assetDir, String(a.id)), row.data);
+      assetBytes += row.data.length;
     }
     dump.assets_dir = `assets-${stamp}`;
   }
