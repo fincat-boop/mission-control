@@ -542,6 +542,20 @@ function renderActions(post, f) {
   }
 }
 
+let previewReq = 0; // רק התשובה לפתיחה האחרונה מצוירת
+
+/** הטעינה נכשלה — אומרים מה קרה בתוך החלון, עם "נסה שוב" ו"סגור" (עיקרון 3) */
+function showPreviewError(postId, e) {
+  $('#postDlgTitle').textContent = 'הפוסט לא נטען';
+  $('#postPreview').innerHTML = `
+    <div class="pverr">${esc(e.status === 404
+      ? 'הפוסט לא נמצא — אולי הוא נמחק בינתיים. מרעננים את הלוח.'
+      : `לא הצלחנו לטעון את הפוסט: ${e.message}`)}</div>`;
+  $('#pActs').innerHTML = `${e.status === 404 ? '' : '<button type="button" class="btn primary" id="pRetry">נסה שוב</button>'}`;
+  $('#pRetry')?.addEventListener('click', run(() => openPostPreview(postId)));
+  if (e.status === 404) run(refreshAfterPostChange)();
+}
+
 /** מה שאמור לצאת: הטקסט של המדיה הזו והקבצים שלה */
 export async function openPostPreview(postId) {
   $('#postDlgTitle').textContent = 'טוען…';
@@ -556,11 +570,21 @@ export async function openPostPreview(postId) {
   setTab('view');
   if (!$('#postDlg').open) $('#postDlg').showModal();
 
-  const [{ post, variant, assets, results }, attempts] = await Promise.all([
-    api(`/posts/${postId}/preview`),
-    // היסטוריית הניסיונות רכה — אם היא נכשלת, החלון עצמו עדיין מוצג
-    api(`/posts/${postId}/publish-log`).then((r) => r.log).catch(() => []),
-  ]);
+  const req = ++previewReq;
+  previewPost = null;
+  let data;
+  try {
+    data = await Promise.all([
+      api(`/posts/${postId}/preview`),
+      // היסטוריית הניסיונות רכה — אם היא נכשלת, החלון עצמו עדיין מוצג
+      api(`/posts/${postId}/publish-log`).then((r) => r.log).catch(() => []),
+    ]);
+  } catch (e) {
+    if (req === previewReq) showPreviewError(postId, e);
+    return;
+  }
+  if (req !== previewReq) return; // בינתיים נפתח פוסט אחר
+  const [{ post, variant, assets, results }, attempts] = data;
   previewPost = post;
   previewFacts = postFacts(post, variant);
   renderActions(post, previewFacts);

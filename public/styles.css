@@ -1152,3 +1152,4 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .pvlog li.ok .st { color: var(--st-good); white-space: nowrap; }
 .pvlog li.bad .st { color: var(--st-crit); white-space: nowrap; }
 .pvlog .msg { color: var(--ink-2); }
+.pverr { color: var(--st-crit); font-size: 13px; line-height: 1.6; padding: 6px 0 4px; }
