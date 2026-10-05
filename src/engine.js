@@ -627,7 +627,7 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
     if (debts.scheduledCount(e.id) > 0) continue;         // כבר קיבלה שיבוץ בריצה הזו
     if (existing.some((x) => x.endpoint_id === e.id)) continue; // כבר על הלוח השבוע
 
-    const hasAnyContent = content.some((c) => c.endpoint_id === e.id);
+    const mine = content.filter((c) => c.endpoint_id === e.id);
 
     // הערוץ הכי פנוי — שם נשבץ בלי תוכן. גם טיוטה כבר נבדקה ונפסלה
     // למעלה בלולאת ה-slots הרגילה, אז אם הגענו לכאן — באמת אין כלום.
@@ -653,14 +653,25 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
       date: day.date,
       day_label: day.label,
       scheduled_at: new Date(`${day.date}T${String(hour).padStart(2, '0')}:00:00`).toISOString(),
-      reason: hasAnyContent
-        ? 'יש תוכן לנקודה הזו, אבל אף גרסה לא מתאימה לערוץ פנוי כרגע'
-        : 'אין שום תוכן (גם לא טיוטה) לנקודה הזו',
+      reason: holeReason(mine, day.date),
       days_since: p.daysSince === null ? null : Math.floor(p.daysSince),
     });
   }
 
   return holes;
+}
+
+/**
+ * למה אין תוכן לנקודה במשבצת — הטקסט שמופיע על החור ובמשימת "לכתוב".
+ * תוכן שכולו של קמפיינים שלא רצים בתאריך הזה הוא סיבה אחרת לגמרי מ"אין
+ * גרסה מתאימה", ומי שקורא את ההודעה צריך לדעת איזו מהן.
+ */
+export function holeReason(endpointContent, dateKey) {
+  if (!endpointContent.length) return 'אין שום תוכן (גם לא טיוטה) לנקודה הזו';
+  if (endpointContent.every((c) => outsideCampaignWindow(c, dateKey))) {
+    return 'התוכן של נקודת הקצה שייך לקמפיינים שלא רצים בתאריך הזה, ואין לה תוכן שוטף';
+  }
+  return 'יש תוכן לנקודה הזו, אבל אף גרסה לא מתאימה לערוץ פנוי כרגע';
 }
 
 /** היום שבו יישב חור: לא בתחילת השבוע, ורחוק ככל האפשר משאר הלוח של הערוץ. */

@@ -2,7 +2,7 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildSlots, buildUsage, chooseForSlot, nextSlot, outsideCampaignWindow,
+  buildSlots, buildUsage, chooseForSlot, holeReason, nextSlot, outsideCampaignWindow,
 } from '../src/engine.js';
 import { weekMeta } from '../src/board.js';
 
@@ -169,4 +169,13 @@ test('משבצת-מדיה של קמפיין כללי (גרסה למדיה אחת
   });
   const { out } = pickAcrossWeek([general]); // הערוץ בבדיקה הוא 1
   assert.ok([...out.values()].every((v) => v === null));
+});
+
+test('holeReason — אין תוכן / תוכן רק של קמפיינים מחוץ לחלון / תוכן שלא מתאים', () => {
+  const out = { campaign_id: 7, campaign_starts_on: '2027-01-01', campaign_ends_on: '2027-01-31' };
+  const bg = { campaign_id: null };
+  assert.match(holeReason([], '2026-11-10'), /אין שום תוכן/);
+  assert.match(holeReason([out, out], '2026-11-10'), /קמפיינים שלא רצים/);
+  assert.match(holeReason([out, bg], '2026-11-10'), /אף גרסה לא מתאימה/);
+  assert.match(holeReason([out], '2027-01-10'), /אף גרסה לא מתאימה/);
 });
