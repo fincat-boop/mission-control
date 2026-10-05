@@ -29,23 +29,32 @@
       </div>
     </div>
   </div>
-  <nav class="tabs" role="tablist">
-    <button class="tab" role="tab" aria-selected="true"  data-t="board">הלוח</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="strategy">אסטרטגיה</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="plan">קמפיינים ותוכן</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="tasks">משימות<span class="badge" id="taskBadge" hidden></span></button>
-    <button class="tab" role="tab" aria-selected="false" data-t="data">נתונים</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="manage">ניהול</button>
+  <nav class="tabs" role="tablist" aria-label="אזורי המערכת">
+    <button class="tab" role="tab" id="tab-board"    aria-controls="board"    aria-selected="true"  tabindex="0"  data-t="board">הלוח</button>
+    <button class="tab" role="tab" id="tab-strategy" aria-controls="strategy" aria-selected="false" tabindex="-1" data-t="strategy">אסטרטגיה</button>
+    <button class="tab" role="tab" id="tab-plan"     aria-controls="plan"     aria-selected="false" tabindex="-1" data-t="plan">קמפיינים ותוכן</button>
+    <button class="tab" role="tab" id="tab-tasks"    aria-controls="tasks"    aria-selected="false" tabindex="-1" data-t="tasks">משימות<span class="badge" id="taskBadge" hidden></span></button>
+    <button class="tab" role="tab" id="tab-data"     aria-controls="data"     aria-selected="false" tabindex="-1" data-t="data">נתונים</button>
+    <button class="tab" role="tab" id="tab-manage"   aria-controls="manage"   aria-selected="false" tabindex="-1" data-t="manage">ניהול</button>
   </nav>
 </header>
 
+<!-- העלייה נכשלה (רשת/שרת) — במקום מסך ריק. app.js: showBootError -->
+<div id="bootErr" class="boot-err" role="alert" hidden>
+  <div class="panel">
+    <h2>המערכת לא נטענה</h2>
+    <p id="bootErrMsg"></p>
+    <button class="btn primary" id="bootRetry">נסה שוב</button>
+  </div>
+</div>
+
 <main>
-  <section id="board"></section>
-  <section id="strategy" hidden></section>
-  <section id="plan" hidden></section>
-  <section id="tasks" hidden></section>
-  <section id="data" hidden></section>
-  <section id="manage" hidden></section>
+  <section id="board"    role="tabpanel" aria-labelledby="tab-board"></section>
+  <section id="strategy" role="tabpanel" aria-labelledby="tab-strategy" hidden></section>
+  <section id="plan"     role="tabpanel" aria-labelledby="tab-plan" hidden></section>
+  <section id="tasks"    role="tabpanel" aria-labelledby="tab-tasks" hidden></section>
+  <section id="data"     role="tabpanel" aria-labelledby="tab-data" hidden></section>
+  <section id="manage"   role="tabpanel" aria-labelledby="tab-manage" hidden></section>
 </main>
 
 <!-- מבצע דחוף -->
@@ -146,7 +155,7 @@
     </div>
     <input type="text" id="rNote" class="res-note" placeholder="הערה (אופציונלי)">
     <div class="res-actions">
-      <button class="btn small" id="rClear" hidden style="color:var(--st-crit)">מחק מדידה</button>
+      <button class="btn small danger" id="rClear" hidden>מחק מדידה</button>
       <button class="btn small primary" id="rSave">שמור תוצאות</button>
     </div>
   </div>
@@ -273,6 +282,17 @@
   <div class="dactions">
     <button class="btn" id="confirmCancel">ביטול</button>
     <button class="btn primary" id="confirmOk">אישור</button>
+  </div>
+</dialog>
+
+<!-- החיבור פג באמצע עבודה — נשאר פתוח עד ש-/api/me מצליח (core/session.js) -->
+<dialog id="authDlg" class="confirm-dlg" aria-labelledby="authTitle">
+  <h3 id="authTitle">החיבור פג</h3>
+  <p>מתחברים מחדש בלשונית חדשה ואז חוזרים לכאן. מה שפתוח במסך הזה נשאר כמו שהוא.</p>
+  <p class="fhint" id="authMsg" aria-live="polite"></p>
+  <div class="dactions">
+    <button class="btn" id="authRetry">נסה שוב</button>
+    <button class="btn primary" id="authLogin">התחברות בלשונית חדשה</button>
   </div>
 </dialog>
 

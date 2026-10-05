@@ -13,14 +13,12 @@ const r = Router();
 
 /** כל הקמפיינים עם מצב מלאות, קצב והתוכן שמשויך אליהם */
 r.get('/campaigns', wrap(async (_req, res) => {
-  const [campaigns, allocation, milestones] = await Promise.all([
-    campaignsWithHealth(),
-    currentAllocation(),
-    rows(`select m.*, e.name as endpoint_name
-            from strategy_milestones m
-            left join endpoints e on e.id = m.endpoint_id
-           order by m.on_date`),
-  ]);
+  const campaigns = await campaignsWithHealth();
+  const allocation = await currentAllocation();
+  const milestones = await rows(`select m.*, e.name as endpoint_name
+          from strategy_milestones m
+          left join endpoints e on e.id = m.endpoint_id
+         order by m.on_date`);
   res.json({ campaigns, allocation, milestones });
 }));
 
@@ -283,10 +281,10 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     if (orphans.length) {
       const total = orphans.reduce((sum, o) => sum + o.n, 0);
       const message =
-        `למדיות שיורדות מהקמפיין יש ${total === 1 ? 'פוסט אחד' : `${total} פוסטים`}: ` +
+        `לערוצים שיורדים מהקמפיין יש ${total === 1 ? 'פוסט אחד' : `${total} פוסטים`}: ` +
         `${orphans.map((o) => `${o.name} (${o.n})`).join(', ')}. ` +
         'אחרי ההסרה הפוסטים נשמרים אבל לא ישובצו יותר; מה שכבר בלוח נשאר. ' +
-        'החזרת המדיה לקמפיין מחזירה אותם.';
+        'החזרת הערוץ לקמפיין מחזירה אותם.';
       return res.status(409).json({
         error: message, needs_confirm: true, warning: { message, orphans },
       });

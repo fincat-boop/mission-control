@@ -16,7 +16,7 @@ export function confirmDialog(message, { okLabel = 'אישור', danger = false 
     $('#confirmMsg').textContent = message;
     okBtn.textContent = okLabel;
     okBtn.classList.toggle('primary', !danger);
-    okBtn.classList.toggle('crit', danger);
+    okBtn.classList.toggle('danger', danger);
 
     let decided = false;
     const finish = (result) => {

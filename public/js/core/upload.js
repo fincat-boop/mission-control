@@ -1,4 +1,5 @@
-import { api } from './api.js';
+import { api, SESSION_ERROR } from './api.js';
+import { sessionExpired } from './session.js';
 import { esc } from './dom.js';
 import { state } from './state.js';
 
@@ -97,7 +98,7 @@ async function legacyMultipart(path, files, extraFields, onProgress) {
       });
     },
   });
-  if (res.status === 401) { location.href = '/login.html'; throw new Error('נדרשת התחברות'); }
+  if (res.status === 401) { sessionExpired(); throw new Error(SESSION_ERROR); }
   if (!res.ok) throw new Error(res.data.error || 'הקבצים לא נשמרו');
   return res.data;
 }

@@ -51,27 +51,25 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   const to = new Date(week.endDate);
   to.setHours(23, 59, 59, 999);
 
-  const [settings, channels, posts] = await Promise.all([
-    one('select * from engine_settings limit 1'),
-    rows('select * from channels where active = true order by sort_order, id'),
-    rows(
-      `select p.id, p.title, p.kind, p.status, p.scheduled_at,
-              p.channel_id, p.endpoint_id,
-              c.name as channel_name, e.name as endpoint_name,
-              ci.campaign_id, ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
-              -- קמפיין מוכן: פוסט לא זז לפני התאריך המתוכנן שלו (outsideCampaignWindow)
-              ${COMPLETE_SPREAD_COLUMNS}
-         from posts p
-         join channels c       on c.id = p.channel_id
-         left join endpoints e on e.id = p.endpoint_id
-         left join content_items ci on ci.id = p.content_id
-         left join campaigns ca     on ca.id = ci.campaign_id
-        where p.scheduled_at >= $1 and p.scheduled_at <= $2
-          and p.status = any($3)
-        order by p.scheduled_at, p.id`,
-      [from, to, ON_BOARD]
-    ),
-  ]);
+  const settings = await one('select * from engine_settings limit 1');
+  const channels = await rows('select * from channels where active = true order by sort_order, id');
+  const posts = await rows(
+    `select p.id, p.title, p.kind, p.status, p.scheduled_at,
+            p.channel_id, p.endpoint_id,
+            c.name as channel_name, e.name as endpoint_name,
+            ci.campaign_id, ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
+            -- קמפיין מוכן: פוסט לא זז לפני התאריך המתוכנן שלו (outsideCampaignWindow)
+            ${COMPLETE_SPREAD_COLUMNS}
+       from posts p
+       join channels c       on c.id = p.channel_id
+       left join endpoints e on e.id = p.endpoint_id
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.scheduled_at >= $1 and p.scheduled_at <= $2
+        and p.status = any($3)
+      order by p.scheduled_at, p.id`,
+    [from, to, ON_BOARD]
+  );
 
   const byId = new Map(channels.map((c) => [c.id, c]));
   const illegal = (p) => onBlockedDay(p, byId.get(p.channel_id));

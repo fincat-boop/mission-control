@@ -1,5 +1,6 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { api, SESSION_ERROR } from '../core/api.js';
+import { sessionExpired } from '../core/session.js';
 import { KIND_HE } from '../core/format.js';
 
 /* ========================= ייבוא תוכן מטבלה ========================= */
@@ -43,13 +44,13 @@ export function openImport(campaign, reload) {
   const names = (campaign.channels ?? []).map((c) => c.name);
   $('#impHelp').innerHTML = `
     <b>המבנה שהמערכת מצפה לו</b>
-    שורה לכל זווית, עמודה לכל מדיה. התא הוא הניסוח של אותה זווית באותה מדיה.
+    שורה לכל זווית, עמודה לכל ערוץ. התא הוא הניסוח של אותה זווית באותו ערוץ.
     <table class="imptable">
       <tr><th>כותרת</th><th>סוג</th>${names.map((n) => `<th>${esc(n)}</th>`).join('')}</tr>
-      <tr><td>המסר הראשון</td><td>ערך</td>${names.map(() => '<td>הניסוח למדיה הזו…</td>').join('')}</tr>
+      <tr><td>המסר הראשון</td><td>ערך</td>${names.map(() => '<td>הניסוח לערוץ הזה…</td>').join('')}</tr>
     </table>
     <span>עמודת "סוג" מקבלת ערך / מכירתי / משולב, ואם היא חסרה הכול נחשב ערך.
-    תא ריק פירושו שאין גרסה למדיה הזו. שורה שהכותרת שלה כבר קיימת בקמפיין מדולגת,
+    תא ריק פירושו שאין גרסה לערוץ הזה. שורה שהכותרת שלה כבר קיימת בקמפיין מדולגת,
     כך שאפשר לייבא שוב אחרי תיקון בלי ליצור כפילויות.</span>
     <span><b style="display:inline">אין לך את המבנה הזה?</b>
     העלו את המסמך כמו שהוא — Excel, Word או PDF — והמערכת תפרק אותו לטבלה הזו.
@@ -89,6 +90,7 @@ async function analyzeFile(file) {
     fd.append('file', file);
     const res = await fetch(`/api/campaigns/${impCampaign.campaign.id}/import/analyze`,
       { method: 'POST', body: fd });
+    if (res.status === 401) { sessionExpired(); throw new Error(SESSION_ERROR); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'הניתוח נכשל');
 
@@ -145,7 +147,7 @@ async function checkImport() {
   out.innerHTML = `
     <div class="impbox ${t.errors ? 'bad' : 'ok'}">
       <b>${t.errors ? 'יש שגיאות — שום דבר לא ייובא' : `ייווצרו ${t.to_create} זוויות ו-${t.variants} ניסוחים`}</b>
-      זוהו ${t.rows} שורות · מדיות שזוהו: ${plan.columns.channels.join(', ') || 'אין'}
+      זוהו ${t.rows} שורות · ערוצים שזוהו: ${plan.columns.channels.join(', ') || 'אין'}
     </div>
     ${list('שגיאות', plan.errors, 'bad')}
     ${list('שורות שידולגו', plan.skipped, '')}

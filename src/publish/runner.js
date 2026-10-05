@@ -197,8 +197,8 @@ export function publishBlocker({ post, variant, assets }) {
   // ניוזלטר: השליחה בפועל דרך ה-HUB — נדרשים חיבור, נושא ורשימת יעד
   if (post.platform === 'newsletter') {
     if (!hubMailReady()) return 'חיבור ה-HUB לא מוגדר (HUB_API_URL / HUB_API_KEY בשרת)';
-    if (!post.content_id) return 'אין תוכן משויך לשיבוץ';
-    if (!variant || variant.status !== 'ready') return 'הגרסה למדיה הזו עוד לא מסומנת "מוכן"';
+    if (!post.content_id) return 'אין תוכן משויך לפוסט';
+    if (!variant || variant.status !== 'ready') return 'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"';
     const m = variant.meta ?? {};
     // התוכן חי או בגוף הגרסה או במילוי הממלא של ה-HUB (שדה תוכן בתבנית)
     const hasFilledContent = Object.entries(m.field_values ?? {}).some(
@@ -217,8 +217,8 @@ export function publishBlocker({ post, variant, assets }) {
   if (!post.access_token_enc) return 'אין חיבור פעיל לערוץ — מגדירים בניהול → ערוצי פרסום';
   if (post.platform === 'facebook' && !post.page_id) return 'חסר מזהה עמוד פייסבוק בחיבור';
   if (post.platform === 'instagram' && !post.ig_user_id) return 'חסר מזהה חשבון אינסטגרם בחיבור';
-  if (!post.content_id) return 'אין תוכן משויך לשיבוץ';
-  if (!variant || variant.status !== 'ready') return 'הגרסה למדיה הזו עוד לא מסומנת "מוכן"';
+  if (!post.content_id) return 'אין תוכן משויך לפוסט';
+  if (!variant || variant.status !== 'ready') return 'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"';
 
   const media = assets.filter((a) => isImage(a.mime) || isVideo(a.mime));
   if (post.platform === 'instagram') {
