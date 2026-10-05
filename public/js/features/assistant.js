@@ -2,6 +2,7 @@ import { $, $$, esc, run, toast } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { rebuildEpColors, state } from '../core/state.js';
 import { describeArgs } from '../core/proposalArgs.js';
+import { AI_CHAT_PREFIX } from '../core/session.js';
 import { refreshAlerts, refreshCurrentTab, refreshTaskBadge } from '../ui/refresh.js';
 
 /* ========================= העוזר ========================= */
@@ -18,7 +19,9 @@ const ai = { history: [], log: [], busy: false, ready: null, usd: 0 };
  * ההיסטוריה נחתכת רק בהודעת משתמש רגילה, כדי לא להשאיר תוצאת כלי בלי הקריאה שלה.
  * חסימת אחסון (גלישה פרטית, מכסה) לא מפילה כלום — פשוט לא נשמר.
  */
-const AI_CHAT_KEY = 'mb_ai_chat';
+// לכל משתמש בארגון מפתח משלו — לשונית שעברה משתמש לא מציגה שיחה של אחר.
+// הקידומת (AI_CHAT_PREFIX) נמחקת כולה ביציאה ובהחלפת משתמש (core/session.js).
+const chatKey = () => `${AI_CHAT_PREFIX}${state.me?.org_id ?? 0}:${state.me?.id ?? 0}`;
 const AI_CHAT_MAX_CHARS = 400000;
 const AI_KEEP_LOG = 60;
 const AI_KEEP_HISTORY = 30;
@@ -42,13 +45,13 @@ function saveAI() {
       json = JSON.stringify(data);
     }
     if (json.length > AI_CHAT_MAX_CHARS) json = JSON.stringify({ history: [], log: data.log, usd: data.usd });
-    sessionStorage.setItem(AI_CHAT_KEY, json);
+    sessionStorage.setItem(chatKey(), json);
   } catch { /* אחסון חסום או מלא — השיחה פשוט לא תשרוד רענון */ }
 }
 
 function loadAI() {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(AI_CHAT_KEY) ?? 'null');
+    const saved = JSON.parse(sessionStorage.getItem(chatKey()) ?? 'null');
     if (!saved || !Array.isArray(saved.log) || !Array.isArray(saved.history)) return;
     ai.history = saved.history;
     ai.usd = Number(saved.usd) || 0;
@@ -76,7 +79,7 @@ export function wireAIWidget() {
     ai.history = [];
     ai.log = [];
     ai.usd = 0;
-    try { sessionStorage.removeItem(AI_CHAT_KEY); } catch { /* אין מה למחוק */ }
+    try { sessionStorage.removeItem(chatKey()); } catch { /* אין מה למחוק */ }
     renderAI();
     $('#aiInput').focus();
   });

@@ -12,6 +12,22 @@ import { state } from './state.js';
  * שכבה 0: נשען על dom ו-state בלבד, ו-api.js קורא לו.
  */
 
+/** קידומת השיחות השמורות של העוזר (features/assistant.js) — מפתח לכל ארגון:משתמש */
+export const AI_CHAT_PREFIX = 'mb_ai_chat:';
+
+/**
+ * מוחק מהלשונית את מה שנשמר בשם המשתמש (שיחות העוזר) — ביציאה, ולפני
+ * טעינה מחדש כשבלשונית אחרת התחברו כמשתמש אחר.
+ */
+export function forgetSessionData() {
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i -= 1) {
+      const k = sessionStorage.key(i);
+      if (k?.startsWith(AI_CHAT_PREFIX) || k === 'mb_ai_chat') sessionStorage.removeItem(k);
+    }
+  } catch { /* אחסון חסום — אין מה למחוק */ }
+}
+
 /** דף הכניסה, עם חזרה לתצוגה הנוכחית אחרי ההתחברות (השרת מאמת את next) */
 export const loginUrl = () =>
   `/login.html?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
@@ -26,7 +42,8 @@ async function stillOut() {
     const { user } = await res.json();
     if (!user) return true;
     // התחברו בלשונית החדשה כמשתמש אחר — המסך הזה שייך למישהו אחר
-    if (state.me && user.id !== state.me.id) {
+    if (state.me && (user.id !== state.me.id || user.org_id !== state.me.org_id)) {
+      forgetSessionData();
       location.reload();
       return true;
     }

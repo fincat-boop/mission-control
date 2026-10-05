@@ -2,7 +2,7 @@
 
 import { $, $$, esc, run } from './js/core/dom.js';
 import { api } from './js/core/api.js';
-import { loginUrl } from './js/core/session.js';
+import { forgetSessionData, loginUrl } from './js/core/session.js';
 
 import { TABS, state, rebuildEpColors, persistView, restoreView } from './js/core/state.js';
 import { registerRefreshers, refreshAfterPostChange, goToTab } from './js/ui/refresh.js';
@@ -258,6 +258,7 @@ function wireChrome() {
 
   $('#btnLogout').addEventListener('click', run(async () => {
     await api('/auth/logout', { method: 'POST' });
+    forgetSessionData(); // שיחות העוזר של המשתמש לא נשארות בלשונית
     location.href = '/login.html';
   }));
 
