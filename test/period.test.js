@@ -93,3 +93,16 @@ test('periodLabel — חודשים שאינם בין המוכנים', () => {
   assert.equal(periodLabel('12m'), '12 חודשים');
   assert.equal(inferPeriod('2026-11-01', periodEnd('2026-11-01', '5m')), '5m');
 });
+
+import { spreadDate } from '../public/js/core/period.js';
+
+test('spreadDate — ראשון ביום הראשון, אחרון ביום האחרון, אחיד ביניהם', () => {
+  assert.equal(spreadDate('2026-11-01', '2026-11-30', 0, 6), '2026-11-01');
+  assert.equal(spreadDate('2026-11-01', '2026-11-30', 5, 6), '2026-11-30');
+  assert.equal(spreadDate('2026-11-01', '2026-11-30', 2, 6), '2026-11-13');
+  assert.equal(spreadDate('2026-11-01', '2026-11-30', 0, 1), '2026-11-01');
+  assert.equal(spreadDate('2026-11-01', null, 3, 6), '2026-11-01');
+  assert.equal(spreadDate(null, '2026-11-30', 0, 2), null);
+  // מעבר שעון (סוף אוקטובר) לא מזיז יום
+  assert.equal(spreadDate('2026-10-20', '2026-11-03', 1, 2), '2026-11-03');
+});

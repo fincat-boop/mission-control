@@ -227,3 +227,129 @@ test('gridFor — טיוטות נספרות לתצוגה, וגם בתוך החס
   assert.equal(g.drafts, 1);
   assert.equal(g.missing, g.total_cells - g.ready);
 });
+
+/* ========================= קמפיין מוכן ========================= */
+
+import { isCompleteMode, statusOf } from '../src/campaigns.js';
+import { campaignContentAlert } from '../src/alerts.js';
+
+// חודש (30 יום), צורך לפי קצב: 3 בשבוע → 13, 1 בשבוע → 4
+const month = {
+  starts_on: '2026-11-01', ends_on: '2026-11-30', active: true, importance: 5,
+  structure: 'general',
+};
+const done = { ...month, content_complete_at: '2026-10-05T10:00:00Z' };
+
+test('generalGridFor מוכן — רק המשבצות שמולאו, בלי ריקות, וטיוטות נשארות לא מוכנות', () => {
+  // ערוץ A: משבצות 1, 4, 9 (עם חורים); ערוץ B: משבצת 2 בטיוטה
+  const content = [
+    slotItem(1, 1, 1, 'ready'), slotItem(2, 1, 4, 'ready'), slotItem(3, 1, 9, 'draft'),
+    slotItem(4, 2, 2, 'draft'),
+  ];
+  const before = generalGridFor(month, content, [chA, chB], '2026-10-01', [month]);
+  assert.ok(before.total_cells > 4);
+
+  const g = generalGridFor(done, content, [chA, chB], '2026-10-01', [done]);
+  assert.equal(g.complete, true);
+  assert.deepEqual(g.needs, { 1: 3, 2: 1 });
+  assert.equal(g.channels[0].slots.length, 3);
+  assert.equal(g.channels[1].slots.length, 1);
+  assert.ok(g.channels.every((c) => c.slots.every((s) => s.state !== 'empty' && !s.extra)));
+  assert.equal(g.total_cells, 4);
+  assert.equal(g.ready, 2);
+  assert.equal(g.drafts, 2);
+  assert.equal(g.missing, 2);                   // חסר = נדרש − מוכן = הטיוטות
+  // index נשאר sort_order (הלחיצה בממשק), התאריך לפי המקום ברשימה
+  assert.deepEqual(g.channels[0].slots.map((s) => s.index), [1, 4, 9]);
+  assert.deepEqual(g.channels[0].slots.map((s) => s.date),
+    ['2026-11-01', '2026-11-16', '2026-11-30']);
+  assert.equal(g.channels[1].slots[0].date, '2026-11-01'); // פריט יחיד — יום ההתחלה
+});
+
+test('generalGridFor מוכן — 6 פוסטים בחודש נפרסים בערך כל 5–6 ימים', () => {
+  const content = [1, 2, 3, 4, 5, 6].map((i) => slotItem(i, 1, i, 'ready'));
+  const g = generalGridFor(done, content, [chA], '2026-10-01', [done]);
+  assert.deepEqual(g.channels[0].slots.map((s) => s.date), [
+    '2026-11-01', '2026-11-07', '2026-11-13', '2026-11-18', '2026-11-24', '2026-11-30']);
+});
+
+test('gridFor מוכן — זוויות שנכתבו בלבד; מדיה בלי גרסה לא מקבלת את הזווית', () => {
+  const camp = { ...done, structure: 'angles' };
+  const angles = [
+    { id: 1, sort_order: 2, variants: [
+      { id: 1, channel_id: 1, status: 'ready' }, { id: 2, channel_id: 2, status: 'draft' }] },
+    { id: 2, sort_order: 5, variants: [{ id: 3, channel_id: 1, status: 'ready' }] },
+    { id: 3, sort_order: 7, variants: [
+      { id: 4, channel_id: 1, status: 'draft' }, { id: 5, channel_id: 2, status: 'not_relevant' }] },
+  ];
+  const g = gridFor(camp, angles, [chA, chB], '2026-10-01', [camp]);
+  assert.equal(g.complete, true);
+  assert.equal(g.angles.length, 3);
+  assert.deepEqual(g.angles.map((r) => r.index), [2, 5, 7]);
+  assert.deepEqual(g.angles.map((r) => r.date), ['2026-11-01', '2026-11-16', '2026-11-30']);
+  assert.deepEqual(g.needs, { 1: 3, 2: 1 });
+  assert.equal(g.angles[1].cells[1].state, 'not_needed');
+  assert.equal(g.angles[2].cells[1].state, 'not_relevant');
+  assert.equal(g.total_cells, 4);
+  assert.equal(g.ready, 2);
+  assert.equal(g.drafts, 2);
+  assert.equal(g.missing, 2);
+  assert.ok(g.angles.every((r) => r.cells.every((c) => c.state !== 'empty')));
+});
+
+test('isCompleteMode — רק עם סימון, תאריכים ותוכן; פתיחה מחדש מחזירה את המשבצות', () => {
+  const one = [slotItem(1, 1, 1, 'ready')];
+  assert.equal(isCompleteMode(done, one), true);
+  assert.equal(isCompleteMode(done, []), false);
+  assert.equal(isCompleteMode({ ...done, ends_on: null }, one), false);
+  assert.equal(isCompleteMode(month, one), false);
+  // reopen = content_complete_at חוזר ל-null → הקצאה רגילה לפי קצב
+  const reopened = generalGridFor({ ...done, content_complete_at: null }, one, [chA], '2026-10-01');
+  assert.equal(reopened.complete, undefined);
+  assert.ok(reopened.channels[0].slots.length > 1);
+  assert.equal(reopened.channels[0].slots[1].state, 'empty');
+});
+
+test('תוכן שנוסף אחרי הסימון מגדיל את הספירה', () => {
+  const content = [slotItem(1, 1, 1, 'ready'), slotItem(2, 1, 2, 'ready')];
+  const a = generalGridFor(done, content, [chA], '2026-10-01');
+  const b = generalGridFor(done, [...content, slotItem(3, 1, 3, 'draft')], [chA], '2026-10-01');
+  assert.equal(a.total_cells, 2);
+  assert.equal(b.total_cells, 3);
+  assert.equal(b.channels[0].slots[2].date, '2026-11-30');
+});
+
+test('statusOf — קמפיין מוכן עם טיוטות לא "חסר": "מוכן · X טיוטות לסיום"', () => {
+  const myChannels = [chA];
+  const today = '2026-11-05';
+  for (const structure of ['general', 'angles']) {
+    const c = { ...done, structure };
+    const st = statusOf({ c, today, myChannels,
+      grid: { complete: true, missing: 2, drafts: 2, ready: 3, total_cells: 5 } });
+    assert.equal(st.key, 'complete_drafts');
+    assert.equal(st.label, 'מוכן · 2 טיוטות לסיום');
+    assert.doesNotMatch(st.label, /חסר/);
+    const one = statusOf({ c, today, myChannels,
+      grid: { complete: true, missing: 1, drafts: 1, ready: 3, total_cells: 4 } });
+    assert.equal(one.label, 'מוכן · טיוטה אחת לסיום');
+    const full = statusOf({ c, today, myChannels,
+      grid: { complete: true, missing: 0, drafts: 0, ready: 4, total_cells: 4 } });
+    assert.equal(full.key, 'complete');
+    assert.equal(full.tone, 'good');
+  }
+  // קמפיין רגיל — בלי שינוי
+  const normal = statusOf({ c: month, today, myChannels,
+    grid: { missing: 2, drafts: 0, ready: 3, total_cells: 5 } });
+  assert.equal(normal.key, 'missing_content');
+});
+
+test('התראת תוכן — בקמפיין מוכן "טיוטות לסיום" ולא "חסר תוכן"', () => {
+  const base = { id: 4, name: 'סתיו', phase: 'running', missing_content: 2, required: 6 };
+  const complete = campaignContentAlert({ ...base, complete: true }, 0);
+  assert.match(complete.title, /^טיוטות לסיום/);
+  assert.doesNotMatch(complete.title + complete.detail, /חסר/);
+  assert.match(complete.detail, /2 פוסטים עדיין בטיוטה/);
+  const normal = campaignContentAlert({ ...base, complete: false }, 0);
+  assert.match(normal.title, /^חסר תוכן/);
+  assert.equal(normal.level, 'crit');
+});
