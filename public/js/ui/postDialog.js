@@ -1,29 +1,42 @@
 import { $, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { confirmDialog } from '../core/confirm.js';
-import { api } from '../core/api.js';
+import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
 import { goToTab, refreshAfterPostChange } from '../ui/refresh.js';
-import { isImage, isVideo, ymd } from '../core/format.js';
+import { hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
+import { AUTO_PLATFORMS, choosePrimary, isMissed, nextFullHour, postFacts,
+         rescheduleApproves } from '../core/postActions.js';
 
 /* ========================= תצוגת פוסט מהלוח ========================= */
 
 let previewPost = null;
+let previewFacts = null; // העובדות שהפעולה הראשית נבחרה לפיהן (postActions.js)
 
-/* פעולות הפוסט — פונקציות במפה אחת; הפוטר בוחר מי ראשית, מי משנית ומה בתפריט */
+const perms = () => ({ content: can('content'), approve: can('approve') });
+
+/** "פרסם/אושר" — שעה ותאריך קצרים להודעות */
+const shortWhen = (d) => new Date(d).toLocaleString('he-IL',
+  { weekday: 'long', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/*
+ * פעולות הפוסט — פונקציות במפה אחת. choosePrimary (postActions.js) בוחר מי
+ * ראשית ומי משנית בפוטר; כל השאר בתפריט "עוד". label יכול להיות פונקציה
+ * כשהניסוח תלוי במצב (קבע מועד חדש / קבע מועד חדש ופרסם).
+ */
 const ACT = {
   approve: {
-    label: 'אשר לשליחה אוטומטית ⚡',
+    label: 'אשר לפרסום אוטומטי ⚡',
     run: async (post) => {
       await api(`/posts/${post.id}/approve-publish`, { method: 'POST' });
-      toast('אושר — הפוסט יישלח אוטומטית במועד שנקבע. ⚡');
+      toast('אושר — הפוסט יתפרסם אוטומטית במועד שנקבע. ⚡');
     },
   },
   unapprove: {
-    label: 'בטל אישור שליחה',
+    label: 'בטל אישור',
     run: async (post) => {
       await api(`/posts/${post.id}/unapprove-publish`, { method: 'POST' });
-      toast('האישור בוטל — הפוסט חזר למתוכנן ולא יישלח.');
+      toast('האישור בוטל — הפוסט חזר למתוכנן ולא יתפרסם אוטומטית.');
     },
   },
   publishNow: {
@@ -46,6 +59,45 @@ const ACT = {
     run: async (post) => {
       await api(`/posts/${post.id}/unpublish`, { method: 'POST' });
       toast('הפרסום בוטל, השיבוץ חזר למתוכנן.');
+    },
+  },
+  // פוסט שתקוע ב"בפרסום" (פרסום שנקטע, ניוזלטר שה-HUB לא סגר) — עובר ל"נכשל"
+  resetPublishing: {
+    label: 'שחרר פרסום תקוע',
+    run: async (post) => {
+      const q = post.platform === 'newsletter'
+        ? 'לשחרר את הניוזלטר? אם ה-HUB עוד שולח אותו, עדיף לחכות. אחרי השחרור הפוסט יסומן "נכשל" — בודקים ב-HUB אם נשלח, ואז מסמנים פורסם או מפרסמים שוב.'
+        : 'לשחרר את הפוסט? הוא יסומן "נכשל" — בודקים בעמוד אם עלה, ואז מסמנים פורסם או מפרסמים שוב.';
+      if (!(await confirmDialog(q, { okLabel: 'שחרר' }))) return false;
+      await api(`/posts/${post.id}/reset-publishing`, { method: 'POST' });
+      toast('הפוסט שוחרר וסומן "נכשל". אם הוא עלה בפועל — "סמן כפורסם".');
+    },
+  },
+  // ממתין לאישור (מבצע דחוף של מי שאין לו הרשאת אישור)
+  approvePending: {
+    label: 'אשר',
+    run: async (post) => {
+      await api(`/posts/${post.id}/approve`, { method: 'POST' });
+      toast('אושר — הפוסט על הלוח, ומשימת האישור נסגרה.');
+    },
+  },
+  reject: {
+    label: 'דחה',
+    danger: true,
+    run: async (post) => {
+      if (!(await confirmDialog(`לדחות את "${post.title}"? הפוסט יימחק מהלוח, ומשימת האישור שלו תיסגר.`,
+        { danger: true, okLabel: 'דחה ומחק' }))) return false;
+      await api(`/posts/${post.id}/reject`, { method: 'POST' });
+      // הדחייה לא ממלאת מחדש — המקום נשאר פנוי (עיקרון 1)
+      toast('הפוסט נדחה והוסר מהלוח.');
+    },
+  },
+  reschedule: {
+    label: (post, f) => (rescheduleApproves(f, perms()) ? 'קבע מועד חדש ופרסם' : 'קבע מועד חדש'),
+    keepOpen: true,
+    run: async (post) => {
+      showReschedule(post);
+      return false; // הבחירה קורית בתוך החלון
     },
   },
   attach: {
@@ -88,6 +140,77 @@ const ACT = {
   },
 };
 
+const labelOf = (key) => {
+  const l = ACT[key].label;
+  return typeof l === 'function' ? l(previewPost, previewFacts) : l;
+};
+
+/**
+ * "קבע מועד חדש" לפוסט שהמועד שלו עבר (או שנכשל): תאריך ושעה בתוך החלון,
+ * ואז שתי קריאות — הזזה (עם אזהרת המרווח הרגילה) ואחריה אישור לפרסום
+ * אוטומטי, כשאפשר. אישור שנכשל אחרי הזזה שהצליחה — אומרים בדיוק מה קרה.
+ */
+function showReschedule(post) {
+  const box = $('#pReschedBox');
+  if (!box) return;
+  const f = previewFacts;
+  const approves = rescheduleApproves(f, perms());
+  const at = nextFullHour();
+  const hint = approves
+    ? 'אחרי שהמועד יישמר הפוסט יאושר לפרסום אוטומטי, ויתפרסם במועד החדש.'
+    : post.status === 'approved'
+      ? 'האישור לפרסום אוטומטי נשאר — הפוסט יתפרסם במועד החדש.'
+      : post.status === 'failed'
+        ? 'הפוסט יישאר מסומן "נכשל" עד שמישהו עם הרשאת אישור יאשר אותו שוב.'
+        : '';
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="pvbox-title">מועד חדש</div>
+    <div class="frow frow2">
+      <label>תאריך<input type="date" id="pRsDate" min="${ymd(new Date())}" value="${ymd(at)}"></label>
+      <label>שעה<input type="time" id="pRsTime" value="${hhmm(at)}"></label>
+    </div>
+    ${hint ? `<div class="fhint">${esc(hint)}</div>` : ''}
+    <div class="pvbox-acts">
+      <button type="button" class="btn small" id="pRsCancel">ביטול</button>
+      <button type="button" class="btn small primary" id="pRsGo">${approves ? 'קבע ופרסם במועד הזה' : 'קבע מועד'}</button>
+    </div>`;
+  $('#pRsCancel').addEventListener('click', () => { box.hidden = true; box.innerHTML = ''; });
+  const go = $('#pRsGo');
+  go.addEventListener('click', run(async () => {
+    const when = new Date(`${$('#pRsDate').value}T${$('#pRsTime').value || '10:00'}:00`);
+    if (Number.isNaN(when.getTime())) return toast('צריך תאריך ושעה', true);
+    if (when <= new Date()) return toast('המועד שבחרת כבר עבר — בוחרים מועד עתידי', true);
+    go.disabled = true;
+    try {
+      const moved = await postWithGapCheck(`/posts/${post.id}`, { scheduled_at: when.toISOString() });
+      if (!moved) return; // ביטול אחרי אזהרת המרווח
+      let msg = `המועד עודכן ל${shortWhen(when)}.`;
+      if (approves) {
+        try {
+          await api(`/posts/${post.id}/approve-publish`, { method: 'POST' });
+          msg += ' הפוסט אושר ויתפרסם אוטומטית במועד הזה. ⚡';
+        } catch (e) {
+          await afterChange(post.id);
+          return toast(`המועד עודכן, אבל האישור לפרסום אוטומטי נכשל: ${e.message}`, true);
+        }
+      } else if (post.status === 'approved') {
+        msg += ' האישור נשאר — הפוסט יתפרסם במועד החדש.';
+      }
+      toast(msg);
+      await afterChange(post.id);
+    } finally {
+      go.disabled = false;
+    }
+  }));
+}
+
+/** אחרי שינוי שמשאיר את החלון פתוח: רענון הלוח וציור הפוסט מחדש במצבו החדש */
+async function afterChange(postId) {
+  await refreshAfterPostChange();
+  if ($('#postDlg').open) await openPostPreview(postId);
+}
+
 /** מעבר ל"קמפיינים ותוכן" של הנקודה — כשאין עדיין מה לשייך */
 async function goToEndpointContent(endpointId) {
   $('#postDlg').close();
@@ -105,8 +228,6 @@ async function goToEndpointContent(endpointId) {
 async function showAttachPicker(post) {
   const box = $('#pAttachBox');
   if (!box) return;
-  const opener = $('#postPreview .pvattach');
-  if (opener) opener.hidden = true;
   box.hidden = false;
   box.innerHTML = '<div class="empty">טוען…</div>';
   const list = await loadCandidates({
@@ -149,10 +270,10 @@ async function showAttachPicker(post) {
 
 async function runAction(key) {
   if (!previewPost) return;
+  $('#pMenu').hidden = true;
   const done = await ACT[key].run(previewPost);
   if (done === false) return;
   $('#postDlg').close();
-  $('#pMenu').hidden = true;
   await refreshAfterPostChange();
 }
 
@@ -198,59 +319,95 @@ export function wirePostDialog() {
 /** צ'יפ הסטטוס בכותרת */
 const STATUS_CHIP = {
   scheduled: ['מתוכנן', ''],
-  approved: ['⚡ מאושר לשליחה', 'good'],
-  publishing: ['בשליחה…', 'good'],
+  approved: ['⚡ מאושר לפרסום אוטומטי', 'good'],
+  publishing: ['בפרסום…', 'good'],
   published: ['פורסם ✓', 'good'],
   failed: ['נכשל', 'crit'],
+  pending_approval: ['ממתין לאישור', 'warn'],
+  hole: ['חסר תוכן', 'crit'],
 };
+const MISSED_CHIP = ['עבר המועד', 'warn'];
+
+/**
+ * מה נכנס לתפריט "עוד": כל מה שרלוונטי למצב, בלי הראשית והמשנית שכבר
+ * בפוטר. הסדר: קודם מה שהמצב מזמין, עריכה באמצע, הסרה אחרונה אחרי מפריד.
+ */
+function menuKeys(post, f, p) {
+  const connected = AUTO_PLATFORMS.includes(post.platform) && post.autopub_connected;
+  const future = new Date(post.scheduled_at) > new Date();
+  const menu = [];
+  if (['scheduled', 'failed'].includes(post.status)) {
+    // אישור לפוסט שהמועד שלו עבר נדחה בשרת — אז "קבע מועד חדש" או "פרסם עכשיו"
+    if (p.approve && f.autoReady && future) menu.push('approve');
+    if (p.approve && connected) menu.push('publishNow');
+    if (p.content) menu.push('markPublished');
+    if (p.content && !future) menu.push('reschedule');
+  } else if (post.status === 'approved') {
+    if (p.approve) menu.push('unapprove', 'publishNow');
+    if (p.content) menu.push('markPublished');
+    if (p.content && isMissed(post)) menu.push('reschedule');
+  } else if (post.status === 'published') {
+    if (p.content) menu.push('unpublish');
+  } else if (post.status === 'publishing') {
+    if (p.approve) menu.push('resetPublishing');
+  } else if (post.status === 'pending_approval') {
+    if (p.approve) menu.push('approvePending', 'reject');
+  }
+  const attachable = !post.content_id && p.content &&
+    !['published', 'publishing'].includes(post.status);
+  if (attachable) menu.unshift('attach');
+  else menu.push('openContent');
+  if (p.content && post.status !== 'publishing') menu.push('remove');
+  return menu;
+}
+
+/** הפוטר: ראשית + משנית ככפתורים, כל השאר בתפריט "עוד" */
+function renderActions(post, f) {
+  const p = perms();
+  const { primary, secondary } = choosePrimary(f, p);
+  const shown = [primary, secondary].filter(Boolean);
+  const menu = menuKeys(post, f, p).filter((k) => !shown.includes(k));
+
+  $('#pActs').innerHTML = shown.map((key, i) => `<button type="button" class="btn${
+    i === 0 && !ACT[key].danger ? ' primary' : ''}${ACT[key].danger ? ' danger' : ''}" data-act="${key}">${
+    esc(labelOf(key))}</button>`).join('');
+
+  const menuEl = $('#pMenu');
+  const more = $('#pMoreBtn');
+  menuEl.hidden = true;
+  more.hidden = menu.length === 0;
+  // בלי פעולה ראשית — "פעולות" הוא הכפתור הבולט; עם ראשית — "עוד" צנוע לידה
+  more.textContent = shown.length ? 'עוד ⌄' : 'פעולות ⌄';
+  more.classList.toggle('primary', shown.length === 0);
+  menuEl.innerHTML = menu.map((key, i) => `${
+    ACT[key].danger && i > 0 ? '<div class="sep"></div>' : ''
+  }<button type="button" data-act="${key}"${ACT[key].danger ? ' data-danger' : ''}>${esc(labelOf(key))}</button>`).join('');
+
+  for (const b of [...$('#pActs').querySelectorAll('[data-act]'), ...menuEl.querySelectorAll('[data-act]')]) {
+    b.addEventListener('click', run(() => runAction(b.dataset.act)));
+  }
+}
 
 /** מה שאמור לצאת: הטקסט של המדיה הזו והקבצים שלה */
 export async function openPostPreview(postId) {
   $('#postDlgTitle').textContent = 'טוען…';
   $('#postPreview').innerHTML = '';
+  $('#pActs').innerHTML = '';
   $('#pMoreBtn').hidden = true;
+  $('#pMenu').hidden = true;
+  $('#pStatusChip').hidden = true;
   $('#pResults').hidden = true;
-  $('#postDlg').showModal();
+  if (!$('#postDlg').open) $('#postDlg').showModal();
 
   const { post, variant, assets, results } = await api(`/posts/${postId}/preview`);
   previewPost = post;
-
-  /*
-   * כל הפעולות הרלוונטיות למצב — בתפריט "פעולות" אחד. הסדר: קודם מה
-   * שהמצב מזמין, עריכה באמצע, הסרה אחרונה אחרי מפריד.
-   */
-  const autoCapable = ['facebook', 'instagram', 'newsletter'].includes(post.platform)
-    && post.autopub_connected;
-  const menu = [];
-
-  if (['scheduled', 'failed'].includes(post.status)) {
-    // אישור לפוסט שהמועד שלו עבר נדחה בשרת — אז רק "פרסם עכשיו"
-    const future = new Date(post.scheduled_at) > new Date();
-    if (can('approve') && autoCapable) menu.push(...(future ? ['approve'] : []), 'publishNow');
-    if (can('content')) menu.push('markPublished');
-  } else if (post.status === 'approved') {
-    if (can('approve')) menu.push('unapprove', 'publishNow');
-    if (can('content')) menu.push('markPublished');
-  } else if (post.status === 'published') {
-    if (can('content')) menu.push('unpublish');
-  }
+  previewFacts = postFacts(post, variant);
+  renderActions(post, previewFacts);
   const attachable = !post.content_id && can('content') &&
     !['published', 'publishing'].includes(post.status);
-  if (attachable) menu.unshift('attach');
-  else menu.push('openContent');
-  if (can('content') && post.status !== 'publishing') menu.push('remove');
-
-  const menuEl = $('#pMenu');
-  menuEl.hidden = true;
-  $('#pMoreBtn').hidden = menu.length === 0;
-  menuEl.innerHTML = menu.map((key, i) => `${
-    ACT[key].danger && i > 0 ? '<div class="sep"></div>' : ''
-  }<button type="button" data-act="${key}"${ACT[key].danger ? ' data-danger' : ''}>${esc(ACT[key].label)}</button>`).join('');
-  menuEl.querySelectorAll('[data-act]').forEach((b) =>
-    b.addEventListener('click', run(() => runAction(b.dataset.act))));
 
   const chip = $('#pStatusChip');
-  const [chipLabel, chipTone] = STATUS_CHIP[post.status] ?? [null, ''];
+  const [chipLabel, chipTone] = isMissed(post) ? MISSED_CHIP : STATUS_CHIP[post.status] ?? [null, ''];
   chip.hidden = !chipLabel;
   chip.textContent = chipLabel ?? '';
   chip.dataset.tone = chipTone;
@@ -307,9 +464,7 @@ export async function openPostPreview(postId) {
               <div class="pvcopy"><button type="button" class="btn small" id="pCopyBody">העתק טקסט</button></div>`
             : !post.content_id
               ? `<div class="pvempty">חסר תוכן — לפוסט הזה עוד לא שויך תוכן.</div>
-                 ${attachable ? `<div class="pvattach">
-                   <button type="button" class="btn small primary" id="pAttachBtn">שייך תוכן</button></div>
-                   <div id="pAttachBox" hidden></div>` : ''}`
+                 ${attachable ? '<div id="pAttachBox" hidden></div>' : ''}`
               : `<div class="pvempty">${post.platform === 'newsletter'
                 ? 'אין עדיין תוכן לניוזלטר — ממלאים דרך "פתח בתוכן".'
                 : 'אין עדיין טקסט לגרסה של הערוץ הזה.'}</div>`}
@@ -319,21 +474,25 @@ export async function openPostPreview(postId) {
          מסמנים "מוכן" בעריכת התוכן לפני פרסום.</div>` : ''}
 
     ${post.status === 'approved'
-      ? `<div class="pvauto">⚡ מאושר לשליחה אוטומטית${
+      ? `<div class="pvauto">⚡ מאושר לפרסום אוטומטי${
           post.approved_by_name ? ` — אישר: ${esc(post.approved_by_name)}` : ''}.
-          יישלח ב-${esc(when)}.</div>` : ''}
+          יתפרסם ב-${esc(when)}.</div>` : ''}
     ${post.status === 'publishing'
       ? (post.platform === 'newsletter'
           ? '<div class="pvauto">📧 התקבל ב-HUB — הניוזלטר בשליחה. הפוסט יסומן "פורסם" אוטומטית כשתושלם.</div>'
           : '<div class="pvauto">🚀 נשלח לערוץ ממש עכשיו…</div>') : ''}
     ${post.status === 'failed'
       ? `<div class="pvwarn"><b>הפרסום האוטומטי נכשל:</b> ${esc(post.publish_error ?? 'ללא פירוט')}
-         <br>אפשר לתקן ולאשר שוב, לפרסם עכשיו, או לפרסם ידנית ולסמן "פורסם".</div>` : ''}
+         <br>אפשר לקבוע מועד חדש ולאשר שוב, לפרסם עכשיו, או לפרסם ידנית ולסמן "פורסם".</div>` : ''}
+    ${isMissed(post)
+      ? `<div class="pvwarn"><b>המועד עבר והפוסט לא יצא.</b> ${previewFacts.autoReady
+          ? 'קובעים מועד חדש — או, אם פורסם ביד, מסמנים "פורסם".'
+          : 'אם פורסם ביד — מסמנים "פורסם"; אם לא — קובעים מועד חדש.'}</div>` : ''}
+    <div id="pReschedBox" class="pvbox" hidden></div>
     ${post.status === 'published' && post.external_url
       ? `<div class="pvauto">✓ פורסם אוטומטית —
          <a href="${esc(post.external_url)}" target="_blank" rel="noopener">לצפייה בפוסט</a></div>` : ''}`;
   wireCopyLinks($('#postPreview'));
-  $('#pAttachBtn')?.addEventListener('click', run(() => showAttachPicker(post)));
   // מעתיק בדיוק את מה שהתצוגה מראה — לשליחה ידנית (וואטסאפ) או להדבקה
   const copyBtn = $('#pCopyBody');
   copyBtn?.addEventListener('click', run(async () => {

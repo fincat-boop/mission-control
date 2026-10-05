@@ -239,11 +239,11 @@ function wireBoardDrag() {
   });
 }
 
-// מצבי מסלול השליחה האוטומטית — תג במקום תגית התוכן, כי הם חזקים ממנה
+// מצבי מסלול הפרסום האוטומטי — תג במקום תגית התוכן, כי הם חזקים ממנה
 const AUTO_TAG = {
-  approved:   { cls: 'auto', label: '⚡ לשליחה אוטו׳' },
-  publishing: { cls: 'auto', label: '🚀 שולח…' },
-  failed:     { cls: 'red',  label: '✗ שליחה נכשלה' },
+  approved:   { cls: 'auto', label: '⚡ פרסום אוטו׳' },
+  publishing: { cls: 'auto', label: '🚀 מתפרסם…' },
+  failed:     { cls: 'red',  label: '✗ הפרסום נכשל' },
 };
 
 function postCard(p) {

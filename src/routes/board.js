@@ -392,4 +392,20 @@ r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
   res.json({ post });
 }));
 
+/**
+ * דחיית פוסט שממתין לאישור (מבצע דחוף של מי שאין לו הרשאת אישור) — הפוסט
+ * נמחק, ומשימת האישור שלו איתו (cascade). הרשאת approve, כמו האישור עצמו —
+ * לא DELETE /posts, שדורש הרשאת תוכן. בלי מילוי מחדש: המקום נשאר פנוי.
+ */
+r.post('/posts/:id/reject', requirePerm('approve'), wrap(async (req, res) => {
+  const post = await one(
+    `delete from posts where id = $1 and status = 'pending_approval'
+      returning id, content_id, channel_id, scheduled_at`,
+    [req.params.id]
+  );
+  if (!post) return bad(res, 'אין פוסט שממתין לאישור עם המזהה הזה', 404);
+  if (post.content_id) await recordDismissals([post]);
+  res.json({ ok: true });
+}));
+
 export default r;

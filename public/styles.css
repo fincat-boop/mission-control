@@ -1113,3 +1113,16 @@ details.item summary .epstate { width: 48px; }
 }
 /* שינוי בבלוק החיבור שעוד לא נשמר */
 button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
+
+/* ============ לוח וחלון פוסט (גל 3א) ============ */
+/* פוטר חלון הפוסט: ראשית (+משנית) ← "עוד" ← סגור בקצה */
+#postDlg .pfoot { flex-wrap: wrap; align-items: center; }
+.pacts { display: flex; gap: 8px; flex-wrap: wrap; }
+.pacts:empty { display: none; }
+/* תיבה קטנה בתוך החלון — "מועד חדש" */
+.pvbox { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--page); }
+.pvbox[hidden] { display: none; }
+.pvbox-title { font-size: 12.5px; font-weight: 650; margin-bottom: 8px; }
+.pvbox-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.frow2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.frow2 label { margin-bottom: 0; display: flex; flex-direction: column; gap: 4px; }
