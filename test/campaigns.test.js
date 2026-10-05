@@ -391,7 +391,10 @@ test('שכפול — העותק מתחיל לא "מוכן": insertCampaign לא 
     src.indexOf("r.post('/campaigns',"));
   assert.match(insert, /insert into campaigns/);
   assert.doesNotMatch(insert, /content_complete_at/);
-  // והשכפול יוצר את הקמפיין דרכו
+  // השכפול עובר דרך copyCampaign, שיוצר את הקמפיין דרכו — ומסמן "מוכן"
+  // רק כשמבקשים במפורש (הרצה של קמפיין מחזורי), לא בשכפול רגיל
+  const copy = src.slice(src.indexOf('async function copyCampaign'));
+  assert.match(copy.slice(0, copy.indexOf('\n}\n')), /insertCampaign\(b\)/);
   const dup = src.slice(src.indexOf("r.post('/campaigns/:id/duplicate'"));
-  assert.match(dup.slice(0, dup.indexOf('}));')), /insertCampaign\(b\)/);
+  assert.match(dup.slice(0, dup.indexOf('}));')), /copyCampaign\(src, b\);/);
 });

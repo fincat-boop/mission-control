@@ -94,6 +94,45 @@ export function periodLabel(period) {
   return p.unit === 'w' ? `${p.n} שבועות` : `${p.n} חודשים`;
 }
 
+const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+                   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+/**
+ * שם ברירת המחדל להרצה חדשה של קמפיין מחזורי: "השקה · נובמבר 2026", לפי
+ * חודש הפוסט הראשון. הטופס מציע אותו לעריכה, והשרת משתמש בו כששם לא נשלח.
+ */
+export function runName(name, start) {
+  if (!start) return name;
+  const [y, m] = parts(start);
+  return `${name} · ${HE_MONTHS[m - 1]} ${y}`;
+}
+
+/** מספר הימים בטווח, כולל שני הקצוות (1.11–7.11 = 7) */
+export function spanDays(start, end) {
+  const [ay, am, ad] = parts(start);
+  const [by, bm, bd] = parts(end);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000) + 1;
+}
+
+/**
+ * התקופה של הרצה חדשה של קמפיין מחזורי שמתחילה ב-start: אותו אורך כמו
+ * המקור. תקופה קבועה ('2w', '1m') נשמרת כמו שהיא והסיום מחושב מההתחלה
+ * החדשה (חודש מ-31.1 נגמר ב-28.2, חודש מ-31.3 ב-30.4). מקור עם סיום ידני,
+ * או מלפני שדה התקופה, מקבל את אותו מספר ימים בתאריך סיום ידני — אלא אם
+ * התאריכים שלו הם תקופה שלמה. מקור בלי תאריך סיום — null: צריך לבחור.
+ * @returns {{period:string, ends_on?:string}|null}
+ */
+export function rerunPeriod(src, start) {
+  const fixed = (p) => p && /^\d+[wm]$/.test(p);
+  if (fixed(src.period)) return { period: src.period };
+  if (!src.starts_on || !src.ends_on || !start) return null;
+  if (src.period == null) {
+    const inferred = inferPeriod(src.starts_on, src.ends_on);
+    if (fixed(inferred)) return { period: inferred };
+  }
+  return { period: 'custom', ends_on: addDays(start, spanDays(src.starts_on, src.ends_on) - 1) };
+}
+
 /**
  * התאריך של פריט מספר i (מאופס מ-0) מתוך total, פרוסים אחיד על התקופה
  * [start, end]: התקופה מחולקת ל-total מקטעים שווים, וכל פריט בתחילת המקטע

@@ -6,6 +6,7 @@ import {
 import { currentOrg, one, rows, tx } from '../db.js';
 import { mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
+import { rerunPeriod, runName } from '../../public/js/core/period.js';
 
 const r = Router();
 
@@ -26,7 +27,7 @@ r.get('/campaigns', wrap(async (_req, res) => {
 
 const CAMPAIGN_FIELDS = ['name', 'endpoint_id', 'starts_on', 'ends_on', 'share_pct',
                          'importance', 'target_posts', 'goal', 'urgent', 'active',
-                         'period', 'structure'];
+                         'period', 'structure', 'recurring'];
 
 /** מחיל את resolvePeriod על גוף הבקשה. מחזיר הודעת שגיאה או null. */
 function applyPeriod(b, before) {
@@ -95,28 +96,27 @@ r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
 }));
 
 /**
- * שכפול: קמפיין חדש עם ההגדרות שבגוף הבקשה (הטופס נפתח עם ההגדרות של
- * המקור, ומשנים בו מה שרוצים), ואותו תוכן — זוויות, ניסוחים לכל מדיה
- * וקבצים. השיבוצים בלוח לא מועתקים: המנוע משבץ את החדש לפי התאריכים שלו.
- * קובץ ב-R2 מועתק לאובייקט חדש, כי מחיקה מאחד הקמפיינים מוחקת את האובייקט.
- * העותק מתחיל לא "מוכן" (content_complete_at לא מועתק): הקצאה רגילה לפי
- * קצב על התאריכים החדשים, עד שמסמנים אותו מוכן בעצמו. משבצות מקושרות
- * נשארות מקושרות בעותק, זו לזו (לעוקבת אין קבצים משלה — הם על המקור).
+ * העתקת קמפיין: קמפיין חדש עם ההגדרות שב-b (כבר עברו newCampaignError), ואותו
+ * תוכן — זוויות/משבצות, ניסוחים לכל מדיה (כולל המצב וה-meta של ניוזלטר:
+ * נושא ורשימות) וקבצים. השיבוצים בלוח לא מועתקים: המנוע משבץ את החדש לפי
+ * התאריכים שלו. קובץ ב-R2 מועתק לאובייקט חדש, כי מחיקה מאחד הקמפיינים
+ * מוחקת את האובייקט. משבצות מקושרות נשארות מקושרות בעותק, זו לזו (לעוקבת
+ * אין קבצים משלה — הם על המקור).
+ *
+ * complete: העותק מסומן "מוכן" (הרצה חדשה של קמפיין מחזורי שהמקור שלו
+ * מוכן — אותו תוכן נפרס על החלון החדש). בשכפול רגיל לא: הקצאה לפי קצב על
+ * התאריכים החדשים, עד שמסמנים אותו מוכן בעצמו.
+ * templateId: העותק הוא הרצה של קמפיין מחזורי (campaigns.template_id).
+ *
+ * @returns {Promise<{error?:string, status?:number, campaign?:object, copied?:object}>}
  */
-r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res) => {
-  const src = await one('select * from campaigns where id = $1', [req.params.id]);
-  if (!src) return bad(res, 'לא נמצא קמפיין כזה', 404);
-
-  const b = { ...(req.body ?? {}), structure: src.structure };
-  const err = newCampaignError(b);
-  if (err) return bad(res, err);
-
+async function copyCampaign(src, b, { complete = false, templateId = null } = {}) {
   const assets = await rows(
     `select a.id, a.storage_key, a.filename from content_assets a
        join content_items ci on ci.id = a.content_id
       where ci.campaign_id = $1 and a.storage_key is not null`, [src.id]);
   if (assets.length && !mediaReady()) {
-    return bad(res, 'אחסון המדיה לא מוגדר בשרת — אי אפשר להעתיק את הקבצים של הקמפיין', 503);
+    return { error: 'אחסון המדיה לא מוגדר בשרת — אי אפשר להעתיק את הקבצים של הקמפיין', status: 503 };
   }
   // קודם הקבצים: אם העתקה נכשלת לא נוצר כלום במסד. מה שכבר הועתק נשאר
   // יתום, וסריקת היתומים מנקה אותו.
@@ -127,7 +127,12 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
     newKey.set(a.id, key);
   }
 
-  const c = await insertCampaign(b);
+  let c = await insertCampaign(b);
+  if (complete || templateId != null) {
+    c = await one(
+      `update campaigns set content_complete_at = case when $2 then now() end, template_id = $3
+        where id = $1 returning *`, [c.id, complete, templateId]);
+  }
   const counts = await tx(async (client) => {
     const items = await client.query(
       'select * from content_items where campaign_id = $1 order by sort_order, id', [src.id]);
@@ -145,11 +150,13 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
 
       const vmap = new Map();
       const vs = await client.query(
-        'select id, channel_id, body, status from content_variants where content_id = $1', [it.id]);
+        'select id, channel_id, body, status, meta from content_variants where content_id = $1',
+        [it.id]);
       for (const v of vs.rows) {
         const { rows: [nv] } = await client.query(
-          `insert into content_variants (content_id, channel_id, body, status)
-           values ($1,$2,$3,$4) returning id`, [copy.id, v.channel_id, v.body, v.status]);
+          `insert into content_variants (content_id, channel_id, body, status, meta)
+           values ($1,$2,$3,$4,$5::jsonb) returning id`,
+          [copy.id, v.channel_id, v.body, v.status, v.meta == null ? null : JSON.stringify(v.meta)]);
         vmap.set(v.id, nv.id);
         variantsN++;
       }
@@ -182,9 +189,70 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
     }
     return { items: items.rows.length, variants: variantsN, assets: assetsN, links: linksN };
   });
+  return { campaign: c, copied: counts };
+}
 
+/**
+ * שכפול: הטופס נפתח עם ההגדרות של המקור, ומשנים בו מה שרוצים. העותק
+ * מתחיל לא "מוכן" ולא מחזורי (ראו copyCampaign).
+ */
+r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res) => {
+  const src = await one('select * from campaigns where id = $1', [req.params.id]);
+  if (!src) return bad(res, 'לא נמצא קמפיין כזה', 404);
+
+  const b = { ...(req.body ?? {}), structure: src.structure };
+  const err = newCampaignError(b);
+  if (err) return bad(res, err);
+
+  const out = await copyCampaign(src, b);
+  if (out.error) return bad(res, out.error, out.status);
   const engine = await autoFill(b.week);
-  res.status(201).json({ campaign: c, copied: counts, engine });
+  res.status(201).json({ ...out, engine });
+}));
+
+/**
+ * "שבץ מחדש" של קמפיין מחזורי: הרצה חדשה מתאריך יעד חדש. הכול כמו בתבנית —
+ * נקודת קצה, מדיות, מבנה, חשיבות ונתח, מטרה, אורך התקופה והתוכן עם המצבים
+ * שלו (מוכן נשאר מוכן) — חוץ מהשם (ברירת מחדל: "<שם> · <חודש שנה>") ומה
+ * שנבחר בטופס. תבנית שסומנה "מוכן" נותנת הרצה מוכנה: אותו תוכן נפרס על
+ * החלון החדש. התבנית וההרצות הקודמות לא משתנות.
+ *
+ * גוף: { starts_on, name?, period?, ends_on?, week? } — period/ends_on כמו
+ * בטופס הקמפיין; בלעדיהם אורך התבנית (rerunPeriod).
+ */
+r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) => {
+  const src = await one('select * from campaigns where id = $1', [req.params.id]);
+  if (!src) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  if (!src.recurring) return bad(res, 'הקמפיין לא מסומן כקמפיין מחזורי', 409);
+
+  const body = req.body ?? {};
+  if (!body.starts_on) return bad(res, 'צריך תאריך יעד לפוסט הראשון');
+  let period;
+  if (body.period != null) {
+    period = { period: body.period, ...(body.ends_on !== undefined ? { ends_on: body.ends_on } : {}) };
+  } else {
+    period = rerunPeriod(src, body.starts_on);
+    if (!period) return bad(res, 'לקמפיין המקורי אין תאריך סיום — צריך לבחור תקופה');
+  }
+
+  const channels = await rows(
+    'select channel_id from campaign_channels where campaign_id = $1 order by channel_id', [src.id]);
+  const name = typeof body.name === 'string' && body.name.trim()
+    ? body.name.trim() : runName(src.name, body.starts_on);
+  const b = {
+    endpoint_id: src.endpoint_id, name, goal: src.goal, starts_on: body.starts_on, ...period,
+    share_pct: src.share_pct, importance: src.importance, target_posts: src.target_posts,
+    urgent: src.urgent, structure: src.structure,
+    channel_ids: channels.map((x) => x.channel_id),
+  };
+  const err = newCampaignError(b);
+  if (err) return bad(res, err);
+
+  const out = await copyCampaign(src, b,
+    { complete: !!src.content_complete_at, templateId: src.id });
+  if (out.error) return bad(res, out.error, out.status);
+  const engine = await autoFill(body.week ?? body.starts_on);
+  res.status(201).json({ ...out, engine });
 }));
 
 /* ---------- "קמפיין מוכן": הקמפיין בגודל התוכן שקיים ---------- */
@@ -258,6 +326,12 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
   const periodErr = applyPeriod(b, before);
   if (periodErr) return bad(res, periodErr);
+
+  // קמפיין מחזורי (תבנית ל"שבץ מחדש" בלוח האסטרטגיה) — דגל בלבד, בלי
+  // השפעה על המנוע. עותקים נוצרים לא מחזוריים (insertCampaign).
+  if (b.recurring !== undefined && typeof b.recurring !== 'boolean') {
+    return bad(res, 'ערך לא תקין לקמפיין מחזורי');
+  }
 
   if (b.structure == null) delete b.structure; // עמודה not null — "לא נשלח" = לא נוגעים
   if (b.structure != null && b.structure !== before.structure) {
