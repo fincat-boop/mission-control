@@ -25,7 +25,7 @@ export async function renderManage() {
   $('#manage').innerHTML = `
     <div class="setgroup">
       <h2>נקודות קצה</h2>
-      <p class="sub">כל נקודה מרכזת אצלה הכול: הגדרות, קמפיינים, ותוכן.</p>
+      <p class="sub">ההגדרות של כל נקודה — חשיבות ותדירות. הקמפיינים והתוכן שלה בטאב "קמפיינים ותוכן".</p>
       <div class="panel">${endpoints.map((e) => endpointItem(e, channels, ro)).join('')
         || '<div class="empty">אין עדיין נקודות קצה.</div>'}</div>
       ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addEndpoint">＋ הוסף נקודת קצה</button></div>'}
@@ -56,7 +56,7 @@ export async function renderManage() {
 }
 
 function endpointItem(e, channels, ro) {
-  // הקמפיינים והתוכן עברו לטאבים משלהם. כאן נשארו רק ההגדרות של הנקודה עצמה.
+  // הקמפיינים והתוכן עברו לטאב "קמפיינים ותוכן". כאן נשארו רק ההגדרות של הנקודה עצמה.
   const hasContent = e.content.length > 0;
 
   return `<details class="item">
@@ -93,7 +93,7 @@ function endpointItem(e, channels, ro) {
       <div class="subsec">
         <h4>סיכום</h4>
         <div class="contentline">${e.campaigns.length} קמפיינים · ${e.content.length} פריטי תוכן
-          <span style="color:var(--muted)">— לניהול שלהם: הטאבים "קמפיינים" ו"תוכן"</span></div>
+          <span style="color:var(--muted)">— לניהול שלהם: הטאב "קמפיינים ותוכן"</span></div>
       </div>
 
       ${ro ? '' : `<div style="margin-top:14px">
