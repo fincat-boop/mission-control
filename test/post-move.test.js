@@ -41,3 +41,34 @@ test('moveBlocker — מתוכנן / מאושר / נכשל לעתיד — מות
   // פוסט שהמועד שלו עבר מוזז קדימה — זה בדיוק התיקון שרוצים לאפשר
   assert.equal(moveBlocker(post({ scheduled_at: '2026-10-01T09:00:00+03:00' }), when, NOW), null);
 });
+
+test('approvalResetOnChange — ערוץ, תוכן או נקודה אחרים מבטלים אישור; מועד/כותרת לא', async () => {
+  const { approvalResetOnChange } = await import('../src/routes/board.js');
+  const p = post({ status: 'approved', content_id: 5, endpoint_id: 4 });
+  assert.equal(approvalResetOnChange(p, { scheduled_at: '2026-10-09T09:00:00+03:00' }), false);
+  assert.equal(approvalResetOnChange(p, { channel_id: 6 }), false);
+  assert.equal(approvalResetOnChange(p, { channel_id: '7' }), true);
+  assert.equal(approvalResetOnChange(p, { title: 'x', assignee_id: 2 }), false);
+  // החלפת תוכן (משימת swap) או נקודת קצה
+  assert.equal(approvalResetOnChange(p, { content_id: 5 }), false);
+  assert.equal(approvalResetOnChange(p, { content_id: 9 }), true);
+  assert.equal(approvalResetOnChange(p, { content_id: null }), true);
+  assert.equal(approvalResetOnChange(p, { endpoint_id: '4' }), false);
+  assert.equal(approvalResetOnChange(p, { endpoint_id: 6 }), true);
+});
+
+test('channelChangeBlocker — ערוץ פעיל, ניסוח שאינו "לא רלוונטי", משבצת-מדיה בערוץ שלה', async () => {
+  const { channelChangeBlocker } = await import('../src/routes/board.js');
+  const target = { name: 'אינסטגרם', active: true };
+  const item = { id: 5, slot_channel_id: null };
+  assert.equal(channelChangeBlocker({ target, item, variant: { status: 'ready' } }, 7), null);
+  assert.equal(channelChangeBlocker({ target, item, variant: { status: 'draft' } }, 7), null);
+  // פוסט בלי תוכן — רק הערוץ נבדק
+  assert.equal(channelChangeBlocker({ target, item: null, variant: null }, 7), null);
+  assert.equal(channelChangeBlocker({ target: null, item, variant: null }, 7).status, 404);
+  assert.equal(channelChangeBlocker({ target: { ...target, active: false }, item: null }, 7).status, 409);
+  assert.match(channelChangeBlocker({ target, item, variant: null }, 7).error, /אין לתוכן הזה גרסה/);
+  assert.match(channelChangeBlocker({ target, item, variant: { status: 'not_relevant' } }, 7).error, /לא רלוונטי/);
+  assert.match(channelChangeBlocker({ target, item: { id: 5, slot_channel_id: 6 }, variant: { status: 'ready' } }, 7).error,
+    /משבצת של ערוץ אחר/);
+});

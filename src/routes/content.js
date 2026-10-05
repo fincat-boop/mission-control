@@ -28,7 +28,7 @@ const r = Router();
 async function slotChannelError(contentId, channelId) {
   const item = await one('select slot_channel_id from content_items where id = $1', [contentId]);
   if (!item?.slot_channel_id || Number(channelId) === item.slot_channel_id) return null;
-  return 'הפוסט הזה שייך למדיה אחת בקמפיין כללי — אין לו גרסה למדיה אחרת';
+  return 'הפוסט הזה שייך לערוץ אחד בקמפיין כללי — אין לו גרסה לערוץ אחר';
 }
 
 /** שגיאת קישור (LinkError) חוזרת למשתמש כמו שהיא; כל השאר — שגיאת שרת */
@@ -261,7 +261,7 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
   if (!Array.isArray(ids)) return bad(res, 'צריך רשימת מזהי תוכן');
   const c = await one('select structure from campaigns where id = $1', [req.params.id]);
   if (c?.structure === 'general') {
-    return bad(res, 'בקמפיין כללי אין סדר זוויות — כל פוסט יושב במשבצת של המדיה שלו');
+    return bad(res, 'בקמפיין כללי אין סדר זוויות — כל פוסט יושב במשבצת של הערוץ שלו');
   }
   await tx(async (client) => {
     for (const [i, contentId] of ids.entries()) {
@@ -355,22 +355,20 @@ r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
 /** ספריית התוכן, עם הגרסאות לכל מדיה ולאן כל פריט כבר שובץ */
 r.get('/content', wrap(async (_req, res) => {
-  const [items, variants, assets] = await Promise.all([
-    rows(
-      `select ci.*, e.name as endpoint_name, c.name as campaign_name,
-              coalesce(p.placements, 0) as placements
-         from content_items ci
-         join endpoints e on e.id = ci.endpoint_id
-         left join campaigns c on c.id = ci.campaign_id
-         left join (select content_id, count(*)::int as placements
-                      from posts where content_id is not null group by content_id) p
-                on p.content_id = ci.id
-        order by ci.campaign_id nulls last, ci.sort_order, ci.id`
-    ),
-    rows('select * from content_variants order by content_id, channel_id'),
-    rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
-            from content_assets order by id`),
-  ]);
+  const items = await rows(
+    `select ci.*, e.name as endpoint_name, c.name as campaign_name,
+            coalesce(p.placements, 0) as placements
+       from content_items ci
+       join endpoints e on e.id = ci.endpoint_id
+       left join campaigns c on c.id = ci.campaign_id
+       left join (select content_id, count(*)::int as placements
+                    from posts where content_id is not null group by content_id) p
+              on p.content_id = ci.id
+      order by ci.campaign_id nulls last, ci.sort_order, ci.id`
+  );
+  const variants = await rows('select * from content_variants order by content_id, channel_id');
+  const assets = await rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
+          from content_assets order by id`);
 
   res.json({
     content: items.map((x) => ({
@@ -407,7 +405,7 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     const onCampaign = slotChannel && await one(
       'select 1 from campaign_channels where campaign_id = $1 and channel_id = $2',
       [campaign.id, slotChannel]);
-    if (!onCampaign) return bad(res, 'בקמפיין כללי צריך לבחור מדיה מהמדיות של הקמפיין');
+    if (!onCampaign) return bad(res, 'בקמפיין כללי צריך לבחור ערוץ מהערוצים של הקמפיין');
   }
 
   // משבצת מפורשת מנצחת (מילוי משבצת מהציר). בלעדיה — סוף התור.
@@ -973,7 +971,7 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
     [campaign.id]
   );
   if (!myChannels.some((c) => c.id === channelId)) {
-    return bad(res, 'בקמפיין כללי ההעלאה המרוכזת היא למדיה אחת מהמדיות של הקמפיין');
+    return bad(res, 'בקמפיין כללי ההעלאה המרוכזת היא לערוץ אחד מהערוצים של הקמפיין');
   }
 
   // אותו חשבון בדיוק כמו המסך (campaignsWithHealth) — כולל הנתח שנגזר

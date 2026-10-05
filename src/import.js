@@ -131,7 +131,6 @@ export async function analyzeImport(campaignId, text, { markReady = false } = {}
     throw new Error('הטבלה צריכה שורת כותרות ולפחות שורת תוכן אחת');
   }
 
-  // בזו אחר זו — Promise.all על אותו client בתוך בקשה מזהיר ב-pg
   const channels = await rows('select id, name, platform from channels order by sort_order, id');
   const myChannels = await rows(
     `select ch.id, ch.name, ch.platform from campaign_channels cc

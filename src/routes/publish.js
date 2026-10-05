@@ -9,6 +9,7 @@ import { loadPayload, publishBlocker, publishOne, resetPublishing } from '../pub
 import { HubMailError, audienceLists, hubMailReady,
          newsletterTemplate, newsletterPreview } from '../hub-mail.js';
 import { weekMeta } from '../board.js';
+import { friendlyPublishError } from '../publish/errors.js';
 
 const r = Router();
 
@@ -19,14 +20,12 @@ const r = Router();
  * הטוקן לעולם לא חוזר — רק העובדה שהוא קיים.
  */
 r.get('/publish/status', wrap(async (_req, res) => {
-  const [settings, connections] = await Promise.all([
-    one('select autopublish_enabled from engine_settings limit 1'),
-    rows(
-      `select cc.channel_id, cc.page_id, cc.ig_user_id, cc.auto_enabled,
-              cc.access_token_enc is not null as has_token,
-              cc.last_check_at, cc.last_check_ok, cc.last_check_note
-         from channel_connections cc`),
-  ]);
+  const settings = await one('select autopublish_enabled from engine_settings limit 1');
+  const connections = await rows(
+    `select cc.channel_id, cc.page_id, cc.ig_user_id, cc.auto_enabled,
+            cc.access_token_enc is not null as has_token,
+            cc.last_check_at, cc.last_check_ok, cc.last_check_note
+       from channel_connections cc`);
   res.json({
     autopublish_enabled: settings?.autopublish_enabled ?? false,
     hub_mail_ready: hubMailReady(),
@@ -225,9 +224,9 @@ r.delete('/channels/:id/connection', requirePerm('settings'), wrap(async (req, r
  */
 r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, res) => {
   const payload = await loadPayload(req.params.id);
-  if (!payload) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  if (!payload) return bad(res, 'לא נמצא פוסט כזה', 404);
   if (!['scheduled', 'failed'].includes(payload.post.status)) {
-    return bad(res, 'אפשר לאשר רק שיבוץ מתוכנן (או כזה שנכשל)');
+    return bad(res, 'אפשר לאשר רק פוסט מתוכנן (או כזה שנכשל)');
   }
   // מועד שעבר: הרַנֶר היה מפרסם מיד (או מכשיל אחרי 12 שעות) — לא מה שאושר
   if (isPast(payload.post)) return bad(res, 'המועד עבר — קבעו מועד חדש ואז אשרו');
@@ -237,7 +236,7 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, re
   // ניוזלטר לא צריך channel_connection — החיבור שלו הוא HUB_API_* בסביבה,
   // ו-publishBlocker כבר בדק אותו
   if (!payload.post.auto_enabled && payload.post.platform !== 'newsletter') {
-    return bad(res, 'השליחה האוטומטית כבויה לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
+    return bad(res, 'הפרסום האוטומטי כבוי לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
   }
 
   const post = await one(
@@ -260,7 +259,7 @@ export function weekApprovalReason(payload, now = new Date()) {
   if (isPast(payload.post, now)) return 'המועד עבר';
   const autoOk = payload.post.auto_enabled || payload.post.platform === 'newsletter';
   return publishBlocker(payload) ??
-    (autoOk ? null : 'השליחה האוטומטית כבויה לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
+    (autoOk ? null : 'הפרסום האוטומטי כבוי לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
 }
 
 /**
@@ -322,7 +321,7 @@ r.post('/posts/:id/unapprove-publish', requirePerm('approve'), wrap(async (req, 
       where id = $1 and status = 'approved' returning *`,
     [req.params.id]
   );
-  if (!post) return bad(res, 'אין שיבוץ שמאושר לשליחה עם המזהה הזה', 404);
+  if (!post) return bad(res, 'אין פוסט שמאושר לפרסום אוטומטי עם המזהה הזה', 404);
   res.json({ post });
 }));
 
@@ -342,18 +341,26 @@ r.post('/posts/:id/publish-now', requirePerm('approve'), wrap(async (req, res) =
  * משימת כשל: בודקים בעמוד אם עלה, ואז מסמנים פורסם או מפרסמים שוב.
  */
 r.post('/posts/:id/reset-publishing', requirePerm('approve'), wrap(async (req, res) => {
-  const post = await resetPublishing(req.params.id, req.user);
-  if (!post) return bad(res, 'הפוסט לא תקוע בפרסום — אין מה לאפס', 409);
-  res.json({ post });
+  const r = await resetPublishing(req.params.id, req.user);
+  if (!r) return bad(res, 'הפוסט לא תקוע בפרסום — אין מה לאפס', 409);
+  if (r.error) return bad(res, r.error, 409);
+  res.json({ post: r.post });
 }));
 
-/** היסטוריית הניסיונות של פוסט — מוצג בדיאלוג הפוסט */
+/**
+ * היסטוריית הניסיונות של פוסט — מוצג בחלון הפוסט. message: מה שבן אדם מבין
+ * (friendlyPublishError); error הגולמי נשאר בשביל המפתח (title בחלון).
+ */
 r.get('/posts/:id/publish-log', wrap(async (req, res) => {
+  const log = await rows(
+    `select id, platform, ok, external_id, error, created_at
+       from publish_log where post_id = $1 order by created_at desc limit 20`,
+    [req.params.id]);
   res.json({
-    log: await rows(
-      `select id, platform, ok, external_id, error, created_at
-         from publish_log where post_id = $1 order by created_at desc limit 20`,
-      [req.params.id]),
+    log: log.map((x) => ({
+      ...x,
+      message: x.ok ? null : friendlyPublishError(x.error ?? '', { platform: x.platform }).message,
+    })),
   });
 }));
 

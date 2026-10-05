@@ -29,23 +29,32 @@
       </div>
     </div>
   </div>
-  <nav class="tabs" role="tablist">
-    <button class="tab" role="tab" aria-selected="true"  data-t="board">הלוח</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="strategy">אסטרטגיה</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="plan">קמפיינים ותוכן</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="tasks">משימות<span class="badge" id="taskBadge" hidden></span></button>
-    <button class="tab" role="tab" aria-selected="false" data-t="data">נתונים</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="manage">ניהול</button>
+  <nav class="tabs" role="tablist" aria-label="אזורי המערכת">
+    <button class="tab" role="tab" id="tab-board"    aria-controls="board"    aria-selected="true"  tabindex="0"  data-t="board">הלוח</button>
+    <button class="tab" role="tab" id="tab-strategy" aria-controls="strategy" aria-selected="false" tabindex="-1" data-t="strategy">אסטרטגיה</button>
+    <button class="tab" role="tab" id="tab-plan"     aria-controls="plan"     aria-selected="false" tabindex="-1" data-t="plan">קמפיינים ותוכן</button>
+    <button class="tab" role="tab" id="tab-tasks"    aria-controls="tasks"    aria-selected="false" tabindex="-1" data-t="tasks">משימות<span class="badge" id="taskBadge" hidden></span></button>
+    <button class="tab" role="tab" id="tab-data"     aria-controls="data"     aria-selected="false" tabindex="-1" data-t="data">נתונים</button>
+    <button class="tab" role="tab" id="tab-manage"   aria-controls="manage"   aria-selected="false" tabindex="-1" data-t="manage">ניהול</button>
   </nav>
 </header>
 
+<!-- העלייה נכשלה (רשת/שרת) — במקום מסך ריק. app.js: showBootError -->
+<div id="bootErr" class="boot-err" role="alert" hidden>
+  <div class="panel">
+    <h2>המערכת לא נטענה</h2>
+    <p id="bootErrMsg"></p>
+    <button class="btn primary" id="bootRetry">נסה שוב</button>
+  </div>
+</div>
+
 <main>
-  <section id="board"></section>
-  <section id="strategy" hidden></section>
-  <section id="plan" hidden></section>
-  <section id="tasks" hidden></section>
-  <section id="data" hidden></section>
-  <section id="manage" hidden></section>
+  <section id="board"    role="tabpanel" aria-labelledby="tab-board"></section>
+  <section id="strategy" role="tabpanel" aria-labelledby="tab-strategy" hidden></section>
+  <section id="plan"     role="tabpanel" aria-labelledby="tab-plan" hidden></section>
+  <section id="tasks"    role="tabpanel" aria-labelledby="tab-tasks" hidden></section>
+  <section id="data"     role="tabpanel" aria-labelledby="tab-data" hidden></section>
+  <section id="manage"   role="tabpanel" aria-labelledby="tab-manage" hidden></section>
 </main>
 
 <!-- מבצע דחוף -->
@@ -64,6 +73,11 @@
     <input id="uUntil" type="date">
   </div>
   <div class="frow">
+    <label for="uTime">שעה</label>
+    <input id="uTime" type="time" value="10:00">
+    <div class="fhint">היום, אם השעה כבר עברה — השעה העגולה הבאה.</div>
+  </div>
+  <div class="frow">
     <label>איפה</label>
     <div class="checks" id="uChannels"></div>
   </div>
@@ -74,7 +88,7 @@
   <label class="ack-row">
     <input type="checkbox" id="uAck">
     <span>ידוע לי שזו רק כותרת קצרה בלי טקסט מלא, שזה תופס משבצת פנויה בלוח,
-      ושאם לא יתווסף תוכן עד מועד הפרסום — השיבוץ יימחק אוטומטית.</span>
+      ושאם הפוסט לא יסומן כפורסם עד 24 שעות אחרי המועד — הוא יימחק מהלוח אוטומטית.</span>
   </label>
   <div class="dactions">
     <button class="btn" id="uCancel">ביטול</button>
@@ -99,7 +113,35 @@
     <h3 id="postDlgTitle"></h3>
     <span id="pStatusChip" class="pchip" hidden></span>
   </div>
+  <!-- תצוגה / עריכה — העריכה רק לפוסט שעוד לא יצא, ולמי שיש הרשאת תוכן -->
+  <div class="ptabs" id="pTabs" role="tablist" hidden>
+    <button type="button" role="tab" data-ptab="view" aria-selected="true">תצוגה</button>
+    <button type="button" role="tab" data-ptab="edit" aria-selected="false">עריכה</button>
+  </div>
   <div id="postPreview"></div>
+  <div id="pEdit" hidden>
+    <div class="frow frow2">
+      <label>תאריך<input type="date" id="peDate"></label>
+      <label>שעה<input type="time" id="peTime"></label>
+    </div>
+    <div class="frow">
+      <label for="peChannel">ערוץ</label>
+      <select id="peChannel"></select>
+    </div>
+    <div class="frow">
+      <label for="peAssignee">אחראי</label>
+      <select id="peAssignee"></select>
+    </div>
+    <div class="frow">
+      <label for="peTitle">כותרת</label>
+      <input id="peTitle" type="text">
+    </div>
+    <div class="frow">
+      <label for="peNote">הערה</label>
+      <textarea id="peNote" placeholder="לא חובה"></textarea>
+    </div>
+    <div class="fhint" id="peHint"></div>
+  </div>
 
   <!-- תוצאות בפועל — מוצג רק לפוסט שכבר פורסם -->
   <div id="pResults" hidden>
@@ -113,15 +155,17 @@
     </div>
     <input type="text" id="rNote" class="res-note" placeholder="הערה (אופציונלי)">
     <div class="res-actions">
-      <button class="btn small" id="rClear" hidden style="color:var(--st-crit)">מחק מדידה</button>
+      <button class="btn small danger" id="rClear" hidden>מחק מדידה</button>
       <button class="btn small primary" id="rSave">שמור תוצאות</button>
     </div>
   </div>
 
-  <!-- שני כפתורים בלבד: "פעולות" פותח את כל מה שאפשר לעשות עם הפוסט -->
+  <!-- הפעולה הראשית לפי מצב הפוסט (ולפעמים משנית) בפוטר; כל השאר בתפריט "עוד" -->
   <div class="dactions pfoot">
+    <span class="pacts" id="pActs"></span>
+    <button class="btn primary" id="peSave" hidden>שמור שינויים</button>
     <span class="pmore">
-      <button class="btn primary" id="pMoreBtn" hidden>פעולות ⌄</button>
+      <button class="btn" id="pMoreBtn" hidden>עוד ⌄</button>
       <div class="pmenu" id="pMenu" hidden></div>
     </span>
     <button class="btn" id="pClose" style="margin-inline-start:auto">סגור</button>
@@ -132,6 +176,11 @@
 <dialog id="addPostDlg">
   <h3>פוסט חדש</h3>
   <p class="sub" id="apContext"></p>
+  <!-- בטלפון הפוסט נוסף ליום, לא למשבצת — אז בוחרים כאן ערוץ -->
+  <div class="frow" id="apChannelRow" hidden>
+    <label for="apChannel">ערוץ</label>
+    <select id="apChannel"></select>
+  </div>
   <div class="frow">
     <label for="apTitle">כותרת</label>
     <input id="apTitle" type="text" placeholder="למשל: תזכורת להרשמה לוובינר">
@@ -233,6 +282,17 @@
   <div class="dactions">
     <button class="btn" id="confirmCancel">ביטול</button>
     <button class="btn primary" id="confirmOk">אישור</button>
+  </div>
+</dialog>
+
+<!-- החיבור פג באמצע עבודה — נשאר פתוח עד ש-/api/me מצליח (core/session.js) -->
+<dialog id="authDlg" class="confirm-dlg" aria-labelledby="authTitle">
+  <h3 id="authTitle">החיבור פג</h3>
+  <p>מתחברים מחדש בלשונית חדשה ואז חוזרים לכאן. מה שפתוח במסך הזה נשאר כמו שהוא.</p>
+  <p class="fhint" id="authMsg" aria-live="polite"></p>
+  <div class="dactions">
+    <button class="btn" id="authRetry">נסה שוב</button>
+    <button class="btn primary" id="authLogin">התחברות בלשונית חדשה</button>
   </div>
 </dialog>
 

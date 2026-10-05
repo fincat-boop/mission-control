@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
 import { bad, parseIdList, wrap } from './_shared.js';
@@ -110,18 +111,20 @@ r.post('/urgent/commit', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
   const plan = await planUrgent(b);
   if (plan.errors?.length) return bad(res, plan.errors.join(' · '));
-  if (plan.placements.length === 0) return bad(res, 'לא נמצא שטח פנוי לשיבוץ הדחוף');
+  if (plan.placements.length === 0) return bad(res, 'לא נמצא שטח פנוי למבצע הדחוף');
 
   const needsApproval = !(req.user.is_owner || req.user.perm_approve);
+  // מפתח אחד לכל הפוסטים של המבצע — "אשר את כל המבצע" בחלון הפוסט
+  const group = crypto.randomUUID();
   const created = [];
   for (const p of plan.placements) {
     const post = await one(
       `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at,
-                          status, assignee_id, urgent, note)
-       values ($1,$2,$3,'promo',$4,$5,$6,true,$7) returning *`,
+                          status, assignee_id, urgent, note, urgent_group)
+       values ($1,$2,$3,'promo',$4,$5,$6,true,$7,$8) returning *`,
       [p.channel_id, b.endpoint_id ?? null, b.title, p.scheduled_at,
        needsApproval ? 'pending_approval' : 'scheduled',
-       b.assignee_id ?? req.user.id, p.note ?? null]
+       b.assignee_id ?? req.user.id, p.note ?? null, group]
     );
     created.push(post);
     if (needsApproval) {

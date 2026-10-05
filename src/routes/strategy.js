@@ -15,17 +15,15 @@ const r = Router();
  */
 r.get('/strategy', wrap(async (_req, res) => {
   // ציר "נתח לפי חודש" (shareTimeline) לא מוצג במסך — נשאר רק לעוזר
-  const [allocation, milestones, endpoints, campaigns] = await Promise.all([
-    currentAllocation(),
-    rows(`select m.*, e.name as endpoint_name from strategy_milestones m
-            left join endpoints e on e.id = m.endpoint_id order by m.on_date`),
-    rows('select * from endpoints order by importance desc, id'),
-    rows(`select c.*, count(ci.id)::int as content_count,
-                 count(ci.id) filter (where ci.evergreen)::int as evergreen_count
-            from campaigns c
-            left join content_items ci on ci.campaign_id = c.id
-           group by c.id order by c.starts_on nulls last, c.id`),
-  ]);
+  const allocation = await currentAllocation();
+  const milestones = await rows(`select m.*, e.name as endpoint_name from strategy_milestones m
+          left join endpoints e on e.id = m.endpoint_id order by m.on_date`);
+  const endpoints = await rows('select * from endpoints order by importance desc, id');
+  const campaigns = await rows(`select c.*, count(ci.id)::int as content_count,
+               count(ci.id) filter (where ci.evergreen)::int as evergreen_count
+          from campaigns c
+          left join content_items ci on ci.campaign_id = c.id
+         group by c.id order by c.starts_on nulls last, c.id`);
 
   // הספירה היא ישירות מול נקודת הקצה ולא דרך הקמפיינים,
   // אחרת התוכן השוטף — שאין לו קמפיין — נופל מהספירה
@@ -49,8 +47,33 @@ r.get('/strategy', wrap(async (_req, res) => {
     };
   });
 
-  res.json({ allocation, milestones, endpoints: byEndpoint });
+  res.json({ allocation, milestones, endpoints: byEndpoint,
+             recurring: await recurringTemplates() });
 }));
+
+/**
+ * הקמפיינים המחזוריים (תבניות ל"שבץ מחדש"), עם ההרצה האחרונה של כל אחד:
+ * העותק המאוחר ביותר שנוצר ממנו (template_id). בלי עותקים — התבנית עצמה
+ * היא ההרצה האחרונה, אם יש לה תאריכים.
+ */
+async function recurringTemplates() {
+  return rows(
+    `select c.id, c.name, c.endpoint_id, e.name as endpoint_name, c.period, c.structure,
+            c.starts_on, c.ends_on, c.content_complete_at,
+            (select count(*)::int from content_items ci where ci.campaign_id = c.id) as content_count,
+            (select count(*)::int from campaigns k where k.template_id = c.id) as runs,
+            coalesce(last.starts_on, c.starts_on) as last_run_on,
+            coalesce(last.ends_on, case when last.id is null then c.ends_on end) as last_run_ends_on,
+            last.id as last_run_id
+       from campaigns c
+       join endpoints e on e.id = c.endpoint_id
+       left join lateral (
+         select k.id, k.starts_on, k.ends_on from campaigns k
+          where k.template_id = c.id
+          order by k.starts_on desc nulls last, k.id desc limit 1) last on true
+      where c.recurring
+      order by c.name, c.id`);
+}
 
 /* ========================= התראות ========================= */
 

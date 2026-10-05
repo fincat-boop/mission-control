@@ -16,3 +16,11 @@ test('effectiveCadenceDays — נחסם בין 2 ל-30', () => {
 test('effectiveCadenceDays — min_days_between הוא override מפורש', () => {
   assert.equal(effectiveCadenceDays({ importance: 10, min_days_between: 14 }), 14);
 });
+
+test('shapePost — has_results: פוסט בלי שורת תוצאות מסומן "לא נמדד"', async () => {
+  const { shapePost } = await import('../src/board.js');
+  const base = { id: 1, scheduled_at: '2026-10-05T09:00:00+03:00', status: 'published' };
+  assert.equal(shapePost({ ...base, has_results: false }).has_results, false);
+  assert.equal(shapePost({ ...base, has_results: true }).has_results, true);
+  assert.equal(shapePost(base).has_results, false);
+});

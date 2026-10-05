@@ -5,6 +5,7 @@ import { clearSession, issueSession } from '../auth.js';
 import { authUrl, exchangeCode, googleReady, signState, verifyState } from '../google-auth.js';
 import { hubSsoReady, verifyHubSsoToken } from '../hub-sso.js';
 import { mediaConfig } from '../media.js';
+import { safeNext } from '../next-path.js';
 
 const r = Router();
 
@@ -34,7 +35,8 @@ r.get('/auth/config', (_req, res) => res.json({ google: googleReady() }));
 
 r.get('/auth/google', wrap(async (req, res) => {
   if (!googleReady()) return bad(res, 'התחברות Google לא מוגדרת', 503);
-  const state = signState();
+  // לאן לחזור אחרי הכניסה (חיבור שפג באמצע עבודה, קישור שהודבק) — בתוך ה-state החתום
+  const state = signState(safeNext(req.query.next));
   // sameSite:lax (ולא strict) — ה-callback חוזר מגוגל כניווט חוצה-אתר,
   // וקוקי strict לא היה נשלח בו.
   res.cookie(G_STATE, state, {
@@ -50,7 +52,8 @@ r.get('/auth/google/callback', wrap(async (req, res) => {
   res.clearCookie(G_STATE);
 
   // state חייב להתאים לקוקי (אותו דפדפן) וגם להיות חתום ותקף
-  if (!code || !state || state !== cookieState || !verifyState(String(state))) {
+  const claims = code && state && state === cookieState ? verifyState(String(state)) : null;
+  if (!claims) {
     console.warn(`[auth] Google callback — state נכשל (code=${!!code}, state=${!!state}, cookie=${!!cookieState})`);
     return res.redirect('/login.html?error=google');
   }
@@ -72,13 +75,15 @@ r.get('/auth/google/callback', wrap(async (req, res) => {
   }
 
   issueSession(res, user);
-  res.redirect('/');
+  // נבדק שוב גם כאן — ה-state חתום, אבל הכלל על "לאן מותר" יושב במקום אחד
+  res.redirect(safeNext(claims.next) ?? '/');
 }));
 
 /* ========================= כניסת SSO מ-HUB ========================= */
 
 /**
  * ניווט שמגיע מכפתור "בקרת שיגור" ב-HUB עם טוקן חתום (60 שניות).
+ * ?next= אופציונלי — נתיב יחסי באתר בלבד (safeNext), אחרת חוזרים לדף הבית.
  * אותו allowlist כמו Google: רק email שכבר קיים כמשתמש. הקוקי נקבע כאן,
  * וההפניה ל-'/' עובדת גם עם sameSite:strict כי הדף עצמו סטטי — האימות
  * בפועל קורה ב-fetch של /api/me מתוך הדף (בקשה same-site).
@@ -93,7 +98,7 @@ r.get('/auth/sso', wrap(async (req, res) => {
   if (!user) return res.redirect('/login.html?error=not_approved');
 
   issueSession(res, user);
-  res.redirect('/');
+  res.redirect(safeNext(req.query.next) ?? '/');
 }));
 
 export default r;

@@ -18,12 +18,29 @@ export function wireAddPostDialog() {
   $('#apAddAndCheck').addEventListener('click', run(() => submitManualPost(true)));
   $('#apEndpoint').addEventListener('change', run(refreshContentOptions));
   $('#apContent').addEventListener('change', syncContentHint);
+  $('#apChannel').addEventListener('change', run(async () => {
+    addSlotCtx.channelId = Number($('#apChannel').value);
+    await refreshContentOptions();
+  }));
 }
 
+/**
+ * channelId ריק (הלוח בטלפון — "+ פוסט" ליום): בוחרים ערוץ בחלון, מתוך
+ * הערוצים הפעילים שמקבלים תוכן ביום הזה.
+ */
 export function openAddPost(channelId, date, channelName) {
+  const pickChannel = !channelId;
+  if (pickChannel) {
+    const dow = new Date(`${date}T00:00:00`).getDay();
+    const open = state.channels.filter((c) => c.active && !(c.blocked_days ?? []).includes(dow));
+    if (!open.length) return toast('אין ערוץ פעיל שמקבל תוכן ביום הזה', true);
+    fillSelect($('#apChannel'), open, 'name');
+    channelId = open[0].id;
+  }
+  $('#apChannelRow').hidden = !pickChannel;
   addSlotCtx = { channelId, date };
   fillSelect($('#apEndpoint'), state.endpoints, 'name', 'ללא נקודת קצה');
-  $('#apContext').textContent = `${channelName} · ${fmtDate(date)}`;
+  $('#apContext').textContent = pickChannel ? fmtDate(date) : `${channelName} · ${fmtDate(date)}`;
   $('#apTitle').value = '';
   $('#apKind').value = 'value';
   $('#apTime').value = '10:00';

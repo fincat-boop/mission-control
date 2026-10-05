@@ -1,5 +1,5 @@
 import { api, postWithGapCheck } from '../core/api.js';
-import { can, epColor, state } from '../core/state.js';
+import { can, epColor, persistView, state } from '../core/state.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { HE_DAYS, KIND_HE, inkOn, ymd } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
@@ -7,17 +7,32 @@ import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
 import { confirmDialog } from '../core/confirm.js';
+import { isMissed } from '../core/postActions.js';
 import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
 
 /* ========================= הלוח ========================= */
 
+/*
+ * בטלפון (עד 600px) הלוח הוא רשימה לפי ימים במקום טבלה ברוחב 1000px — אותם
+ * נתונים, רנדרר אחר. מעבר בין המצבים (סיבוב, שינוי חלון) מצייר מחדש.
+ * בטלפון אין גרירה: הזזת פוסט היא דרך לשונית "עריכה" בחלון הפוסט.
+ */
+const PHONE = matchMedia('(max-width: 600px)');
+PHONE.addEventListener('change', () => {
+  if (state.tab === 'board') run(refreshBoard)();
+});
+
+let boardReq = 0; // רק התשובה לבקשה האחרונה מצוירת — לחיצות מהירות על ‹ › לא מתערבבות
+
 export async function renderBoard() {
+  const req = ++boardReq;
   // רשימת ההקמה — רכה: אם היא נכשלת, הלוח עצמו עדיין מוצג. אחרי שהושלמה
   // לא נשאלת שוב באותו דף (fetchSetupStatus)
   const [b, setup] = await Promise.all([
     api(`/board${state.week ? `?week=${state.week}` : ''}`),
     fetchSetupStatus(),
   ]);
+  if (req !== boardReq) return; // בינתיים התבקש שבוע אחר
   const editable = can('content');
 
   // רשימה אחת שמשמשת גם כמקרא הצבעים וגם כמצב האוויר של כל נקודה.
@@ -32,12 +47,17 @@ export async function renderBoard() {
     const tip = `${o.name} · ${when}` +
                 (o.scheduled_this_week ? ` · משובץ ${o.scheduled_this_week} פעמים השבוע`
                                        : ' · לא משובץ השבוע');
-    return `<span class="oxychip${onAir ? '' : ' off'}" data-tt="${esc(tip)}">
+    // כפתור ולא span: במגע אין ריחוף, ולחיצה מציגה את אותו הסבר (data-oxy)
+    return `<button type="button" class="oxychip${onAir ? '' : ' off'}" data-tt="${esc(tip)}"
+      data-oxy="${esc(tip)}" aria-label="${esc(tip)}">
       <i class="sw" style="background:${epColor(o.endpoint_id)}"></i>${esc(o.name)}
-    </span>`;
+    </button>`;
   }).join('');
 
-  const head = b.week.days.map((d) => `<th>${esc(d.label)}</th>`).join('');
+  const today = ymd(new Date());
+  const head = b.week.days.map((d) => (d.date === today
+    ? `<th class="today" aria-current="date">${esc(d.label)} · היום</th>`
+    : `<th>${esc(d.label)}</th>`)).join('');
 
   const body = b.channels.map((ch) => {
     const full = ch.used >= ch.max_per_week;
@@ -53,9 +73,11 @@ export async function renderBoard() {
         ? `<button type="button" class="addslot" data-add-slot
              data-channel="${ch.id}" data-date="${day.date}"
              data-channel-name="${esc(ch.name)}" title="הוסף פוסט">+</button>` : '';
-      return `<td class="day${blocked ? ' blocked' : ''}" ${drop}
-        ${blocked ? `data-tt="${esc(ch.name)} לא מקבל תוכן בימי ${HE_DAYS[dow]}"` : ''}
-        >${cards}${add}</td>`;
+      // הסיבה גם כטקסט גלוי — במגע אין tooltip של ריחוף
+      const why = `${ch.name} לא מקבל תוכן בימי ${HE_DAYS[dow]}`;
+      return `<td class="day${blocked ? ' blocked' : ''}${day.date === today ? ' today' : ''}" ${drop}
+        ${blocked ? `data-tt="${esc(why)}"` : ''}
+        >${blocked ? `<span class="daynote" title="${esc(why)}">יום חסום</span>` : ''}${cards}${add}</td>`;
     }).join('');
     return `<tr>
       <td class="chan">
@@ -99,27 +121,35 @@ export async function renderBoard() {
       </div>
     </div>
 
-    <div class="board panel">
+    ${PHONE.matches
+      ? `<div class="board mboard">${b.channels.length ? phoneDays(b, editable)
+          : `<div class="empty">אין ערוצים פעילים — כל ערוץ הוא שורה בלוח.
+             ${setupGoButton(chStep?.target ?? { tab: 'manage', section: 'channels' },
+                             chStep?.action ?? 'לערוצים', true)}</div>`}</div>`
+      : `<div class="board panel">
       <table class="grid">
         <thead><tr><th></th>${head}</tr></thead>
         <tbody>${body || emptyRow}</tbody>
       </table>
-    </div>
+    </div>`}
     <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
       — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}`;
 
   renderSetupCard($('#setupCard'), setup);
-  wireSetupGo($('#board .grid'));
+  wireSetupGo($('#board .board'));
 
+  // השבוע המוצג נשמר בכתובת (;w=) — רענון נשאר על אותו שבוע
   $$('#board [data-week]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
       state.week = btn.dataset.week;
+      persistView();
       await refreshBoard();
     })));
   $('#thisWeek').addEventListener('click', run(async () => {
     state.week = null;
+    persistView();
     await refreshBoard();
   }));
   $('#runEngine')?.addEventListener('click', run(openEngine));
@@ -155,14 +185,70 @@ export async function renderBoard() {
   $$('#board [data-post-id]').forEach((el) =>
     el.addEventListener('click', run(() => openPostPreview(el.dataset.postId))));
 
+  // מצב האוויר של נקודה — גם בלחיצה (במגע אין ריחוף)
+  $$('#board [data-oxy]').forEach((chip) =>
+    chip.addEventListener('click', () => toast(chip.dataset.oxy)));
+
   // + במשבצת ריקה — הוספת פוסט ידנית
   $$('#board [data-add-slot]').forEach((btn) =>
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       openAddPost(Number(btn.dataset.channel), btn.dataset.date, btn.dataset.channelName);
     }));
+  // בטלפון — פוסט ליום, והערוץ נבחר בחלון ההוספה
+  $$('#board [data-add-day]').forEach((btn) =>
+    btn.addEventListener('click', () => openAddPost(null, btn.dataset.addDay, null)));
 
-  if (editable) wireBoardDrag();
+  if (editable && !PHONE.matches) wireBoardDrag();
+}
+
+/* ========================= הלוח בטלפון ========================= */
+
+/** תג המצב של פוסט ברשימת הטלפון — אותה שפה כמו התגיות הפינתיות בטבלה */
+function statusTag(p) {
+  if (p.status === 'hole') return { cls: 'red', label: 'חסר תוכן' };
+  if (p.status === 'pending_approval') return { cls: 'yellow', label: 'ממתין לאישור' };
+  if (p.status === 'published') {
+    return p.has_results ? { cls: 'auto', label: '✓ פורסם' } : { cls: 'yellow', label: '✓ פורסם · לא נמדד' };
+  }
+  if (isMissed(p)) return { cls: 'yellow', label: 'עבר המועד' };
+  if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
+  if (!p.content_id) return { cls: 'red', label: 'חסר תוכן' };
+  return p.variant_status === 'ready' ? { cls: 'blue', label: 'יש תוכן' } : { cls: 'yellow', label: 'יש טיוטה' };
+}
+
+/** שורת פוסט בטלפון: שעה, צבע הנקודה, כותרת, ערוץ ונקודה, ותג מצב */
+function phoneRow(p) {
+  const tag = statusTag(p);
+  const title = p.status === 'hole' ? 'חסר תוכן' : p.title;
+  return `<button type="button" class="mpost${p.status === 'published' ? ' done' : ''}" data-post-id="${p.id}">
+    <span class="mtime">${esc(p.time)}</span>
+    <i class="sw" style="background:${epColor(p.endpoint_id)}"></i>
+    <span class="mbody">
+      <b>${p.urgent ? '⚡ ' : ''}${esc(title)}</b>
+      <span class="d">${esc(p.channel_name)}${p.endpoint_name ? ` · ${esc(p.endpoint_name)}` : ''}${
+        p.assignee_name ? ` · ${esc(p.assignee_name)}` : ''}</span>
+    </span>
+    <span class="mtag ${tag.cls}">${tag.label}</span>
+  </button>`;
+}
+
+/** השבוע כרשימת ימים: כותרת יום ← הפוסטים לפי שעה; יום ריק — "+" */
+function phoneDays(b, editable) {
+  const today = ymd(new Date());
+  return b.week.days.map((d) => {
+    const posts = b.channels
+      .flatMap((ch) => (ch.days.find((x) => x.date === d.date)?.posts ?? [])
+        .map((p) => ({ ...p, channel_name: ch.name })))
+      .sort((x, y) => new Date(x.scheduled_at) - new Date(y.scheduled_at));
+    const add = editable
+      ? `<button type="button" class="btn small mday-add" data-add-day="${d.date}"
+           aria-label="הוסף פוסט ליום ${esc(d.label)}">+ פוסט</button>` : '';
+    return `<section class="mday${d.date === today ? ' today' : ''}">
+      <h4 class="mday-head"><span>${esc(d.label)}${d.date === today ? ' · היום' : ''}</span>${add}</h4>
+      ${posts.length ? posts.map(phoneRow).join('') : '<div class="mday-empty">אין פוסטים ביום הזה</div>'}
+    </section>`;
+  }).join('');
 }
 
 const APPROVE_WEEK_LABEL = '⚡ אשר מוכנים לפרסום אוטומטי';
@@ -233,17 +319,19 @@ function wireBoardDrag() {
       const moved = await postWithGapCheck(`/posts/${dragged.id}`,
         { scheduled_at: at.toISOString(), channel_id: channelId });
       if (!moved) return;   // המשתמש ביטל אחרי האזהרה
-      toast('השיבוץ הוזז.');
+      toast(moved.approval_reset
+        ? 'השיבוץ הוזז. האישור לפרסום אוטומטי בוטל כי הערוץ השתנה — צריך לאשר שוב.'
+        : 'השיבוץ הוזז.');
       await Promise.all([refreshBoard(), refreshAlerts()]);
     }));
   });
 }
 
-// מצבי מסלול השליחה האוטומטית — תג במקום תגית התוכן, כי הם חזקים ממנה
+// מצבי מסלול הפרסום האוטומטי — תג במקום תגית התוכן, כי הם חזקים ממנה
 const AUTO_TAG = {
-  approved:   { cls: 'auto', label: '⚡ לשליחה אוטו׳' },
-  publishing: { cls: 'auto', label: '🚀 שולח…' },
-  failed:     { cls: 'red',  label: '✗ שליחה נכשלה' },
+  approved:   { cls: 'auto', label: '⚡ פרסום אוטו׳' },
+  publishing: { cls: 'auto', label: '🚀 מתפרסם…' },
+  failed:     { cls: 'red',  label: '✗ הפרסום נכשל' },
 };
 
 function postCard(p) {
@@ -275,7 +363,7 @@ function postCard(p) {
   // פוסט שכבר יצא לאוויר: הכרטיס עצמו נשאר (צבע, כותרת, פרטים), רק
   // דהוי, וחותמת ירוקה גדולה למעלה אומרת שזה כבר קרה.
   if (p.status === 'published') {
-    return `<div class="post published" ${clickable} data-tt="${esc(tip)}"
+    return `<div class="post published" ${clickable} data-tt="${esc(p.has_results ? tip : `לא נמדד · ${tip}`)}"
       style="background:${bg};color:${inkOn(bg)}">
       <span class="pub-stamp">✓ פורסם</span>
       <div class="published-inner">
@@ -285,6 +373,7 @@ function postCard(p) {
           ${esc(p.time)}${who}
         </div>
       </div>
+      ${p.has_results ? '' : '<i class="unmeasured" title="עוד לא הוזנו תוצאות — לוחצים כדי להזין">לא נמדד</i>'}
     </div>`;
   }
 
@@ -307,15 +396,18 @@ function postCard(p) {
     ? `<i class="hint">${p.content_hint === 'ready' ? 'יש תוכן לשייך' : 'יש טיוטה'}</i>` : '';
 
   const tag = AUTO_TAG[p.status] ?? contentTag;
-  const cls = ['post', p.status === 'failed' && 'failed', missing && 'missing']
+  // מתוכנן (או מאושר שלא נתפס) שהמועד שלו עבר — לא יצא, וצריך החלטה
+  const missed = isMissed(p);
+  const cls = ['post', p.status === 'failed' && 'failed', missing && 'missing', missed && 'missed']
     .filter(Boolean).join(' ');
+  const tt = [missed && 'עבר המועד', missing && 'חסר תוכן', tip].filter(Boolean).join(' · ');
 
-  return `<div class="${cls}" ${clickable} data-tt="${esc(missing ? `חסר תוכן · ${tip}` : tip)}"
+  return `<div class="${cls}" ${clickable} data-tt="${esc(tt)}"
     style="background:${bg};color:${inkOn(bg)}">
     <span class="corner-tag ${tag.cls}">${tag.label}</span>
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
       ${esc(p.time)}${who}${hint}
-    </div></div>`;
+    </div>${missed ? '<i class="missed-tag">עבר המועד</i>' : ''}</div>`;
 }

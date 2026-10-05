@@ -185,7 +185,7 @@ export async function suggestContentSwaps() {
       `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
        values ($1,$2,'swap',$3,$4,true,$5,$6,$7)`,
       [
-        `הצעה: להחליף תוכן בשיבוץ שמתפרסם בקרוב`,
+        `הצעה: להחליף תוכן בפוסט שמתפרסם בקרוב`,
         `${post.endpoint_name ?? 'ללא נקודת קצה'} עדיין בלי תוכן · הצעה: "${suggestion.title}" ` +
         `(${suggestion.endpoint_name}) · מתפרסם ${new Date(post.scheduled_at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}`,
         post.id, post.endpoint_id, post.due_on,

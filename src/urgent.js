@@ -3,7 +3,37 @@ import { weekStart, ymd } from './board.js';
 import { gapWarning } from './gap.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
-const DEFAULT_HOUR = 10;
+const DEFAULT_TIME = '10:00';
+// השעה האחרונה ביום שבה עוד משבצים "היום" — מאוחר מזה עוברים למחר
+export const LAST_URGENT_HOUR = 21;
+
+const pad = (n) => String(n).padStart(2, '0');
+
+/** "HH:MM" תקין → [h, m]; אחרת null */
+export function parseTime(v) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? '').trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h <= 23 && min <= 59 ? [h, min] : null;
+}
+
+/**
+ * מתי לשבץ ביום נתון: בשעה שנבחרה, אם היא עוד לא עברה. היום, כשהשעה כבר
+ * עברה — השעה העגולה הבאה (לפחות רבע שעה מעכשיו), עד LAST_URGENT_HOUR.
+ * null = אין מועד ביום הזה (עבר, או מאוחר מדי היום) — עוברים ליום הבא.
+ */
+export function urgentSlotTime(day, [h, m], now = new Date()) {
+  const at = new Date(day);
+  at.setHours(h, m, 0, 0);
+  if (at.getTime() > now.getTime()) return at;
+  if (ymd(day) !== ymd(now)) return null;
+  const next = new Date(now.getTime() + 15 * 60000);
+  if (next.getMinutes() || next.getSeconds() || next.getMilliseconds()) {
+    next.setHours(next.getHours() + 1, 0, 0, 0);
+  }
+  return ymd(next) === ymd(now) && next.getHours() <= LAST_URGENT_HOUR ? next : null;
+}
 
 /**
  * "מה יקרה" של מבצע דחוף: מחפש לכל ערוץ מבוקש את היום הקרוב ביותר
@@ -21,9 +51,12 @@ export async function planUrgent(input) {
 
   const until = input.until ? new Date(input.until) : null;
   if (until && Number.isNaN(until.getTime())) errors.push('תאריך "רלוונטי עד" לא תקין');
+  const hm = parseTime(input.time || DEFAULT_TIME);
+  if (!hm) errors.push('שעה לא תקינה');
   if (errors.length) return { ok: false, errors, placements: [], warnings: [], displaced: [] };
 
-  const today = new Date();
+  const now = new Date();
+  const today = new Date(now);
   today.setHours(0, 0, 0, 0);
 
   const lastDay = until ?? new Date(today.getTime() + 6 * 86400000);
@@ -84,6 +117,10 @@ export async function planUrgent(input) {
 
       if (endpointId && sameDay.has(`${ch.id}:${dayKey}`)) continue;
 
+      // היום, כשהשעה כבר עברה — השעה העגולה הבאה; מאוחר מדי — מחר
+      const at = urgentSlotTime(day, hm, now);
+      if (!at) continue;
+
       // יום שהוגדר כחסום למדיה הזו — גם דחוף לא נכנס אליו
       if ((ch.blocked_days ?? []).includes(day.getDay())) continue;
 
@@ -105,14 +142,12 @@ export async function planUrgent(input) {
 
       if (endpointId) sameDay.add(`${ch.id}:${dayKey}`);
 
-      const at = new Date(day);
-      at.setHours(DEFAULT_HOUR, 0, 0, 0);
       placed = {
         channel_id: ch.id,
         channel_name: ch.name,
         scheduled_at: at.toISOString(),
         day_label: `${HE_DAYS[at.getDay()]} ${at.getDate()}.${at.getMonth() + 1}`,
-        time: `${String(DEFAULT_HOUR).padStart(2, '0')}:00`,
+        time: `${pad(at.getHours())}:${pad(at.getMinutes())}`,
         note: null,
       };
       planned.push({ channel_id: ch.id, kind: 'promo', scheduled_at: at.toISOString() });

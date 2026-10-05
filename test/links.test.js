@@ -57,7 +57,7 @@ test('linkError — המדיה של היעד חייבת להיות בקמפיי�
 test('linkError — אותה מדיה נחסמת: שם כל משבצת היא פוסט נפרד', () => {
   const r = linkError(ctx({ target: { channel_id: IG.id, sort_order: 4, campaign_id: 5 }, targetChannel: IG }));
   assert.equal(r.status, 400);
-  assert.match(r.error, /מדיה אחרת/);
+  assert.match(r.error, /ערוץ אחר/);
 });
 
 test('linkError — ניוזלטר לא מתקשר, לא כמקור ולא כיעד', () => {

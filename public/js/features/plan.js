@@ -630,6 +630,8 @@ function campaignHead(c) {
           <h2>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</h2>
           ${c.complete ? `<span class="gst ok" data-tt="סומן מוכן: רק התוכן שנכתב, פרוס על התקופה">
             <i></i>מוכן</span>` : ''}
+          ${c.recurring ? `<span class="gst na" data-tt="קמפיין מחזורי: משבצים אותו מחדש מלוח האסטרטגיה">
+            <i></i>מחזורי</span>` : ''}
         </div>
         <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
           · נתח ${c.share_pct != null ? c.share_pct + '%' : 'נגזר מהחשיבות'}
@@ -1250,6 +1252,12 @@ function wireCampaignGrid(selected, reload) {
     complete: run(() => completeCampaign(selected, reload)),
     reopen: run(() => reopenCampaign(selected, reload)),
     delete: run(() => deleteCampaign(selected, reload)),
+    recurring: run(async () => {
+      await api(`/campaigns/${selected.id}`, { method: 'PATCH', body: { recurring: !selected.recurring } });
+      toast(selected.recurring ? 'הקמפיין הוסר מהמחזוריים.'
+        : 'נשמר כקמפיין מחזורי — משבצים אותו מחדש מלוח האסטרטגיה.');
+      await reload();
+    }),
   };
   $$('#plan .cbhead [data-act]').forEach((b) =>
     b.addEventListener('click', () => actions[b.dataset.act]()));
@@ -1296,6 +1304,10 @@ function campaignMenu(c) {
       '<button type="button" data-act="complete">קמפיין מוכן</button>',
     can('settings') && c.content_complete_at &&
       '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
+    // תבנית ל"שבץ מחדש" בלוח האסטרטגיה
+    can('settings') && (c.recurring
+      ? '<button type="button" data-act="recurring">הסר מהמחזוריים</button>'
+      : '<button type="button" data-act="recurring">שמור כקמפיין מחזורי</button>'),
     can('settings') && '<div class="sep"></div><button type="button" data-act="delete" data-danger>מחק קמפיין</button>',
   ].filter(Boolean);
   return kebab('פעולות על הקמפיין', items);

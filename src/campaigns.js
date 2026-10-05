@@ -454,7 +454,7 @@ export function completionSummary(c, today = ymd(new Date())) {
     ? generalGridFor(after, c.content, c.channels, today)
     : gridFor(after, c.content, c.channels, today);
   if (!grid.total_cells) {
-    return { error: 'אין בקמפיין פוסטים למדיות שלו — אין מה לפרוס' };
+    return { error: 'אין בקמפיין פוסטים לערוצים שלו — אין מה לפרוס' };
   }
   return {
     removed_empty: c.complete ? 0 : Math.max(0, c.missing_content - (c.drafts ?? 0)),
@@ -497,21 +497,19 @@ export function missingAhead(rows, today, days = null) {
 
 /** כל הקמפיינים עם מצב מלא */
 export async function campaignsWithHealth() {
-  const [list, content, posts, assets, variants, channels, links] = await Promise.all([
-    rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance
-            from campaigns c join endpoints e on e.id = c.endpoint_id
-           order by c.active desc, c.starts_on nulls last, c.id`),
-    rows('select * from content_items order by campaign_id, sort_order, id'),
-    rows(`select p.id, p.content_id, p.status, p.scheduled_at, p.published_at,
-                 p.channel_id, p.title, ch.name as channel_name
-            from posts p left join channels ch on ch.id = p.channel_id
-           where p.content_id is not null`),
-    rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
-            from content_assets order by id`),
-    rows('select * from content_variants order by content_id, channel_id'),
-    rows('select * from channels order by sort_order, id'),
-    rows('select * from campaign_channels'),
-  ]);
+  const list = await rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance
+          from campaigns c join endpoints e on e.id = c.endpoint_id
+         order by c.active desc, c.starts_on nulls last, c.id`);
+  const content = await rows('select * from content_items order by campaign_id, sort_order, id');
+  const posts = await rows(`select p.id, p.content_id, p.status, p.scheduled_at, p.published_at,
+               p.channel_id, p.title, ch.name as channel_name
+          from posts p left join channels ch on ch.id = p.channel_id
+         where p.content_id is not null`);
+  const assets = await rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
+          from content_assets order by id`);
+  const variants = await rows('select * from content_variants order by content_id, channel_id');
+  const channels = await rows('select * from channels order by sort_order, id');
+  const links = await rows('select * from campaign_channels');
 
   const today = ymd(new Date());
   const channelById = new Map(channels.map((c) => [c.id, c]));
@@ -628,7 +626,7 @@ export function statusOf({ c, today, grid, myChannels, ahead = null }) {
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
   if (phase === 'ended') return { key: 'ended', label: 'הסתיים', tone: 'muted' };
   if (myChannels.length === 0) {
-    return { key: 'no_channels', label: 'לא נבחרו מדיות', tone: 'bad' };
+    return { key: 'no_channels', label: 'לא נבחרו ערוצים', tone: 'bad' };
   }
   if (!c.starts_on || !c.ends_on) {
     return { key: 'open', label: 'ללא תאריכים', tone: 'muted' };
@@ -681,10 +679,8 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
  * מקבלת לאורך הזמן. הנתח של כל חודש מנורמל ל-100% מהקמפיינים שרצים בו.
  */
 export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
-  const [campaigns, endpoints] = await Promise.all([
-    rows('select * from campaigns where active = true and paused_at is null'),
-    rows('select id, name, importance from endpoints where active = true order by importance desc, id'),
-  ]);
+  const campaigns = await rows('select * from campaigns where active = true and paused_at is null');
+  const endpoints = await rows('select id, name, importance from endpoints where active = true order by importance desc, id');
 
   const now = new Date();
   const base = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);

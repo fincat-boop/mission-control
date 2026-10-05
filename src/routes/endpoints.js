@@ -10,10 +10,8 @@ const r = Router();
 
 r.get('/endpoints', wrap(async (_req, res) => {
   const list = await rows('select * from endpoints order by importance desc, id');
-  const [campaigns, content] = await Promise.all([
-    rows('select * from campaigns order by starts_on nulls last, id'),
-    rows('select * from content_items order by created_at desc'),
-  ]);
+  const campaigns = await rows('select * from campaigns order by starts_on nulls last, id');
+  const content = await rows('select * from content_items order by created_at desc');
   res.json({
     endpoints: list.map((e) => ({
       ...e,

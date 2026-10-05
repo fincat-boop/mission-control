@@ -110,3 +110,60 @@ test('spreadDate — הראשון ביום ההתחלה, האחרון מקטע �
   // מעבר שעון (סוף אוקטובר) לא מזיז יום: 15 יום, 2 פריטים → 0 ו-7
   assert.equal(spreadDate('2026-10-20', '2026-11-03', 1, 2), '2026-10-27');
 });
+
+/* ---------- קמפיין מחזורי: התקופה והשם של הרצה חדשה ---------- */
+
+import { isDate, rerunPeriod, runName, spanDays } from '../public/js/core/period.js';
+
+test('rerunPeriod — תקופה קבועה נשמרת, והסיום מחושב מההתחלה החדשה (קצוות סוף חודש)', () => {
+  const tpl = { period: '1m', starts_on: '2026-01-31', ends_on: '2026-02-28' };
+  assert.deepEqual(rerunPeriod(tpl, '2026-03-31'), { period: '1m' });
+  // הסיום עצמו נגזר בשרת מ-periodEnd: חודש מ-31.3 → 30.4, מ-31.1 בשנה מעוברת → 29.2
+  assert.equal(periodEnd('2026-03-31', '1m'), '2026-04-30');
+  assert.equal(periodEnd('2028-01-31', '1m'), '2028-02-29');
+  assert.equal(periodEnd('2026-12-15', '2m'), '2027-02-14');
+  assert.deepEqual(rerunPeriod({ period: '3w' }, '2026-11-01'), { period: '3w' });
+});
+
+test('rerunPeriod — סיום ידני: אותו מספר ימים; בלי תקופה: מוסקת מהתאריכים', () => {
+  // 10 ימים כולל (1–10 בנובמבר) → 10 ימים מההתחלה החדשה, גם דרך סוף חודש
+  const custom = { period: 'custom', starts_on: '2026-11-01', ends_on: '2026-11-10' };
+  assert.deepEqual(rerunPeriod(custom, '2026-12-27'), { period: 'custom', ends_on: '2027-01-05' });
+  assert.equal(spanDays('2026-12-27', '2027-01-05'), 10);
+  // ידני שבמקרה הוא חודש שלם נשאר ידני — מה שהמשתמש בחר
+  assert.deepEqual(rerunPeriod({ period: 'custom', starts_on: '2026-11-01', ends_on: '2026-11-30' },
+    '2027-02-01'), { period: 'custom', ends_on: '2027-03-02' });
+  // קמפיין מלפני השדה: 1.11–30.11 = חודש, 14 ימים = שבועיים, 10 ימים = ידני
+  assert.deepEqual(rerunPeriod({ period: null, starts_on: '2026-11-01', ends_on: '2026-11-30' },
+    '2027-02-01'), { period: '1m' });
+  assert.deepEqual(rerunPeriod({ period: null, starts_on: '2026-11-01', ends_on: '2026-11-14' },
+    '2027-02-01'), { period: '2w' });
+  assert.deepEqual(rerunPeriod({ period: null, starts_on: '2026-11-01', ends_on: '2026-11-10' },
+    '2027-02-01'), { period: 'custom', ends_on: '2027-02-10' });
+});
+
+test('rerunPeriod — בלי תאריך סיום (open / בלי תאריכים) אין מה להעתיק: null', () => {
+  assert.equal(rerunPeriod({ period: 'open', starts_on: '2026-11-01', ends_on: null }, '2027-01-01'), null);
+  assert.equal(rerunPeriod({ period: null, starts_on: null, ends_on: null }, '2027-01-01'), null);
+});
+
+test('runName — שם ההרצה לפי חודש הפוסט הראשון', () => {
+  assert.equal(runName('השקה', '2026-11-03'), 'השקה · נובמבר 2026');
+  assert.equal(runName('השקה', '2027-01-31'), 'השקה · ינואר 2027');
+  assert.equal(runName('השקה', null), 'השקה');
+  // תבנית שכבר נושאת סיומת (הרצה שסומנה מחזורית) — הסיומת מתחלפת, לא מצטברת
+  assert.equal(runName('השקה · מרץ 2027', '2027-05-01'), 'השקה · מאי 2027');
+  // סיומת שאינה חודש ושנה נשארת
+  assert.equal(runName('השקה · קיץ', '2027-05-01'), 'השקה · קיץ · מאי 2027');
+});
+
+test('isDate — רק תאריך אמיתי בפורמט YYYY-MM-DD', () => {
+  assert.equal(isDate('2027-02-28'), true);
+  assert.equal(isDate('2028-02-29'), true);
+  assert.equal(isDate('2027-02-29'), false);
+  assert.equal(isDate('2027-13-01'), false);
+  assert.equal(isDate('2027-1-05'), false);
+  assert.equal(isDate('2027-01-05T00:00'), false);
+  assert.equal(isDate('לא תאריך'), false);
+  assert.equal(isDate(20270105), false);
+});

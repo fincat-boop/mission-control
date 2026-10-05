@@ -200,12 +200,10 @@ async function loadResults(period) {
  */
 export async function buildPerformance(from, to) {
   const period = periodOf(from, to);
-  const [results, endpoints, channels, settings] = await Promise.all([
-    loadResults(period),
-    rows('select id, name from endpoints order by id'),
-    rows('select id, name from channels order by sort_order, id'),
-    one('select use_performance from engine_settings limit 1'),
-  ]);
+  const results = await loadResults(period);
+  const endpoints = await rows('select id, name from endpoints order by id');
+  const channels = await rows('select id, name from channels order by sort_order, id');
+  const settings = await one('select use_performance from engine_settings limit 1');
 
   const { scored } = scoreAll(results);
 
