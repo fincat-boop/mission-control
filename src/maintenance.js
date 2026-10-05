@@ -3,6 +3,7 @@ import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
 import { weekMeta } from './board.js';
+import { closeResolvedTasks } from './task-lifecycle.js';
 import {
   TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, mediaSweepEnabled,
   orgMediaPrefix, pickOrphans,
@@ -30,6 +31,7 @@ const SYSTEM_USER_NAME = 'תחזוקה אוטומטית';
 const BACKUP_RETENTION = 14;           // כמה גיבויים תקופתיים לשמור
 const URGENT_GRACE_HOURS = 24;         // כמה זמן אחרי המועד לתת לפני שזורקים
 const SWAP_WINDOW_HOURS = 4;           // כמה זמן לפני הפרסום מציעים חלופה
+const SWAP_REOFFER_DAYS = 7;           // הצעה שנדחתה לא חוזרת לאותו פוסט+תוכן בתקופה הזו
 
 async function logSystem(action, entity, entity_id, summary, meta = null) {
   await query(
@@ -103,7 +105,7 @@ export async function cleanupStaleUrgent() {
 export async function suggestContentSwaps() {
   await forEachOrg(async () => {
   const candidates = await rows(
-    `select p.id, p.channel_id, p.endpoint_id, p.scheduled_at, e.name as endpoint_name,
+    `select p.id, p.channel_id, p.endpoint_id, p.scheduled_at, p.assignee_id, e.name as endpoint_name,
             -- היום המקומי של המועד, לא UTC — "היום" במשימות הוא ישראלי
             (p.scheduled_at at time zone 'Asia/Jerusalem')::date as due_on
        from posts p
@@ -126,6 +128,14 @@ export async function suggestContentSwaps() {
          join endpoints e on e.id = ci.endpoint_id and e.active = true
          left join campaigns ca on ca.id = ci.campaign_id
         where (ca.id is null or ca.paused_at is null)
+          -- הצעה שכבר הוצעה לאותו פוסט (פתוחה, בוצעה או נדחתה) לא חוזרת:
+          -- מי שסימן/מחק את ההצעה לא יקבל אותה שוב בעוד שעה
+          and not exists (
+            select 1 from tasks ts
+             where ts.post_id = $4 and ts.kind = 'swap'
+               and ts.meta->>'suggested_content_id' = ci.id::text
+               and ts.created_at >= now() - make_interval(days => $5)
+          )
           and not exists (
             select 1 from posts p2
              where p2.content_id = ci.id and p2.channel_id = $1
@@ -134,13 +144,13 @@ export async function suggestContentSwaps() {
           )
         order by e.importance desc, ci.created_at asc
         limit 1`,
-      [post.channel_id, week.startDate, week.endDate]
+      [post.channel_id, week.startDate, week.endDate, post.id, SWAP_REOFFER_DAYS]
     );
     if (!suggestion) continue; // אין כרגע שום תוכן מוכן להציע במקומו
 
     await query(
-      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta)
-       values ($1,$2,'swap',$3,$4,true,$5,$6)`,
+      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
+       values ($1,$2,'swap',$3,$4,true,$5,$6,$7)`,
       [
         `הצעה: להחליף תוכן בשיבוץ שמתפרסם בקרוב`,
         `${post.endpoint_name ?? 'ללא נקודת קצה'} עדיין בלי תוכן · הצעה: "${suggestion.title}" ` +
@@ -151,11 +161,27 @@ export async function suggestContentSwaps() {
           suggested_title: suggestion.title,
           suggested_kind: suggestion.kind,
           suggested_endpoint_id: suggestion.endpoint_id,
+          ...(post.assignee_id ? { assignee_auto: true } : {}),
         }),
+        post.assignee_id ?? null,
       ]
     );
     console.log(`הצעת החלפה נוצרה לפוסט #${post.id} (${post.endpoint_name ?? 'ללא נקודת קצה'}) — מוצע: "${suggestion.title}"`);
   }
+  });
+}
+
+/**
+ * משימות שנסגרות לבד (src/task-lifecycle.js) — שעתי, לכל ארגון. אותה
+ * סגירה רצה גם בפתיחת טאב המשימות; כאן היא תופסת את מי שלא פתח אותו.
+ */
+export async function sweepTasks() {
+  await forEachOrg(async (orgId) => {
+    const { closed, assigned } = await closeResolvedTasks();
+    if (closed || assigned) {
+      console.log(`משימות (ארגון ${orgId}): ${closed} נסגרו לבד כי התנאי שלהן נפתר` +
+        (assigned ? `, ${assigned} שויכו לאחראי של הפוסט` : ''));
+    }
   });
 }
 

@@ -9,7 +9,7 @@ import { loadUser } from './auth.js';
 import { csrfGuard } from './csrf.js';
 import { audit } from './audit.js';
 import {
-  backupNow, cleanupStaleUrgent, forEachOrg, mediaMaintenance, suggestContentSwaps,
+  backupNow, cleanupStaleUrgent, forEachOrg, mediaMaintenance, suggestContentSwaps, sweepTasks,
 } from './maintenance.js';
 import { publishTickForOrg, refreshNewsletterMetrics } from './publish/runner.js';
 import api from './routes/api.js';
@@ -119,6 +119,9 @@ const timers = [
   setInterval(() => { cleanupStaleUrgent().catch((e) => console.error('ניקוי מבצעים דחופים נכשל:', e)); }, 6 * HOUR),
   setTimeout(() => { suggestContentSwaps().catch((e) => console.error('הצעת החלפת תוכן נכשלה:', e)); }, 3 * 60000),
   setInterval(() => { suggestContentSwaps().catch((e) => console.error('הצעת החלפת תוכן נכשלה:', e)); }, HOUR),
+  // משימות שהתנאי שלהן נפתר נסגרות לבד (src/task-lifecycle.js)
+  setTimeout(() => { sweepTasks().catch((e) => console.error('סגירת משימות שנפתרו נכשלה:', e)); }, 6 * 60000),
+  setInterval(() => { sweepTasks().catch((e) => console.error('סגירת משימות שנפתרו נכשלה:', e)); }, HOUR),
   // מדיה ב-R2: סל מחזור, העברת קבצים ישנים מהמסד, יתומים (src/maintenance.js)
   setTimeout(() => { mediaMaintenance().catch((e) => console.error('תחזוקת מדיה נכשלה:', e)); }, 4 * 60000),
   setInterval(() => { mediaMaintenance().catch((e) => console.error('תחזוקת מדיה נכשלה:', e)); }, HOUR),

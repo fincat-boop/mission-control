@@ -283,6 +283,10 @@ alter table tasks add column if not exists meta jsonb;
 create unique index if not exists tasks_open_failed_post_idx
   on tasks (post_id) where kind = 'failed' and done = false;
 
+-- "דחה עד מחר": משימה שנדחתה לא מוצגת ברשימה הפתוחה ולא נספרת בתגית
+-- עד הזמן הזה. null = לא נדחתה.
+alter table tasks add column if not exists snoozed_until timestamptz;
+
 create table if not exists engine_settings (
   id                  int primary key default 1 check (id = 1),
   min_gap_days        int not null default 7,
@@ -337,6 +341,17 @@ create table if not exists backups (
 );
 
 create index if not exists backups_created_at_idx on backups (created_at desc);
+
+-- תוצאת הניסיון האחרון של כל שכבת גיבוי (db = בתוך המסד, drive, r2 = מלא).
+-- גלובלית כמו backups — הגיבוי רץ על כל המסד, לא לכל ארגון. מוצגת בניהול
+-- ומזינה את התראות הגיבוי (src/backup-status.js).
+create table if not exists backup_status (
+  layer           text primary key check (layer in ('db','drive','r2')),
+  last_attempt_at timestamptz not null default now(),
+  last_result     text not null check (last_result in ('ok','failed','skipped')),
+  last_error      text,
+  last_success_at timestamptz
+);
 
 -- ========================= הגבלת קצב בהתחברות =========================
 -- ניסיונות התחברות כושלים, להגנה מפני brute-force. מבוסס-DB ולא מונה
@@ -396,6 +411,9 @@ alter table posts
   add column if not exists publish_error text,        -- הכשל האחרון, לתצוגה
   add column if not exists approved_by   int references users(id) on delete set null,
   add column if not exists approved_at   timestamptz;
+
+-- מתי הפוסט נתפס ל-publishing — כדי לזהות פרסום שנתקע באמצע (runner.js)
+alter table posts add column if not exists publishing_started_at timestamptz;
 
 -- סטטוסים חדשים למסלול: approved (אושר לשליחה אוטומטית) → publishing → published,
 -- וכשל הופך ל-failed (נשאר על הלוח עד טיפול, לא נעלם).
