@@ -155,6 +155,17 @@ test('stuckPublishingError — ניוזלטר שהועבר ימים מראש ל�
   STUCK_NEWSLETTER_CAP_ERROR);
 });
 
+test('stuckPublishingError — ניוזלטר ישן (נוצר ב-HUB לפני "העבר ל-HUB"): טיוטה = עד 72 שעות', () => {
+  const now = new Date('2026-10-10T12:00:00Z');
+  const h = (n) => new Date(now.getTime() - n * 3600000).toISOString();
+  const old = (hours, hub) => stuckPublishingError(
+    { platform: 'newsletter', started: h(hours), scheduled: h(hours), hub, legacy: true }, now);
+  assert.equal(old(48, 'draft'), null);
+  assert.equal(old(80, 'draft'), STUCK_NEWSLETTER_CAP_ERROR);
+  // לא ענה — כמו קודם, יממה
+  assert.equal(old(30, null), STUCK_NEWSLETTER_ERROR);
+});
+
 /* ---------- הזזה של ניוזלטר שהועבר ---------- */
 
 test('moveBlocker — ניוזלטר שהועבר ל-HUB: משנים מועד שם', () => {

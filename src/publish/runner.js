@@ -414,14 +414,18 @@ export async function publishTickForOrg() {
  * כבר נסגר ב-pollNewsletterOutcomes.
  * scheduled — לניוזלטר: המועד (של ה-HUB אם ידוע, אחרת שלנו). השעון מתחיל
  * מהמאוחר מבין ההעברה למועד — ניוזלטר שהועבר ימים מראש לא "תקוע".
+ * legacy — ניוזלטר שהרַנֶר הישן יצר ב-HUB בעצמו (לפני "העבר ל-HUB";
+ * hub_transferred_at ריק): נשאר על הכלל הישן — טיוטה ב-HUB נחשבת "עוד
+ * באוויר" עד 72 שעות, בלי "לא אושר" אחרי יממה.
  */
-export function stuckPublishingError({ platform, started, scheduled = null, hub = null }, now = new Date()) {
+export function stuckPublishingError(
+  { platform, started, scheduled = null, hub = null, legacy = false }, now = new Date()) {
   if (!started) return null;
   if (platform === 'newsletter') {
     const from = newsletterClockStart({ started, scheduled });
     const age = now.getTime() - from.getTime();
     if (age > STUCK_NEWSLETTER_CAP_HOURS * 3600000) return STUCK_NEWSLETTER_CAP_ERROR;
-    if (hub === 'active') return null;
+    if (hub === 'active' || (legacy && hub === 'draft')) return null;
     if (age <= STUCK_NEWSLETTER_HOURS * 3600000) return null;
     return hub === 'draft' ? NOT_APPROVED_ERROR : STUCK_NEWSLETTER_ERROR;
   }
@@ -438,7 +442,8 @@ export function stuckPublishingError({ platform, started, scheduled = null, hub 
 async function failStuckPublishing(now = new Date(), hubState = new Map()) {
   const stuck = await rows(
     `select p.id, c.platform,
-            p.publishing_started_at as started, p.scheduled_at
+            p.publishing_started_at as started, p.scheduled_at,
+            p.hub_transferred_at is null as legacy
        from posts p
        join channels c on c.id = p.channel_id and c.active
       where p.status = 'publishing'
@@ -450,7 +455,7 @@ async function failStuckPublishing(now = new Date(), hubState = new Map()) {
     const h = hubState.get(s.id);
     const error = stuckPublishingError({
       platform: s.platform, started: s.started,
-      scheduled: h?.scheduled ?? s.scheduled_at, hub: h?.hub ?? null,
+      scheduled: h?.scheduled ?? s.scheduled_at, hub: h?.hub ?? null, legacy: s.legacy,
     }, now);
     if (!error) continue;
     await bestEffort(`סגירת פוסט #${s.id} שנתקע נכשלה:`, async () => {

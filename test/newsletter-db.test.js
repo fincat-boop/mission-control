@@ -403,6 +403,21 @@ test('תקוע: ממתין לאישור ב-HUB יממה אחרי המועד — 
   assert.match(p.publish_error, /ממתין לאישור ב-HUB/);
 });
 
+test('ניוזלטר ישן (נוצר ב-HUB ע"י הרַנֶר הקודם): טיוטה יומיים — עדיין ממתין, לא "לא אושר"', { skip }, async () => {
+  const { post: id } = await newsletter({ at: inHours(-40) });
+  // כמו שהרַנֶר הישן השאיר: publishing + external_id, בלי hub_transferred_at / hub_ref
+  const c = { id: '00000000-0000-4000-8000-0000000legacy'.slice(0, 36), external_ref: `post-${id}`,
+    status: 'draft', scheduled_at: inHours(-40) };
+  hub.campaigns.set(c.id, c);
+  hub.byRef.set(c.external_ref, c);
+  await q(`update posts set status = 'publishing', external_id = $2,
+                  publishing_started_at = now() - interval '40 hours' where id = $1`, [id, c.id]);
+  await tick();
+  const p = await post(id);
+  assert.equal(p.status, 'publishing');
+  assert.equal(p.hub_status, 'draft');
+});
+
 /* ---------- SSO ---------- */
 
 test('SSO: jti נוצל פעם אחת בלבד; שורות שפגו נמחקות', { skip }, async () => {
