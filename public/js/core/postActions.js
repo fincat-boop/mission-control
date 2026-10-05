@@ -47,8 +47,17 @@ export function postFacts(post, variant) {
     autoReady: autoReady(post),
     hasContent: !!post.content_id,
     variantReady: variant?.status === 'ready',
+    publishingStartedAt: post.publishing_started_at ?? null,
   };
 }
+
+/** אחרי כמה זמן בפרסום מותר "שחרר פרסום תקוע" — כמו RESET_MIN_MS בשרת */
+export const STUCK_AFTER_MS = 10 * 60000;
+
+/** בפרסום מעל 10 דקות (או בלי זמן התחלה — שורה ישנה) */
+export const publishingStuck = (f, now = new Date()) => f.status === 'publishing' &&
+  (f.publishingStartedAt == null ||
+   now.getTime() - new Date(f.publishingStartedAt).getTime() >= STUCK_AFTER_MS);
 
 /** "קבע מועד חדש" גם מאשר מיד לפרסום אוטומטי? רק כשהאישור יעבור בשרת. */
 export function rescheduleApproves(f, perms) {
@@ -70,7 +79,10 @@ export function choosePrimary(f, perms, now = new Date()) {
   const past = time(f) < now.getTime();
 
   if (f.status === 'published') return NONE;
-  if (f.status === 'publishing') return perms.approve ? only('resetPublishing') : NONE;
+  // בפרסום — רק אחרי 10 דקות זה "תקוע"; לפני זה הוא כנראה עוד רץ
+  if (f.status === 'publishing') {
+    return perms.approve && publishingStuck(f, now) ? only('resetPublishing') : NONE;
+  }
   if (f.status === 'pending_approval') {
     return perms.approve ? { primary: 'approvePending', secondary: 'reject' } : NONE;
   }

@@ -343,9 +343,10 @@ r.post('/posts/:id/publish-now', requirePerm('approve'), wrap(async (req, res) =
  * משימת כשל: בודקים בעמוד אם עלה, ואז מסמנים פורסם או מפרסמים שוב.
  */
 r.post('/posts/:id/reset-publishing', requirePerm('approve'), wrap(async (req, res) => {
-  const post = await resetPublishing(req.params.id, req.user);
-  if (!post) return bad(res, 'הפוסט לא תקוע בפרסום — אין מה לאפס', 409);
-  res.json({ post });
+  const r = await resetPublishing(req.params.id, req.user);
+  if (!r) return bad(res, 'הפוסט לא תקוע בפרסום — אין מה לאפס', 409);
+  if (r.error) return bad(res, r.error, 409);
+  res.json({ post: r.post });
 }));
 
 /**

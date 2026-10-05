@@ -79,9 +79,15 @@ test('עבר המועד בערוץ אוטומטי — "קבע מועד חדש"',
   assert.equal(pick(facts({ status: 'approved', scheduled_at: PAST })).primary, 'reschedule');
 });
 
-test('בפרסום — "שחרר פרסום תקוע" עם הרשאת אישור בלבד', () => {
+test('בפרסום — "שחרר פרסום תקוע" רק אחרי 10 דקות, ורק עם הרשאת אישור', () => {
+  const old = '2026-10-05T11:45:00+03:00';   // רבע שעה לפני NOW
+  const fresh = '2026-10-05T11:55:00+03:00'; // חמש דקות לפני NOW
+  assert.equal(pick(facts({ status: 'publishing', scheduled_at: PAST, publishingStartedAt: old })).primary,
+    'resetPublishing');
+  assert.equal(pick(facts({ status: 'publishing', scheduled_at: PAST, publishingStartedAt: fresh })).primary, null);
+  // שורה ישנה בלי זמן התחלה — מותר
   assert.equal(pick(facts({ status: 'publishing', scheduled_at: PAST })).primary, 'resetPublishing');
-  assert.equal(pick(facts({ status: 'publishing' }), CONTENT).primary, null);
+  assert.equal(pick(facts({ status: 'publishing', publishingStartedAt: old }), CONTENT).primary, null);
 });
 
 test('בלי תוכן — "שייך תוכן"', () => {
@@ -149,4 +155,12 @@ test('nextFreeSlot — השעה העגולה הפנויה הבאה בערוץ', 
   // לפני שעות הפעילות — 9:00 של אותו יום
   assert.equal(nextFreeSlot({ now: new Date('2026-10-05T06:10:00+03:00') }).toISOString(),
     d('2026-10-05T09:00:00+03:00'));
+});
+
+test('resetTooSoon (שרת) — אותו סף של 10 דקות', async () => {
+  const { resetTooSoon } = await import('../src/publish/runner.js');
+  const now = new Date('2026-10-05T12:00:00+03:00');
+  assert.equal(resetTooSoon('2026-10-05T11:55:00+03:00', now), true);
+  assert.equal(resetTooSoon('2026-10-05T11:50:00+03:00', now), false);
+  assert.equal(resetTooSoon(null, now), false);
 });

@@ -6,7 +6,7 @@ import { goToTab, refreshAfterPostChange } from '../ui/refresh.js';
 import { KIND_HE, hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
 import { AUTO_PLATFORMS, choosePrimary, isMissed, nextFreeSlot, postFacts,
-         rescheduleApproves } from '../core/postActions.js';
+         publishingStuck, rescheduleApproves } from '../core/postActions.js';
 
 /* ========================= תצוגת פוסט מהלוח ========================= */
 
@@ -503,7 +503,7 @@ function menuKeys(post, f, p) {
   } else if (post.status === 'published') {
     if (p.content) menu.push('unpublish');
   } else if (post.status === 'publishing') {
-    if (p.approve) menu.push('resetPublishing');
+    if (p.approve && publishingStuck(f)) menu.push('resetPublishing');
   } else if (post.status === 'pending_approval') {
     if (p.approve) menu.push('approvePending', 'reject');
   }
@@ -677,6 +677,8 @@ export async function openPostPreview(postId) {
       ? (post.platform === 'newsletter'
           ? '<div class="pvauto">📧 התקבל ב-HUB — הניוזלטר בשליחה. הפוסט יסומן "פורסם" אוטומטית כשתושלם.</div>'
           : '<div class="pvauto">🚀 נשלח לערוץ ממש עכשיו…</div>') : ''}
+    ${post.status === 'publishing' && !publishingStuck(previewFacts) && can('approve')
+      ? '<div class="pvnote">אם זה ייתקע — "שחרר פרסום תקוע" יופיע כאן אחרי 10 דקות בפרסום.</div>' : ''}
     ${post.status === 'failed'
       ? `<div class="pvwarn"><b>הפרסום האוטומטי נכשל:</b> ${esc(post.publish_error ?? 'ללא פירוט')}
          <br>אפשר לקבוע מועד חדש ולאשר שוב, לפרסם עכשיו, או לפרסם ידנית ולסמן "פורסם".</div>` : ''}
