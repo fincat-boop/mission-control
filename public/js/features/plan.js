@@ -653,10 +653,10 @@ function campaignGrid(c) {
       const st = CELL[cell.state];
       // בקמפיין מוכן תא בלי גרסה לא נדרש, אבל אפשר לפתוח אותו ולהוסיף גרסה
       const clickable = can('content') && (cell.state !== 'not_needed' || c.complete);
-      return `<td class="cell ${st.cls}"
+      return `<td class="cell ${st.cls}${cell.warn ? ' warn' : ''}"
         ${clickable ? `data-cell="${row.index}" data-ch="${ch.id}"` : ''}
-        ${clickable ? `data-tt="${esc(ch.name)} · ${esc(st.label)}"` : ''}>
-        <span>${st.label || '—'}</span></td>`;
+        ${clickable || cell.warn ? `data-tt="${esc(ch.name)} · ${esc(cellTip(cell))}"` : ''}>
+        <span>${esc(cellLabel(cell))}</span></td>`;
     }).join('');
 
     return `<tr class="${row.past ? 'past' : ''}">
@@ -681,6 +681,14 @@ function campaignGrid(c) {
     </div>`;
 }
 
+
+/**
+ * הטקסט של תא/משבצת: "מוכן ⚠" כשהגרסה סומנה מוכנה אבל התוכן לא יעבור את
+ * בדיקת הפרסום (warn מהשרת — אותם כללים כמו בסימון, readiness.js)
+ */
+const cellLabel = (cell) =>
+  (cell.warn ? 'מוכן ⚠' : CELL[cell.state].label) || '—';
+const cellTip = (cell) => cell.warn ?? CELL[cell.state].label;
 
 /** שורת הסבר מתחת לרשת של קמפיין שסומן מוכן */
 function completeLine(c) {
@@ -849,7 +857,8 @@ function generalBoard(c) {
           ? `<span class="gt">${esc(item.title)}${item.assets.length
               ? ` <span class="gclip">📎${item.assets.length}</span>` : ''}</span>${linkLine(c, item)}`
           : (s.past ? 'לא נכתב' : 'לכתוב')}</span>
-        <span class="gst ${st.cls}"><i></i>${esc(st.label)}</span>
+        <span class="gst ${st.cls}${s.warn ? ' warn' : ''}"${
+          s.warn ? ` data-tt="${esc(s.warn)}"` : ''}><i></i>${esc(cellLabel(s))}</span>
       </li>`;
     }).join('');
 

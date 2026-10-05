@@ -12,9 +12,10 @@ import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
 import {
-  LinkError, assetOwnerId, linkGroup, linkSlots, lockLinkScope, mediaOwner, releaseLinks, syncFrom,
-  unlink,
+  LinkError, assetOwnerId, itemAssetsSql, linkGroup, linkSlots, lockLinkScope, mediaOwner,
+  releaseLinks, syncFrom, unlink,
 } from '../links.js';
+import { contentBlocker, readyRejection } from '../publish/readiness.js';
 
 const r = Router();
 
@@ -33,6 +34,20 @@ async function slotChannelError(contentId, channelId) {
 function linkFail(res, e) {
   if (e instanceof LinkError) return res.status(e.status).json({ error: e.message, ...e.extra });
   throw e;
+}
+
+/**
+ * האם גרסה עם התוכן הזה יכולה להיות "מוכן" בערוץ הזה — אותם כללי תוכן כמו
+ * בפרסום (readiness.js). הקבצים: מה שהפריט יצא איתו בערוץ (משבצת מקושרת —
+ * של המקור). רץ לפני הכתיבה: הבקשה נשמרת (commit) גם כשהתשובה 400.
+ * @returns {Promise<string|null>} ההודעה למשתמש, או null כשמותר
+ */
+async function readyError(contentId, channelId, variant, { assets } = {}) {
+  const ch = await one('select platform from channels where id = $1', [channelId]);
+  if (!ch) return null;
+  const files = assets ?? (contentId ? await rows(itemAssetsSql('a.mime'), [contentId, channelId]) : []);
+  const reason = contentBlocker({ platform: ch.platform, variant, assets: files });
+  return reason ? readyRejection(reason) : null;
 }
 
 /** מקום במשבצת: מספר שלם 1–1000 */
@@ -68,6 +83,18 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
   const slotErr = await slotChannelError(req.params.id, req.params.channelId);
   if (slotErr) return bad(res, slotErr);
   const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
+
+  const before = await one(
+    `select body, status, meta from content_variants
+      where content_id = $1 and channel_id = $2 for update`,
+    [req.params.id, req.params.channelId]);
+  // "מוכן" נבדק מול התוכן שיישמר בפועל (מה שלא נשלח — נשאר מהקיים)
+  if (status === 'ready') {
+    const err = await readyError(req.params.id, req.params.channelId, {
+      body: b.body ?? before?.body ?? '', meta: b.meta ?? before?.meta ?? null,
+    });
+    if (err) return bad(res, err);
+  }
 
   // meta — נושא ורשימות יעד של ערוץ המייל. לא נשלח = לא נוגעים בקיים.
   const meta = b.meta != null ? JSON.stringify(b.meta) : null;
@@ -312,6 +339,13 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     }
   }
 
+  // משבצת חדשה שנשלחת כ"מוכן" — אותם כללי תוכן כמו בעריכת גרסה. אין לה
+  // עדיין קבצים (הם עולים אחרי היצירה), ולכן הטופס שולח קודם טיוטה כשיש קבצים.
+  if (slotChannel && b.status === 'ready') {
+    const err = await readyError(null, slotChannel, { body: b.body ?? '' }, { assets: [] });
+    if (err) return bad(res, err);
+  }
+
   // ready_channel_ids חייב המרת טיפוס מפורשת: בלעדיה Postgres מפרש
   // את ברירת המחדל '{}' כטקסט ונופל על אי-התאמה ל-integer[]
   // שני משתמשים שממלאים את אותה משבצת באותו רגע: האינדקס הייחודי תופס,
@@ -340,14 +374,21 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   }
 
   // זווית חדשה נפתחת עם גרסת טיוטה לכל מדיה שביקשו — הניסוח נכתב לכל אחת בנפרד
+  // טקסט שנשלח עם הזווית נכנס לכל גרסה, אבל "מוכן" רק בערוץ שהטקסט לבדו
+  // מספיק לו (אינסטגרם בלי מדיה, ניוזלטר בלי נושא — נשארים טיוטה)
   const channelIds = parseIdList(b.channel_ids ?? b.ready_channel_ids);
   if (channelIds.length) {
+    const platforms = new Map((await rows(
+      'select id, platform from channels where id = any($1::int[])', [channelIds]))
+      .map((ch) => [ch.id, ch.platform]));
     await tx(async (client) => {
       for (const channelId of channelIds) {
+        const ready = !!b.body && !contentBlocker({
+          platform: platforms.get(channelId), variant: { body: b.body }, assets: [] });
         await client.query(
           `insert into content_variants (content_id, channel_id, body, status)
            values ($1,$2,coalesce($3,''),$4) on conflict do nothing`,
-          [c.id, channelId, b.body ?? null, b.body ? 'ready' : 'draft']
+          [c.id, channelId, b.body ?? null, ready ? 'ready' : 'draft']
         );
       }
     });
@@ -379,6 +420,21 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
           and sort_order = $3 and id <> $4`,
       [current.campaign_id, current.slot_channel_id, b.sort_order, current.id]);
     if (taken) return bad(res, 'המשבצת תפוסה', 409);
+  }
+
+  // משבצת שנשמרת כ"מוכן" (או נשארת "מוכן" וטקסט שלה משתנה) — אותם כללי
+  // תוכן כמו בעריכת גרסה
+  if (current.slot_channel_id && !leavingSlot && (b.body !== undefined || b.status !== undefined)) {
+    const v = await one(
+      'select body, status, meta from content_variants where content_id = $1 and channel_id = $2',
+      [current.id, current.slot_channel_id]);
+    const status = ['ready', 'draft'].includes(b.status) ? b.status : (v?.status ?? 'draft');
+    if (status === 'ready') {
+      const err = await readyError(current.id, current.slot_channel_id, {
+        body: b.body !== undefined ? (b.body ?? '') : (v?.body ?? ''), meta: v?.meta ?? null,
+      });
+      if (err) return bad(res, err);
+    }
   }
 
   // מעבר לקמפיין אחר גורר איתו את נקודת הקצה שלו

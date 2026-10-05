@@ -1138,3 +1138,8 @@ details.item summary .epstate { width: 48px; }
 }
 /* שינוי בבלוק החיבור שעוד לא נשמר */
 button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
+
+/* ========================= גל 4: הפקת תוכן ========================= */
+
+/* "מוכן ⚠" — סומן מוכן, אבל התוכן לא יעבור את בדיקת הפרסום */
+.cgrid td.cell.ok.warn, .gst.ok.warn { color: var(--st-warn); }

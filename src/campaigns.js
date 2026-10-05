@@ -2,6 +2,7 @@ import { rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
+import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 
 /**
@@ -85,6 +86,21 @@ export function isCompleteMode(campaign, content) {
             content.length);
 }
 
+/**
+ * תא "מוכן" שהתוכן שלו לא יעבור את בדיקת הפרסום (אותם כללים — readiness.js),
+ * למשל גרסה שסומנה לפני שהבדיקה נוספה, או שהקובץ שלה נמחק אחר כך. מחזיר את
+ * הסיבה, אחרת null. הקבצים: המשותפים + של הגרסה; במשבצת (גרסה אחת) ובמשבצת
+ * מקושרת (הקבצים של המקור) — כולם.
+ */
+export function readyWarn(item, v, ch) {
+  if (!item || v?.status !== 'ready') return null;
+  const all = item.variant_assets ?? [];
+  const own = item.linked_to_id || item.slot_channel_id
+    ? all : all.filter((a) => a.variant_id === v.id);
+  return contentBlocker({ platform: ch.platform, variant: v,
+                          assets: [...(item.assets ?? []), ...own] });
+}
+
 /** לפי sort_order ואז id — הסדר שבו הפריטים נפרסים על התקופה */
 const byOrder = (a, b) => (a.sort_order - b.sort_order) || (a.id - b.id);
 
@@ -134,6 +150,7 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
         variant_id: v?.id ?? null,
         state,
         has_text: !!v?.body,
+        warn: readyWarn(item, v, ch),
       };
     });
 
@@ -182,6 +199,7 @@ function completeAnglesGrid(campaign, content, campaignChannels, today) {
         variant_id: v?.id ?? null,
         state,
         has_text: !!v?.body,
+        warn: readyWarn(item, v, ch),
       };
     });
     // index = sort_order של הזווית: הלחיצה בממשק מוצאת לפיו את הפריט
@@ -247,6 +265,7 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
         content: item,
         variant_id: v?.id ?? null,
         has_text: !!v?.body,
+        warn: readyWarn(item, v, ch),
       };
     });
 
@@ -286,7 +305,8 @@ function completeGeneralGrid(campaign, content, campaignChannels, today) {
       const date = angleDate(campaign, i, mine.length);
       // index = sort_order: הלחיצה בממשק מוצאת לפיו את הפריט
       return { index: item.sort_order, date, past: date < today, extra: false, state,
-               content: item, variant_id: v?.id ?? null, has_text: !!v?.body };
+               content: item, variant_id: v?.id ?? null, has_text: !!v?.body,
+               warn: readyWarn(item, v, ch) };
     });
 
     needs[ch.id] = colRequired;
