@@ -59,10 +59,11 @@ async function deletePrefix(prefix) {
   for (const k of keys) await deleteObject(k);
 }
 
+/** @returns {Promise<'ok'|'skipped'>} — לרישום מצב השכבה (backup-status.js) */
 export async function fullBackup(dump) {
   if (!r2Ready()) {
     console.log('R2 לא מוגדר — מדלג על גיבוי מלא');
-    return;
+    return 'skipped';
   }
 
   const now = new Date(dump.created_at);
@@ -83,6 +84,7 @@ export async function fullBackup(dump) {
     for (const p of stale) await deletePrefix(p);
     if (stale.length) console.log(`  ${stale.length} גיבויי ${tier} ישנים/חלקיים נמחקו מ-R2`);
   }
+  return 'ok';
 }
 
 /**

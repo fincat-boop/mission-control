@@ -50,7 +50,7 @@ export async function renderManage() {
       ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
     </div>
 
-    ${systemGroup(users, settings, backupsRes?.backups ?? null, ro)}`;
+    ${systemGroup(users, settings, backupsRes, ro)}`;
 
   wireManage(ro);
 }
@@ -248,7 +248,8 @@ const APPROVE_HINT = 'אישור פוסטים לפרסום אוטומטי ופר
  * משתמשים ← users; כללי המנוע גלויים לכולם וניתנים לעריכה רק עם settings
  * (PATCH /settings), כמו ערוצים ונקודות קצה; גיבויים ← settings (GET /backups).
  */
-function systemGroup(users, settings, backups, ro) {
+function systemGroup(users, settings, backupsRes, ro) {
+  const backups = backupsRes?.backups ?? null;
   const rows = users.map((u) => {
     const cell = (perm) => u.is_owner
       ? '✓'
@@ -311,23 +312,54 @@ function systemGroup(users, settings, backups, ro) {
           </div>
         </div>
       </details>
-      ${backups ? `<details class="item">
-        <summary><b>גיבויים אוטומטיים</b>
-          <span class="info">${backups.length
-            ? `${backups.length} שמורים · אחרון ${fmtDate(ymd(new Date(backups[0].created_at)))}`
-            : 'עוד לא רץ גיבוי'}</span></summary>
-        <div class="ibody">
-          <p class="sub">רץ אוטומטית כל 24 שעות, שומר עותק של כל הטבלאות בתוך ה-DB עצמו
-            (בלי קבצים מצורפים — הם כבר בטוחים ב-content_assets). מגן מפני טעות אפליקטיבית,
-            לא מפני אובדן הדיסק עצמו — לזה יש את הגיבוי המובנה של Railway ל-Postgres.</p>
-          ${backups.length ? `<table class="utable"><thead><tr><th>מתי</th><th>שורות</th></tr></thead>
-            <tbody>${backups.slice(0, 10).map((b) => `<tr>
-              <td>${esc(new Date(b.created_at).toLocaleString('he-IL'))}</td>
-              <td>${b.row_count}</td></tr>`).join('')}</tbody></table>` : ''}
-        </div>
-      </details>` : ''}
+      ${backups ? backupsItem(backups, backupsRes.layers ?? []) : ''}
     </div>
   </div>`;
+}
+
+const whenHe = (d) => new Date(d).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
+
+/** שורת מצב לשכבת גיבוי אחת: נקודה + טקסט — הצליח מתי / נכשל ולמה / לא מוגדר */
+function backupLayerLine(l) {
+  let tone;
+  let text;
+  if (!l.configured || l.last_result === 'skipped') {
+    tone = 'muted';
+    text = 'לא מוגדר — ההגדרה אצל המפתח';
+  } else if (!l.last_result) {
+    tone = 'muted';
+    text = 'עוד לא רץ מאז העלייה האחרונה';
+  } else if (l.last_result === 'ok') {
+    tone = 'good';
+    text = `הצליח · ${whenHe(l.last_attempt_at)}`;
+  } else {
+    tone = 'crit';
+    text = `נכשל · ${whenHe(l.last_attempt_at)}${l.last_error ? ` — ${l.last_error}` : ''}` +
+      (l.last_success_at ? ` · הצלחה אחרונה ${whenHe(l.last_success_at)}` : '');
+  }
+  return `<div class="bkline"><span class="dot bk-${tone}"></span>
+    <b>${esc(l.label)}</b><span>${esc(text)}</span></div>`;
+}
+
+function backupsItem(backups, layers) {
+  const failed = layers.filter((l) => l.configured && l.last_result === 'failed').length;
+  const info = failed
+    ? `${failed === 1 ? 'שכבה אחת נכשלה' : `${failed} שכבות נכשלו`}`
+    : backups.length ? `אחרון ${fmtDate(ymd(new Date(backups[0].created_at)))}` : 'עוד לא רץ גיבוי';
+  return `<details class="item">
+        <summary><b>גיבויים</b><span class="info${failed ? ' bk-warn' : ''}">${esc(info)}</span></summary>
+        <div class="ibody">
+          <p class="sub">המערכת מגבה את עצמה לבד פעם ביממה, לכמה מקומות. העותק בתוך המסד
+            מאפשר לחזור אחורה אחרי מחיקה בטעות. העותקים בחוץ שומרים על הנתונים גם אם השרת
+            עצמו נפגע — והגיבוי המלא הוא היחיד שכולל גם את הקבצים. שחזור נעשה על ידי המפתח.</p>
+          <div class="bklayers">${layers.map(backupLayerLine).join('')}</div>
+          ${backups.length ? `<details class="bkhist"><summary>העותקים בתוך המסד (${backups.length})</summary>
+            <table class="utable"><thead><tr><th>מתי</th><th>שורות</th></tr></thead>
+            <tbody>${backups.slice(0, 10).map((b) => `<tr>
+              <td>${esc(new Date(b.created_at).toLocaleString('he-IL'))}</td>
+              <td>${b.row_count}</td></tr>`).join('')}</tbody></table></details>` : ''}
+        </div>
+      </details>`;
 }
 
 /**

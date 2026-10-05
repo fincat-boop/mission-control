@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { autoFill, bad, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { PUBLIC_USER_COLS, hashPassword, requirePerm } from '../auth.js';
+import { readBackupLayers } from '../backup-status.js';
 
 const r = Router();
 
@@ -30,12 +31,16 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
 
 /* ========================= גיבויים ========================= */
 
-/** מטא-דאטה בלבד — בלי ה-payload עצמו, כדי שהרשימה תהיה קלה */
+/**
+ * מטא-דאטה בלבד — בלי ה-payload עצמו, כדי שהרשימה תהיה קלה. layers = מצב
+ * הניסיון האחרון של כל שכבת גיבוי (בתוך המסד / Drive / R2), לתצוגה בניהול.
+ */
 r.get('/backups', requirePerm('settings'), wrap(async (_req, res) => {
-  const list = await rows(
-    'select id, created_at, row_count from backups order by created_at desc'
-  );
-  res.json({ backups: list });
+  const [list, layers] = await Promise.all([
+    rows('select id, created_at, row_count from backups order by created_at desc'),
+    readBackupLayers(),
+  ]);
+  res.json({ backups: list, layers });
 }));
 
 /* ========================= משתמשים ========================= */

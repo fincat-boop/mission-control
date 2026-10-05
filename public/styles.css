@@ -836,3 +836,15 @@ button.btn.bell .badge {
 .choice-dlg { width: min(440px, 92vw); }
 .choice-dlg .choice-msg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 16px; }
 .choice-dlg .btn.crit { color: var(--st-crit); }
+
+/* ניהול → גיבויים: שורת מצב לכל שכבה — נקודה + טקסט (manage.js backupsItem) */
+.bklayers { display: grid; gap: 8px; margin: 12px 0; }
+.bkline { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.bkline b { font-weight: 600; white-space: nowrap; }
+.bkline span:last-child { color: var(--ink-2); }
+.bkline .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; align-self: center; }
+.dot.bk-good { background: var(--st-good); }
+.dot.bk-crit { background: var(--st-crit); }
+.dot.bk-muted { background: var(--muted); }
+.info.bk-warn { color: var(--st-warn); }
+.bkhist summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); margin-bottom: 8px; }

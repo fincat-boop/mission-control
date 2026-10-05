@@ -4,6 +4,7 @@ import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
 import { weekMeta } from './board.js';
 import { closeResolvedTasks } from './task-lifecycle.js';
+import { recordBackupLayer } from './backup-status.js';
 import {
   TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, mediaSweepEnabled,
   orgMediaPrefix, pickOrphans,
@@ -47,28 +48,53 @@ async function logSystem(action, entity, entity_id, summary, meta = null) {
  * ההערה ב-schema.sql. שומר את ה-N האחרונים בלבד.
  */
 export async function backupNow() {
-  const dump = await buildDump();
+  // כל שכבה רושמת את תוצאתה (backup_status) — כשל כבר לא נשאר רק בלוג
+  let dump;
+  try {
+    dump = await buildDump();
+  } catch (e) {
+    // בלי dump אף שכבה לא יכולה לרוץ
+    const why = `שליפת הנתונים לגיבוי נכשלה: ${e.message}`;
+    for (const layer of ['db', 'drive', 'r2']) await recordBackupLayer(layer, 'failed', why);
+    throw e;
+  }
   const rowCount = Object.values(dump.tables).reduce((s, r) => s + r.length, 0);
 
-  await query(
-    `insert into backups (row_count, payload) values ($1, $2)`,
-    [rowCount, JSON.stringify(dump)]
-  );
-  const pruned = await rows(
-    `delete from backups
-      where id not in (select id from backups order by created_at desc limit $1)
-      returning id`,
-    [BACKUP_RETENTION]
-  );
-
-  console.log(`גיבוי אוטומטי נשמר: ${rowCount} שורות` +
-    (pruned.length ? `, ${pruned.length} גיבויים ישנים נמחקו` : ''));
-  await logSystem('create', 'backup', null, `גיבוי אוטומטי — ${rowCount} שורות`);
+  try {
+    await query(
+      `insert into backups (row_count, payload) values ($1, $2)`,
+      [rowCount, JSON.stringify(dump)]
+    );
+    const pruned = await rows(
+      `delete from backups
+        where id not in (select id from backups order by created_at desc limit $1)
+        returning id`,
+      [BACKUP_RETENTION]
+    );
+    console.log(`גיבוי אוטומטי נשמר: ${rowCount} שורות` +
+      (pruned.length ? `, ${pruned.length} גיבויים ישנים נמחקו` : ''));
+    await logSystem('create', 'backup', null, `גיבוי אוטומטי — ${rowCount} שורות`);
+    await recordBackupLayer('db', 'ok');
+  } catch (e) {
+    // הגיבוי הפנימי נכשל, אבל ה-dump קיים — השכבות החיצוניות עדיין רצות
+    console.error('גיבוי פנימי נכשל:', e.message);
+    await recordBackupLayer('db', 'failed', e.message);
+  }
 
   // כשל כאן לא אמור למנוע את הגיבוי הפנימי שכבר הצליח ונשמר למעלה
-  await offsiteBackup(dump).catch((e) => console.error('גיבוי חיצוני ל-Drive נכשל:', e.message));
+  await offsiteBackup(dump)
+    .then((r) => recordBackupLayer('drive', r === 'skipped' ? 'skipped' : 'ok'))
+    .catch(async (e) => {
+      console.error('גיבוי חיצוני ל-Drive נכשל:', e.message);
+      await recordBackupLayer('drive', 'failed', e.message);
+    });
   // גיבוי מלא (כולל בייטים) ל-R2 — אותה חוסן: כשל לא מפיל את מה שכבר נשמר
-  await fullBackup(dump).catch((e) => console.error('גיבוי מלא ל-R2 נכשל:', e.message));
+  await fullBackup(dump)
+    .then((r) => recordBackupLayer('r2', r === 'skipped' ? 'skipped' : 'ok'))
+    .catch(async (e) => {
+      console.error('גיבוי מלא ל-R2 נכשל:', e.message);
+      await recordBackupLayer('r2', 'failed', e.message);
+    });
 }
 
 /**
