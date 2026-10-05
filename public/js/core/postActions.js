@@ -171,3 +171,25 @@ export function nextFreeSlot({
   }
   return nextFullHour(now);
 }
+
+/**
+ * מה לשלוח ב-PATCH מלשונית העריכה: רק שדות ששונו מול מה שנטען לטופס
+ * (snapshot), לא מול הפוסט — כך מועד עם שניות שלא נגעו בו לא "מתעגל",
+ * אחראי שלא נגעו בו לא מתאפס, וערוץ ריק לא נשלח כ-0.
+ * ערכים: מחרוזות כמו בטופס (date, time, channel, assignee, title, note).
+ * @returns {{body: object} | {error: string}}
+ */
+export function editPatch(snap, v) {
+  if (!v.title) return { error: 'צריך כותרת לפוסט' };
+  const body = {};
+  if (v.date !== snap.date || v.time !== snap.time) {
+    const when = new Date(`${v.date}T${v.time}:00`);
+    if (!v.date || !v.time || Number.isNaN(when.getTime())) return { error: 'צריך תאריך ושעה' };
+    body.scheduled_at = when.toISOString();
+  }
+  if (v.channel !== snap.channel && Number(v.channel) > 0) body.channel_id = Number(v.channel);
+  if (v.assignee !== snap.assignee) body.assignee_id = v.assignee ? Number(v.assignee) : null;
+  if (v.title !== snap.title) body.title = v.title;
+  if (v.note !== snap.note) body.note = v.note || null;
+  return { body };
+}

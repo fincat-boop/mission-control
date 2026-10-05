@@ -5,7 +5,7 @@ import { can, epColor, state } from '../core/state.js';
 import { goToTab, refreshAfterPostChange } from '../ui/refresh.js';
 import { KIND_HE, hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
-import { AUTO_PLATFORMS, choosePrimary, isMissed, nextFreeSlot, postFacts,
+import { AUTO_PLATFORMS, choosePrimary, editPatch, isMissed, nextFreeSlot, postFacts,
          publishingStuck, rescheduleApproves } from '../core/postActions.js';
 
 /* ========================= תצוגת פוסט מהלוח ========================= */
@@ -355,20 +355,14 @@ function setTab(tab) {
 async function saveEdit() {
   const post = previewPost;
   if (!post) return;
-  const v = editValues();
-  if (!v.title) return toast('צריך כותרת לפוסט', true);
-  const when = new Date(`${v.date}T${v.time || '00:00'}:00`);
-  if (Number.isNaN(when.getTime())) return toast('צריך תאריך ושעה', true);
-
-  const body = {};
-  if (when.getTime() !== new Date(post.scheduled_at).getTime()) body.scheduled_at = when.toISOString();
-  if (Number(v.channel) !== post.channel_id) body.channel_id = Number(v.channel);
-  const assignee = v.assignee ? Number(v.assignee) : null;
-  if (assignee !== (post.assignee_id ?? null)) body.assignee_id = assignee;
-  if (v.title !== post.title) body.title = v.title;
-  if (v.note !== (post.note ?? '')) body.note = v.note || null;
+  if (!editSnapshot) return;
+  const patch = editPatch(editSnapshot, editValues());
+  if (patch.error) return toast(patch.error, true);
+  const { body } = patch;
   if (Object.keys(body).length === 0) return toast('אין שינויים לשמור.');
-  if (body.scheduled_at && when <= new Date()) return toast('המועד שבחרת כבר עבר — בוחרים מועד עתידי', true);
+  if (body.scheduled_at && new Date(body.scheduled_at) <= new Date()) {
+    return toast('המועד שבחרת כבר עבר — בוחרים מועד עתידי', true);
+  }
 
   const btn = $('#peSave');
   btn.disabled = true;

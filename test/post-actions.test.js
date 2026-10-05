@@ -164,3 +164,23 @@ test('resetTooSoon (שרת) — אותו סף של 10 דקות', async () => {
   assert.equal(resetTooSoon('2026-10-05T11:50:00', now), false);
   assert.equal(resetTooSoon(null, now), false);
 });
+
+test('editPatch — רק מה ששונה מול הטופס שנטען', async () => {
+  const { editPatch } = await import('../public/js/core/postActions.js');
+  const snap = { date: '2026-10-08', time: '09:00', channel: '6', assignee: '2', title: 'כותרת', note: '' };
+  // כלום לא השתנה — גוף ריק (גם אם המועד המקורי כלל שניות, הוא לא נשלח)
+  assert.deepEqual(editPatch(snap, { ...snap }), { body: {} });
+  // רק כותרת — לא נוגעים באחראי, בערוץ או במועד
+  assert.deepEqual(editPatch(snap, { ...snap, title: 'חדשה' }), { body: { title: 'חדשה' } });
+  // ניקוי אחראי מפורש — null
+  assert.deepEqual(editPatch(snap, { ...snap, assignee: '' }), { body: { assignee_id: null } });
+  // ערוץ ריק לא נשלח כ-0
+  assert.deepEqual(editPatch(snap, { ...snap, channel: '' }), { body: {} });
+  assert.deepEqual(editPatch(snap, { ...snap, channel: '7' }), { body: { channel_id: 7 } });
+  // שעה חדשה — מועד מלא
+  const r = editPatch(snap, { ...snap, time: '11:30' });
+  assert.equal(r.body.scheduled_at, new Date('2026-10-08T11:30:00').toISOString());
+  assert.equal(editPatch(snap, { ...snap, time: '' }).error, 'צריך תאריך ושעה');
+  assert.equal(editPatch(snap, { ...snap, title: '' }).error, 'צריך כותרת לפוסט');
+  assert.deepEqual(editPatch(snap, { ...snap, note: 'הערה' }), { body: { note: 'הערה' } });
+});
