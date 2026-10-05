@@ -92,12 +92,14 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
   // Object ולא Map — כמו במסלול היציאה השני, אחרת הצרכן מקבל טיפוס אחר
   // תלוי אם יצא תוכן או לא
   if (!angles) {
-    return { angles: [], needs: Object.fromEntries(needs), total_cells: 0, missing: 0, ready: 0 };
+    return { angles: [], needs: Object.fromEntries(needs), total_cells: 0, missing: 0, ready: 0,
+             drafts: 0 };
   }
 
   const byOrder = new Map(content.map((c) => [c.sort_order, c]));
   let missing = 0;
   let ready = 0;
+  let drafts = 0;
   let total = 0;
 
   const list = Array.from({ length: angles }, (_, i) => {
@@ -114,6 +116,7 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
         total += 1;
         if (state === 'ready') ready += 1;
         else missing += 1;
+        if (state === 'draft') drafts += 1;
       }
       return {
         channel_id: ch.id,
@@ -133,7 +136,8 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
     };
   });
 
-  return { angles: list, needs: Object.fromEntries(needs), total_cells: total, missing, ready };
+  return { angles: list, needs: Object.fromEntries(needs), total_cells: total, missing, ready,
+           drafts };
 }
 
 /**
@@ -141,9 +145,10 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
  * (אותו חשבון קצב × שבועות × נתח כמו ברשת הזוויות), וכל משבצת ממולאת
  * בפריט תוכן של אותה מדיה בלבד (slot_channel_id + sort_order).
  *
- * נדרש = סכום הצרכים, מוכן = משבצות שהגרסה שלהן "מוכן", חסר = משבצות
- * ריקות. טיוטה ממלאת משבצת (לא חסרה) אבל עוד לא מוכנה. פריט שמעבר לצורך
- * (העלאה מרוכזת שגלשה) מוצג כמשבצת נוספת ולא נספר.
+ * אותן הגדרות כמו ברשת הזוויות: נדרש = סכום הצרכים פחות משבצות שסומנו
+ * "לא רלוונטי", מוכן = גרסה "מוכן", חסר = נדרש − מוכן (טיוטה עדיין חסרה),
+ * וטיוטות נספרות בנפרד לתצוגה. פריט שמעבר לצורך (העלאה מרוכזת שגלשה) מוצג
+ * כמשבצת נוספת ולא נספר.
  *
  * מצב משבצת: ready / draft / not_relevant / empty
  */
@@ -152,12 +157,15 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
   const needs = channelNeeds(campaign, campaignChannels, concurrent);
   let missing = 0;
   let ready = 0;
+  let drafts = 0;
   let total = 0;
   if (needs.size === 0) {
-    return { channels: [], needs: {}, total_cells: 0, missing: 0, ready: 0 };
+    return { channels: [], needs: {}, total_cells: 0, missing: 0, ready: 0, drafts: 0 };
   }
 
   const channels = campaignChannels.map((ch) => {
+    let colRequired = 0;
+    let colReady = 0;
     const need = needs.get(ch.id) ?? 0;
     const mine = content.filter((x) => x.slot_channel_id === ch.id);
     const byOrder = new Map(mine.map((x) => [x.sort_order, x]));
@@ -168,10 +176,11 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
       const v = item?.variants?.find((x) => x.channel_id === ch.id) ?? null;
       const state = item ? (v?.status ?? 'draft') : 'empty';
       const extra = i + 1 > need;
-      if (!extra) {
+      if (!extra && state !== 'not_relevant') {
         total += 1;
-        if (state === 'ready') ready += 1;
-        if (!item) missing += 1;
+        colRequired += 1;
+        if (state === 'ready') { ready += 1; colReady += 1; } else missing += 1;
+        if (state === 'draft') drafts += 1;
       }
       const date = extra ? null : angleDate(campaign, i, need);
       return {
@@ -186,10 +195,11 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
       };
     });
 
-    return { channel_id: ch.id, channel_name: ch.name, need, slots };
+    return { channel_id: ch.id, channel_name: ch.name, need, required: colRequired,
+             ready: colReady, slots };
   });
 
-  return { channels, needs: Object.fromEntries(needs), total_cells: total, missing, ready };
+  return { channels, needs: Object.fromEntries(needs), total_cells: total, missing, ready, drafts };
 }
 
 /**
@@ -335,6 +345,8 @@ export async function campaignsWithHealth() {
       angles_written: general ? 0 : mine.length,
       required: grid.total_cells,      // סך הפוסטים שהקמפיין צריך על כל המדיות
       ready: grid.ready,
+      // טיוטות הן חלק מהחסר (לא מוכנות) — נשלחות בנפרד רק לתצוגה
+      drafts: grid.drafts,
       missing_content: grid.missing,
       needs: grid.needs,
       scheduled,

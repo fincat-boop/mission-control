@@ -575,12 +575,22 @@ function campaignHead(c) {
       </div>
       <div class="spacer"></div>
       ${campaignMenu(c)}
-      ${c.required ? `<div class="fill">
-        <b>${c.ready}</b> מתוך <b>${c.required}</b> פוסטים מוכנים
-        ${c.missing_content ? `<span class="off">— חסרים ${c.missing_content}</span>`
-                            : '<span class="ok">✓</span>'}
-      </div>` : ''}
+      ${c.required ? fillLine(c) : ''}
     </div>`;
+}
+
+/**
+ * מצב המילוי בכותרת: מוכנים · טיוטות · לא נכתבו, מתוך הנדרש. אותן הגדרות
+ * בשני המבנים — טיוטה היא עוד לא מוכנה, ו"לא נכתבו" הם תאים/משבצות ריקים.
+ */
+function fillLine(c) {
+  const empty = c.missing_content - (c.drafts ?? 0);
+  return `<div class="fill hstats">
+    <span class="gst ok"><i></i>${c.ready} מוכנים</span>
+    ${c.drafts ? `<span class="gst draft"><i></i>${c.drafts} טיוטות</span>` : ''}
+    ${empty > 0 ? `<span class="gst gap"><i></i>${empty} לא נכתבו</span>` : ''}
+    <span class="of">מתוך ${c.required}</span>
+  </div>`;
 }
 
 function campaignGrid(c) {
@@ -652,7 +662,6 @@ function campaignGrid(c) {
  */
 function generalBoard(c) {
   const cols = c.slots.map((col) => {
-    const ready = col.slots.filter((s) => !s.extra && s.state === 'ready').length;
     const rows = col.slots.map((s) => {
       const st = CELL[s.state];
       const item = s.content;
@@ -672,7 +681,7 @@ function generalBoard(c) {
       <div class="gcol-head">
         <div>
           <b>${esc(col.channel_name)}</b>
-          <span class="d">${ready} מתוך ${col.need} מוכנים</span>
+          <span class="d">${col.ready} מתוך ${col.required} מוכנים</span>
         </div>
         ${can('content') ? `<button class="btn small" data-gbulk="${col.channel_id}">העלאה מרוכזת</button>` : ''}
       </div>

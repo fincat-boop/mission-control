@@ -77,7 +77,7 @@ test('generalGridFor — משבצות לכל מדיה לפי הצורך שלה, 
   assert.equal(g.channels[1].slots[1].date, '2026-11-14');
 });
 
-test('generalGridFor — נדרש = סכום הצרכים, מוכן = גרסה מוכנה, חסר = משבצת ריקה', () => {
+test('generalGridFor — נדרש = סכום הצרכים, מוכן = גרסה מוכנה, חסר = נדרש − מוכן', () => {
   const content = [
     slotItem(1, 1, 1, 'ready'),
     slotItem(2, 1, 2, 'draft'),
@@ -86,7 +86,8 @@ test('generalGridFor — נדרש = סכום הצרכים, מוכן = גרסה �
   const g = generalGridFor(twoWeeks, content, [chA, chB], '2026-10-01', [twoWeeks]);
   assert.equal(g.total_cells, 8);
   assert.equal(g.ready, 2);
-  assert.equal(g.missing, 5);          // טיוטה ממלאת משבצת, לא חסרה
+  assert.equal(g.missing, 6);          // טיוטה עדיין חסרה — כמו בזוויות
+  assert.equal(g.drafts, 1);
   assert.equal(g.channels[0].slots[1].state, 'draft');
   assert.equal(g.channels[1].slots[0].state, 'ready');
   assert.equal(g.channels[1].slots[1].state, 'empty');
@@ -200,4 +201,29 @@ test('resolvePeriod — open: סוף ריק, רק בקמפיין לפי זווי
   assert.ok(resolvePeriod({ starts_on: '2026-11-01', period: 'open' },
     { ...legacy, structure: 'general' }).error);
   assert.ok(resolvePeriod({ starts_on: '2026-11-01', period: 'open', structure: 'general' }).error);
+});
+
+test('generalGridFor — קמפיין שכולו טיוטות לא "מלא"; לא רלוונטי יוצא מהנדרש', () => {
+  const drafts = [slotItem(1, 2, 1, 'draft'), slotItem(2, 2, 2, 'draft')];
+  const g = generalGridFor(twoWeeks, drafts, [chB], '2026-10-01', [twoWeeks]);
+  assert.equal(g.total_cells, 2);
+  assert.equal(g.ready, 0);
+  assert.equal(g.missing, 2);
+  assert.equal(g.drafts, 2);
+
+  const na = [slotItem(1, 2, 1, 'not_relevant'), slotItem(2, 2, 2, 'ready')];
+  const h = generalGridFor(twoWeeks, na, [chB], '2026-10-01', [twoWeeks]);
+  assert.equal(h.total_cells, 1);
+  assert.equal(h.ready, 1);
+  assert.equal(h.missing, 0);
+  assert.equal(h.channels[0].required, 1);
+});
+
+test('gridFor — טיוטות נספרות לתצוגה, וגם בתוך החסר', () => {
+  const camp = { ...twoWeeks, structure: 'angles' };
+  const angle = { id: 1, sort_order: 1, variants: [
+    { id: 1, channel_id: 1, status: 'ready' }, { id: 2, channel_id: 2, status: 'draft' }] };
+  const g = gridFor(camp, [angle], [chA, chB], '2026-10-01', [camp]);
+  assert.equal(g.drafts, 1);
+  assert.equal(g.missing, g.total_cells - g.ready);
 });
