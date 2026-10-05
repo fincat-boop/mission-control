@@ -6,7 +6,7 @@ import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
   newMediaKey, uploadSignedHeaders, validateSignRequest, verifyUploaded,
 } from '../media.js';
-import { angleCount, channelNeeds } from '../campaigns.js';
+import { angleCount, channelNeeds, nextSlots } from '../campaigns.js';
 import { analyzeImport, runImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
@@ -101,6 +101,10 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
 }));
 
 r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  // התוכן נשאר ומתנתק (on delete set null). משבצת-מדיה בלי קמפיין היא
+  // סתם תוכן שוטף, ולכן גם השיוך למשבצת יורד.
+  await query('update content_items set slot_channel_id = null where campaign_id = $1',
+    [req.params.id]);
   await query('delete from campaigns where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });
@@ -152,20 +156,36 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     return bad(res, 'תוכן שלא משויך לקמפיין צריך נקודת קצה');
   }
   b.endpoint_id = endpointId;
+
+  // קמפיין כללי: הפריט ממלא משבצת של מדיה אחת, ולא נפרש על כל המדיות
+  const campaign = b.campaign_id
+    ? await one('select id, structure from campaigns where id = $1', [b.campaign_id]) : null;
+  const slotChannel = campaign?.structure === 'general' ? Number(b.slot_channel_id) : null;
+  if (campaign?.structure === 'general') {
+    const onCampaign = slotChannel && await one(
+      'select 1 from campaign_channels where campaign_id = $1 and channel_id = $2',
+      [campaign.id, slotChannel]);
+    if (!onCampaign) return bad(res, 'בקמפיין כללי צריך לבחור מדיה מהמדיות של הקמפיין');
+  }
+
   // משבצת מפורשת מנצחת (מילוי משבצת מהציר). בלעדיה — סוף התור.
+  // בזוויות המשבצת היא שורה ברשת; בכללי — מקום ברשימה של מדיה אחת.
   let nextOrder = 0;
   if (b.campaign_id) {
     if (b.sort_order != null) {
       const taken = await one(
-        'select 1 from content_items where campaign_id = $1 and sort_order = $2',
-        [b.campaign_id, b.sort_order]
+        `select 1 from content_items
+          where campaign_id = $1 and sort_order = $2
+            and slot_channel_id is not distinct from $3`,
+        [b.campaign_id, b.sort_order, slotChannel]
       );
       if (taken) return bad(res, 'המשבצת הזו כבר תפוסה');
       nextOrder = Number(b.sort_order);
     } else {
       nextOrder = (await one(
-        'select coalesce(max(sort_order),0) + 1 as n from content_items where campaign_id = $1',
-        [b.campaign_id]
+        `select coalesce(max(sort_order),0) + 1 as n from content_items
+          where campaign_id = $1 and slot_channel_id is not distinct from $2`,
+        [b.campaign_id, slotChannel]
       ))?.n ?? 1;
     }
   }
@@ -174,12 +194,25 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   // את ברירת המחדל '{}' כטקסט ונופל על אי-התאמה ל-integer[]
   const c = await one(
     `insert into content_items (endpoint_id, campaign_id, kind, title, body,
-                                ready_channel_ids, sort_order, evergreen, reuse_after_days)
+                                ready_channel_ids, sort_order, evergreen, reuse_after_days,
+                                slot_channel_id)
      values ($1,$2,$3,$4,coalesce($5,''),coalesce($6::int[],'{}'::int[]),$7,
-             coalesce($8,false),$9) returning *`,
+             coalesce($8,false),$9,$10) returning *`,
     [b.endpoint_id, b.campaign_id ?? null, b.kind, b.title, b.body ?? null,
-     b.ready_channel_ids ?? null, nextOrder, b.evergreen ?? null, b.reuse_after_days ?? null]
+     slotChannel ? [slotChannel] : (b.ready_channel_ids ?? null), nextOrder,
+     b.evergreen ?? null, b.reuse_after_days ?? null, slotChannel]
   );
+
+  if (slotChannel) {
+    // הגרסה היחידה של הפריט — לאותה מדיה. הטקסט שלה הוא הטקסט של הפריט.
+    await query(
+      `insert into content_variants (content_id, channel_id, body, status)
+       values ($1,$2,coalesce($3,''),$4)`,
+      [c.id, slotChannel, b.body ?? null, b.status === 'ready' ? 'ready' : 'draft']
+    );
+    const engine = await autoFill(b.week);
+    return res.status(201).json({ content: c, engine });
+  }
 
   // זווית חדשה נפתחת עם גרסת טיוטה לכל מדיה שביקשו — הניסוח נכתב לכל אחת בנפרד
   const channelIds = parseIdList(b.channel_ids ?? b.ready_channel_ids);
@@ -200,13 +233,38 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
 
 r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   const b = { ...req.body };
+  const current = await one('select id, campaign_id, slot_channel_id from content_items where id = $1',
+    [req.params.id]);
+  if (!current) return bad(res, 'לא נמצא תוכן כזה', 404);
+
   // מעבר לקמפיין אחר גורר איתו את נקודת הקצה שלו
-  if (b.campaign_id) {
-    const owner = await one('select endpoint_id from campaigns where id = $1', [b.campaign_id]);
+  if (b.campaign_id && b.campaign_id !== current.campaign_id) {
+    const owner = await one('select endpoint_id, structure from campaigns where id = $1',
+      [b.campaign_id]);
     if (owner) b.endpoint_id = owner.endpoint_id;
+    // זווית לא נכנסת לקמפיין כללי ומשבצת-מדיה לא נכנסת לקמפיין זוויות:
+    // אין לה מקום ברשת של המבנה האחר, והיא הייתה נעלמת מהמסך
+    if (owner && (owner.structure === 'general') !== !!current.slot_channel_id) {
+      return bad(res, owner.structure === 'general'
+        ? 'אי אפשר להעביר זווית לקמפיין כללי'
+        : 'אי אפשר להעביר תוכן של משבצת לקמפיין לפי זוויות');
+    }
   }
   const c = await updateById('content_items', CONTENT_FIELDS, req.params.id, b);
-  if (!c) return bad(res, 'לא נמצא תוכן כזה', 404);
+
+  // משבצת בקמפיין כללי: הטקסט והמצב נשמרים גם על הגרסה היחידה שלה,
+  // כדי שהטופס הפשוט יישמר בבקשה אחת
+  if (c.slot_channel_id && (b.body !== undefined || b.status !== undefined)) {
+    await query(
+      `insert into content_variants (content_id, channel_id, body, status)
+       values ($1,$2,coalesce($3,''),coalesce($4,'draft'))
+       on conflict (content_id, channel_id)
+         do update set body = coalesce($3, content_variants.body),
+                       status = coalesce($4, content_variants.status)`,
+      [c.id, c.slot_channel_id, b.body !== undefined ? (b.body ?? '') : null,
+       ['ready', 'draft'].includes(b.status) ? b.status : null]
+    );
+  }
   const engine = await autoFill(b.week);
   res.json({ content: c, engine });
 }));
@@ -422,6 +480,9 @@ async function bulkAngles(req, res, files, attach) {
 
   const kind = ['promo', 'value', 'hybrid'].includes(req.body?.kind)
     ? req.body.kind : 'value';
+  if (campaign.structure === 'general') {
+    return bulkGeneral(req, res, campaign, kind, files, attach);
+  }
   const channelIds = parseIdList(req.body?.ready_channel_ids);
 
   const existing = await rows(
@@ -477,6 +538,70 @@ async function bulkAngles(req, res, files, attach) {
   });
 }
 
+/**
+ * העלאה מרוכזת לקמפיין כללי: לעמודה של מדיה אחת (channel_id). כל קובץ
+ * ממלא את המשבצת הפנויה הבאה של המדיה הזו, עם גרסת טיוטה אחת — לאותה
+ * מדיה בלבד. כשהמשבצות נגמרות ממשיכים אחריהן, כמו בזוויות.
+ */
+async function bulkGeneral(req, res, campaign, kind, files, attach) {
+  const channelId = Number(req.body?.channel_id);
+  const myChannels = await rows(
+    `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
+      where cc.campaign_id = $1 order by ch.sort_order, ch.id`,
+    [campaign.id]
+  );
+  if (!myChannels.some((c) => c.id === channelId)) {
+    return bad(res, 'בקמפיין כללי ההעלאה המרוכזת היא למדיה אחת מהמדיות של הקמפיין');
+  }
+
+  // אותו חשבון בדיוק כמו המסך (campaignsWithHealth) — כולל הנתח שנגזר
+  // מהקמפיינים החופפים — כדי שהקבצים ימלאו את המשבצות שהמשתמש רואה
+  const concurrent = await rows('select * from campaigns');
+  const need = channelNeeds(campaign, myChannels, concurrent).get(channelId) ?? null;
+
+  const existing = await rows(
+    'select sort_order from content_items where campaign_id = $1 and slot_channel_id = $2',
+    [campaign.id, channelId]
+  );
+  const slots = nextSlots(need, existing.map((x) => x.sort_order), files.length);
+
+  const created = [];
+  await tx(async (client) => {
+    for (const [i, f] of files.entries()) {
+      const slot = slots[i];
+      const item = (await client.query(
+        `insert into content_items (endpoint_id, campaign_id, kind, title,
+                                    ready_channel_ids, sort_order, slot_channel_id)
+         values ($1,$2,$3,$4,$5::int[],$6,$7) returning *`,
+        [campaign.endpoint_id, campaign.id, kind, titleFromFilename(f.filename),
+         [channelId], slot, channelId]
+      )).rows[0];
+      await client.query(
+        `insert into content_variants (content_id, channel_id, status) values ($1,$2,'draft')`,
+        [item.id, channelId]
+      );
+      await attach(client, item.id, i);
+      created.push({ id: item.id, title: item.title, slot });
+    }
+  });
+
+  res.status(201).json({
+    created,
+    filled_slots: created.filter((c) => need === null || c.slot <= need).length,
+    overflow: created.filter((c) => need !== null && c.slot > need).length,
+  });
+}
+
+/** ייבוא וניתוח יוצרים זוויות — בקמפיין כללי אין להן מקום */
+async function anglesOnly(req, res) {
+  const c = await one('select structure from campaigns where id = $1', [req.params.id]);
+  if (c?.structure === 'general') {
+    bad(res, 'ייבוא מטבלה זמין רק בקמפיין לפי זוויות');
+    return false;
+  }
+  return true;
+}
+
 /** העלאה מרוכזת — multipart, הבייטים נשמרים במסד */
 r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
   wrap(async (req, res) => {
@@ -530,6 +655,7 @@ r.post('/campaigns/:id/bulk/media', requirePerm('content'), wrap(async (req, res
  * ואז ביצוע — כדי שאף אחד לא יטעין 200 שורות בלי לראות מה ייווצר.
  */
 r.post('/campaigns/:id/import/preview', requirePerm('content'), wrap(async (req, res) => {
+  if (!(await anglesOnly(req, res))) return;
   try {
     res.json(await analyzeImport(req.params.id, req.body?.text));
   } catch (e) {
@@ -543,6 +669,7 @@ r.post('/campaigns/:id/import/preview', requirePerm('content'), wrap(async (req,
  */
 r.post('/campaigns/:id/import/analyze', requirePerm('content'), upload.single('file'),
   wrap(async (req, res) => {
+    if (!(await anglesOnly(req, res))) return;
     if (!assistantReady()) {
       return bad(res, 'הניתוח לא זמין — חסר מפתח API בהגדרות השרת', 503);
     }
@@ -559,6 +686,7 @@ r.post('/campaigns/:id/import/analyze', requirePerm('content'), upload.single('f
   }));
 
 r.post('/campaigns/:id/import', requirePerm('content'), wrap(async (req, res) => {
+  if (!(await anglesOnly(req, res))) return;
   try {
     res.status(201).json(await runImport(req.params.id, req.body?.text));
   } catch (e) {

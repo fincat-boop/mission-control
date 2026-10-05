@@ -193,6 +193,19 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
 }
 
 /**
+ * לאילו משבצות נכנסים count קבצים חדשים: קודם המשבצות הפנויות עד הצורך,
+ * לפי הסדר, ואחר כך אחרי המשבצת הגבוהה ביותר (תפוסה או נדרשת).
+ * need = null (אין תאריכים) → הכול בסוף התור.
+ */
+export function nextSlots(need, takenOrders, count) {
+  const taken = new Set(takenOrders);
+  const free = [];
+  for (let i = 1; need != null && i <= need; i += 1) if (!taken.has(i)) free.push(i);
+  let overflowFrom = Math.max(0, ...takenOrders, need ?? 0);
+  return Array.from({ length: count }, () => free.shift() ?? (overflowFrom += 1));
+}
+
+/**
  * האם מותר לשנות את מבנה הקמפיין. מותר רק כל עוד אין לו תוכן — אחרת
  * זוויות היו נשארות בלי מקום ברשימות של "כללי", ולהפך.
  * @returns {string|null} הודעת שגיאה, או null כשמותר

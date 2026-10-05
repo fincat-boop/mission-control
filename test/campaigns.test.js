@@ -173,3 +173,22 @@ test('resolvePeriod — תאריכים בלי תקופה (ציר האסטרטג�
   assert.deepEqual(resolvePeriod({ starts_on: '2026-11-16', ends_on: '2026-12-21' }),
     { period: 'custom', ends_on: '2026-12-21' });
 });
+
+import { nextSlots } from '../src/campaigns.js';
+
+test('nextSlots — ממלא משבצות פנויות לפי הסדר, ואז גולש אחרי האחרונה', () => {
+  assert.deepEqual(nextSlots(4, [], 2), [1, 2]);
+  assert.deepEqual(nextSlots(4, [1, 3], 3), [2, 4, 5]);
+  assert.deepEqual(nextSlots(2, [1, 2], 2), [3, 4]);
+  // עודף קיים מעבר לצורך — ממשיכים אחריו ולא דורסים
+  assert.deepEqual(nextSlots(2, [1, 5], 2), [2, 6]);
+  // בלי צורך (אין תאריכים) — הכול בסוף התור
+  assert.deepEqual(nextSlots(null, [1, 2], 2), [3, 4]);
+});
+
+test('nextSlots — אף פעם לא מחזיר משבצת תפוסה או כפולה', () => {
+  const taken = [2, 3, 7];
+  const out = nextSlots(6, taken, 8);
+  assert.equal(new Set(out).size, out.length);
+  assert.ok(out.every((s) => !taken.includes(s)));
+});
