@@ -179,3 +179,90 @@ test('holeReason — אין תוכן / תוכן רק של קמפיינים מח�
   assert.match(holeReason([out, bg], '2026-11-10'), /אף גרסה לא מתאימה/);
   assert.match(holeReason([out], '2027-01-10'), /אף גרסה לא מתאימה/);
 });
+
+/* ========================= קמפיין מוכן ========================= */
+
+import { plannedDate } from '../src/engine.js';
+import { generalGridFor } from '../src/campaigns.js';
+
+/**
+ * מריץ את הלולאה של planWeek שבוע אחרי שבוע על ערוץ אחד (קצב 3 בשבוע),
+ * עם היסטוריה מצטברת — תוכן חד-פעמי שכבר שובץ לא חוזר. מחזיר מתי כל פריט
+ * שובץ.
+ */
+function runWeeks(content, anchors) {
+  const ch = channel({ max_per_week: 3 });
+  const settings = { ...SETTINGS, min_gap_days: 0 };
+  const placedAt = new Map();
+  for (const anchor of anchors) {
+    const week = weekMeta(anchor);
+    const usage = buildUsage([ch], [], settings);
+    const usedContent = new Set();
+    const pending = new Set(buildSlots(week, [ch], null));
+    const history = new Map([...placedAt].map(([id, date]) =>
+      [id, { lastByChannel: new Map([[1, date]]) }]));
+    while (pending.size) {
+      const slot = nextSlot(pending, usage, week);
+      pending.delete(slot);
+      if (!usage.channelHasRoom(slot.channel_id)) continue;
+      const pick = chooseForSlot({
+        slot, endpoints: [{ id: 1, name: 'נקודה', importance: 5 }], content, campaigns: [],
+        debts: debtsStub, usage, usedContent, lastPerPair: new Map(), settings,
+        placements: [], history, sameDay: new Set(),
+      });
+      if (!pick) continue;
+      usage.take(slot.channel_id, slot.dateKey, pick.content.kind, 10);
+      usedContent.add(`${slot.channel_id}:${pick.content.id}`);
+      history.set(pick.content.id, { lastByChannel: new Map([[1, slot.dateKey]]) });
+      placedAt.set(pick.content.id, slot.dateKey);
+    }
+  }
+  return placedAt;
+}
+
+// חודש: 1.11 (ראשון) עד 30.11; חמישה שבועות שמכסים אותו
+const NOV = ['2026-11-01', '2026-11-08', '2026-11-15', '2026-11-22', '2026-11-29'];
+const sixItems = (complete) => [1, 2, 3, 4, 5, 6].map((i) => item({
+  id: i, campaign_id: 7, slot_channel_id: 1, sort_order: i,
+  campaign_starts_on: '2026-11-01', campaign_ends_on: '2026-11-30',
+  ...(complete ? { campaign_complete_at: '2026-10-05T10:00:00Z',
+                   campaign_slot_rank: i, campaign_slot_count: 6 } : {}),
+}));
+
+test('plannedDate — אותו תאריך שהרשת מציגה (spreadDate), ורק בקמפיין מוכן', () => {
+  const items = sixItems(true);
+  const grid = generalGridFor(
+    { starts_on: '2026-11-01', ends_on: '2026-11-30', content_complete_at: 'x' },
+    items.map((x) => ({ ...x, variants: [{ id: x.id, channel_id: 1, status: 'ready' }] })),
+    [{ id: 1, name: 'ערוץ' }], '2026-10-01');
+  assert.deepEqual(items.map(plannedDate), grid.channels[0].slots.map((s) => s.date));
+  assert.equal(plannedDate(sixItems(false)[0]), null);
+  assert.equal(outsideCampaignWindow(items[1], '2026-11-06'), true);   // לפני 7.11
+  assert.equal(outsideCampaignWindow(items[1], '2026-11-07'), false);
+  assert.equal(outsideCampaignWindow(items[1], '2026-11-20'), false);  // התפספס — מותר אחר כך
+  assert.equal(outsideCampaignWindow(items[1], '2026-12-01'), true);   // אחרי סוף הקמפיין
+});
+
+test('קמפיין רגיל עם 6 פוסטים בקצב 3 בשבוע — נגמר בשבועיים הראשונים (המצב שמתקנים)', () => {
+  const at = runWeeks(sixItems(false), NOV);
+  assert.equal(at.size, 6);
+  assert.ok([...at.values()].every((d) => d < '2026-11-15'), [...at.values()].join(','));
+});
+
+test('קמפיין מוכן: 6 פוסטים בחודש נפרסים על כל התקופה, אף אחד לא לפני התאריך שלו', () => {
+  const items = sixItems(true);
+  const at = runWeeks(items, NOV);
+  assert.equal(at.size, 6);
+  for (const it of items) {
+    assert.ok(at.get(it.id) >= plannedDate(it), `${it.id}: ${at.get(it.id)} < ${plannedDate(it)}`);
+  }
+  const dates = [...at.values()].sort();
+  assert.ok(dates[5] >= '2026-11-24', dates.join(','));   // האחרון בשבוע האחרון
+  // לא יותר משניים באותו שבוע — לא נדחס לשבועות הראשונים
+  const perWeek = new Map();
+  for (const d of dates) {
+    const w = weekMeta(d).start;
+    perWeek.set(w, (perWeek.get(w) ?? 0) + 1);
+  }
+  assert.ok(Math.max(...perWeek.values()) <= 2, [...perWeek].join(' '));
+});
