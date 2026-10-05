@@ -1061,3 +1061,5 @@ details.item summary .epstate { width: 48px; }
   .setupline { flex-wrap: wrap; }
   .setupline .btn { margin-inline-start: 20px; }
 }
+/* שינוי בבלוק החיבור שעוד לא נשמר */
+button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }

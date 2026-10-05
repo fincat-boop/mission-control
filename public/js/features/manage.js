@@ -256,7 +256,8 @@ function channelItem(c, ro, conn, hubReady) {
       </section>
 
       <section class="chblock">
-        <h4>חיבור ופרסום</h4>
+        <h4>חיבור ופרסום${['facebook', 'instagram'].includes(c.platform)
+          ? ' <span class="savenote">נשמר בכפתור "שמור חיבור" · כיבוי הפרסום האוטומטי נשמר מיד</span>' : ''}</h4>
         ${connectionBlock(c, conn, ro, hubReady)}
       </section>
 
@@ -524,6 +525,42 @@ function wireManage(ro, connections) {
     b.auto_enabled = $(`[data-conn-auto="${id}"]`)?.checked ?? false;
     return b;
   };
+
+  // יש שינוי שלא נשמר בבלוק החיבור — הכפתור מסומן "שמור חיבור •"
+  const markConnDirty = (id) => {
+    const btn = $(`#manage [data-conn-save="${id}"]`);
+    if (!btn) return;
+    const saved = connections.find((c) => c.channel_id === Number(id));
+    const idInput = $(`#manage [data-conn-id-field="${id}"]`);
+    const dirty = (idInput && idInput.value.trim() !== idInput.defaultValue.trim())
+      || !!$(`#manage [data-conn-token="${id}"]`)?.value.trim()
+      || ($(`#manage [data-conn-auto="${id}"]`)?.checked ?? false) !== !!saved?.auto_enabled;
+    btn.classList.toggle('dirty', dirty);
+    btn.textContent = dirty ? 'שמור חיבור •' : 'שמור חיבור';
+  };
+  $$('#manage [data-conn-id-field], #manage [data-conn-token]').forEach((inp) =>
+    inp.addEventListener('input', () =>
+      markConnDirty(inp.dataset.connIdField ?? inp.dataset.connToken)));
+
+  // כיבוי פרסום אוטומטי לערוץ = פעולת בטיחות: נשמר מיד, בלי לחכות לכפתור.
+  // הדלקה נשארת חלק מ"שמור חיבור" (ודורשת חיבור שנבדק).
+  $$('#manage [data-conn-auto]').forEach((cb) =>
+    cb.addEventListener('change', run(async () => {
+      const id = cb.dataset.connAuto;
+      const saved = connections.find((c) => c.channel_id === Number(id));
+      if (!cb.checked && saved?.auto_enabled) {
+        try {
+          await api(`/channels/${id}/connection`,
+            { method: 'PUT', body: { auto_enabled: false } });
+        } catch (e) {
+          cb.checked = true;   // לא כובה בשרת — התיבה לא משקרת
+          throw e;
+        }
+        saved.auto_enabled = false;
+        toast('הפרסום האוטומטי כובה לערוץ.');
+      }
+      markConnDirty(id);
+    })));
 
   // מזהה, טוקן ופרסום אוטומטי לערוץ — נשמרים יחד, רק בכפתור. אחרי השמירה
   // הפוקוס עובר ל"בדוק חיבור", הצעד הבא.
