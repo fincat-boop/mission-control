@@ -108,6 +108,24 @@ do $$ begin
     check (importance between 1 and 10);
 exception when duplicate_object then null; end $$;
 
+-- התקופה שנבחרה בטופס ('1w', '2m', '5w', 'custom'). ends_on נגזר ממנה
+-- בשרת (public/js/core/period.js) ונשמר כרגיל — כל השאר ממשיך לקרוא
+-- את ends_on. null = קמפיין מלפני השדה; הטופס מסיק את התקופה מהתאריכים.
+alter table campaigns add column if not exists period text;
+do $$ begin
+  alter table campaigns add constraint campaigns_period_format
+    check (period is null or period ~ '^([0-9]{1,3}[wm]|custom)$');
+exception when duplicate_object then null; end $$;
+
+-- מבנה התוכן: angles = זווית × מדיה (רשת), general = רשימת משבצות
+-- עצמאית לכל מדיה, בלי זוויות. קמפיין קיים נשאר angles.
+alter table campaigns
+  add column if not exists structure text not null default 'angles';
+do $$ begin
+  alter table campaigns add constraint campaigns_structure_check
+    check (structure in ('angles', 'general'));
+exception when duplicate_object then null; end $$;
+
 -- על אילו מדיות הקמפיין יושב
 create table if not exists campaign_channels (
   campaign_id int not null references campaigns(id) on delete cascade,
@@ -155,6 +173,15 @@ create table if not exists content_variants (
 create index if not exists content_variants_content_idx on content_variants (content_id);
 
 create index if not exists content_campaign_idx on content_items (campaign_id, sort_order);
+
+-- קמפיין "כללי": כל פריט תוכן ממלא משבצת של מדיה אחת (sort_order = מספר
+-- המשבצת באותה מדיה), ויש לו גרסה אחת בדיוק — לאותה מדיה. בקמפיין לפי
+-- זוויות השדה ריק, והזווית נפרשת על כל המדיות כמו קודם.
+alter table content_items
+  add column if not exists slot_channel_id int references channels(id) on delete set null;
+create unique index if not exists content_general_slot_idx
+  on content_items (campaign_id, slot_channel_id, sort_order)
+  where slot_channel_id is not null;
 
 -- קבצים מצורפים לתוכן: תמונה, מסמך, כל דבר.
 -- נשמרים במסד ולא בדיסק, כדי שסקריפט הגיבוי יכסה אותם כמו כל השאר.
