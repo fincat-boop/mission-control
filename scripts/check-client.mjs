@@ -100,7 +100,7 @@ const DUP_RE = /^(?:export\s+)?(?:const|let|function)\s+([A-Za-z_$][\w$]*)/gm;
 
 const IGNORE = new Set(['JSON', 'GET', 'POST', 'PATCH', 'PUT', 'DELETE',
   'UTF', 'MB', 'KB', 'URL', 'API', 'RTL', 'LTR', 'CSS', 'HTML', 'PDF', 'CSV',
-  'TSV', 'XLSX', 'AI', 'HUB', 'HUB_API_URL', 'HUB_API_KEY']);
+  'TSV', 'XLSX', 'AI', 'HUB', 'HUB_API_URL', 'HUB_API_KEY', 'HUB_APP_URL']);
 
 const problems = [];
 const graph = new Map();   // path -> [paths]

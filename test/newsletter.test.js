@@ -11,7 +11,7 @@ import {
 } from '../src/publish/runner.js';
 import { weekApprovalReason } from '../src/routes/publish.js';
 import { moveBlocker } from '../src/routes/board.js';
-import { hubCampaignUrl, hubFillUrl, hubOrigins } from '../src/hub-mail.js';
+import { hubAppMissing, hubCampaignUrl, hubFillUrl, hubOrigins } from '../src/hub-mail.js';
 
 const NOW = new Date('2026-10-05T12:00:00+03:00');
 
@@ -196,23 +196,24 @@ test('moveBlocker — ניוזלטר שהועבר ל-HUB: משנים מועד ש
 
 /* ---------- כתובות ה-HUB ---------- */
 
-test('hubFillUrl / hubCampaignUrl — מהדשבורד (HUB_APP_URL), אחרת מה-API', () => {
-  assert.equal(hubFillUrl({ HUB_API_URL: 'https://app.hub.io/' }),
-    'https://app.hub.io/dashboard/mission-control/fill');
+test('hubFillUrl / hubCampaignUrl — רק מהדשבורד (HUB_APP_URL), בלי נפילה ל-API', () => {
+  assert.equal(hubFillUrl({ HUB_API_URL: 'https://app.hub.io/' }), null);
   assert.equal(hubFillUrl({ HUB_API_URL: 'https://app.hub.io', HUB_APP_URL: 'https://hub.io/' }),
     'https://hub.io/dashboard/mission-control/fill');
   assert.equal(hubFillUrl({}), null);
+  assert.equal(hubAppMissing({ HUB_API_URL: 'https://x', HUB_API_KEY: 'k' }), true);
+  assert.equal(hubAppMissing({ HUB_API_URL: 'https://x', HUB_API_KEY: 'k', HUB_APP_URL: 'https://y' }), false);
+  assert.equal(hubAppMissing({}), false);
   assert.equal(hubCampaignUrl('c-1', { HUB_API_URL: 'https://app.hub.io', HUB_APP_URL: 'https://hub.io' }),
     'https://hub.io/dashboard/campaigns/c-1/edit');
   assert.equal(hubCampaignUrl(null, { HUB_API_URL: 'https://app.hub.io' }), null);
 });
 
-test('hubOrigins — שני המקורות, בלי כפילויות ובלי ערכים פסולים', () => {
+test('hubOrigins — רק מקור הדשבורד; בלי HUB_APP_URL או עם ערך פסול — ריק', () => {
   assert.deepEqual(hubOrigins({ HUB_API_URL: 'https://app.hub.io/x', HUB_APP_URL: 'https://hub.io/' }),
-    ['https://hub.io', 'https://app.hub.io']);
-  assert.deepEqual(hubOrigins({ HUB_API_URL: 'https://hub.io', HUB_APP_URL: 'https://hub.io/a' }),
     ['https://hub.io']);
-  assert.deepEqual(hubOrigins({ HUB_API_URL: 'not a url' }), []);
+  assert.deepEqual(hubOrigins({ HUB_API_URL: 'https://hub.io' }), []);
+  assert.deepEqual(hubOrigins({ HUB_APP_URL: 'not a url' }), []);
 });
 
 test('shapePost — ניוזלטר שהועבר נושא את מצב ה-HUB ללוח; פוסט רגיל לא', async () => {

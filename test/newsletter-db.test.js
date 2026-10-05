@@ -425,6 +425,8 @@ test('ניוזלטר ישן (נוצר ב-HUB ע"י הרַנֶר הקודם): ט�
   const p = await post(id);
   assert.equal(p.status, 'publishing');
   assert.equal(p.hub_status, 'draft');
+  // "פתח ב-HUB" נמלא בדיעבד מהבדיקה
+  assert.equal(p.external_url, `https://hub-dashboard.example/dashboard/campaigns/${c.id}/edit`);
 });
 
 test('ה-HUB עמוס (429) — העברה ותצוגה מחזירות "נסה שוב בעוד דקה", והפוסט לא זז', { skip }, async () => {

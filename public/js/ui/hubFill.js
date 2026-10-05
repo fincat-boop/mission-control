@@ -56,7 +56,7 @@ function endSession() {
  */
 export function openHubFill({ fillUrl, origins, values, onSave, onStatus = () => {} }) {
   if (!fillUrl || !origins?.length) {
-    toast('עורך המייל של ה-HUB לא מוגדר בשרת (HUB_API_URL).', true);
+    toast('עורך ה-HUB לא מוגדר (HUB_APP_URL).', true);
     return;
   }
   endSession();
@@ -208,6 +208,9 @@ export function newsletterPostNotes(post) {
 
 /* ========================= עורך הניוזלטר ========================= */
 
+/** בלי כתובת הדשבורד אין עורך — לא פותחים חלון שלא יוכל לדבר איתנו */
+const NO_APP_URL = 'עורך ה-HUB לא מוגדר (HUB_APP_URL) — מה שכבר נשמר נשאר, אבל אי אפשר לערוך את המייל מכאן.';
+
 /** מה כותבים ליד "ערוך מייל ב-HUB" בכל שלב של חלון העורך */
 const STATUS_NOTE = {
   opening: 'העורך נפתח בחלון חדש…',
@@ -301,8 +304,11 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
       <div class="fhint">המייל נכתב בעורך של ה-HUB, על התבנית "${esc(template.name ?? '')}". הוא נפתח
         בחלון חדש, ו"שמור וחזור ללוח" שם שומר את התוכן כאן.</div>
       <div class="hubfill-acts">
-        <button type="button" class="btn small primary" id="hfOpen">ערוך מייל ב-HUB</button>
-        <span class="hubfill-note" id="hfNote" aria-live="polite"></span>
+        ${setup.fill_url
+          ? '<button type="button" class="btn small primary" id="hfOpen">ערוך מייל ב-HUB</button>'
+          : ''}
+        <span class="hubfill-note${setup.fill_url ? '' : ' bad'}" id="hfNote" aria-live="polite">${setup.fill_url
+          ? '' : esc(NO_APP_URL)}</span>
       </div></div>`;
   };
 

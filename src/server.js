@@ -16,6 +16,7 @@ import api from './routes/api.js';
 import { MAX_FILE_MB } from './routes/_shared.js';
 import { mediaReady } from './media.js';
 import { r2Host } from './r2.js';
+import { hubAppMissing } from './hub-mail.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(here, '..', 'public');
@@ -123,6 +124,10 @@ await migrate();
 
 const server = app.listen(port, () => {
   console.log(`Mission Control — מאזין על פורט ${port}`);
+  if (hubAppMissing()) {
+    console.warn('אזהרה: HUB_APP_URL לא מוגדר — עורך המייל של ה-HUB והקישור "פתח ב-HUB" לא זמינים ' +
+      '(השליחה דרך ה-HUB עצמה עובדת). בפרוד: HUB_APP_URL=https://backbone.co.il');
+  }
   // "היום", שעות עגולות וימים חסומים מחושבים בשעון התהליך — חייב להיות ישראל
   if (Intl.DateTimeFormat().resolvedOptions().timeZone !== 'Asia/Jerusalem') console.warn(`⚠ אזור הזמן של השרת הוא ${Intl.DateTimeFormat().resolvedOptions().timeZone} ולא Asia/Jerusalem — הגדירו TZ=Asia/Jerusalem, אחרת "היום" ושעות השיבוץ יזוזו`);
 });

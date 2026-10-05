@@ -750,7 +750,11 @@ async function failFromHub(post, error) {
  */
 async function saveHubStatus(post, status) {
   await bestEffort(`שמירת סטטוס ה-HUB לפוסט #${post.id} נכשלה:`, () =>
-    query('update posts set hub_status = $2, hub_polled_at = now() where id = $1', [post.id, status]));
+    // external_url נמלא גם בדיעבד: פוסט שהרַנֶר הישן יצר, או שהועבר לפני
+    // שהוגדר HUB_APP_URL — מקבל "פתח ב-HUB" ברגע שהכתובת ידועה
+    query(`update posts set hub_status = $2, hub_polled_at = now(),
+                  external_url = coalesce(external_url, $3) where id = $1`,
+          [post.id, status, hubCampaignUrl(post.external_id)]));
 }
 
 /**

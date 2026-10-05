@@ -12,10 +12,10 @@
  * משתני סביבה:
  *   HUB_API_URL — בסיס ה-HUB (למשל https://app.yourdomain.com), בלי / בסוף.
  *   HUB_API_KEY — Bearer; זהה ל-MISSION_CONTROL_API_KEY שמוגדר ב-HUB.
- *   HUB_APP_URL — (רשות) כתובת הדשבורד של ה-HUB, כשהיא שונה מ-HUB_API_URL
- *                 (למשל API ב-app.backbone.co.il והדשבורד ב-backbone.co.il).
- *                 ממנה נפתחים עורך המייל ומסך האישור, והיא המקור היחיד
- *                 שהלוח מקבל ממנו הודעות של העורך. בלי — HUB_API_URL.
+ *   HUB_APP_URL — כתובת הדשבורד של ה-HUB (בפרוד https://backbone.co.il; ה-API
+ *                 יושב בכתובת אחרת). ממנה נפתחים עורך המייל ומסך האישור, והיא
+ *                 המקור היחיד שהלוח מקבל ממנו הודעות של העורך. בלעדיה עורך
+ *                 המייל והקישור "פתח ב-HUB" לא זמינים (השליחה עצמה כן).
  * אם חסרים — hubMailReady() מחזיר false והערוץ פשוט לא זמין, כלום לא נשבר.
  */
 
@@ -23,9 +23,17 @@ export const hubMailReady = () => !!(process.env.HUB_API_URL && process.env.HUB_
 
 const base = () => String(process.env.HUB_API_URL ?? '').replace(/\/+$/, '');
 
-/** בסיס הדשבורד של ה-HUB (HUB_APP_URL, אחרת HUB_API_URL), בלי / בסוף; '' כשלא מוגדר */
+/**
+ * בסיס הדשבורד של ה-HUB (HUB_APP_URL), בלי / בסוף; '' כשלא מוגדר. בלי נפילה
+ * ל-HUB_API_URL: כתובת ה-API (Railway) לא מחזיקה את עוגיות ההתחברות של
+ * הדשבורד, וחלון שנפתח שם לא היה מדבר עם הלוח.
+ */
 export const hubAppBase = (env = process.env) =>
-  String(env.HUB_APP_URL || env.HUB_API_URL || '').trim().replace(/\/+$/, '');
+  String(env.HUB_APP_URL || '').trim().replace(/\/+$/, '');
+
+/** חיבור ה-HUB מוגדר, אבל בלי כתובת דשבורד — לאזהרה בעליית השרת */
+export const hubAppMissing = (env = process.env) =>
+  !!(env.HUB_API_URL && env.HUB_API_KEY) && !hubAppBase(env);
 
 /** עורך המייל של ה-HUB לבקרת שיגור (מילוי התבנית, חוזר ללוח ב-postMessage) */
 export const hubFillUrl = (env = process.env) =>
@@ -37,16 +45,15 @@ export const hubCampaignUrl = (campaignId, env = process.env) =>
     ? `${hubAppBase(env)}/dashboard/campaigns/${encodeURIComponent(campaignId)}/edit` : null);
 
 /**
- * המקורות (origin) שהלוח מקבל מהם הודעות של עורך המייל: הדשבורד, ובנוסף
- * כתובת ה-API — אם הדשבורד לא הוגדר בנפרד וה-HUB מפנה את הדף לכתובת אחרת,
- * ההודעה תגיע מהיעד; מה שלא ברשימה נזרק בצד הלקוח.
+ * המקורות (origin) שהלוח מקבל מהם הודעות של עורך המייל: הדשבורד בלבד
+ * (HUB_APP_URL). מה שלא ברשימה נזרק בצד הלקוח.
  */
 export function hubOrigins(env = process.env) {
-  const out = new Set();
-  for (const u of [env.HUB_APP_URL, env.HUB_API_URL]) {
-    try { if (u?.trim()) out.add(new URL(u.trim()).origin); } catch { /* כתובת לא תקינה — מדלגים */ }
+  try {
+    return hubAppBase(env) ? [new URL(hubAppBase(env)).origin] : [];
+  } catch {
+    return []; // כתובת לא תקינה
   }
-  return [...out];
 }
 
 /** שגיאה עם message ידידותי מה-HUB (הוא מחזיר {error} בעברית) + סטטוס. */
