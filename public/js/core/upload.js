@@ -57,14 +57,13 @@ function xhrSend(method, url, body, { headers = {}, onProgress } = {}) {
 }
 
 async function putToStorage(signPath, file, extra, onProgress) {
-  const { key, url } = await api(signPath, {
+  const { key, url, headers } = await api(signPath, {
     method: 'POST',
     body: { filename: file.name, mime: file.type, size: file.size, ...extra },
   });
-  const res = await xhrSend('PUT', url, file, {
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    onProgress,
-  });
+  // הכותרות חתומות ב-URL (סוג וגודל) — שולחים בדיוק את מה שהשרת חתם.
+  // Content-Length הדפדפן קובע לבד, מגודל הקובץ.
+  const res = await xhrSend('PUT', url, file, { headers: headers ?? {}, onProgress });
   if (!res.ok) throw new Error(`ההעלאה של "${file.name}" לאחסון נכשלה (${res.status})`);
   return key;
 }

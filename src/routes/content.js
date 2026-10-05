@@ -4,8 +4,7 @@ import { autoFill, bad, parseIdList, titleFromFilename, updateById, upload, wrap
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
-  newMediaKey,
-  validateSignRequest, verifyUploaded,
+  newMediaKey, uploadSignedHeaders, validateSignRequest, verifyUploaded,
 } from '../media.js';
 import { angleCount, channelNeeds } from '../campaigns.js';
 import { analyzeImport, runImport } from '../import.js';
@@ -335,7 +334,10 @@ r.post('/content/:id/uploads/sign', requirePerm('content'), wrap(async (req, res
   }
 
   const key = newMediaKey(currentOrg(), b.filename);
-  res.json({ key, url: mediaStore.presignPut(key), method: 'PUT' });
+  // הדפדפן חייב לשלוח בדיוק את הכותרות החתומות (סוג וגודל) — אחרת R2 דוחה
+  const headers = uploadSignedHeaders(b.mime, b.size);
+  res.json({ key, url: mediaStore.presignPut(key, headers), method: 'PUT',
+             headers: { 'Content-Type': headers['content-type'] } });
 }));
 
 /**
@@ -499,7 +501,10 @@ r.post('/campaigns/:id/bulk/sign', requirePerm('content'), wrap(async (req, res)
   const campaign = await one('select id from campaigns where id = $1', [req.params.id]);
   if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
   const key = newMediaKey(currentOrg(), b.filename);
-  res.json({ key, url: mediaStore.presignPut(key), method: 'PUT' });
+  // הדפדפן חייב לשלוח בדיוק את הכותרות החתומות (סוג וגודל) — אחרת R2 דוחה
+  const headers = uploadSignedHeaders(b.mime, b.size);
+  res.json({ key, url: mediaStore.presignPut(key, headers), method: 'PUT',
+             headers: { 'Content-Type': headers['content-type'] } });
 }));
 
 r.post('/campaigns/:id/bulk/media', requirePerm('content'), wrap(async (req, res) => {

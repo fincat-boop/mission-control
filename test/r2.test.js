@@ -85,3 +85,48 @@ test('enc — ASCII כמו קודם, ותו שאינו ASCII לפי בייטים
   assert.equal(enc('ä'), '%C3%A4');
   assert.equal(enc('ק'), '%D7%A7');
 });
+
+/* ========================= presign עם כותרות חתומות ========================= */
+
+test('presignParts — content-type ו-content-length נחתמים, ממוינים, ב-canonical request', async () => {
+  const { presignParts } = await import('../src/r2.js');
+  const { createHash } = await import('node:crypto');
+  const base = {
+    method: 'PUT', host: 'acct.r2.cloudflarestorage.com', bucket: 'media-bkt',
+    key: 'media/1/u/a.png', accessKey: 'AK', secretKey: 'SK',
+    amzDate: '20261005T120000Z', expiresSec: 900,
+  };
+  const { url, canonicalRequest } = presignParts({
+    ...base, headers: { 'Content-Type': 'image/png', 'content-length': 1234 },
+  });
+  const q = 'X-Amz-Algorithm=AWS4-HMAC-SHA256' +
+    '&X-Amz-Credential=AK%2F20261005%2Fauto%2Fs3%2Faws4_request' +
+    '&X-Amz-Date=20261005T120000Z&X-Amz-Expires=900' +
+    '&X-Amz-SignedHeaders=content-length%3Bcontent-type%3Bhost';
+  assert.equal(canonicalRequest, [
+    'PUT',
+    '/media-bkt/media/1/u/a.png',
+    q,
+    'content-length:1234\ncontent-type:image/png\nhost:acct.r2.cloudflarestorage.com\n',
+    'content-length;content-type;host',
+    'UNSIGNED-PAYLOAD',
+  ].join('\n'));
+  assert.ok(url.startsWith(`https://acct.r2.cloudflarestorage.com/media-bkt/media/1/u/a.png?${q}&X-Amz-Signature=`));
+
+  // ערך אחר בכותרת חתומה = חתימה אחרת (R2 ידחה PUT עם סוג/גודל שונים)
+  const sig = (h) => presignParts({ ...base, headers: h }).url.split('X-Amz-Signature=')[1];
+  const a = sig({ 'content-type': 'image/png', 'content-length': '1234' });
+  assert.equal(url.split('X-Amz-Signature=')[1], a);
+  assert.notEqual(sig({ 'content-type': 'text/html', 'content-length': '1234' }), a);
+  assert.notEqual(sig({ 'content-type': 'image/png', 'content-length': '1235' }), a);
+  assert.match(createHash('sha256').update(canonicalRequest).digest('hex'), /^[0-9a-f]{64}$/);
+});
+
+test('presignParts — בלי כותרות נוספות: SignedHeaders=host בלבד (כמו וקטור AWS)', async () => {
+  const { presignParts } = await import('../src/r2.js');
+  const { canonicalRequest } = presignParts({
+    method: 'GET', host: 'h', bucket: null, key: 'k', accessKey: 'A', secretKey: 'S',
+    amzDate: '20130524T000000Z',
+  });
+  assert.match(canonicalRequest, /\nhost:h\n\nhost\nUNSIGNED-PAYLOAD$/);
+});

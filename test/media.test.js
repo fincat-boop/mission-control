@@ -172,3 +172,16 @@ test('legacyUploadMime — סוג לא מותר עולה כ-octet-stream', async
   assert.equal(legacyUploadMime('application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 });
+
+test('uploadSignedHeaders — סוג באותיות קטנות וגודל כמחרוזת', async () => {
+  const { uploadSignedHeaders, SIGN_CONTENT_LENGTH } = await import('../src/media.js');
+  const h = uploadSignedHeaders('Image/PNG', 1234);
+  assert.equal(h['content-type'], 'image/png');
+  if (SIGN_CONTENT_LENGTH) assert.equal(h['content-length'], '1234');
+  else assert.equal('content-length' in h, false);
+});
+
+test('validateSignRequest — גודל חייב להיות שלם (נחתם כ-content-length)', async () => {
+  const { validateSignRequest } = await import('../src/media.js');
+  assert.match(validateSignRequest({ filename: 'a.png', mime: 'image/png', size: 1.5 }, 10), /גודל/);
+});

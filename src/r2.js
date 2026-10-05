@@ -112,41 +112,56 @@ export function signRequest({
 }
 
 /**
- * ליבת ה-presign (SigV4 ב-query string) — טהורה. רק host חתום
- * (X-Amz-SignedHeaders=host) והגוף UNSIGNED-PAYLOAD, כך שהדפדפן שולח
- * כל Content-Type שירצה. canonicalUri מגיע מקודד; bucket=null = virtual-host
- * (הצורה של וקטור הבדיקה של AWS), אחרת path-style כמו כל השאר כאן.
+ * ליבת ה-presign (SigV4 ב-query string) — טהורה. הגוף UNSIGNED-PAYLOAD.
+ * headers = כותרות נוספות שנחתמות מלבד host (שם באותיות קטנות → ערך), למשל
+ * content-type ו-content-length: הלקוח חייב לשלוח בדיוק אותם ערכים, אחרת
+ * החתימה לא תתאים. canonicalUri מגיע מקודד; bucket=null = virtual-host (הצורה
+ * של וקטור הבדיקה של AWS), אחרת path-style כמו כל השאר כאן.
+ * @returns {{url:string, canonicalRequest:string}}
  */
-export function presignUrl({
+export function presignParts({
   method = 'PUT', host, bucket = null, key, accessKey, secretKey, amzDate,
-  expiresSec = 900, region = REGION,
+  expiresSec = 900, region = REGION, headers = {},
 }) {
   const dateOnly = amzDate.slice(0, 8);
   const scope = `${dateOnly}/${region}/${SERVICE}/aws4_request`;
   const canonicalUri = bucket ? canonicalPath(bucket, key) : '/' + enc(key, false);
+  const all = { host };
+  for (const [k, v] of Object.entries(headers)) all[k.toLowerCase()] = String(v).trim();
+  const names = Object.keys(all).sort();
+  const signedHeaders = names.join(';');
   const query = {
     'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
     'X-Amz-Credential': `${accessKey}/${scope}`,
     'X-Amz-Date': amzDate,
     'X-Amz-Expires': String(expiresSec),
-    'X-Amz-SignedHeaders': 'host',
+    'X-Amz-SignedHeaders': signedHeaders,
   };
   const canonicalQuery = canonicalQueryOf(query);
+  const canonicalHeaders = names.map((h) => `${h}:${all[h]}\n`).join('');
   const canonicalRequest = [
-    method, canonicalUri, canonicalQuery, `host:${host}\n`, 'host', UNSIGNED,
+    method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, UNSIGNED,
   ].join('\n');
   const stringToSign = [
     'AWS4-HMAC-SHA256', amzDate, scope, sha256hex(canonicalRequest),
   ].join('\n');
   const sig = signature({ secretKey, dateOnly, region, stringToSign });
-  return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${sig}`;
+  return {
+    url: `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${sig}`,
+    canonicalRequest,
+  };
 }
 
-/** URL חתום להעלאה ישירה (PUT) מהדפדפן ל-R2, תקף expiresSec שניות */
-export function presignPut(key, { bucket, expiresSec = 900 } = {}) {
+export const presignUrl = (opts) => presignParts(opts).url;
+
+/**
+ * URL חתום להעלאה ישירה (PUT) מהדפדפן ל-R2, תקף expiresSec שניות.
+ * headers נחתמות (ראו presignParts) — הדפדפן חייב לשלוח אותן בדיוק.
+ */
+export function presignPut(key, { bucket, expiresSec = 900, headers = {} } = {}) {
   const c = config(bucket);
   return presignUrl({
-    method: 'PUT', host: c.host, bucket: c.bucket, key,
+    method: 'PUT', host: c.host, bucket: c.bucket, key, headers,
     accessKey: c.accessKey, secretKey: c.secretKey, amzDate: amzStamp(), expiresSec,
   });
 }

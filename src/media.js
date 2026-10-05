@@ -33,8 +33,23 @@ export const TRASH_DAYS = 30;
  * פעולות R2 שהמדיה נשענת עליהן — אובייקט ולא יבוא ישיר, כדי שטסטים
  * יחליפו אותן בלי רשת.
  */
+/**
+ * לחתום גם content-length בהעלאה (הגודל המוצהר) — כך R2 עצמו דוחה PUT בגודל
+ * אחר, ולא רק ה-HEAD ב-complete. דפדפנים קובעים Content-Length לבד ובדיוק.
+ * אם יתברר ש-R2 לא מקבל content-length חתום ב-presign — מכבים כאן (false),
+ * וה-HEAD ב-complete נשאר האכיפה היחידה של הגודל.
+ */
+export const SIGN_CONTENT_LENGTH = true;
+
+/** הכותרות שנחתמות ב-presigned PUT. content-type תמיד (מהרשימה הסגורה). */
+export const uploadSignedHeaders = (mime, size) => ({
+  'content-type': String(mime).toLowerCase(),
+  ...(SIGN_CONTENT_LENGTH ? { 'content-length': String(Number(size)) } : {}),
+});
+
 export const mediaStore = {
-  presignPut: (key) => presignPut(key, { bucket: process.env.R2_PUBLIC_BUCKET }),
+  presignPut: (key, headers = {}) =>
+    presignPut(key, { bucket: process.env.R2_PUBLIC_BUCKET, headers }),
   head: (key) => headObject(key, process.env.R2_PUBLIC_BUCKET),
   put: (key, body, mime) => putObject(key, body, mime, process.env.R2_PUBLIC_BUCKET),
   del: (key, bucket = process.env.R2_PUBLIC_BUCKET) => deleteObject(key, bucket),
@@ -131,7 +146,7 @@ export function validateSignRequest(b, max = MAX_MEDIA_BYTES) {
   if (typeof b.filename !== 'string' || !b.filename.trim()) return 'חסר שם קובץ';
   if (!isAllowedMime(b.mime)) return TYPE_ERROR;
   const size = Number(b.size);
-  if (!Number.isFinite(size) || size <= 0) return 'גודל הקובץ חסר או לא תקין';
+  if (!Number.isInteger(size) || size <= 0) return 'גודל הקובץ חסר או לא תקין';
   if (size > max) return `הקובץ גדול מדי — עד ${fmtLimit(max)} לקובץ`;
   return null;
 }
