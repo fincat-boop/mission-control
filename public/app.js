@@ -41,18 +41,30 @@ registerRefreshers({
   goToTab: (tab) => showTab(tab),
 });
 
+let chromeWired = false;
+let pollingWired = false;
+
+$('#bootRetry').addEventListener('click', () => boot());
 boot();
 
+/**
+ * עלייה. נכשלת לכרטיס שגיאה עם "נסה שוב" — לא למסך ריק ולא לדף הכניסה:
+ * רק תשובה של /me בלי משתמש (או 401) אומרת שצריך להתחבר. נפילת רשת או
+ * שרת היא תקלה זמנית, והכניסה לא תפתור אותה. "נסה שוב" מריץ את העלייה
+ * מחדש בלי לטעון את הדף — אם השרת למטה, טעינה הייתה מראה דף שגיאה של הדפדפן.
+ */
 async function boot() {
+  showBootError(null);
+  let me;
   try {
-    const { user, media } = await api('/me');
-    // לא מחוברים — לכניסה, ומשם חזרה לאותה תצוגה (קישור שהודבק לא הולך לאיבוד)
-    if (!user) return void (location.href = loginUrl());
-    state.me = user;
-    state.media = media ?? null;
-  } catch {
-    return void (location.href = '/login.html');
+    me = await api('/me');
+  } catch (e) {
+    return showBootError(e);
   }
+  // לא מחוברים — לכניסה, ומשם חזרה לאותה תצוגה (קישור שהודבק לא הולך לאיבוד)
+  if (!me.user) return void (location.href = loginUrl());
+  state.me = me.user;
+  state.media = me.media ?? null;
 
   const initial = (state.me.name || '?').trim().charAt(0).toUpperCase();
   $('#btnProfile').textContent = initial;
@@ -66,25 +78,50 @@ async function boot() {
     org.hidden = false;
   }
 
-  wireChrome();
+  if (!chromeWired) {
+    wireChrome();
+    chromeWired = true;
+  }
   // שחזור התצוגה מה-hash — לפני הרינדור הראשון, כדי שרענון לא יחזיר לדף הבית
   restoreView();
   $$('.tab').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.t === state.tab)));
   for (const key of TABS) $(`#${key}`).hidden = key !== state.tab;
 
-  const [{ channels }, { endpoints }, { users }] = await Promise.all([
-    api('/channels'), api('/endpoints'), api('/users'),
-  ]);
-  state.channels = channels;
-  state.endpoints = endpoints;
-  rebuildEpColors();
-  state.users = users;
+  try {
+    const [{ channels }, { endpoints }, { users }] = await Promise.all([
+      api('/channels'), api('/endpoints'), api('/users'),
+    ]);
+    state.channels = channels;
+    state.endpoints = endpoints;
+    rebuildEpColors();
+    state.users = users;
 
-  await refreshAfterPostChange();
-  // refreshAfterPostChange מצייר לוח/משימות/נתונים בלבד — טאב אחר שחזר
-  // מה-hash (ניהול, אסטרטגיה, קמפיינים) היה נשאר ריק עד לחיצה עליו
-  if (!['board', 'tasks', 'data'].includes(state.tab)) await renderTab(state.tab);
-  wirePolling();
+    await refreshAfterPostChange();
+    // refreshAfterPostChange מצייר לוח/משימות/נתונים בלבד — טאב אחר שחזר
+    // מה-hash (ניהול, אסטרטגיה, קמפיינים) היה נשאר ריק עד לחיצה עליו
+    if (!['board', 'tasks', 'data'].includes(state.tab)) await renderTab(state.tab);
+  } catch (e) {
+    return showBootError(e);
+  }
+  if (!pollingWired) {
+    wirePolling();
+    pollingWired = true;
+  }
+}
+
+/** כרטיס שגיאה במקום התוכן (e=null מסתיר אותו) */
+function showBootError(e) {
+  $('#bootErr').hidden = !e;
+  $('main').hidden = !!e;
+  if (!e) return;
+  // fetch שלא הגיע לשרת זורק TypeError ("Failed to fetch") — באנגלית ובלי פרטים
+  $('#bootErrMsg').textContent = e instanceof TypeError
+    ? 'אין חיבור לשרת. בודקים את החיבור לאינטרנט ולוחצים "נסה שוב".'
+    // 5xx, או תשובה בלי הודעה שלנו (דף שגיאה של הפרוקסי בזמן פריסה)
+    : e.status >= 500 || (e.status && !e.payload?.error)
+      ? 'השרת לא זמין כרגע או נתקל בתקלה. בדרך כלל זה עובר תוך דקה — לוחצים "נסה שוב".'
+      : e.message;
+  $('#bootRetry').focus();
 }
 
 const RENDERERS = {

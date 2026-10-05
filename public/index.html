@@ -39,6 +39,15 @@
   </nav>
 </header>
 
+<!-- העלייה נכשלה (רשת/שרת) — במקום מסך ריק. app.js: showBootError -->
+<div id="bootErr" class="boot-err" role="alert" hidden>
+  <div class="panel">
+    <h2>המערכת לא נטענה</h2>
+    <p id="bootErrMsg"></p>
+    <button class="btn primary" id="bootRetry">נסה שוב</button>
+  </div>
+</div>
+
 <main>
   <section id="board"></section>
   <section id="strategy" hidden></section>

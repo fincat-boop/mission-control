@@ -1144,3 +1144,10 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 /* החיבור פג (core/session.js) */
 #authDlg p { font-size: 13.5px; line-height: 1.6; margin: 0 0 10px; }
 #authDlg #authMsg:empty { display: none; }
+
+/* העלייה נכשלה — כרטיס במקום מסך ריק */
+.boot-err { display: grid; place-items: center; padding: 72px 16px; }
+.boot-err[hidden] { display: none; }
+.boot-err .panel { max-width: 420px; padding: 24px; text-align: center; }
+.boot-err h2 { font-size: 16px; margin-bottom: 8px; }
+.boot-err p { color: var(--ink-2); font-size: 13.5px; line-height: 1.6; margin-bottom: 18px; }
