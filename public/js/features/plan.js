@@ -725,31 +725,40 @@ function wireGeneralBoard(selected, reload) {
 function openSlotForm({ campaign, channelId, index, item }, reload) {
   const channel = state.channels.find((c) => c.id === channelId);
   const v = item?.variants.find((x) => x.channel_id === channelId) ?? null;
+  // ניוזלטר: הנושא, התבנית והתוכן נערכים בעורך המייל הקיים (בלעדיהם אי אפשר
+  // לשלוח). כאן רק הכותרת והסוג — והשמירה ממשיכה ישר לעורך.
+  const mail = channel?.platform === 'newsletter';
   // לפריט של מדיה אחת אין "משותף" מול "של המדיה" — כל הקבצים שלו, וכולם ניתנים להסרה
   const files = [...(item?.assets ?? []), ...(item?.variant_assets ?? [])]
     .map((a) => assetLine(a, true, false)).join('');
 
   openGeneric({
     title: `${channel?.name ?? ''} · פוסט ${index}${item ? '' : ' — חדש'}`,
+    saveLabel: mail ? 'שמור והמשך לעריכת המייל' : undefined,
     fields: [
-      { name: 'title', label: 'כותרת', type: 'text', value: item?.title },
+      { name: 'title', label: mail ? 'כותרת (פנימית — הנושא נכתב בעורך המייל)' : 'כותרת',
+        type: 'text', value: item?.title },
       { name: 'kind', label: 'סוג', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
         value: item?.kind },
-      { name: 'body', label: `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'מדיה'}`,
-        type: 'textarea', value: v?.body ?? item?.body },
-      { name: '__files', label: 'תמונות, סרטונים ומסמכים', type: 'files', existing: files },
-      { name: 'status', label: 'מצב', type: 'radio',
-        options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום']],
-        value: v?.status === 'ready' ? 'ready' : 'draft' },
+      ...(mail ? [] : [
+        { name: 'body', label: `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'מדיה'}`,
+          type: 'textarea', value: v?.body ?? item?.body },
+        { name: '__files', label: 'תמונות, סרטונים ומסמכים', type: 'files', existing: files },
+        { name: 'status', label: 'מצב', type: 'radio',
+          options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום']],
+          value: v?.status === 'ready' ? 'ready' : 'draft' },
+      ]),
     ],
     extraActions: item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
       : '',
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
-      const body = { title: val.title, kind: val.kind, body: val.body ?? '',
-                     status: val.status, week: state.week };
+      const body = mail
+        ? { title: val.title, kind: val.kind, week: state.week }
+        : { title: val.title, kind: val.kind, body: val.body ?? '',
+            status: val.status, week: state.week };
       const saved = item
         ? (await api(`/content/${item.id}`, { method: 'PATCH', body })).content
         : (await api('/content', { method: 'POST', body: {
@@ -763,6 +772,16 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         });
       }
       await reload();
+      if (mail) {
+        // הפריט הטרי (עם הגרסה שלו) — אחרי הרענון. העורך נפתח רק אחרי שהטופס
+        // הזה נסגר: שניהם משתמשים באותו דיאלוג.
+        const fresh = state.campaigns.find((c) => c.id === campaign.id);
+        const freshItem = fresh?.content.find((x) => x.id === saved.id);
+        if (freshItem) {
+          setTimeout(() => openVariantForm({ item: freshItem, channelId, campaign: fresh }, reload));
+        }
+        return 'נשמר — ממשיכים לנושא ולתוכן של המייל.';
+      }
     },
     onOpen: () => {
       wireCopyLinks($('#genBody'));
