@@ -79,6 +79,9 @@ async function boot() {
   state.users = users;
 
   await refreshAfterPostChange();
+  // refreshAfterPostChange מצייר לוח/משימות/נתונים בלבד — טאב אחר שחזר
+  // מה-hash (ניהול, אסטרטגיה, קמפיינים) היה נשאר ריק עד לחיצה עליו
+  if (!['board', 'tasks', 'data'].includes(state.tab)) await renderTab(state.tab);
   wirePolling();
 }
 
