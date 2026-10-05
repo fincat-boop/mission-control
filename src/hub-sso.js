@@ -34,15 +34,18 @@ export const SSO_MAX_AGE = '60s';
  * מאמת טוקן ומחזיר את ה-claims הרלוונטיים, או null אם הטוקן פסול/פג/לא
  * לתכלית הזו. אלגוריתם ננעל ל-HS256 — מונע בלבול-אלגוריתם; purpose ייעודי —
  * טוקן שנחתם לכל מטרה אחרת באותו סוד לא יעבוד כאן.
- * @returns {{email:string, jti:string|null, tid:string|null, exp:number}|null}
+ * טוקן בלי jti נדחה.
+ * @returns {{email:string, jti:string, tid:string|null, exp:number}|null}
  */
 export function verifyHubSsoClaims(token, secret = (process.env.HUB_SSO_SECRET ?? '').trim()) {
   try {
     const claims = jwt.verify(token, secret, { algorithms: ['HS256'], maxAge: SSO_MAX_AGE });
     if (claims.purpose !== 'hub-sso' || !claims.sub) return null;
+    // jti חובה — ה-HUB שולח אותו תמיד; בלעדיו אין הגנה מפני שימוש חוזר
+    if (typeof claims.jti !== 'string' || !claims.jti.trim()) return null;
     return {
       email: String(claims.sub).trim().toLowerCase(),
-      jti: typeof claims.jti === 'string' && claims.jti ? claims.jti : null,
+      jti: claims.jti,
       tid: typeof claims.tid === 'string' && claims.tid.trim() ? claims.tid.trim().toLowerCase() : null,
       exp: Number(claims.exp),
     };

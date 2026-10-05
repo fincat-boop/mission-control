@@ -8,7 +8,7 @@ import { verifyHubSsoToken, verifyHubSsoClaims, ssoTenantCheck, hubSsoReady } fr
 const SECRET = 'shared-sso-secret-for-tests';
 
 const sign = (claims, secret = SECRET, opts = {}) =>
-  jwt.sign({ purpose: 'hub-sso', ...claims }, secret, { expiresIn: '60s', ...opts });
+  jwt.sign({ purpose: 'hub-sso', jti: `j-${Math.random()}`, ...claims }, secret, { expiresIn: '60s', ...opts });
 
 test('טוקן תקין מחזיר email מנורמל', () => {
   const email = verifyHubSsoToken(sign({ sub: '  User@Example.COM ' }), SECRET);
@@ -61,8 +61,14 @@ test('claims — jti ו-tid חוזרים; בלי — null', () => {
   assert.equal(c.jti, 'j1');
   assert.equal(c.tid, TENANT);
   const bare = verifyHubSsoClaims(sign({ sub: 'a@b.co' }), SECRET);
-  assert.equal(bare.jti, null);
   assert.equal(bare.tid, null);
+});
+
+test('בלי jti (או jti ריק) — נדחה: אין הגנה מפני שימוש חוזר', () => {
+  const noJti = jwt.sign({ purpose: 'hub-sso', sub: 'a@b.co' }, SECRET, { expiresIn: '20s' });
+  assert.equal(verifyHubSsoClaims(noJti, SECRET), null);
+  assert.equal(verifyHubSsoToken(sign({ sub: 'a@b.co', jti: ' ' }), SECRET), null);
+  assert.equal(verifyHubSsoToken(sign({ sub: 'a@b.co', jti: 5 }), SECRET), null);
 });
 
 test('טוקן ישן מדי (iat לפני יותר מדקה) נדחה גם כשה-exp רחוק', () => {

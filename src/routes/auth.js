@@ -96,13 +96,9 @@ r.get('/auth/sso', wrap(async (req, res) => {
   if (!claims) return res.redirect('/login.html?error=sso');
 
   // חד-פעמי: הניצול נרשם לפני כל בדיקה אחרת — גם ניסיון שנדחה "שורף" את הטוקן
-  if (claims.jti) {
-    if (!(await consumeSsoJti(claims.jti, claims.exp))) {
-      console.warn(`[auth] SSO — טוקן שכבר נוצל (jti חוזר) עבור ${claims.email}, נדחה`);
-      return res.redirect('/login.html?error=sso');
-    }
-  } else {
-    console.warn(`[auth] SSO — טוקן בלי jti עבור ${claims.email} (HUB ישן?) — אין הגנת שימוש חוזר`);
+  if (!(await consumeSsoJti(claims.jti, claims.exp))) {
+    console.warn(`[auth] SSO — טוקן שכבר נוצל (jti חוזר) עבור ${claims.email}, נדחה`);
+    return res.redirect('/login.html?error=sso');
   }
 
   const user = await one('select * from users where lower(email) = $1', [claims.email]);
