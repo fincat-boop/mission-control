@@ -38,17 +38,28 @@ function linkFail(res, e) {
 }
 
 /**
- * האם גרסה עם התוכן הזה יכולה להיות "מוכן" בערוץ הזה — אותם כללי תוכן כמו
- * בפרסום (readiness.js). הקבצים: מה שהפריט יצא איתו בערוץ (משבצת מקושרת —
- * של המקור). רץ לפני הכתיבה: הבקשה נשמרת (commit) גם כשהתשובה 400.
- * @returns {Promise<string|null>} ההודעה למשתמש, או null כשמותר
+ * מה חסר לגרסה עם התוכן הזה כדי להיות "מוכן" בערוץ הזה — אותם כללי תוכן
+ * כמו בפרסום (readiness.js). הקבצים: מה שהפריט יצא איתו בערוץ (משבצת
+ * מקושרת — של המקור). רץ לפני הכתיבה: הבקשה נשמרת (commit) גם כשהתשובה 400.
+ * @returns {Promise<string|null>} הסיבה, או null כשאין חסר
  */
-async function readyError(contentId, channelId, variant, { assets } = {}) {
+async function readyReason(contentId, channelId, variant, { assets } = {}) {
   const ch = await one('select platform from channels where id = $1', [channelId]);
   if (!ch) return null;
   const files = assets ?? (contentId ? await rows(itemAssetsSql('a.mime'), [contentId, channelId]) : []);
-  const reason = contentBlocker({ platform: ch.platform, variant, assets: files });
-  return reason ? readyRejection(reason) : null;
+  return contentBlocker({ platform: ch.platform, variant, assets: files });
+}
+
+/**
+ * "מוכן" נבדק רק במעבר אליו (או ביצירה כמוכן): שם החסר נדחה ב-400. גרסה
+ * שכבר "מוכן" נשמרת גם כשהיא לא עוברת — אחרת אי אפשר היה לתקן בה טקסט —
+ * והסיבה חוזרת כ-warn (התא מסומן "מוכן ⚠").
+ * @returns {Promise<{error?:string, warn:string|null}>}
+ */
+async function readyCheck(contentId, channelId, variant, wasReady, opts) {
+  const reason = await readyReason(contentId, channelId, variant, opts);
+  if (reason && !wasReady) return { error: readyRejection(reason), warn: reason };
+  return { warn: reason };
 }
 
 /* ---------- נעילה אופטימית של גרסה (src/variant-lock.js) ---------- */
@@ -100,28 +111,45 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
     return staleReply(res, before);
   }
   // "מוכן" נבדק מול התוכן שיישמר בפועל (מה שלא נשלח — נשאר מהקיים)
+  let warn = null;
   if (status === 'ready') {
-    const err = await readyError(req.params.id, req.params.channelId, {
+    const check = await readyCheck(req.params.id, req.params.channelId, {
       body: b.body ?? before?.body ?? '', meta: b.meta ?? before?.meta ?? null,
-    });
-    if (err) return bad(res, err);
+    }, before?.status === 'ready');
+    if (check.error) return bad(res, check.error);
+    warn = check.warn;
   }
 
   // meta — נושא ורשימות יעד של ערוץ המייל. לא נשלח = לא נוגעים בקיים.
   const meta = b.meta != null ? JSON.stringify(b.meta) : null;
-  const v = await one(
-    `insert into content_variants (content_id, channel_id, body, status, meta)
-     values ($1,$2,coalesce($3,''),$4,$5::jsonb)
-     on conflict (content_id, channel_id)
-       do update set body = coalesce($3, content_variants.body), status = $4,
-                     meta = coalesce($5::jsonb, content_variants.meta)
-     returning *`,
-    [req.params.id, req.params.channelId, b.body ?? null, status, meta]
-  );
-  // משבצת מקושרת: אותו טקסט ומצב לכל המשבצות בקבוצה
-  await syncFrom(req.params.id);
+  const params = [req.params.id, req.params.channelId, b.body ?? null, status, meta];
+  let v;
+  if ('base_updated_at' in b && !before) {
+    // שמירה ראשונה מטופס שנפתח בלי גרסה: אין שורה לנעול, ושתי שמירות במקביל
+    // היו דורסות זו את זו. השנייה לא מוסיפה כלום ומקבלת 409, כמו גרסה ישנה.
+    v = await one(
+      `insert into content_variants (content_id, channel_id, body, status, meta)
+       values ($1,$2,coalesce($3,''),$4,$5::jsonb)
+       on conflict (content_id, channel_id) do nothing returning *`, params);
+    if (!v) {
+      return staleReply(res, await one(
+        `select id, body, status, meta, updated_at from content_variants
+          where content_id = $1 and channel_id = $2`, [req.params.id, req.params.channelId]));
+    }
+  } else {
+    v = await one(
+      `insert into content_variants (content_id, channel_id, body, status, meta)
+       values ($1,$2,coalesce($3,''),$4,$5::jsonb)
+       on conflict (content_id, channel_id)
+         do update set body = coalesce($3, content_variants.body), status = $4,
+                       meta = coalesce($5::jsonb, content_variants.meta)
+       returning *`, params);
+  }
+  // משבצת מקושרת: אותו טקסט ומצב לכל המשבצות בקבוצה (downgraded — עוקבות
+  // שנשארו טיוטה כי התוכן לא מספיק לערוץ שלהן)
+  const { downgraded } = await syncFrom(req.params.id);
   const engine = await autoFill(b.week);
-  res.json({ variant: v, engine });
+  res.json({ variant: v, warn, downgraded, engine });
 }));
 
 r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
@@ -246,13 +274,18 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
   res.json({ ok: true, engine });
 }));
 
-/** פוסטים עתידיים של התוכן שעוד לא יצאו (ופוסטים שעוד לא פורסמו בכלל) */
-const FUTURE_UNPUBLISHED = `p.status in ('scheduled','approved','failed','pending_approval','hole')
-  and p.scheduled_at >= now()`;
+/**
+ * פוסטים של התוכן שלא פורסמו — עתידיים, וגם כאלה שהמועד שלהם עבר (נכשל,
+ * חסר תוכן, ממתין לאישור). 'publishing' בכוונה לא כאן: פרסום באמצע לא נעצר
+ * ממחיקה; הפוסט נשאר, בלי תוכן, ומסלול התקיעה מטפל בו.
+ */
+const UNPUBLISHED = `p.status in ('scheduled','approved','failed','pending_approval','hole')`;
+const FUTURE_UNPUBLISHED = `${UNPUBLISHED} and p.scheduled_at >= now()`;
 
 /**
  * מה מחיקת הקמפיין נוגעת בו — לשאלה לפני המחיקה: כמה פריטי תוכן, כמה
- * פוסטים עתידיים שלהם על הלוח, וכמה כבר פורסמו (נשארים בהיסטוריה תמיד).
+ * פוסטים שלהם לא פורסמו (יורדים במחיקה עם התוכן), כמה מהם עתידיים (נשארים
+ * על הלוח כשמשאירים את התוכן), וכמה כבר פורסמו (נשארים בהיסטוריה תמיד).
  */
 r.get('/campaigns/:id/delete-impact', wrap(async (req, res) => {
   const c = await one('select id, name from campaigns where id = $1', [req.params.id]);
@@ -262,14 +295,16 @@ r.get('/campaigns/:id/delete-impact', wrap(async (req, res) => {
             (select count(*)::int from posts p join content_items ci on ci.id = p.content_id
               where ci.campaign_id = $1 and ${FUTURE_UNPUBLISHED}) as future_posts,
             (select count(*)::int from posts p join content_items ci on ci.id = p.content_id
+              where ci.campaign_id = $1 and ${UNPUBLISHED}) as unpublished_posts,
+            (select count(*)::int from posts p join content_items ci on ci.id = p.content_id
               where ci.campaign_id = $1 and p.status = 'published') as published`,
     [c.id]);
   res.json(n);
 }));
 
 /**
- * מחיקת קמפיין. ?content=delete — גם התוכן שלו נמחק, עם הפוסטים העתידיים
- * שלו שעוד לא יצאו (מה שפורסם נשאר בהיסטוריה, בלי תוכן). קבצים ב-R2 עוברים
+ * מחיקת קמפיין. ?content=delete — גם התוכן שלו נמחק, עם כל הפוסטים שלו שלא
+ * פורסמו (גם כאלה שהמועד שלהם עבר); מה שפורסם נשאר בהיסטוריה, בלי תוכן. קבצים ב-R2 עוברים
  * לסל המחזור. ?content=keep (ברירת המחדל לקריאה בלי פרמטר — העוזר, קריאות
  * ישנות): התוכן נשאר כתוכן שוטף של נקודת הקצה, כמו עד היום.
  */
@@ -284,7 +319,7 @@ r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     // כל הקבוצה נמחקת יחד — אין טעם להעתיק קבצים לעוקבות שנמחקות גם הן
     const posts = await rows(
       `delete from posts p using content_items ci
-        where ci.id = p.content_id and ci.campaign_id = $1 and ${FUTURE_UNPUBLISHED}
+        where ci.id = p.content_id and ci.campaign_id = $1 and ${UNPUBLISHED}
         returning p.id`, [req.params.id]);
     await query(
       `insert into media_trash (bucket, storage_key, delete_after)
@@ -381,6 +416,9 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     return bad(res, 'מספר המשבצת חייב להיות מספר שלם בין 1 ל-1000');
   }
   if (b.campaign_id) {
+    // זווית (לא משבצת): נעילת הקמפיין לפני שבודקים מקום — גם במקום מפורש, כמו
+    // בהעלאה המרוכזת. שתי יצירות במקביל לא יקבלו אותו מקום
+    if (!slotChannel) await one('select id from campaigns where id = $1 for update', [b.campaign_id]);
     if (b.sort_order != null) {
       const taken = await one(
         `select 1 from content_items
@@ -397,9 +435,7 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
         [b.campaign_id, slotChannel]
       ))?.n ?? 1;
     } else {
-      // זווית בלי מקום מפורש — המקום הפנוי הראשון ברשת, לא אחרי האחרון.
-      // נעילת הקמפיין כמו בהעלאה המרוכזת: שתי יצירות במקביל לא יקבלו אותו מקום
-      await one('select id from campaigns where id = $1 for update', [b.campaign_id]);
+      // זווית בלי מקום מפורש — המקום הפנוי הראשון ברשת, לא אחרי האחרון
       nextOrder = (await freeAngleSlots(b.campaign_id, 1)).slots[0] ?? 1;
     }
   }
@@ -407,8 +443,8 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   // משבצת חדשה שנשלחת כ"מוכן" — אותם כללי תוכן כמו בעריכת גרסה. אין לה
   // עדיין קבצים (הם עולים אחרי היצירה), ולכן הטופס שולח קודם טיוטה כשיש קבצים.
   if (slotChannel && b.status === 'ready') {
-    const err = await readyError(null, slotChannel, { body: b.body ?? '' }, { assets: [] });
-    if (err) return bad(res, err);
+    const check = await readyCheck(null, slotChannel, { body: b.body ?? '' }, false, { assets: [] });
+    if (check.error) return bad(res, check.error);
   }
 
   // ready_channel_ids חייב המרת טיפוס מפורשת: בלעדיה Postgres מפרש
@@ -488,8 +524,9 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
     if (taken) return bad(res, 'המשבצת תפוסה', 409);
   }
 
-  // משבצת שנשמרת כ"מוכן" (או נשארת "מוכן" וטקסט שלה משתנה) — אותם כללי
-  // תוכן כמו בעריכת גרסה
+  // משבצת שעוברת ל"מוכן" — אותם כללי תוכן כמו בעריכת גרסה. משבצת שכבר
+  // "מוכן" נשמרת, והסיבה (אם יש) חוזרת כ-warn
+  let warn = null;
   if (current.slot_channel_id && !leavingSlot && (b.body !== undefined || b.status !== undefined)) {
     const v = await one(
       `select id, body, status, meta, updated_at from content_variants
@@ -498,10 +535,11 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
     if ('base_updated_at' in b && staleVariant(v, b.base_updated_at)) return staleReply(res, v);
     const status = ['ready', 'draft'].includes(b.status) ? b.status : (v?.status ?? 'draft');
     if (status === 'ready') {
-      const err = await readyError(current.id, current.slot_channel_id, {
+      const check = await readyCheck(current.id, current.slot_channel_id, {
         body: b.body !== undefined ? (b.body ?? '') : (v?.body ?? ''), meta: v?.meta ?? null,
-      });
-      if (err) return bad(res, err);
+      }, v?.status === 'ready');
+      if (check.error) return bad(res, check.error);
+      warn = check.warn;
     }
   }
 
@@ -556,8 +594,9 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   }
   // משבצת מקושרת: התוכן (כותרת, סוג, טקסט, מצב) אחד לכל הקבוצה — עריכה
   // מכל משבצת בה עוברת לכולן. המיקום (משבצת, קמפיין) נשאר של כל אחת.
+  let downgraded = [];
   if (['title', 'kind', 'body', 'status'].some((k) => b[k] !== undefined)) {
-    await syncFrom(c.id);
+    ({ downgraded } = await syncFrom(c.id));
   }
   // משבצת: הגרסה היחידה שלה — לנעילה האופטימית של השמירה הבאה מאותו טופס
   const variant = c.slot_channel_id
@@ -565,7 +604,7 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
       [c.id, c.slot_channel_id])
     : null;
   const engine = await autoFill(b.week);
-  res.json({ content: c, variant, engine });
+  res.json({ content: c, variant, warn, downgraded, engine });
 }));
 
 /**
@@ -578,7 +617,7 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
   let out;
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
   const engine = await autoFill(req.body?.week);
-  res.json({ content: out.source, follower: out.follower, engine });
+  res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, engine });
 }));
 
 /**
@@ -813,6 +852,7 @@ r.get('/assets/:id', wrap(async (req, res) => {
  * מצב ביניים של שורה שנמחקה בלי רישום בסל. התחזוקה מוחקת כשמגיע הזמן.
  */
 r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
+  const asset = await one('select content_id from content_assets where id = $1', [req.params.id]);
   await query(
     `with gone as (delete from content_assets where id = $1 returning storage_key)
      insert into media_trash (bucket, storage_key, delete_after)
@@ -821,8 +861,29 @@ r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
      on conflict (bucket, storage_key) do nothing`,
     [req.params.id, process.env.R2_PUBLIC_BUCKET ?? '', TRASH_DAYS]
   );
-  res.json({ ok: true });
+  // גרסה "מוכן" שאיבדה את המדיה שלה — התא מתעדכן ל"מוכן ⚠" בלי טעינה מחדש
+  res.json({ ok: true, warns: asset ? await readyWarns(asset.content_id) : [] });
 }));
+
+/**
+ * הגרסאות "מוכן" של פריט (ושל העוקבות שלו — הקבצים של המקור הם שלהן) ומה
+ * חסר בכל אחת לפי כללי הפרסום. [{content_id, channel_id, warn|null}]
+ */
+async function readyWarns(contentId) {
+  const ready = await rows(
+    `select v.content_id, v.channel_id, v.body, v.meta, ch.platform
+       from content_variants v
+       join content_items ci on ci.id = v.content_id
+       join channels ch on ch.id = v.channel_id
+      where (ci.id = $1 or ci.linked_to_id = $1) and v.status = 'ready'`, [contentId]);
+  const out = [];
+  for (const v of ready) {
+    const assets = await rows(itemAssetsSql('a.mime'), [v.content_id, v.channel_id]);
+    out.push({ content_id: v.content_id, channel_id: v.channel_id,
+               warn: contentBlocker({ platform: v.platform, variant: v, assets }) });
+  }
+  return out;
+}
 
 /**
  * העלאה מרוכזת: כל קובץ הופך לפריט תוכן, והפריטים מתפזרים

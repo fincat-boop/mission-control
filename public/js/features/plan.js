@@ -259,8 +259,8 @@ function campaignList(endpoint, campaigns, content) {
         <span><b>${mine.filter((c) => c.phase === 'upcoming').length}</b> מתוכננים</span>
       </div>
       <div class="spacer"></div>
-      <button class="btn small" data-ep-settings="${endpoint.id}"
-        data-tt="חשיבות ותדירות של הנקודה — בטאב ניהול">הגדרות נקודה</button>
+      ${can('settings') ? `<button class="btn small" data-ep-settings="${endpoint.id}"
+        data-tt="חשיבות ותדירות של הנקודה — בטאב ניהול">הגדרות נקודה</button>` : ''}
       ${can('settings') ? '<button class="btn primary" id="addCampaign">＋ קמפיין חדש</button>' : ''}
     </div>
     ${mine.length || bg.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}
@@ -903,7 +903,7 @@ async function linkTo(campaign, channelId, index, item, reload) {
   }
   const done = `${linkMode.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של הערוץ שלה.`;
   exitLinkMode();
-  engineToast(res, done);
+  engineToast(res, done + downgradeNote(res.downgraded));
   await reload();
 }
 
@@ -1099,7 +1099,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           fills.push(r2);
         }
       }
-      engineToast(mergeFills(fills), 'נשמר.');
+      const last = fills[fills.length - 1];
+      engineToast(mergeFills(fills),
+        `נשמר.${warnNote(last.warn)}${downgradeNote(fills.flatMap((f) => f.downgraded ?? []))}`);
       await reload();
       if (mail) {
         // הפריט הטרי (עם הגרסה שלו) — אחרי הרענון. העורך נפתח רק אחרי שהטופס
@@ -1355,7 +1357,10 @@ async function deleteCampaign(campaign, reload) {
       message: `למחוק את "${campaign.name}"?${published}`,
       options: [
         ['delete', `מחק גם את התוכן (${imp.content})`,
-          imp.future_posts ? `${posts} יירדו מהלוח.` : 'אין לו פוסטים עתידיים על הלוח.'],
+          imp.unpublished_posts
+            ? `${imp.unpublished_posts === 1 ? 'פוסט אחד שלא פורסם יורד'
+              : `${imp.unpublished_posts} פוסטים שלא פורסמו יורדים`} מהלוח (כולל כאלה שהמועד שלהם עבר).`
+            : 'אין לו פוסטים שלא פורסמו על הלוח.'],
         ['keep', `השאר את התוכן כתוכן כללי של ${campaign.endpoint_name}`,
           'הזוויות נשארות בלי קמפיין, והמנוע עשוי לשבץ אותן כשיש מקום — גם פוסטי השקה.' +
           (imp.future_posts ? ` ${posts} נשארים על הלוח.` : '')],
@@ -1368,7 +1373,7 @@ async function deleteCampaign(campaign, reload) {
     { method: 'DELETE', body: { week: state.week } });
   state.planCampaign = null;
   engineToast(res, mode === 'delete'
-    ? `הקמפיין נמחק עם ${res.removed.content} פריטי תוכן${res.removed.posts ? ` ו-${res.removed.posts} פוסטים עתידיים` : ''}.`
+    ? `הקמפיין נמחק עם ${res.removed.content} פריטי תוכן${res.removed.posts ? ` ו-${res.removed.posts} פוסטים שלא פורסמו` : ''}.`
     : 'הקמפיין נמחק — התוכן שלו נשאר כתוכן שוטף.');
   await reload();
   return true;
@@ -1678,7 +1683,7 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     const v = res.variant;
     Object.assign(t, { v, body: v.body, status: v.status, base: v.updated_at });
     item.variants = [...item.variants.filter((x) => x.channel_id !== t.ch.id), v];
-    paintCellInPlace(campaign, item, t.ch.id, v.status);
+    paintCellInPlace(campaign, item, t.ch.id, v.status, res.warn);
     return res;
   };
 
@@ -1709,8 +1714,10 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     $$('#vfiles [data-del-asset]').forEach((b) =>
       b.addEventListener('click', run(async () => {
         const id = Number(b.dataset.delAsset);
-        if (!(await deleteAssetAsk(b))) return;
+        const res = await deleteAssetAsk(b);
+        if (!res) return;
         item.variant_assets = (item.variant_assets ?? []).filter((a) => a.id !== id);
+        paintWarns(campaign, res.warns);
         filesChanged = true;
       })));
   };
@@ -1743,8 +1750,9 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     onSave: async () => {
       const results = await saveAll();
       if (results.length) {
+        const warns = results.map((r) => warnNote(r.warn)).join('');
         engineToast(mergeFills(results),
-          results.length === 1 ? 'נשמר.' : `נשמרו ${results.length} ערוצים.`);
+          (results.length === 1 ? 'נשמר.' : `נשמרו ${results.length} ערוצים.`) + warns);
         refreshAround();
       }
       return false;
@@ -1777,7 +1785,7 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         sync();
         if (dirty(cur)) {
           const res = await saveTab(cur);
-          engineToast(res, `${cur.ch.name} נשמר.`);
+          engineToast(res, `${cur.ch.name} נשמר.${warnNote(res.warn)}`);
           refreshAround();
         }
         const next = tabs[tabs.indexOf(cur) + 1];
@@ -1836,17 +1844,21 @@ async function uploadPicked(contentId, picked, afterFail, channelId = null) {
   throw new Error(uploadFailedMessage(failed));
 }
 
-/** מחיקת קובץ מהטופס — אחרי אישור עם שם הקובץ. מחזיר האם נמחק. */
+/**
+ * מחיקת קובץ מהטופס — אחרי אישור עם שם הקובץ. מחזיר את תשובת השרת (עם
+ * warns — תאים "מוכן" שאיבדו מדיה), או null כשבוטל.
+ */
 async function deleteAssetAsk(btn) {
   const line = btn.closest('.fileline');
   const name = line?.querySelector('a')?.textContent ?? 'הקובץ';
   if (!(await confirmDialog(`להסיר את "${name}"?`, { okLabel: 'הסר קובץ', danger: true }))) {
-    return false;
+    return null;
   }
-  await api(`/assets/${btn.dataset.delAsset}`, { method: 'DELETE' });
+  const res = await api(`/assets/${btn.dataset.delAsset}`, { method: 'DELETE' });
   line?.remove();
-  toast(`"${name}" הוסר.`);
-  return true;
+  const lost = (res.warns ?? []).find((w) => w.warn);
+  toast(`"${name}" הוסר.${lost ? ` שים לב — ${lost.warn}.` : ''}`);
+  return res;
 }
 
 /* ---------- עדכון במקום: תא אחד ברשת, בלי לצייר את כל המסך מחדש ---------- */
@@ -1858,15 +1870,15 @@ const counted = (st) => st !== 'not_relevant' && st !== 'not_needed';
  * מתעדכנת לפי ההפרש (אותן הגדרות כמו בשרת: "לא רלוונטי" ו"לא נדרש" לא
  * נספרים, טיוטה היא עוד לא מוכנה).
  */
-function paintCellInPlace(campaign, item, channelId, status) {
+function paintCellInPlace(campaign, item, channelId, status, warn = null) {
   const td = $(`#plan td.cell[data-item="${item.id}"][data-ch="${channelId}"]`);
   if (!td) return;
   const old = td.dataset.state;
-  const st = CELL[status];
-  td.className = `cell ${st.cls}`;
+  const cell = { state: status, warn };
+  td.className = `cell ${CELL[status].cls}${warn ? ' warn' : ''}`;
   td.dataset.state = status;
-  td.dataset.tt = `${channelName(channelId)} · ${st.label}`;
-  td.querySelector('span').textContent = st.label || '—';
+  td.dataset.tt = `${channelName(channelId)} · ${cellTip(cell)}`;
+  td.querySelector('span').textContent = cellLabel(cell);
 
   const c = campaign && state.campaigns.find((x) => x.id === campaign.id);
   if (!c || old === status) return;
@@ -1881,6 +1893,20 @@ function paintCellInPlace(campaign, item, channelId, status) {
   const fill = $('#plan .cbhead .fill');
   if (fill && c.required) fill.outerHTML = fillLine(c);
 }
+
+/** אחרי הסרת קובץ: תאים "מוכן" שאיבדו את המדיה שלהם הופכים ל"מוכן ⚠" (ולהפך) */
+function paintWarns(campaign, warns = []) {
+  for (const w of warns) {
+    paintCellInPlace(campaign, { id: w.content_id }, w.channel_id, 'ready', w.warn);
+  }
+}
+
+/** "אינסטגרם נשאר טיוטה — …": עוקבות שלא קיבלו "מוכן" כי התוכן לא מספיק לערוץ שלהן */
+const downgradeNote = (list = []) => list.map((d) =>
+  ` ${d.channel_name} נשאר טיוטה — ${d.reason}.`).join('');
+
+/** "מוכן" שנשמר למרות חסר (כבר היה מוכן) — אומרים מה חסר */
+const warnNote = (warn) => (warn ? ` שים לב — ${warn}.` : '');
 
 /** שורת הזווית ברשת (מספר הקבצים 📎) אחרי שינוי בקבצים */
 function paintAngleInPlace(item) {
