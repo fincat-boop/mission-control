@@ -131,7 +131,7 @@ export async function buildAlerts() {
     alerts.push({
       id: `hole-${h.id}`,
       level: 'crit',
-      title: `הלוח מחכה לתוכן — ${h.endpoint_name ?? 'לא משויך'}`,
+      title: `חסר תוכן על הלוח — ${h.endpoint_name ?? 'לא משויך'}`,
       detail: `${h.channel_name} · ${new Date(h.scheduled_at).toLocaleDateString('he-IL')}`,
       tab: 'board',
       post_id: h.id,
@@ -181,7 +181,7 @@ export async function buildAlerts() {
     alerts.push({
       id: `no-text-${p.id}`,
       level: 'crit',
-      title: `אין טקסט לפוסט שמתפרסם בקרוב`,
+      title: `חסר תוכן לפוסט שמתפרסם בקרוב`,
       detail: `${p.title} · ${p.channel_name} · ` +
               `${new Date(p.scheduled_at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}`,
       tab: 'board',

@@ -84,8 +84,22 @@ export async function buildBoard(anchorDate) {
     // הם נשארים במסד — ההשהיה הפיכה.
     // v.status — הגרסה הספציפית למדיה שהפוסט הזה משודר בה, כדי שהלוח
     // יוכל להראות "יש תוכן" (מוכן) לעומת "יש טיוטה", לא רק "יש/אין".
+    //
+    // content_hint — לפוסט חסר תוכן: האם יש לנקודה תוכן עם ניסוח לערוץ
+    // הזה שאפשר לשייך ('ready' / 'draft'), כדי שהלוח יראה "יש טיוטה".
     rows(
-      `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status
+      `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status,
+              case when p.content_id is null and p.endpoint_id is not null then (
+                select case max(case v2.status when 'ready' then 2 when 'draft' then 1 end)
+                         when 2 then 'ready' when 1 then 'draft' end
+                  from content_items ci2
+                  join content_variants v2 on v2.content_id = ci2.id
+                                          and v2.channel_id = p.channel_id
+                                          and v2.status in ('ready','draft')
+                  left join campaigns ca2 on ca2.id = ci2.campaign_id
+                 where ci2.endpoint_id = p.endpoint_id
+                   and (ca2.id is null or ca2.paused_at is null)
+              ) end as content_hint
          from posts p
          left join users u          on u.id = p.assignee_id
          left join endpoints e      on e.id = p.endpoint_id
@@ -201,6 +215,7 @@ function shapePost(p) {
     endpoint_name: p.endpoint_name,
     content_id: p.content_id,
     variant_status: p.variant_status,
+    content_hint: p.content_hint ?? null,
     title: p.title,
     kind: p.kind,
     status: p.status,
