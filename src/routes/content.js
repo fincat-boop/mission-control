@@ -11,6 +11,7 @@ import { analyzeImport, runImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
+import { assetOwnerId, linkGroup, mediaOwner, syncFrom } from '../links.js';
 
 const r = Router();
 
@@ -65,6 +66,8 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
      returning *`,
     [req.params.id, req.params.channelId, b.body ?? null, status, meta]
   );
+  // משבצת מקושרת: אותו טקסט ומצב לכל המשבצות בקבוצה
+  await syncFrom(req.params.id);
   const engine = await autoFill(b.week);
   res.json({ variant: v, engine });
 }));
@@ -72,6 +75,16 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
 r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
   await query('delete from content_variants where content_id = $1 and channel_id = $2',
     [req.params.id, req.params.channelId]);
+  // משבצת מקושרת: הגרסה המשותפת יורדת מכל המשבצות בקבוצה, כל אחת במדיה שלה
+  const group = await linkGroup(req.params.id);
+  const self = group.find((x) => x.id === Number(req.params.id));
+  if (group.length > 1 && self?.slot_channel_id === Number(req.params.channelId)) {
+    await query(
+      `delete from content_variants v using content_items ci
+        where ci.id = v.content_id and v.channel_id = ci.slot_channel_id
+          and ci.id = any($1::int[])`,
+      [group.map((x) => x.id)]);
+  }
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });
 }));
@@ -215,7 +228,8 @@ r.get('/content', wrap(async (_req, res) => {
     content: items.map((x) => ({
       ...x,
       variants: variants.filter((v) => v.content_id === x.id),
-      assets: assets.filter((a) => a.content_id === x.id).map(assetView),
+      // משבצת מקושרת מציגה את הקבצים של המקור (הם יושבים רק שם)
+      assets: assets.filter((a) => a.content_id === assetOwnerId(x)).map(assetView),
     })),
   });
 }));
@@ -372,6 +386,11 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
        ['ready', 'draft'].includes(b.status) ? b.status : null]
     );
   }
+  // משבצת מקושרת: התוכן (כותרת, סוג, טקסט, מצב) אחד לכל הקבוצה — עריכה
+  // מכל משבצת בה עוברת לכולן. המיקום (משבצת, קמפיין) נשאר של כל אחת.
+  if (['title', 'kind', 'body', 'status'].some((k) => b[k] !== undefined)) {
+    await syncFrom(c.id);
+  }
   const engine = await autoFill(b.week);
   res.json({ content: c, engine });
 }));
@@ -416,9 +435,10 @@ async function ensureVariant(contentId, channelId) {
 /** קבצים משותפים לכל המדיות של הזווית */
 r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
   wrap(async (req, res) => {
-    const item = await one('select id from content_items where id = $1', [req.params.id]);
-    if (!item) return bad(res, 'לא נמצא תוכן כזה', 404);
-    res.status(201).json({ assets: await saveAssets(req.files, item.id, null) });
+    // משבצת מקושרת: הקובץ נרשם על המקור, ומשם כל הקבוצה רואה אותו
+    const owner = await mediaOwner(req.params.id);
+    if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
+    res.status(201).json({ assets: await saveAssets(req.files, owner.contentId, null) });
   }));
 
 /** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
@@ -426,7 +446,9 @@ r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),
   upload.array('files'), wrap(async (req, res) => {
     const slotErr = await slotChannelError(req.params.id, req.params.channelId);
     if (slotErr) return bad(res, slotErr);
-    const v = await ensureVariant(req.params.id, req.params.channelId);
+    const owner = await mediaOwner(req.params.id, req.params.channelId);
+    if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
+    const v = await ensureVariant(owner.contentId, owner.channelId);
     res.status(201).json({ assets: await saveAssets(req.files, v.content_id, v.id) });
   }));
 
@@ -533,9 +555,12 @@ r.post('/content/:id/uploads/complete', requirePerm('content'), wrap(async (req,
   const checked = await checkUploadedKey(key);
   if (checked.error) return bad(res, checked.error, checked.status);
 
-  const variantId = channelId != null ? (await ensureVariant(item.id, channelId)).id : null;
+  // משבצת מקושרת: הקובץ נרשם על המקור (ובגרסה — על הגרסה של המקור)
+  const owner = await mediaOwner(item.id, channelId);
+  const variantId = owner.channelId != null
+    ? (await ensureVariant(owner.contentId, owner.channelId)).id : null;
   const asset = await insertR2Asset({ query }, {
-    contentId: item.id, variantId, key, filename, head: checked.head,
+    contentId: owner.contentId, variantId, key, filename, head: checked.head,
   });
   res.status(201).json({ asset: assetView(asset) });
 }));

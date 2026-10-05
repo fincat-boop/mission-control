@@ -8,6 +8,7 @@ import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
 import { assetView } from '../media.js';
+import { itemAssetsSql } from '../links.js';
 
 const r = Router();
 
@@ -177,13 +178,11 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
                 [p.content_id, p.channel_id])
     : null;
 
+  // משבצת מקושרת: הקבצים של המקור (itemAssetsSql עוקב אחרי הקישור)
   const assets = p.content_id
     ? await rows(
-        `select id, filename, mime, size_bytes, variant_id, storage_key
-           from content_assets
-          where content_id = $1 and (variant_id is null or variant_id = $2)
-          order by variant_id nulls last, id`,
-        [p.content_id, variant?.id ?? null]).then((list) => list.map(assetView))
+        itemAssetsSql('a.id, a.filename, a.mime, a.size_bytes, a.variant_id, a.storage_key'),
+        [p.content_id, p.channel_id]).then((list) => list.map(assetView))
     : [];
 
   // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה

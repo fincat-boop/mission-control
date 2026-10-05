@@ -1,6 +1,7 @@
 import { rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
+import { assetOwnerId } from './links.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 
 /**
@@ -430,11 +431,15 @@ export async function campaignsWithHealth() {
     const shaped = mine.map((x) => ({
       id: x.id, title: x.title, kind: x.kind, sort_order: x.sort_order,
       slot_channel_id: x.slot_channel_id,
+      // משבצת מקושרת (ראו src/links.js): העוקבת מצביעה על המקור
+      linked_to_id: x.linked_to_id ?? null,
       evergreen: x.evergreen, reuse_after_days: x.reuse_after_days,
       endpoint_id: x.endpoint_id, campaign_id: x.campaign_id,
-      // קבצים משותפים לזווית מול קבצים של גרסה מסוימת
-      assets: assets.filter((a) => a.content_id === x.id && !a.variant_id).map(assetView),
-      variant_assets: assets.filter((a) => a.content_id === x.id && a.variant_id).map(assetView),
+      // קבצים משותפים לזווית מול קבצים של גרסה מסוימת. משבצת מקושרת מציגה
+      // את הקבצים של המקור — הם יושבים רק שם.
+      assets: assets.filter((a) => a.content_id === assetOwnerId(x) && !a.variant_id).map(assetView),
+      variant_assets: assets.filter((a) => a.content_id === assetOwnerId(x) && a.variant_id)
+        .map(assetView),
       variants: variants.filter((v) => v.content_id === x.id),
       posts: myPosts.filter((p) => p.content_id === x.id).map((p) => ({
         id: p.id, status: p.status, scheduled_at: p.scheduled_at,
