@@ -15,7 +15,7 @@ import { wirePostDialog } from './js/ui/postDialog.js';
 import { renderStrategy } from './js/features/strategy.js';
 import { wireAIWidget } from './js/features/assistant.js';
 import { paintTaskBadge, renderTasks } from './js/features/tasks.js';
-import { renderData } from './js/features/data.js';
+import { confirmLeaveData, renderData } from './js/features/data.js';
 import { leavePlanView, renderPlan, wireMailPreview } from './js/features/plan.js';
 import { renderManage } from './js/features/manage.js';
 import { renderBoard } from './js/features/board.js';
@@ -148,14 +148,47 @@ function paintTabs(tab) {
   for (const key of TABS) $(`#${key}`).hidden = key !== tab;
 }
 
-/** מעבר לטאב מתוך קוד (למשל לחיצה על פעמון ההתראות) */
+/**
+ * מעבר לטאב (לחיצה, פעמון, ניווט מתוך קוד). מעבר לטאב אחר מוסיף רשומה
+ * להיסטוריה — "אחורה" בדפדפן חוזר לטאב הקודם (onHashChange). persistView
+ * עצמו מחליף את הרשומה הנוכחית (replaceState), ולכן קודם משכפלים אותה:
+ * הישנה נשארת מאחור, והחדשה מקבלת את ה-hash של הטאב החדש.
+ */
 async function showTab(tab) {
   // מצב "בחירת משבצת לקישור" שייך למסך הקמפיין — יציאה ממנו מבטלת אותו
   if (tab !== 'plan') leavePlanView();
+  if (tab !== state.tab) history.pushState(null, '', location.href);
   state.tab = tab;
   paintTabs(tab);
   persistView();
   await renderTab(tab);
+}
+
+/**
+ * "אחורה"/"קדימה" בדפדפן, או hash שהודבק לשורת הכתובת: התצוגה נקראת
+ * מחדש מה-hash (restoreView) ומצוירת. hash שאינו טאב — מתעלמים.
+ * יציאה מהנתונים עם תוצאות שלא נשמרו שואלת קודם, כמו לחיצה על טאב.
+ */
+async function onHashChange() {
+  if (!state.me) return; // עוד בעלייה — boot קורא את ה-hash בעצמו
+  // בלי hash = דף הבית (הכתובת שבה המשתמש נחת לפני המעבר הראשון)
+  const target = location.hash.slice(1).split(';')[0] || 'board';
+  if (!TABS.includes(target)) return;
+  if (state.tab === 'data' && target !== 'data' && !(await confirmLeaveData())) {
+    persistView(); // נשארים — הכתובת חוזרת להצביע על הנתונים
+    return;
+  }
+  // restoreView קובע דרילדאון רק כשהוא ב-hash; בלעדיו — רמת הנקודות
+  if (target === 'plan') {
+    state.planEndpoint = null;
+    state.planCampaign = null;
+  }
+  // כמו showTab: יציאה ממסך הקמפיין מבטלת את מצב הקישור
+  if (target !== 'plan') leavePlanView();
+  state.tab = target;
+  restoreView();
+  paintTabs(state.tab);
+  await renderTab(state.tab);
 }
 
 /**
@@ -202,6 +235,7 @@ async function refreshAlertsImpl() {
 function wireChrome() {
   $$('.tab').forEach((t) => t.addEventListener('click', run(() => showTab(t.dataset.t))));
   wireTabKeys();
+  window.addEventListener('hashchange', run(onHashChange));
 
   $('#btnAlerts').addEventListener('click', run(() => showTab('tasks')));
 

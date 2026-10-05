@@ -363,6 +363,12 @@ async function confirmDiscard() {
 }
 
 /**
+ * יציאה מטאב הנתונים שלא דרך לחיצה (כפתור "אחורה" בדפדפן, hash שהודבק) —
+ * app.js שואל כאן לפני שהוא מחליף טאב. true = אפשר לצאת.
+ */
+export const confirmLeaveData = () => (dirty.size ? confirmDiscard() : Promise.resolve(true));
+
+/**
  * הגנה על עבודה: מעבר לטאב אחר (או לפעמון) בזמן שיש שורות שלא נשמרו
  * שואל קודם. מאזין capture על המסמך — נתפס לפני הניווט של app.js — ונרשם
  * פעם אחת בלבד. סגירת הדף/רענון: beforeunload של הדפדפן.
