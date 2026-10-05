@@ -1182,3 +1182,10 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 
 /* ייבוא: "לסמן כמוכנים" מעל הכפתורים */
 .imp-ready { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
+
+/* "7 הימים הקרובים" ברשת הקמפיין */
+.weekbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: -4px 0 12px; }
+.weekbar .d { color: var(--muted); font-size: 12px; }
+.weekbar .btn.on { border-color: var(--accent); color: var(--accent); }
+#plan.week-only .cgrid tbody tr:not(.inweek),
+#plan.week-only .gslot:not(.inweek) { display: none; }

@@ -2,7 +2,7 @@ import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { openTemplateFiller } from '../ui/templateFiller.js';
-import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
+import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb, ymd } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { closeGeneric, markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
@@ -210,9 +210,11 @@ function endpointList(campaigns) {
   }
   const cards = state.endpoints.map((e) => {
     const mine = campaigns.filter((c) => c.endpoint_id === e.id);
-    // בקמפיין מוכן אין משבצות ריקות — מה שלא מוכן בו הוא טיוטות, לא חוסר
-    const missing = mine.filter((c) => !c.complete).reduce((s, c) => s + c.missing_content, 0);
-    const drafts = mine.filter((c) => c.complete).reduce((s, c) => s + c.missing_content, 0);
+    // מה שעוד אפשר להשלים: רק קמפיינים שרצים או מתוכננים, ורק מהיום והלאה
+    // (השרת מחזיר 0 למושהה/שהסתיים). בקמפיין מוכן אין משבצות ריקות — מה
+    // שלא מוכן בו הוא טיוטות, לא חוסר.
+    const missing = mine.filter((c) => !c.complete).reduce((s, c) => s + c.missing_ahead, 0);
+    const drafts = mine.filter((c) => c.complete).reduce((s, c) => s + c.missing_ahead, 0);
     const draftsLabel = drafts === 1 ? 'טיוטה אחת' : `${drafts} טיוטות`;
     const chip = missing
       ? `<span class="chip bad">חסרים ${missing}${drafts ? ` · ${draftsLabel}` : ''}</span>`
@@ -332,6 +334,8 @@ function wireKebabs() {
 }
 
 function wirePlan(campaign, endpointId, content) {
+  // הסינון "7 הימים הקרובים" שייך לרשת של קמפיין בלבד
+  $('#plan').classList.remove('week-only');
   const reload = run(async () => {
     await Promise.all([renderPlan(), refreshBoard(), refreshAlerts()]);
   });
@@ -627,7 +631,28 @@ function campaignHead(c) {
       <div class="spacer"></div>
       ${campaignMenu(c)}
       ${c.required ? fillLine(c) : ''}
-    </div>`;
+    </div>
+    ${c.required ? weekToggle(c) : ''}`;
+}
+
+/* ---------- "7 הימים הקרובים": רק השורות שמתוכננות לשבוע הקרוב ---------- */
+
+// נשמר לאורך הביקור (בין קמפיינים), לא בכתובת
+let weekOnly = false;
+
+const todayYmd = () => ymd(new Date());
+const weekEnd = () => { const d = new Date(); d.setDate(d.getDate() + 7); return ymd(d); };
+/** תאריך מתוכנן בתוך שבעת הימים הקרובים (היום כלול) */
+const inWeek = (date) => !!date && date >= todayYmd() && date < weekEnd();
+
+function weekToggle(c) {
+  const n = c.missing_week ?? 0;
+  return `<div class="weekbar">
+    <button type="button" class="btn small${weekOnly ? ' on' : ''}" data-week-only
+      aria-pressed="${weekOnly}">7 הימים הקרובים</button>
+    <span class="d">${n ? `חסרים ${n} לפוסטים שמתוכננים לשבוע הקרוב`
+      : 'אין חוסר בפוסטים שמתוכננים לשבוע הקרוב'}</span>
+  </div>`;
 }
 
 /**
@@ -702,7 +727,7 @@ function angleRow(c, row) {
       <span>${esc(cellLabel(cell))}</span></td>`;
   }).join('');
 
-  return `<tr class="${row.past ? 'past' : ''}" data-date="${row.date ?? ''}">
+  return `<tr class="${row.past ? 'past' : ''}${inWeek(row.date) ? ' inweek' : ''}">
     <td class="angle" ${item ? `data-item="${item.id}"` : ''}
       ${can('content') ? `data-angle="${row.index}"` : ''}>
       <div class="anum">${row.index}<span>${row.date ? fmtDate(row.date) : ''}</span></div>
@@ -903,6 +928,7 @@ function generalBoard(c) {
       const item = s.content;
       const pick = linking ? (!blocked && slotPickable(c, item) ? ' pick' : ' nopick') : '';
       return `<li class="gslot${s.past ? ' past' : ''}${s.extra ? ' extra' : ''}${
+          inWeek(s.date) ? ' inweek' : ''}${
           can('content') ? '' : ' ro'}${pick}"
         ${can('content') ? `data-gslot="${s.index}" data-ch="${col.channel_id}"` : ''}>
         <span class="gnum">${s.index}</span>
@@ -1198,6 +1224,15 @@ function openChannelBulk(campaign, channel, reload) {
 }
 
 function wireCampaignGrid(selected, reload) {
+  // "7 הימים הקרובים" — מסנן את השורות במקום, בלי לצייר מחדש
+  $('#plan').classList.toggle('week-only', weekOnly);
+  $('#plan [data-week-only]')?.addEventListener('click', (e) => {
+    weekOnly = !weekOnly;
+    $('#plan').classList.toggle('week-only', weekOnly);
+    e.currentTarget.classList.toggle('on', weekOnly);
+    e.currentTarget.setAttribute('aria-pressed', String(weekOnly));
+  });
+
   // תפריט הכותרת משותף לשני המבנים — מחווטים לפני הפיצול
   const actions = {
     edit: () => openCampaignForm(selected, reload),

@@ -467,6 +467,34 @@ export function completionSummary(c, today = ymd(new Date())) {
   };
 }
 
+/** YYYY-MM-DD + n ימים, בלי להיתקל במעבר שעון */
+function addDaysYmd(d, n) {
+  const [y, m, day] = d.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, day + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * כמה חסר מהיום והלאה (ובתוך days ימים, אם נשלח) — מה שעוד אפשר להשלים.
+ * שורה שהתאריך שלה עבר, או משבצת מעבר לצורך (בלי תאריך), לא נספרות: קודם
+ * "חסרים N" כלל גם שורות שעברו, ולא היה ממה לפעול עליו.
+ * @param rows [{date, cells:[{state}]}] — שורות הזוויות, או משבצת לכל שורה בכללי
+ * @returns {{missing:number, total:number}} total = תאים נדרשים בטווח
+ */
+export function missingAhead(rows, today, days = null) {
+  const end = days ? addDaysYmd(today, days) : null;
+  let missing = 0;
+  let total = 0;
+  for (const r of rows) {
+    if (!r.date || r.date < today || (end && r.date >= end)) continue;
+    for (const cell of r.cells) {
+      if (cell.state === 'not_relevant' || cell.state === 'not_needed') continue;
+      total += 1;
+      if (cell.state !== 'ready') missing += 1;
+    }
+  }
+  return { missing, total };
+}
+
 /** כל הקמפיינים עם מצב מלא */
 export async function campaignsWithHealth() {
   const [list, content, posts, assets, variants, channels, links] = await Promise.all([
@@ -536,6 +564,16 @@ export async function campaignsWithHealth() {
     const autoAngles = angleCount({ ...c, target_posts: null },
       channelNeeds(c, myChannels, list));
 
+    // מה עוד חסר מהיום והלאה — רק בקמפיין שרץ או מתוכנן (מושהה/הסתיים: 0)
+    const phase = phaseOf(c, today);
+    const live = phase === 'running' || phase === 'upcoming';
+    const rowsOf = general
+      ? grid.channels.flatMap((ch) => ch.slots.filter((x) => !x.extra)
+        .map((x) => ({ date: x.date, cells: [x] })))
+      : grid.angles;
+    const ahead = live ? missingAhead(rowsOf, today) : { missing: 0, total: 0 };
+    const week = live ? missingAhead(rowsOf, today, 7) : { missing: 0, total: 0 };
+
     return {
       ...c,
       channels: myChannels,
@@ -554,8 +592,12 @@ export async function campaignsWithHealth() {
       placed: scheduled + published,
       // "קמפיין מוכן" חל בפועל (סומן, יש תאריכים ותוכן) — הרשת בגודל התוכן
       complete: grid.complete === true,
-      phase: phaseOf(c, today),
-      status: statusOf({ c, today, grid, myChannels }),
+      // החסר מהיום והלאה, ובשבעת הימים הקרובים — מה שעוד אפשר להשלים
+      missing_ahead: ahead.missing,
+      total_ahead: ahead.total,
+      missing_week: week.missing,
+      phase,
+      status: statusOf({ c, today, grid, myChannels, ahead }),
       pace: paceOf(c, today, published, grid),
       content: shaped,
       grid: grid.angles,
@@ -580,7 +622,7 @@ function phaseOf(c, today) {
   return 'running';
 }
 
-export function statusOf({ c, today, grid, myChannels }) {
+export function statusOf({ c, today, grid, myChannels, ahead = null }) {
   const phase = phaseOf(c, today);
   if (phase === 'paused') return { key: 'paused', label: 'מושהה', tone: 'warn' };
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
@@ -602,12 +644,14 @@ export function statusOf({ c, today, grid, myChannels }) {
     }
     return { key: 'complete', label: `מוכן — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
   }
+  // החסר נספר מהיום והלאה — שורה שעברה כבר לא תושלם (ahead חסר: הכול, כמו קודם)
+  const missing = ahead ? ahead.missing : grid.missing;
+  const total = ahead ? ahead.total : grid.total_cells;
+  if (missing > 0) {
+    return { key: 'missing_content', label: `חסרים ${missing} מתוך ${total}`, tone: 'bad' };
+  }
   if (grid.missing > 0) {
-    return {
-      key: 'missing_content',
-      label: `חסרים ${grid.missing} מתוך ${grid.total_cells}`,
-      tone: 'bad',
-    };
+    return { key: 'full_ahead', label: 'מלא מהיום והלאה', tone: 'good' };
   }
   return { key: 'full', label: `מלא — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
 }

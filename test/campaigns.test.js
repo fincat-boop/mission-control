@@ -428,3 +428,32 @@ test('nextSlots — מקומות כפולים או מחוץ לטווח לא מב
   // מקום 0 (תוכן שוטף שהוכנס לקמפיין) לא נחשב תפוס ולא נבחר
   assert.deepEqual(nextSlots(2, [0], 2), [1, 2]);
 });
+
+/* ---------- גל 4: מה חסר מהיום והלאה ---------- */
+
+import { missingAhead } from '../src/campaigns.js';
+
+test('missingAhead — שורות שעברו ומשבצות בלי תאריך לא נספרות', () => {
+  const rows = [
+    { date: '2026-10-01', cells: [{ state: 'empty' }, { state: 'draft' }] },   // עבר
+    { date: '2026-10-05', cells: [{ state: 'empty' }, { state: 'ready' }] },   // היום
+    { date: '2026-10-11', cells: [{ state: 'draft' }, { state: 'not_needed' }] },
+    { date: '2026-10-12', cells: [{ state: 'empty' }, { state: 'not_relevant' }] },
+    { date: null, cells: [{ state: 'empty' }] },
+  ];
+  assert.deepEqual(missingAhead(rows, '2026-10-05'), { missing: 3, total: 4 });
+  // שבעה ימים: 5.10 עד 11.10 כולל, 12.10 כבר בחוץ
+  assert.deepEqual(missingAhead(rows, '2026-10-05', 7), { missing: 2, total: 3 });
+});
+
+test('statusOf — "חסרים" לפי מה שנשאר מהיום, ובלי חסר קדימה: "מלא מהיום והלאה"', () => {
+  const c = { active: true, starts_on: '2026-09-01', ends_on: '2026-12-01' };
+  const grid = { missing: 5, total_cells: 10, ready: 5 };
+  const ch = [{ id: 1 }];
+  const st = statusOf({ c, today: '2026-10-05', grid, myChannels: ch,
+                        ahead: { missing: 2, total: 6 } });
+  assert.equal(st.label, 'חסרים 2 מתוך 6');
+  const done = statusOf({ c, today: '2026-10-05', grid, myChannels: ch,
+                          ahead: { missing: 0, total: 6 } });
+  assert.equal(done.label, 'מלא מהיום והלאה');
+});
