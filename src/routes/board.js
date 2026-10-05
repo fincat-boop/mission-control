@@ -211,6 +211,13 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
   // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה
   const results = await one('select * from post_results where post_id = $1', [p.id]);
 
+  // מבצע דחוף שממתין לאישור: כמה פוסטים של אותו מבצע עוד ממתינים (כולל זה)
+  p.group_pending = p.status === 'pending_approval' && p.urgent_group
+    ? (await one(
+        `select count(*)::int as n from posts
+          where urgent_group = $1 and status = 'pending_approval'`, [p.urgent_group])).n
+    : 0;
+
   res.json({ post: p, variant, assets, results });
 }));
 
@@ -410,6 +417,25 @@ r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
   if (!post) return bad(res, 'אין שיבוץ שממתין לאישור עם המזהה הזה', 404);
   await query(`update tasks set done = true, done_at = now() where post_id = $1`, [post.id]);
   res.json({ post });
+}));
+
+/**
+ * "אשר את כל המבצע": כל הפוסטים של אותו מבצע דחוף (urgent_group) שעוד ממתינים
+ * לאישור עוברים למתוכנן, ומשימות האישור שלהם נסגרות — כמו אישור של כל אחד.
+ */
+r.post('/posts/:id/approve-group', requirePerm('approve'), wrap(async (req, res) => {
+  const approved = await rows(
+    `update posts set status = 'scheduled'
+      where status = 'pending_approval' and urgent_group is not null
+        and urgent_group = (select urgent_group from posts where id = $1)
+      returning id`,
+    [req.params.id]
+  );
+  if (approved.length === 0) return bad(res, 'אין במבצע הזה פוסטים שממתינים לאישור', 404);
+  const ids = approved.map((x) => x.id);
+  await query(
+    `update tasks set done = true, done_at = now() where post_id = any($1::int[]) and done = false`, [ids]);
+  res.json({ approved: ids.length, ids });
 }));
 
 /**

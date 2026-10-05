@@ -81,6 +81,14 @@ const ACT = {
       toast('אושר — הפוסט על הלוח, ומשימת האישור נסגרה.');
     },
   },
+  // כל הפוסטים של אותו מבצע דחוף שעוד ממתינים — משימת אישור אחת לכל ערוץ נסגרת
+  approveGroup: {
+    label: (post) => `אשר את כל המבצע (${post.group_pending})`,
+    run: async (post) => {
+      const r = await api(`/posts/${post.id}/approve-group`, { method: 'POST' });
+      toast(`אושרו ${r.approved} פוסטים של המבצע — כולם על הלוח, ומשימות האישור נסגרו.`);
+    },
+  },
   reject: {
     label: 'דחה',
     danger: true,
@@ -463,7 +471,9 @@ function menuKeys(post, f, p) {
 function renderActions(post, f) {
   const p = perms();
   const { primary, secondary } = choosePrimary(f, p);
-  const shown = [primary, secondary].filter(Boolean);
+  // מבצע דחוף עם כמה ערוצים שממתינים — אישור של כולם בלחיצה, ליד "אשר"
+  const group = primary === 'approvePending' && post.group_pending > 1 ? ['approveGroup'] : [];
+  const shown = [primary, ...group, secondary].filter(Boolean);
   const menu = menuKeys(post, f, p).filter((k) => !shown.includes(k));
 
   $('#pActs').innerHTML = shown.map((key, i) => `<button type="button" class="btn${
@@ -577,6 +587,10 @@ export async function openPostPreview(postId) {
       ? `<div class="pvwarn">הגרסה במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
          מסמנים "מוכן" בעריכת התוכן לפני פרסום.</div>` : ''}
 
+    ${post.status === 'pending_approval'
+      ? `<div class="pvwarn"><b>ממתין לאישור.</b> ${post.urgent ? 'מבצע דחוף' : 'פוסט'} שנוצר בלי הרשאת אישור${
+          post.assignee_name ? ` (${esc(post.assignee_name)})` : ''} — לא יתפרסם עד שמישהו עם הרשאת אישור יאשר.${
+          post.group_pending > 1 ? ` במבצע הזה ממתינים ${post.group_pending} ערוצים.` : ''}</div>` : ''}
     ${post.status === 'approved'
       ? `<div class="pvauto">⚡ מאושר לפרסום אוטומטי${
           post.approved_by_name ? ` — אישר: ${esc(post.approved_by_name)}` : ''}.
