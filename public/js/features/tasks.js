@@ -56,8 +56,12 @@ export async function renderTasks() {
   state.users = users;
   paintTaskBadge(t.open_count);
 
-  // "שלי" = משויך אליי. הסינון בצד הלקוח — הרשימה ממילא קטנה
-  const mineOnly = (list) => (view.mine ? list.filter((x) => x.assignee_id === state.me?.id) : list);
+  // "שלי" = משויך אליי. הסינון בצד הלקוח — הרשימה ממילא קטנה. משימת אישור
+  // נשארת גלויה למי שיכול לאשר: היא מחליפה את התראת "ממתין לאישור" (שמוסתרת
+  // כשיש משימה), ובלעדיה המאשר לא היה רואה שום סימן
+  const mineOnly = (list) => (view.mine
+    ? list.filter((x) => x.assignee_id === state.me?.id || (x.kind === 'approve' && can('approve')))
+    : list);
   const visibleIds = new Set([...t.today, ...t.attention].map((x) => x.id));
   for (const id of view.selected) if (!visibleIds.has(id)) view.selected.delete(id);
 
