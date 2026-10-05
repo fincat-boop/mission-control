@@ -1,14 +1,42 @@
 import { Router } from 'express';
 import { bad, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
-import { weekMeta, ymd } from '../board.js';
+import { weekMeta } from '../board.js';
 import { requirePerm } from '../auth.js';
 
 const r = Router();
 
 /* ========================= משימות ========================= */
 
-r.get('/tasks', wrap(async (_req, res) => {
+export const LOCAL_TZ = 'Asia/Jerusalem';
+
+/**
+ * YYYY-MM-DD של הרגע הנתון בשעון ישראל — בלי תלות ב-TZ של התהליך. due_on
+ * של משימות נכתב בתאריך המקומי, ולכן גם "היום" שמולו משווים חייב להיות מקומי.
+ */
+export function localYmd(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: LOCAL_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+}
+
+/** חלוקת המשימות לקבוצות של הטאב. due_on מגיע כמחרוזת 'YYYY-MM-DD'. */
+export function groupTasks(all, { today, weekStart }) {
+  return {
+    today: all.filter((t) => !t.done && t.due_on === today),
+    attention: all.filter((t) => !t.done && t.due_on !== today),
+    done_this_week: all.filter(
+      (t) => t.done && t.done_at && localYmd(new Date(t.done_at)) >= weekStart
+    ),
+    open_count: all.filter((t) => !t.done).length,
+  };
+}
+
+/**
+ * משימות פתוחות + מה שנסגר בשבועיים האחרונים (הטאב מציג רק "הושלם השבוע").
+ * ?all=1 — הכול, כולל ההיסטוריה הישנה.
+ */
+r.get('/tasks', wrap(async (req, res) => {
   const all = await rows(
     `select t.*, u.name as assignee_name, e.name as endpoint_name,
             p.title as post_title, p.scheduled_at, c.name as channel_name,
@@ -24,20 +52,21 @@ r.get('/tasks', wrap(async (_req, res) => {
        left join channels c         on c.id = p.channel_id
        left join content_variants v on v.content_id = p.content_id
                                    and v.channel_id = p.channel_id
-      order by t.urgent desc, t.due_on nulls last, t.id`
+      where $1 or t.done = false or t.done_at >= now() - interval '14 days'
+      order by t.urgent desc, t.due_on nulls last, t.id`,
+    [req.query.all === '1']
   );
-  const today = ymd(new Date());
-  const week = weekMeta(new Date());
+  res.json(groupTasks(all, { today: localYmd(), weekStart: weekMeta(new Date()).start }));
+}));
 
-  res.json({
-    // due_on מגיע כמחרוזת 'YYYY-MM-DD'
-    today: all.filter((t) => !t.done && t.due_on === today),
-    attention: all.filter((t) => !t.done && t.due_on !== today),
-    done_this_week: all.filter(
-      (t) => t.done && t.done_at && ymd(new Date(t.done_at)) >= week.start
-    ),
-    open_count: all.filter((t) => !t.done).length,
-  });
+/** מונה זול לתגית בטאב ולרענון התקופתי — בלי לשלוף את כל המשימות */
+r.get('/tasks/count', wrap(async (_req, res) => {
+  const c = await one(
+    `select count(*) filter (where not done)::int as open_count,
+            count(*) filter (where not done and urgent)::int as urgent_count
+       from tasks`
+  );
+  res.json(c);
 }));
 
 r.post('/tasks', requirePerm('content'), wrap(async (req, res) => {

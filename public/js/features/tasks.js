@@ -1,5 +1,5 @@
 import { api } from '../core/api.js';
-import { goToTab, refreshAlerts, refreshBoard, refreshTaskBadge } from '../ui/refresh.js';
+import { goToTab, refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { $, $$, copyText, esc, run, toast } from '../core/dom.js';
 import { can, state } from '../core/state.js';
 import { openPostPreview } from '../ui/postDialog.js';
@@ -7,8 +7,20 @@ import { hhmm } from '../core/format.js';
 
 /* ========================= משימות ========================= */
 
+/** התגית שעל טאב המשימות: מספר המשימות הפתוחות */
+export function paintTaskBadge(openCount) {
+  const badge = $('#taskBadge');
+  badge.hidden = !openCount;
+  badge.textContent = openCount;
+}
+
+/**
+ * מצייר את הטאב, וגם מעדכן בדרך את הפעמון ואת תגית המשימות מאותם נתונים —
+ * מי שקורא ל-renderTasks לא צריך למשוך אותם שוב.
+ */
 export async function renderTasks() {
   const [t, alertData] = await Promise.all([api('/tasks'), refreshAlerts()]);
+  paintTaskBadge(t.open_count);
 
   const group = (title, items, emptyText) => `
     <div class="tgroup">
@@ -48,7 +60,7 @@ export async function renderTasks() {
   $$('#tasks [data-task-done]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
       await api(`/tasks/${cb.dataset.taskDone}`, { method: 'PATCH', body: { done: cb.checked } });
-      await Promise.all([renderTasks(), refreshTaskBadge()]);
+      await renderTasks();
     })));
 
   $$('#tasks [data-copy]').forEach((b) =>
@@ -61,14 +73,14 @@ export async function renderTasks() {
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.approve}/approve`, { method: 'POST' });
       toast('אושר. השיבוץ נכנס ללוח.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
+      await Promise.all([renderTasks(), refreshBoard()]);
     })));
 
   $$('#tasks [data-publish]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.publish}/publish`, { method: 'POST' });
       toast('סומן כפורסם.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
+      await Promise.all([renderTasks(), refreshBoard()]);
     })));
 
   // הצעת החלפת תוכן: מעדכן את השיבוץ עם התוכן המוצע וסוגר את המשימה
@@ -87,7 +99,7 @@ export async function renderTasks() {
       });
       await api(`/tasks/${b.dataset.swapTask}`, { method: 'PATCH', body: { done: true } });
       toast('הוחלף. השיבוץ מציג עכשיו את התוכן המוצע.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
+      await Promise.all([renderTasks(), refreshBoard()]);
     })));
 }
 

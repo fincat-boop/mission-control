@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { waTaskAction } from '../src/publish/runner.js';
 import { endpointAirStatus, failedPostAlerts, missedPostAlerts } from '../src/alerts.js';
+import { groupTasks, localYmd } from '../src/routes/tasks.js';
 
 /* ========================= משימת וואטסאפ: מה עושים ========================= */
 
@@ -60,4 +61,29 @@ test('endpointAirStatus — נקודה שפרסמה נמדדת מהפרסום ה
   assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-08T12:00:00Z' }, now), null);
   assert.deepEqual(endpointAirStatus({ ...ep, last_at: '2026-09-30T12:00:00Z' }, now),
     { days_since: 10, days_over: 10 });
+});
+
+/* ========================= תאריך מקומי וקבוצות המשימות ========================= */
+
+test('localYmd — התאריך בישראל, לא ב-UTC ולא לפי TZ של התהליך', () => {
+  // 22:30 UTC בקיץ = 01:30 למחרת בישראל (UTC+3)
+  assert.equal(localYmd(new Date('2026-10-05T22:30:00Z')), '2026-10-06');
+  assert.equal(localYmd(new Date('2026-10-05T20:59:00Z')), '2026-10-05');
+  // חורף (UTC+2): 22:30 UTC = 00:30 למחרת
+  assert.equal(localYmd(new Date('2026-12-31T22:30:00Z')), '2027-01-01');
+});
+
+test('groupTasks — היום / דורש טיפול / הושלם השבוע / מונה פתוחות', () => {
+  const all = [
+    { id: 1, done: false, due_on: '2026-10-05' },
+    { id: 2, done: false, due_on: '2026-10-03' },
+    { id: 3, done: false, due_on: null },
+    { id: 4, done: true, due_on: '2026-10-05', done_at: '2026-10-05T08:00:00Z' },
+    { id: 5, done: true, due_on: '2026-09-28', done_at: '2026-09-30T08:00:00Z' }, // שבוע שעבר
+  ];
+  const g = groupTasks(all, { today: '2026-10-05', weekStart: '2026-10-04' });
+  assert.deepEqual(g.today.map((t) => t.id), [1]);
+  assert.deepEqual(g.attention.map((t) => t.id), [2, 3]);
+  assert.deepEqual(g.done_this_week.map((t) => t.id), [4]);
+  assert.equal(g.open_count, 3);
 });
