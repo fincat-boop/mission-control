@@ -13,14 +13,12 @@ const r = Router();
 
 /** כל הקמפיינים עם מצב מלאות, קצב והתוכן שמשויך אליהם */
 r.get('/campaigns', wrap(async (_req, res) => {
-  const [campaigns, allocation, milestones] = await Promise.all([
-    campaignsWithHealth(),
-    currentAllocation(),
-    rows(`select m.*, e.name as endpoint_name
-            from strategy_milestones m
-            left join endpoints e on e.id = m.endpoint_id
-           order by m.on_date`),
-  ]);
+  const campaigns = await campaignsWithHealth();
+  const allocation = await currentAllocation();
+  const milestones = await rows(`select m.*, e.name as endpoint_name
+          from strategy_milestones m
+          left join endpoints e on e.id = m.endpoint_id
+         order by m.on_date`);
   res.json({ campaigns, allocation, milestones });
 }));
 

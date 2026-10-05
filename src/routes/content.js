@@ -232,22 +232,20 @@ r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
 /** ספריית התוכן, עם הגרסאות לכל מדיה ולאן כל פריט כבר שובץ */
 r.get('/content', wrap(async (_req, res) => {
-  const [items, variants, assets] = await Promise.all([
-    rows(
-      `select ci.*, e.name as endpoint_name, c.name as campaign_name,
-              coalesce(p.placements, 0) as placements
-         from content_items ci
-         join endpoints e on e.id = ci.endpoint_id
-         left join campaigns c on c.id = ci.campaign_id
-         left join (select content_id, count(*)::int as placements
-                      from posts where content_id is not null group by content_id) p
-                on p.content_id = ci.id
-        order by ci.campaign_id nulls last, ci.sort_order, ci.id`
-    ),
-    rows('select * from content_variants order by content_id, channel_id'),
-    rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
-            from content_assets order by id`),
-  ]);
+  const items = await rows(
+    `select ci.*, e.name as endpoint_name, c.name as campaign_name,
+            coalesce(p.placements, 0) as placements
+       from content_items ci
+       join endpoints e on e.id = ci.endpoint_id
+       left join campaigns c on c.id = ci.campaign_id
+       left join (select content_id, count(*)::int as placements
+                    from posts where content_id is not null group by content_id) p
+              on p.content_id = ci.id
+      order by ci.campaign_id nulls last, ci.sort_order, ci.id`
+  );
+  const variants = await rows('select * from content_variants order by content_id, channel_id');
+  const assets = await rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
+          from content_assets order by id`);
 
   res.json({
     content: items.map((x) => ({

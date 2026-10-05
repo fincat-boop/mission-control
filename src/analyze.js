@@ -119,11 +119,9 @@ export async function analyzeDocument(campaignId, doc) {
   const campaign = await one('select * from campaigns where id = $1', [campaignId]);
   if (!campaign) throw new Error('לא נמצא קמפיין כזה');
 
-  const [all, mine] = await Promise.all([
-    rows('select id, name from channels where active = true order by sort_order, id'),
-    rows(`select ch.id from campaign_channels cc join channels ch on ch.id = cc.channel_id
-           where cc.campaign_id = $1`, [campaignId]),
-  ]);
+  const all = await rows('select id, name from channels where active = true order by sort_order, id');
+  const mine = await rows(`select ch.id from campaign_channels cc join channels ch on ch.id = cc.channel_id
+         where cc.campaign_id = $1`, [campaignId]);
   const mineIds = new Set(mine.map((m) => m.id));
   const channels = all.map((c) => ({ ...c, inCampaign: mineIds.has(c.id) }));
 

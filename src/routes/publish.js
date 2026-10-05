@@ -19,14 +19,12 @@ const r = Router();
  * הטוקן לעולם לא חוזר — רק העובדה שהוא קיים.
  */
 r.get('/publish/status', wrap(async (_req, res) => {
-  const [settings, connections] = await Promise.all([
-    one('select autopublish_enabled from engine_settings limit 1'),
-    rows(
-      `select cc.channel_id, cc.page_id, cc.ig_user_id, cc.auto_enabled,
-              cc.access_token_enc is not null as has_token,
-              cc.last_check_at, cc.last_check_ok, cc.last_check_note
-         from channel_connections cc`),
-  ]);
+  const settings = await one('select autopublish_enabled from engine_settings limit 1');
+  const connections = await rows(
+    `select cc.channel_id, cc.page_id, cc.ig_user_id, cc.auto_enabled,
+            cc.access_token_enc is not null as has_token,
+            cc.last_check_at, cc.last_check_ok, cc.last_check_note
+       from channel_connections cc`);
   res.json({
     autopublish_enabled: settings?.autopublish_enabled ?? false,
     hub_mail_ready: hubMailReady(),

@@ -72,29 +72,27 @@ export function takeProposal(id, userId) {
  * הפרטים הכבדים — לוח, תוכן, התראות — מגיעים דרך כלי קריאה לפי הצורך.
  */
 async function snapshot() {
-  const [endpoints, channels, campaigns, settings, counts] = await Promise.all([
-    rows('select id, name, importance, min_days_between, active from endpoints order by id'),
-    rows(`select id, name, max_per_week, target_per_week, max_promo_per_week,
-                 max_value_per_week, max_hybrid_per_week, urgent_reserve_pct,
-                 blocked_days, active
-            from channels order by sort_order, id`),
-    rows(`select c.id, c.name, c.endpoint_id, c.starts_on, c.ends_on, c.share_pct,
-                 c.importance, c.target_posts, c.active, c.paused_at,
-                 (select count(*)::int from content_items ci where ci.campaign_id = c.id) as content_count,
-                 (select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
-                    from campaign_channels cc where cc.campaign_id = c.id) as channel_ids
-            from campaigns c order by c.starts_on nulls last, c.id`),
-    one('select * from engine_settings limit 1'),
-    one(`select
-           (select count(*)::int from content_items) as content,
-           (select count(*)::int from posts where status in ('scheduled','approved','publishing','failed','pending_approval')) as scheduled,
-           -- "חסר תוכן": פוסטים עתידיים בלי תוכן משויך. המנוע כבר לא יוצר
-           -- status='hole' — משבצת בלי תוכן היא scheduled עם content_id ריק
-           (select count(*)::int from posts
-             where content_id is null and scheduled_at >= now()
-               and status in ('scheduled','approved','pending_approval')) as missing_content,
-           (select count(*)::int from tasks where done = false) as open_tasks`),
-  ]);
+  const endpoints = await rows('select id, name, importance, min_days_between, active from endpoints order by id');
+  const channels = await rows(`select id, name, max_per_week, target_per_week, max_promo_per_week,
+               max_value_per_week, max_hybrid_per_week, urgent_reserve_pct,
+               blocked_days, active
+          from channels order by sort_order, id`);
+  const campaigns = await rows(`select c.id, c.name, c.endpoint_id, c.starts_on, c.ends_on, c.share_pct,
+               c.importance, c.target_posts, c.active, c.paused_at,
+               (select count(*)::int from content_items ci where ci.campaign_id = c.id) as content_count,
+               (select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
+                  from campaign_channels cc where cc.campaign_id = c.id) as channel_ids
+          from campaigns c order by c.starts_on nulls last, c.id`);
+  const settings = await one('select * from engine_settings limit 1');
+  const counts = await one(`select
+         (select count(*)::int from content_items) as content,
+         (select count(*)::int from posts where status in ('scheduled','approved','publishing','failed','pending_approval')) as scheduled,
+         -- "חסר תוכן": פוסטים עתידיים בלי תוכן משויך. המנוע כבר לא יוצר
+         -- status='hole' — משבצת בלי תוכן היא scheduled עם content_id ריק
+         (select count(*)::int from posts
+           where content_id is null and scheduled_at >= now()
+             and status in ('scheduled','approved','pending_approval')) as missing_content,
+         (select count(*)::int from tasks where done = false) as open_tasks`);
   return { today: ymd(new Date()), endpoints, channels, campaigns, settings, counts };
 }
 

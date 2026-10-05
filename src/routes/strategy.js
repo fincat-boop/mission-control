@@ -14,18 +14,16 @@ const r = Router();
  * וכמה כל אחת קיבלה בפועל.
  */
 r.get('/strategy', wrap(async (_req, res) => {
-  const [timeline, allocation, milestones, endpoints, campaigns] = await Promise.all([
-    shareTimeline(),
-    currentAllocation(),
-    rows(`select m.*, e.name as endpoint_name from strategy_milestones m
-            left join endpoints e on e.id = m.endpoint_id order by m.on_date`),
-    rows('select * from endpoints order by importance desc, id'),
-    rows(`select c.*, count(ci.id)::int as content_count,
-                 count(ci.id) filter (where ci.evergreen)::int as evergreen_count
-            from campaigns c
-            left join content_items ci on ci.campaign_id = c.id
-           group by c.id order by c.starts_on nulls last, c.id`),
-  ]);
+  const timeline = await shareTimeline();
+  const allocation = await currentAllocation();
+  const milestones = await rows(`select m.*, e.name as endpoint_name from strategy_milestones m
+          left join endpoints e on e.id = m.endpoint_id order by m.on_date`);
+  const endpoints = await rows('select * from endpoints order by importance desc, id');
+  const campaigns = await rows(`select c.*, count(ci.id)::int as content_count,
+               count(ci.id) filter (where ci.evergreen)::int as evergreen_count
+          from campaigns c
+          left join content_items ci on ci.campaign_id = c.id
+         group by c.id order by c.starts_on nulls last, c.id`);
 
   // הספירה היא ישירות מול נקודת הקצה ולא דרך הקמפיינים,
   // אחרת התוכן השוטף — שאין לו קמפיין — נופל מהספירה

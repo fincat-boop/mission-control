@@ -122,13 +122,11 @@ export async function analyzeImport(campaignId, text) {
     throw new Error('הטבלה צריכה שורת כותרות ולפחות שורת תוכן אחת');
   }
 
-  const [channels, myChannels, existing] = await Promise.all([
-    rows('select id, name from channels order by sort_order, id'),
-    rows(`select ch.id, ch.name from campaign_channels cc
-            join channels ch on ch.id = cc.channel_id
-           where cc.campaign_id = $1`, [campaignId]),
-    rows('select title, sort_order from content_items where campaign_id = $1', [campaignId]),
-  ]);
+  const channels = await rows('select id, name from channels order by sort_order, id');
+  const myChannels = await rows(`select ch.id, ch.name from campaign_channels cc
+          join channels ch on ch.id = cc.channel_id
+         where cc.campaign_id = $1`, [campaignId]);
+  const existing = await rows('select title, sort_order from content_items where campaign_id = $1', [campaignId]);
 
   const { cols, channelCols, unknown } = mapHeader(table[0], channels);
   if (cols.title === -1) {
