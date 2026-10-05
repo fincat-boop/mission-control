@@ -89,13 +89,17 @@ function planRow(x, { title, where, reason, tone = '' }) {
     </label>`;
 }
 
+let planReq = 0; // רק התשובה לפתיחה האחרונה מצוירת — תשובה ישנה לא דורסת חדשה
+
 export async function openEngine() {
   $('#enginePlan').innerHTML = '<div class="empty">מחשב…</div>';
   $('#eApply').disabled = true;
   $('#eApply').textContent = 'שבץ את המסומנים';
   $('#engineDlg').showModal();
 
+  const req = ++planReq;
   const plan = await api('/engine/plan', { method: 'POST', body: { week: state.week } });
+  if (req !== planReq || !$('#engineDlg').open) return;
   const attachments = plan.attachments ?? [];
 
   const placed = plan.placements.map((p) => planRow(p, {

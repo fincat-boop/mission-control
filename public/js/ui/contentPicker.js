@@ -32,7 +32,7 @@ export function candidateMeta(c, withEndpoint = false) {
 
 /** רשימת כפתורים — אחד לכל מועמד, data-content-id על כל אחד */
 export function candidateButtons(list, withEndpoint = false) {
-  return `<div class="pick-list">${list.map((c) => `
+  return `<div class="pick-list" role="group" aria-label="תוכן שאפשר לשייך לפוסט">${list.map((c) => `
     <button type="button" class="pick-item" data-content-id="${c.id}">
       <span class="pick-title">${esc(c.title)}
         <span class="pick-meta">${esc(candidateMeta(c, withEndpoint))}</span></span>

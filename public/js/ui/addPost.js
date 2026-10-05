@@ -10,6 +10,7 @@ import { candidateMeta, loadCandidates, variantLabel } from '../ui/contentPicker
 
 let addSlotCtx = null;
 let candidates = []; // התוכן שאפשר לשייך במשבצת הזו, לפי הנקודה שנבחרה
+let candidatesReq = 0; // רק התשובה לבקשה האחרונה נכנסת — החלפת נקודה מהירה לא מערבבת רשימות
 
 export function wireAddPostDialog() {
   $('#apCancel').addEventListener('click', () => $('#addPostDlg').close());
@@ -39,9 +40,12 @@ async function refreshContentOptions() {
   const sel = $('#apContent');
   sel.innerHTML = '<option value="">טוען…</option>';
   const endpointId = numOrNull($('#apEndpoint').value);
-  candidates = await loadCandidates({
+  const req = ++candidatesReq;
+  const list = await loadCandidates({
     endpointId, channelId: addSlotCtx.channelId, date: addSlotCtx.date,
   });
+  if (req !== candidatesReq) return; // בינתיים נבחרה נקודה אחרת או נפתחה משבצת אחרת
+  candidates = list;
   const group = (label, list) => list.length
     ? `<optgroup label="${label}">${list.map((c) =>
         `<option value="${c.id}">${esc(c.title)} — ${esc(candidateMeta(c, !endpointId))}</option>`).join('')}</optgroup>`

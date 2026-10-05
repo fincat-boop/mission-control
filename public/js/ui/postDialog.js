@@ -123,11 +123,20 @@ async function showAttachPicker(post) {
   }
 
   box.innerHTML = candidateButtons(list, !post.endpoint_id);
-  box.querySelectorAll('[data-content-id]').forEach((b) =>
+  const buttons = [...box.querySelectorAll('[data-content-id]')];
+  buttons.forEach((b) =>
     b.addEventListener('click', run(async () => {
-      const r = await api(`/posts/${post.id}/attach-content`, {
-        method: 'POST', body: { content_id: Number(b.dataset.contentId) },
-      });
+      // לחיצה אחת בלבד — כפולה הייתה שולחת שני שיוכים (השני נכשל ב-409)
+      buttons.forEach((x) => { x.disabled = true; });
+      let r;
+      try {
+        r = await api(`/posts/${post.id}/attach-content`, {
+          method: 'POST', body: { content_id: Number(b.dataset.contentId) },
+        });
+      } catch (e) {
+        buttons.forEach((x) => { x.disabled = false; });
+        throw e;
+      }
       toast((r.draft
         ? 'התוכן שויך — הניסוח לערוץ הזה עוד בטיוטה; מסמנים "מוכן" לפני פרסום.'
         : 'התוכן שויך לפוסט.') +
