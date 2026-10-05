@@ -355,7 +355,26 @@ function wirePlan(campaign, endpointId, content) {
     b.addEventListener('click', run(async (e) => {
       e.stopPropagation();
       const paused = b.dataset.paused === 'true';
-      const res = await api(`/campaigns/${b.dataset.togglePause}/${paused ? 'resume' : 'pause'}`,
+      // לפני הפעולה — כמה פוסטים זה מזיז, ובהחזרה גם כמה נמחקים
+      const id = b.dataset.togglePause;
+      const name = state.campaigns.find((x) => x.id === Number(id))?.name ?? 'הקמפיין';
+      const imp = await api(`/campaigns/${id}/pause-impact`);
+      const ok = paused
+        ? await confirmDialog(`להחזיר את "${name}" לפעילות?\n` +
+            (imp.resume.cleared
+              ? `${imp.resume.cleared} פוסטים עתידיים שלא אושרו יימחקו, והמנוע ישבץ את הקמפיין מחדש במקומות פנויים.`
+              : 'המנוע ישבץ את הקמפיין מחדש במקומות פנויים.') +
+            (imp.resume.kept_approved
+              ? `\n${imp.resume.kept_approved} פוסטים שאושרו לפרסום אוטומטי נשארים במקומם.` : ''),
+            { okLabel: 'החזר לפעילות', danger: imp.resume.cleared > 0 })
+        : await confirmDialog(`להשהות את "${name}"?\n` +
+            (imp.pause.hidden
+              ? `${imp.pause.hidden} פוסטים עתידיים יירדו מהלוח עד שהקמפיין יחזור לפעילות` +
+                (imp.pause.approved ? ` (מתוכם ${imp.pause.approved} שאושרו לפרסום אוטומטי).` : '.')
+              : 'אין לו פוסטים עתידיים על הלוח — המנוע פשוט יפסיק לשבץ ממנו.'),
+            { okLabel: 'השהה' });
+      if (!ok) return;
+      const res = await api(`/campaigns/${id}/${paused ? 'resume' : 'pause'}`,
         { method: 'POST', body: { week: state.week } });
       toast(paused
         ? 'הקמפיין חזר לפעול.' +

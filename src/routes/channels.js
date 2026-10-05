@@ -36,7 +36,41 @@ r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   res.json({ channel: c, engine, relocated });
 }));
 
+/**
+ * מה נמחק עם הערוץ: הפוסטים שלו (cascade, כולל שפורסמו) ותוצאותיהם.
+ * לפני מחיקה — הממשק מציג את זה ומציע להשבית במקום.
+ */
+async function channelImpact(id) {
+  return one(
+    `select c.id, c.name, c.active,
+            count(p.id) filter (where p.status = 'published')::int  as published,
+            count(p.id) filter (where p.status <> 'published')::int as other,
+            count(pr.post_id)::int                                  as results
+       from channels c
+       left join posts p         on p.channel_id = c.id
+       left join post_results pr on pr.post_id = p.id
+      where c.id = $1
+      group by c.id`,
+    [id]
+  );
+}
+
+r.get('/channels/:id/delete-impact', requirePerm('settings'), wrap(async (req, res) => {
+  const impact = await channelImpact(req.params.id);
+  if (!impact) return bad(res, 'לא נמצא ערוץ כזה', 404);
+  res.json({ impact });
+}));
+
 r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const impact = await channelImpact(req.params.id);
+  if (!impact) return bad(res, 'לא נמצא ערוץ כזה', 404);
+  // היסטוריה שפורסמה לא נמחקת בלי בקשה מפורשת (?force=1)
+  if (impact.published > 0 && req.query.force !== '1') {
+    return res.status(409).json({
+      error: `בערוץ יש ${impact.published} פוסטים שפורסמו — מחיקה תמחק גם אותם ואת התוצאות שלהם. אפשר להשבית את הערוץ במקום.`,
+      impact, needs_force: true,
+    });
+  }
   await query('delete from channels where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });

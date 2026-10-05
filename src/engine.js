@@ -318,6 +318,21 @@ async function computeDebts(endpoints, settings, perf = null) {
 
 /* ========================= קיבולת ========================= */
 
+/**
+ * המשקל של כל צד: "משולב" נספר hybrid_weight כמכירתי והשאר כערך.
+ * אותה נוסחה בשער היחס של המנוע ובכרטיס "ערך לכל מכירתי" בנתונים.
+ */
+export function kindWeights({ promo = 0, value = 0, hybrid = 0 }, hybridWeight) {
+  const hw = Number(hybridWeight);
+  return { promo: promo + hybrid * hw, value: value + hybrid * (1 - hw) };
+}
+
+/** ערך לכל מכירתי (עשרון אחד), או null כשאין שום משקל מכירתי */
+export function valuePerPromo(kinds, hybridWeight) {
+  const w = kindWeights(kinds, hybridWeight);
+  return w.promo > 0 ? Number((w.value / w.promo).toFixed(1)) : null;
+}
+
 export function buildUsage(channels, existing, settings) {
   const byChannel = new Map();
   for (const ch of channels) {
@@ -359,8 +374,8 @@ export function buildUsage(channels, existing, settings) {
   const minRatio = Number(settings?.min_value_per_promo ?? 3);
 
   // "משולב" נספר חלקית בשני הצדדים, לפי hybrid_weight
-  const promoWeight = () => weekKind.promo + weekKind.hybrid * hybridWeight;
-  const valueWeight = () => weekKind.value + weekKind.hybrid * (1 - hybridWeight);
+  const promoWeight = () => kindWeights(weekKind, hybridWeight).promo;
+  const valueWeight = () => kindWeights(weekKind, hybridWeight).value;
 
   return {
     channelHasRoom: (channelId) => {
