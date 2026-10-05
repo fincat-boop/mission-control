@@ -3,7 +3,7 @@ import { bad, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { weekMeta } from '../board.js';
 import { requirePerm } from '../auth.js';
-import { closeResolvedTasks } from '../task-lifecycle.js';
+import { closeResolvedTasksSafely } from '../task-lifecycle.js';
 
 const r = Router();
 
@@ -50,8 +50,9 @@ const OPEN_SQL = 'not done and (snoozed_until is null or snoozed_until <= now())
  * ?all=1 — הכול, כולל ההיסטוריה הישנה.
  */
 r.get('/tasks', wrap(async (req, res) => {
-  // קודם סוגרים את מה שכבר נפתר — שהרשימה לא תציג משימה שאין בה צורך
-  await closeResolvedTasks();
+  // קודם סוגרים את מה שכבר נפתר — שהרשימה לא תציג משימה שאין בה צורך.
+  // כשל כאן לא מפיל את הטאב (ראו closeResolvedTasksSafely)
+  await closeResolvedTasksSafely();
   const all = await rows(
     `select t.*, u.name as assignee_name, e.name as endpoint_name,
             p.title as post_title, p.scheduled_at, c.name as channel_name,
@@ -76,7 +77,7 @@ r.get('/tasks', wrap(async (req, res) => {
 
 /** מונה זול לתגית בטאב ולרענון התקופתי — בלי לשלוף את כל המשימות */
 r.get('/tasks/count', wrap(async (_req, res) => {
-  await closeResolvedTasks();
+  await closeResolvedTasksSafely();
   const c = await one(
     `select count(*) filter (where ${OPEN_SQL})::int as open_count,
             count(*) filter (where ${OPEN_SQL} and urgent)::int as urgent_count

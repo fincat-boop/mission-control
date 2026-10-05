@@ -68,6 +68,28 @@ export function autoAssignee(t) {
 }
 
 /**
+ * הסגירה מתוך בקשת GET (טאב המשימות, המונה): בתוך savepoint ועם
+ * lock_timeout קצר — כשל או המתנה לנעילה לא מפילים את הבקשה, רק
+ * נרשמים ללוג, והרשימה מוגשת כמו שהיא. לא זורק לעולם.
+ */
+export async function closeResolvedTasksSafely() {
+  await query('savepoint task_sweep');
+  try {
+    const { prev } = (await query("select current_setting('lock_timeout') as prev")).rows[0];
+    await query("select set_config('lock_timeout', '2s', true)");
+    const out = await closeResolvedTasks();
+    await query("select set_config('lock_timeout', $1, true)", [prev]);
+    await query('release savepoint task_sweep');
+    return out;
+  } catch (e) {
+    // rollback ל-savepoint מחזיר גם את lock_timeout לקודם
+    await query('rollback to savepoint task_sweep');
+    console.error('סגירת משימות שנפתרו (בתוך בקשה) נכשלה:', e.message);
+    return null;
+  }
+}
+
+/**
  * סוגר משימות שהתנאי שלהן נפתר (done + meta.auto_closed = הסיבה), ומשייך
  * משימות פוסט לאחראי של הפוסט. מחזיר כמה נסגרו וכמה שויכו.
  */
@@ -79,7 +101,10 @@ export async function closeResolvedTasks(now = new Date()) {
        from tasks t
        left join posts p on p.id = t.post_id
       where t.done = false and t.post_id is not null
-        and t.kind = any($1::text[])`,
+        and t.kind = any($1::text[])
+        -- שורה שבקשה אחרת מעדכנת כרגע (סימון בוצע, סגירה מקבילה) — מדלגים
+        -- עליה; היא תיבדק בפעם הבאה. בלי זה GET /tasks היה ממתין לה.
+        for update of t skip locked`,
     [AUTO_CLOSE_KINDS]
   );
 
