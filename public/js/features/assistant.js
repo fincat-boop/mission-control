@@ -1,6 +1,7 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { rebuildEpColors, state } from '../core/state.js';
+import { describeArgs } from '../core/proposalArgs.js';
 import { refreshAlerts, refreshCurrentTab, refreshTaskBadge } from '../ui/refresh.js';
 
 /* ========================= העוזר ========================= */
@@ -11,6 +12,53 @@ import { refreshAlerts, refreshCurrentTab, refreshTaskBadge } from '../ui/refres
  */
 const ai = { history: [], log: [], busy: false, ready: null, usd: 0 };
 
+/**
+ * השיחה שורדת רענון (sessionStorage — רק בלשונית הזו, ונמחקת כשסוגרים
+ * אותה). תקרה על הגודל: שיחה ארוכה מקצרת את ההתחלה, כמו trimHistory בשרת —
+ * ההיסטוריה נחתכת רק בהודעת משתמש רגילה, כדי לא להשאיר תוצאת כלי בלי הקריאה שלה.
+ * חסימת אחסון (גלישה פרטית, מכסה) לא מפילה כלום — פשוט לא נשמר.
+ */
+const AI_CHAT_KEY = 'mb_ai_chat';
+const AI_CHAT_MAX_CHARS = 400000;
+const AI_KEEP_LOG = 60;
+const AI_KEEP_HISTORY = 30;
+
+function trimForStorage({ history, log, usd }) {
+  const keptLog = log.slice(-AI_KEEP_LOG);
+  let keptHistory = [];
+  for (let i = Math.max(0, history.length - AI_KEEP_HISTORY); i < history.length; i += 1) {
+    const m = history[i];
+    if (m.role === 'user' && typeof m.content === 'string') { keptHistory = history.slice(i); break; }
+  }
+  return { history: keptHistory, log: keptLog, usd };
+}
+
+function saveAI() {
+  try {
+    let data = { history: ai.history, log: ai.log.filter((e) => !e.pending), usd: ai.usd };
+    let json = JSON.stringify(data);
+    if (json.length > AI_CHAT_MAX_CHARS) {
+      data = trimForStorage(data);
+      json = JSON.stringify(data);
+    }
+    if (json.length > AI_CHAT_MAX_CHARS) json = JSON.stringify({ history: [], log: data.log, usd: data.usd });
+    sessionStorage.setItem(AI_CHAT_KEY, json);
+  } catch { /* אחסון חסום או מלא — השיחה פשוט לא תשרוד רענון */ }
+}
+
+function loadAI() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(AI_CHAT_KEY) ?? 'null');
+    if (!saved || !Array.isArray(saved.log) || !Array.isArray(saved.history)) return;
+    ai.history = saved.history;
+    ai.usd = Number(saved.usd) || 0;
+    // הצעה שאושרה ממש לפני הרענון — לא ידוע אם הסתיימה
+    ai.log = saved.log.filter((e) => !e.pending).map((e) => (e.type === 'proposal' && e.state === 'running'
+      ? { ...e, state: 'failed', error: 'הדף נטען מחדש באמצע הביצוע — בודקים במסך אם זה קרה' }
+      : e));
+  } catch { /* שמור פגום או אחסון חסום — מתחילים שיחה חדשה */ }
+}
+
 const AI_INTRO = `<div class="aihint"><b>מה אני יכול</b>
 להסביר למה הלוח נראה כמו שהוא נראה, למצוא פוסטים שחסר להם תוכן ולהציע מה לעשות איתם.
 אני גם יודע לייצר קמפיינים, להזיז פוסטים ולכתוב ניסוחים לכל ערוץ —
@@ -20,6 +68,7 @@ const AI_INTRO = `<div class="aihint"><b>מה אני יכול</b>
 const AI_OPEN_KEY = 'mb_ai_open';
 
 export function wireAIWidget() {
+  loadAI();
   $('#aiFab').addEventListener('click', () => openAI(true));
   $('#aiClose').addEventListener('click', () => openAI(false));
   $('#aiSend').addEventListener('click', run(sendAI));
@@ -27,6 +76,7 @@ export function wireAIWidget() {
     ai.history = [];
     ai.log = [];
     ai.usd = 0;
+    try { sessionStorage.removeItem(AI_CHAT_KEY); } catch { /* אין מה למחוק */ }
     renderAI();
     $('#aiInput').focus();
   });
@@ -79,6 +129,7 @@ function renderAI() {
       ולהפעיל מחדש. אחרי זה הוא זמין כאן.</div>`;
     return;
   }
+  saveAI();
   log.innerHTML = (ai.log.length ? '' : AI_INTRO) + ai.log.map(aiEntry).join('');
   log.scrollTop = log.scrollHeight;
   // העלות המצטברת של השיחה — כדי שלא תהיה הפתעה בחשבון
@@ -90,13 +141,21 @@ function renderAI() {
 function aiEntry(entry, i) {
   if (entry.type === 'proposal') {
     const p = entry.proposal;
-    const args = Object.entries(p.args)
+    // מה ההצעה עושה, בעברית ובשמות; ה-JSON הגולמי מקופל למי שצריך אותו
+    const rows = describeArgs(p.args, {
+      channels: state.channels, endpoints: state.endpoints,
+      campaigns: state.campaigns, users: state.users,
+    });
+    const raw = Object.entries(p.args ?? {})
       .map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
     return `<div class="aiprop${entry.state ? ' done' : ''}">
       <div class="t">${esc(p.summary)}</div>
       ${p.warnings?.length
         ? `<div class="w">${p.warnings.map((w) => `⚠ ${esc(w)}`).join('<br>')}</div>` : ''}
-      <div class="args">${esc(args)}</div>
+      ${rows.length ? `<dl class="aiargs">${rows.map(([k, v]) =>
+        `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      ${raw ? `<details class="aitech"><summary>פרטים טכניים</summary>
+        <div class="args">${esc(raw)}</div></details>` : ''}
       ${entry.state === 'failed'
         ? `<div class="w err">הביצוע נכשל: ${esc(entry.error)} — אפשר לבקש מהעוזר שוב</div>`
         : entry.state
@@ -159,7 +218,7 @@ async function sendAI() {
   input.value = '';
   autosizeAI();
   ai.log.push({ type: 'msg', role: 'me', text });
-  ai.log.push({ type: 'msg', role: 'sys', text: 'חושב…' });
+  ai.log.push({ type: 'msg', role: 'sys', text: 'חושב…', pending: true });
   renderAI();
   $('#aiSend').disabled = true;
 
