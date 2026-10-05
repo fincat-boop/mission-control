@@ -395,3 +395,36 @@ test('שכפול — העותק מתחיל לא "מוכן": insertCampaign לא 
   const dup = src.slice(src.indexOf("r.post('/campaigns/:id/duplicate'"));
   assert.match(dup.slice(0, dup.indexOf('}));')), /insertCampaign\(b\)/);
 });
+
+/* ---------- גל 4: כל זווית נראית, ומקומות לא מתנגשים ---------- */
+
+test('gridFor — זווית מעבר לתכנון ושתיים באותו מקום חוזרות ב-extra, לא נעלמות', () => {
+  const camp = { ...twoWeeks, structure: 'angles', target_posts: 2 };
+  const a = (id, order) => ({ id, sort_order: order, variants: [
+    { id: id * 10, channel_id: 1, status: 'ready' }] });
+  const g = gridFor(camp, [a(1, 1), a(2, 1), a(3, 2), a(4, 5)], [chA, chB], '2026-10-01', [camp]);
+  assert.equal(g.angles.length, 2);
+  // המקום הראשון הולך לזווית הראשונה לפי הסדר (ואז לפי id)
+  assert.equal(g.angles[0].content.id, 1);
+  assert.deepEqual(g.extra.map((x) => x.content.id), [2, 4]);
+  assert.equal(g.extra[0].extra, true);
+  // תא בלי גרסה מעבר לתכנון — לא נדרש; לא נספר בנדרש
+  assert.equal(g.extra[0].cells.find((x) => x.channel_id === 2).state, 'not_needed');
+  assert.equal(g.total_cells, 4);
+});
+
+test('gridFor — קמפיין בלי תאריכים: כל הזוויות ב-extra', () => {
+  const g = gridFor({ active: true, structure: 'angles' },
+    [{ id: 1, sort_order: 1, variants: [] }], [chA], '2026-10-01', []);
+  assert.equal(g.angles.length, 0);
+  assert.equal(g.extra.length, 1);
+});
+
+test('nextSlots — מקומות כפולים או מחוץ לטווח לא מבלבלים את הספירה', () => {
+  // שתי זוויות ב-2 ואחת ב-9 (מעבר לתכנון של 4): פנויים 1, 3, 4 ואז אחרי 9
+  assert.deepEqual(nextSlots(4, [2, 2, 9], 4), [1, 3, 4, 10]);
+  // זווית שעוברת לקמפיין מלא מקבלת את המקום שאחרי האחרון
+  assert.deepEqual(nextSlots(3, [1, 2, 3], 1), [4]);
+  // מקום 0 (תוכן שוטף שהוכנס לקמפיין) לא נחשב תפוס ולא נבחר
+  assert.deepEqual(nextSlots(2, [0], 2), [1, 2]);
+});

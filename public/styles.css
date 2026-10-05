@@ -1174,3 +1174,8 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 
 /* כפתור הפעולה הבאה בתוך מצב ריק */
 .empty .empty-act { margin-top: 14px; }
+
+/* זוויות מעבר לתכנון — מתחת לרשת הקמפיין */
+.xgroup { margin-top: 22px; }
+.xgroup h3 { font-size: 14px; font-weight: 650; }
+.xgroup .sub { color: var(--muted); font-size: 12.5px; margin: 4px 0 10px; }

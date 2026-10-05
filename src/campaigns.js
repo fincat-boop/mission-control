@@ -119,10 +119,17 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
   // תלוי אם יצא תוכן או לא
   if (!angles) {
     return { angles: [], needs: Object.fromEntries(needs), total_cells: 0, missing: 0, ready: 0,
-             drafts: 0 };
+             drafts: 0, extra: extraAngles(content, new Set(), campaignChannels) };
   }
 
-  const atOrder = new Map(content.map((c) => [c.sort_order, c]));
+  // כל מקום ברשת מקבל זווית אחת — הראשונה לפי הסדר. זווית מעבר למספר
+  // שתוכנן, או שנייה באותו מקום, לא נעלמת: היא חוזרת ב-extra.
+  const atOrder = new Map();
+  for (const c of [...content].sort(byOrder)) {
+    if (c.sort_order >= 1 && c.sort_order <= angles && !atOrder.has(c.sort_order)) {
+      atOrder.set(c.sort_order, c);
+    }
+  }
   let missing = 0;
   let ready = 0;
   let drafts = 0;
@@ -164,7 +171,28 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
   });
 
   return { angles: list, needs: Object.fromEntries(needs), total_cells: total, missing, ready,
-           drafts };
+           drafts, extra: extraAngles(content, new Set(atOrder.values()), campaignChannels) };
+}
+
+/**
+ * הזוויות שאין להן מקום ברשת: מעבר למספר הזוויות שתוכנן, או כפולות במקום
+ * תפוס. מוצגות בקבוצה "מעבר לתכנון" מתחת לרשת ולא נספרות בנדרש — כמו
+ * משבצת מעבר לצורך בקמפיין כללי. תא בלי גרסה = not_needed.
+ */
+function extraAngles(content, placed, campaignChannels) {
+  return [...content].sort(byOrder).filter((c) => !placed.has(c)).map((item) => ({
+    index: item.sort_order,
+    date: null,
+    past: false,
+    extra: true,
+    content: item,
+    cells: campaignChannels.map((ch) => {
+      const v = item.variants?.find((x) => x.channel_id === ch.id) ?? null;
+      return { channel_id: ch.id, channel_name: ch.name, variant_id: v?.id ?? null,
+               state: v ? v.status : 'not_needed', has_text: !!v?.body,
+               warn: readyWarn(item, v, ch) };
+    }),
+  }));
 }
 
 /**
@@ -207,7 +235,8 @@ function completeAnglesGrid(campaign, content, campaignChannels, today) {
   });
 
   for (const ch of campaignChannels) needs[ch.id] ??= 0;
-  return { angles: list, needs, total_cells: total, missing, ready, drafts, complete: true };
+  return { angles: list, needs, total_cells: total, missing, ready, drafts, complete: true,
+           extra: [] };
 }
 
 /**
@@ -328,6 +357,28 @@ export function nextSlots(need, takenOrders, count) {
   for (let i = 1; need != null && i <= need; i += 1) if (!taken.has(i)) free.push(i);
   let overflowFrom = Math.max(0, ...takenOrders, need ?? 0);
   return Array.from({ length: count }, () => free.shift() ?? (overflowFrom += 1));
+}
+
+/**
+ * המקומות הפנויים הבאים בקמפיין לפי זוויות — לזווית שעוברת אליו, ליצירה
+ * בלי מקום מפורש, לייבוא ולהעלאה מרוכזת. אותו חשבון בדיוק כמו המסך
+ * (campaignsWithHealth: כולל הנתח שנגזר מהקמפיינים החופפים), כך שהתוכן
+ * ממלא את השורות הריקות שהמשתמש רואה. קמפיין מוכן — בסוף התור.
+ * @returns {Promise<{slots:number[], need:number|null}>} count מקומות לפי הסדר,
+ *          ומספר הזוויות שתוכנן (null — קמפיין מוכן / בלי תאריכים)
+ */
+export async function freeAngleSlots(campaignId, count) {
+  const campaign = (await rows('select * from campaigns where id = $1', [campaignId]))[0];
+  if (!campaign) return { slots: [], need: null };
+  const channels = await rows(
+    `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
+      where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [campaignId]);
+  const concurrent = await rows('select * from campaigns');
+  const existing = await rows(
+    'select sort_order from content_items where campaign_id = $1', [campaignId]);
+  const need = campaign.content_complete_at
+    ? null : angleCount(campaign, channelNeeds(campaign, channels, concurrent));
+  return { slots: nextSlots(need, existing.map((x) => x.sort_order), count), need };
 }
 
 /**
@@ -508,6 +559,8 @@ export async function campaignsWithHealth() {
       pace: paceOf(c, today, published, grid),
       content: shaped,
       grid: grid.angles,
+      // זוויות שאין להן מקום ברשת (מעבר לתכנון / כפולות) — מוצגות מתחת לה
+      grid_extra: grid.extra ?? [],
       // קמפיין כללי: רשימת משבצות לכל מדיה (ריק בקמפיין לפי זוויות)
       slots: general ? grid.channels : [],
       // פוסטים במשבצות של מדיות שהוסרו מהקמפיין — נשמרים ולא משובצים

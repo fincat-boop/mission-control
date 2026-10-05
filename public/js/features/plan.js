@@ -658,53 +658,76 @@ function campaignGrid(c) {
       לקמפיין אין תאריכים, ולכן אין ממה לגזור כמה תוכן הוא צריך.
       ${can('settings') ? `<div class="empty-act">
         <button class="btn primary" data-set-dates="${c.id}">קבע תאריכים</button></div>` : ''}
-    </div></div>`;
+    </div></div>${extraGroup(c)}`;
   }
   if (c.structure === 'general') return generalBoard(c);
-
-  const head = c.channels.map((ch) =>
-    `<th>${esc(ch.name)}<div class="need">${c.needs[ch.id] ?? 0} פוסטים</div></th>`).join('');
-
-  const rows = c.grid.map((row) => {
-    const item = row.content;
-    const angle = item
-      ? `<div class="aname">${esc(item.title)}</div>
-         <div class="ameta">${angleMeta(item)}</div>`
-      : `<div class="aname muted">${row.past ? 'זווית שלא נכתבה' : 'זווית חדשה'}</div>`;
-
-    const cells = c.channels.map((ch) => {
-      const cell = row.cells.find((x) => x.channel_id === ch.id);
-      const st = CELL[cell.state];
-      // בקמפיין מוכן תא בלי גרסה לא נדרש, אבל אפשר לפתוח אותו ולהוסיף גרסה
-      const clickable = can('content') && (cell.state !== 'not_needed' || c.complete);
-      return `<td class="cell ${st.cls}${cell.warn ? ' warn' : ''}" data-state="${cell.state}"
-        ${item ? `data-item="${item.id}"` : ''}
-        ${clickable ? `data-cell="${row.index}" data-ch="${ch.id}"` : ''}
-        ${clickable || cell.warn ? `data-tt="${esc(ch.name)} · ${esc(cellTip(cell))}"` : ''}>
-        <span>${esc(cellLabel(cell))}</span></td>`;
-    }).join('');
-
-    return `<tr class="${row.past ? 'past' : ''}">
-      <td class="angle" ${item ? `data-item="${item.id}"` : ''}
-        ${can('content') ? `data-angle="${row.index}"` : ''}>
-        <div class="anum">${row.index}<span>${fmtDate(row.date)}</span></div>
-        ${angle}
-      </td>${cells}</tr>`;
-  }).join('');
 
   return `
     ${campaignHead(c)}
 
     <div class="board panel">
       <table class="grid cgrid">
-        <thead><tr><th class="angle">זווית</th>${head}</tr></thead>
-        <tbody>${rows}</tbody>
+        <thead><tr><th class="angle">זווית</th>${gridHead(c)}</tr></thead>
+        <tbody>${c.grid.map((row) => angleRow(c, row)).join('')}</tbody>
       </table>
     </div>
+    ${extraGroup(c)}
     ${completeLine(c)}
     <div class="sumline">
-      כל שורה היא מסר אחד, וכל עמודה היא הניסוח שלו למדיה. לחיצה על תא פותחת את הטקסט לאותה מדיה.
+      כל שורה היא מסר אחד, וכל עמודה היא הניסוח שלו לערוץ. לחיצה על תא פותחת את הטקסט לאותו ערוץ.
     </div>`;
+}
+
+const gridHead = (c) => c.channels.map((ch) =>
+  `<th>${esc(ch.name)}<div class="need">${c.needs[ch.id] ?? 0} פוסטים</div></th>`).join('');
+
+/** שורה ברשת הזוויות: הזווית (או מקום ריק), ותא לכל ערוץ */
+function angleRow(c, row) {
+  const item = row.content;
+  const angle = item
+    ? `<div class="aname">${esc(item.title)}</div>
+       <div class="ameta">${angleMeta(item)}</div>`
+    : `<div class="aname muted">${row.past ? 'זווית שלא נכתבה' : 'זווית חדשה'}</div>`;
+
+  const cells = c.channels.map((ch) => {
+    const cell = row.cells.find((x) => x.channel_id === ch.id);
+    const st = CELL[cell.state];
+    // בקמפיין מוכן (ומעבר לתכנון) תא בלי גרסה לא נדרש, אבל אפשר לפתוח אותו
+    // ולהוסיף גרסה
+    const clickable = can('content') && (cell.state !== 'not_needed' || c.complete || row.extra);
+    return `<td class="cell ${st.cls}${cell.warn ? ' warn' : ''}" data-state="${cell.state}"
+      ${item ? `data-item="${item.id}"` : ''}
+      ${clickable ? `data-cell="${row.index}" data-ch="${ch.id}"` : ''}
+      ${clickable || cell.warn ? `data-tt="${esc(ch.name)} · ${esc(cellTip(cell))}"` : ''}>
+      <span>${esc(cellLabel(cell))}</span></td>`;
+  }).join('');
+
+  return `<tr class="${row.past ? 'past' : ''}" data-date="${row.date ?? ''}">
+    <td class="angle" ${item ? `data-item="${item.id}"` : ''}
+      ${can('content') ? `data-angle="${row.index}"` : ''}>
+      <div class="anum">${row.index}<span>${row.date ? fmtDate(row.date) : ''}</span></div>
+      ${angle}
+    </td>${cells}</tr>`;
+}
+
+/**
+ * זוויות שאין להן מקום ברשת — מעבר למספר שתוכנן, או שתיים באותו מקום.
+ * קודם הן פשוט לא הוצגו; עכשיו הן בקבוצה משלהן מתחת לרשת, ונפתחות כרגיל.
+ */
+function extraGroup(c) {
+  const extra = c.grid_extra ?? [];
+  if (!extra.length) return '';
+  return `<div class="xgroup">
+    <h3>מעבר לתכנון (${extra.length})</h3>
+    <p class="sub">זוויות שאין להן שורה ברשת: מעבר למספר הזוויות שתוכנן, או שתיים באותו מקום.
+      הן לא נספרות בנדרש, והמנוע עדיין יכול לשבץ אותן.</p>
+    <div class="board panel">
+      <table class="grid cgrid">
+        <thead><tr><th class="angle">זווית</th>${gridHead(c)}</tr></thead>
+        <tbody>${extra.map((row) => angleRow(c, row)).join('')}</tbody>
+      </table>
+    </div>
+  </div>`;
 }
 
 

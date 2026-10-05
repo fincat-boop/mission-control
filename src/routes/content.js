@@ -6,7 +6,7 @@ import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
   newMediaKey, uploadSignedHeaders, validateSignRequest, verifyUploaded,
 } from '../media.js';
-import { angleCount, channelNeeds, nextSlots } from '../campaigns.js';
+import { channelNeeds, freeAngleSlots, nextSlots } from '../campaigns.js';
 import { analyzeImport, runImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
@@ -341,12 +341,17 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
       );
       if (taken) return bad(res, 'המשבצת הזו כבר תפוסה');
       nextOrder = Number(b.sort_order);
-    } else {
+    } else if (slotChannel) {
       nextOrder = (await one(
         `select coalesce(max(sort_order),0) + 1 as n from content_items
-          where campaign_id = $1 and slot_channel_id is not distinct from $2`,
+          where campaign_id = $1 and slot_channel_id = $2`,
         [b.campaign_id, slotChannel]
       ))?.n ?? 1;
+    } else {
+      // זווית בלי מקום מפורש — המקום הפנוי הראשון ברשת, לא אחרי האחרון.
+      // נעילת הקמפיין כמו בהעלאה המרוכזת: שתי יצירות במקביל לא יקבלו אותו מקום
+      await one('select id from campaigns where id = $1 for update', [b.campaign_id]);
+      nextOrder = (await freeAngleSlots(b.campaign_id, 1)).slots[0] ?? 1;
     }
   }
 
@@ -465,15 +470,12 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
         ? 'אי אפשר להעביר זווית לקמפיין כללי'
         : 'אי אפשר להעביר תוכן של משבצת לקמפיין לפי זוויות');
     }
-    // קמפיין מוכן: מה שנכנס אליו מצטרף בסוף (בכללי — בסוף המדיה שלו), ולא
-    // נדחף לפני הפוסטים שכבר נפרסו על התקופה
+    // זווית שעוברת לקמפיין אחר מקבלת שם את המקום הפנוי הראשון — לא את
+    // המספר שהיה לה בקמפיין הקודם (שם הוא יכול להיות תפוס, והזווית הייתה
+    // נעלמת מהרשת). קמפיין מוכן: בסוף התור, ולא לפני הפוסטים שכבר נפרסו.
     // (Number: מזהה שהגיע כמחרוזת מהעוזר הוא אותו קמפיין, לא מעבר)
-    if (owner?.content_complete_at && b.sort_order == null &&
-        Number(b.campaign_id) !== current.campaign_id) {
-      b.sort_order = (await one(
-        `select coalesce(max(sort_order), 0) + 1 as n from content_items
-          where campaign_id = $1 and slot_channel_id is not distinct from $2`,
-        [b.campaign_id, current.slot_channel_id]))?.n ?? 1;
+    if (owner && b.sort_order == null && Number(b.campaign_id) !== current.campaign_id) {
+      b.sort_order = (await freeAngleSlots(b.campaign_id, 1)).slots[0] ?? 1;
     }
   }
   // משבצת מקושרת שיוצאת מהקמפיין מתנתקת קודם — עם עותק משלה של התוכן
@@ -797,32 +799,20 @@ async function bulkAngles(req, res, files, attach) {
   }
   const channelIds = parseIdList(req.body?.ready_channel_ids);
 
-  const existing = await rows(
-    'select sort_order from content_items where campaign_id = $1', [campaign.id]
-  );
-  const taken = new Set(existing.map((x) => x.sort_order));
-
   const myChannels = await rows(
     `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`,
     [campaign.id]
   );
-  // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו. קמפיין
-  // שסומן מוכן הוא בגודל התוכן שלו: מה שנוסף נכנס בסוף ומגדיל אותו.
-  const required = campaign.content_complete_at
-    ? null : angleCount(campaign, channelNeeds(campaign, myChannels));
-
-  // המשבצות הריקות, לפי הסדר. אם נגמרו — ממשיכים אחרי המשבצת האחרונה.
-  const freeSlots = [];
-  for (let i = 1; required !== null && i <= required; i += 1) {
-    if (!taken.has(i)) freeSlots.push(i);
-  }
-  let overflowFrom = Math.max(0, ...existing.map((x) => x.sort_order), required ?? 0);
+  // המשבצות הריקות לפי הסדר, ואחריהן המשך אחרי האחרונה — אותו חשבון כמו
+  // המסך (כולל הנתח שנגזר מהקמפיינים החופפים). קמפיין שסומן מוכן הוא בגודל
+  // התוכן שלו: מה שנוסף נכנס בסוף ומגדיל אותו.
+  const { slots, need: required } = await freeAngleSlots(campaign.id, files.length);
 
   const created = [];
   const ok = await uniqueOrNull(() => tx(async (client) => {
     for (const [i, f] of files.entries()) {
-      const slot = freeSlots.shift() ?? (overflowFrom += 1);
+      const slot = slots[i];
       const item = (await client.query(
         `insert into content_items (endpoint_id, campaign_id, kind, title,
                                     ready_channel_ids, sort_order)
