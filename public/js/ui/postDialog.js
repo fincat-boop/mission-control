@@ -5,7 +5,7 @@ import { can, epColor, state } from '../core/state.js';
 import { goToTab, refreshAfterPostChange } from '../ui/refresh.js';
 import { hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
-import { AUTO_PLATFORMS, choosePrimary, isMissed, nextFullHour, postFacts,
+import { AUTO_PLATFORMS, choosePrimary, isMissed, nextFreeSlot, postFacts,
          rescheduleApproves } from '../core/postActions.js';
 
 /* ========================= תצוגת פוסט מהלוח ========================= */
@@ -104,7 +104,7 @@ const ACT = {
     label: (post, f) => (rescheduleApproves(f, perms()) ? 'קבע מועד חדש ופרסם' : 'קבע מועד חדש'),
     keepOpen: true,
     run: async (post) => {
-      showReschedule(post);
+      await showReschedule(post);
       return false; // הבחירה קורית בתוך החלון
     },
   },
@@ -158,12 +158,40 @@ const labelOf = (key) => {
  * ואז שתי קריאות — הזזה (עם אזהרת המרווח הרגילה) ואחריה אישור לפרסום
  * אוטומטי, כשאפשר. אישור שנכשל אחרי הזזה שהצליחה — אומרים בדיוק מה קרה.
  */
-function showReschedule(post) {
+/**
+ * השעה הפנויה הבאה בערוץ של הפוסט — לפי הלוח של השבוע הזה והבא. אם הלוח
+ * לא נטען, רק השעה העגולה הבאה (השרת עדיין בודק התנגשויות ומרווח).
+ */
+async function defaultSlot(post) {
+  const now = new Date();
+  const weeks = [ymd(now), ymd(new Date(now.getTime() + 7 * 86400000))];
+  const busy = [];
+  try {
+    const boards = await Promise.all(weeks.map((w) => api(`/board?week=${w}`)));
+    for (const b of boards) {
+      const ch = b.channels.find((c) => c.id === post.channel_id);
+      for (const day of ch?.days ?? []) {
+        for (const p of day.posts) {
+          if (p.id !== post.id) busy.push({ at: p.scheduled_at, endpoint_id: p.endpoint_id });
+        }
+      }
+    }
+  } catch { /* בלי הלוח — רק השעה העגולה הבאה */ }
+  const channel = state.channels.find((c) => c.id === post.channel_id);
+  return nextFreeSlot({
+    now, busy, blockedDays: channel?.blocked_days ?? [], endpointId: post.endpoint_id ?? null,
+  });
+}
+
+async function showReschedule(post) {
   const box = $('#pReschedBox');
   if (!box) return;
   const f = previewFacts;
   const approves = rescheduleApproves(f, perms());
-  const at = nextFullHour();
+  box.hidden = false;
+  box.innerHTML = '<div class="pvbox-title">מחפש מועד פנוי…</div>';
+  const at = await defaultSlot(post);
+  if (previewPost?.id !== post.id) return; // בינתיים נפתח פוסט אחר
   const hint = approves
     ? 'אחרי שהמועד יישמר הפוסט יאושר לפרסום אוטומטי, ויתפרסם במועד החדש.'
     : post.status === 'approved'

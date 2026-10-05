@@ -1137,3 +1137,9 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .ptabs button[aria-selected="true"] { color: var(--ink-1); border-bottom-color: var(--accent); font-weight: 600; }
 .ptabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 #pEdit .frow2 { margin-bottom: 10px; }
+/* פוסט שהמועד שלו עבר ולא יצא — מסגרת ותג "עבר המועד" */
+.post.missed { outline: 2px dashed var(--st-warn); outline-offset: -2px; }
+.post .missed-tag {
+  display: inline-block; margin-top: 4px; font-style: normal; font-size: 9.5px; font-weight: 700;
+  padding: 1px 6px; border-radius: 4px; background: var(--st-warn); color: #1a1a1a;
+}

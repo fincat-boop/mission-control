@@ -7,6 +7,7 @@ import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
 import { confirmDialog } from '../core/confirm.js';
+import { isMissed } from '../core/postActions.js';
 import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
 
 /* ========================= הלוח ========================= */
@@ -309,15 +310,18 @@ function postCard(p) {
     ? `<i class="hint">${p.content_hint === 'ready' ? 'יש תוכן לשייך' : 'יש טיוטה'}</i>` : '';
 
   const tag = AUTO_TAG[p.status] ?? contentTag;
-  const cls = ['post', p.status === 'failed' && 'failed', missing && 'missing']
+  // מתוכנן (או מאושר שלא נתפס) שהמועד שלו עבר — לא יצא, וצריך החלטה
+  const missed = isMissed(p);
+  const cls = ['post', p.status === 'failed' && 'failed', missing && 'missing', missed && 'missed']
     .filter(Boolean).join(' ');
+  const tt = [missed && 'עבר המועד', missing && 'חסר תוכן', tip].filter(Boolean).join(' · ');
 
-  return `<div class="${cls}" ${clickable} data-tt="${esc(missing ? `חסר תוכן · ${tip}` : tip)}"
+  return `<div class="${cls}" ${clickable} data-tt="${esc(tt)}"
     style="background:${bg};color:${inkOn(bg)}">
     <span class="corner-tag ${tag.cls}">${tag.label}</span>
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
       ${esc(p.time)}${who}${hint}
-    </div></div>`;
+    </div>${missed ? '<i class="missed-tag">עבר המועד</i>' : ''}</div>`;
 }

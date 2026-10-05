@@ -118,3 +118,44 @@ export function defaultUrgentTime(now = new Date()) {
   const h = next.getHours();
   return sameDay && h > 10 && h <= 21 ? `${String(h).padStart(2, '0')}:00` : '10:00';
 }
+
+const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+const hourKey = (d) => `${dayKey(d)} ${d.getHours()}`;
+
+/**
+ * ברירת המחדל ל"קבע מועד חדש": השעה העגולה הפנויה הבאה בערוץ — לפחות רבע
+ * שעה מעכשיו, בשעות הפעילות, לא ביום חסום לערוץ, לא בשעה שכבר יש בה פוסט
+ * בערוץ, ולא ביום שבו לאותה נקודת קצה כבר יש פוסט בערוץ (השרת דוחה את זה).
+ * לא נמצא בתוך `days` ימים — השעה העגולה הבאה, והשרת יגיד מה לא מתאים.
+ *
+ * @param {{now?: Date, busy?: {at: string|Date, endpoint_id?: number|null}[],
+ *          blockedDays?: number[], endpointId?: number|null,
+ *          firstHour?: number, lastHour?: number, days?: number}} o
+ */
+export function nextFreeSlot({
+  now = new Date(), busy = [], blockedDays = [], endpointId = null,
+  firstHour = 9, lastHour = 20, days = 14,
+} = {}) {
+  const taken = new Set(busy.map((b) => hourKey(new Date(b.at))));
+  const epDays = new Set(endpointId
+    ? busy.filter((b) => b.endpoint_id === endpointId).map((b) => dayKey(new Date(b.at))) : []);
+  const limit = now.getTime() + days * 86400000;
+  const t = nextFullHour(now);
+  while (t.getTime() < limit) {
+    if (t.getHours() < firstHour) {
+      t.setHours(firstHour, 0, 0, 0);
+    } else if (t.getHours() > lastHour) {
+      t.setDate(t.getDate() + 1);
+      t.setHours(firstHour, 0, 0, 0);
+      continue;
+    }
+    if (blockedDays.includes(t.getDay()) || epDays.has(dayKey(t))) {
+      t.setDate(t.getDate() + 1);
+      t.setHours(firstHour, 0, 0, 0);
+      continue;
+    }
+    if (!taken.has(hourKey(t))) return new Date(t);
+    t.setHours(t.getHours() + 1, 0, 0, 0);
+  }
+  return nextFullHour(now);
+}

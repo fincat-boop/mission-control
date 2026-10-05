@@ -127,3 +127,26 @@ test('defaultUrgentTime — 10:00, או השעה העגולה הבאה כשכב�
   assert.equal(t('2026-10-05T15:20:00+03:00'), '16:00');
   assert.equal(t('2026-10-05T21:30:00+03:00'), '10:00'); // מאוחר מדי — מחר
 });
+
+test('nextFreeSlot — השעה העגולה הפנויה הבאה בערוץ', async () => {
+  const { nextFreeSlot } = await import('../public/js/core/postActions.js');
+  const d = (s) => new Date(s).toISOString();
+  const now = new Date('2026-10-05T15:20:00+03:00'); // יום שני
+  // בלי כלום על הלוח — 16:00
+  assert.equal(nextFreeSlot({ now }).toISOString(), d('2026-10-05T16:00:00+03:00'));
+  // 16:00 תפוס בערוץ — 17:00
+  assert.equal(nextFreeSlot({ now, busy: [{ at: '2026-10-05T16:00:00+03:00' }] }).toISOString(),
+    d('2026-10-05T17:00:00+03:00'));
+  // מאוחר מדי היום — מחר ב-9:00
+  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T20:50:00+03:00') }).toISOString(),
+    d('2026-10-06T09:00:00+03:00'));
+  // מחר (שלישי=2) חסום לערוץ — מחרתיים
+  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T20:50:00+03:00'), blockedDays: [2] }).toISOString(),
+    d('2026-10-07T09:00:00+03:00'));
+  // לאותה נקודה כבר יש פוסט היום בערוץ — מחר
+  assert.equal(nextFreeSlot({ now, endpointId: 4, busy: [{ at: '2026-10-05T09:00:00+03:00', endpoint_id: 4 }] })
+    .toISOString(), d('2026-10-06T09:00:00+03:00'));
+  // לפני שעות הפעילות — 9:00 של אותו יום
+  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T06:10:00+03:00') }).toISOString(),
+    d('2026-10-05T09:00:00+03:00'));
+});
