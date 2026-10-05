@@ -428,13 +428,26 @@ function wirePlan(campaign, endpointId, content) {
       if (!ok) return;
       const res = await api(`/campaigns/${id}/${paused ? 'resume' : 'pause'}`,
         { method: 'POST', body: { week: state.week } });
-      if (paused) await import('../ui/engineDialog.js').then(({ engineToast }) => engineToast(res, 'הקמפיין חזר לפעול.' + (res.cleared ? ` ${res.cleared} פוסטים ישנים נוקו.` : '') + (res.engine?.placed || res.engine?.attached ? '' : ' המנוע ימקם אותו מחדש בפעם הבאה שיש מקום.')));
-      else toast(`הקמפיין הושהה${res.held ? ` · ${res.held} שיבוצים ירדו מהלוח` : ''}.`);
+      // בשני הכיוונים המנוע ממלא אחרי השינוי — ההודעה אומרת מה, עם "בטל"
+      if (paused) {
+        engineToast(res, 'הקמפיין חזר לפעול.' +
+          (res.cleared ? ` ${res.cleared} פוסטים ישנים נוקו.` : '') +
+          (res.engine?.placed || res.engine?.attached
+            ? '' : ' המנוע ימקם אותו מחדש בפעם הבאה שיש מקום.'));
+      } else {
+        engineToast(res, `הקמפיין הושהה${res.held ? ` · ${res.held} פוסטים ירדו מהלוח` : ''}.`);
+      }
       await reload();
     })));
 
   $('#addCampaign')?.addEventListener('click', () =>
     openCampaignForm(null, reload, endpointId));
+
+  // מצב ריק של קמפיין בלי תאריכים — ישר לטופס, עם הפוקוס על התאריך
+  $('#plan [data-set-dates]')?.addEventListener('click', () => {
+    openCampaignForm(campaign, reload);
+    $('#gen_starts_on')?.focus();
+  });
 
   if (campaign) wireCampaignGrid(campaign, reload);
 }
@@ -464,8 +477,10 @@ function openChannelPicker(campaign, reload) {
     onSave: async (v) => {
       if (!v.channel_ids?.length) throw new Error('צריך לבחור לפחות מדיה אחת');
       v.week = state.week;
-      await patchCampaign(campaign.id, v);
+      const res = await patchCampaign(campaign.id, v);
+      engineToast(res, 'הערוצים נשמרו.');
       await reload();
+      return false;
     },
   });
 }
@@ -557,12 +572,17 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       if (duplicate) {
         const res = await api(`/campaigns/${source.id}/duplicate`, { method: 'POST', body: v });
         state.planCampaign = res.campaign.id;
+        engineToast(res,
+          `הקמפיין שוכפל עם ${res.copied.items} ${structure === 'general' ? 'פוסטים' : 'זוויות'}.`);
         await reload();
-        return `הקמפיין שוכפל עם ${res.copied.items} ${structure === 'general' ? 'פוסטים' : 'זוויות'}.`;
+        return false;
       }
-      if (campaign) await patchCampaign(campaign.id, v);
-      else await api('/campaigns', { method: 'POST', body: v });
+      const res = campaign
+        ? await patchCampaign(campaign.id, v)
+        : await api('/campaigns', { method: 'POST', body: v });
+      engineToast(res, campaign ? 'הקמפיין נשמר.' : 'הקמפיין נוצר.');
       await reload();
+      return false;
     },
     onOpen: () => {
       $$('#genBody [name="gen_structure"]').forEach((r) =>
@@ -627,16 +647,17 @@ function fillLine(c) {
 function campaignGrid(c) {
   if (!c.channels.length) {
     return `${campaignHead(c)}<div class="panel"><div class="empty">
-      לקמפיין הזה לא נבחרו מדיות, ולכן אין ממה לגזור כמה תוכן הוא צריך.
-      ${can('settings') ? `<div style="margin-top:14px">
-        <button class="btn primary" data-pick-channels="${c.id}">בחירת מדיות</button></div>` : ''}
+      לקמפיין הזה לא נבחרו ערוצים, ולכן אין ממה לגזור כמה תוכן הוא צריך.
+      ${can('settings') ? `<div class="empty-act">
+        <button class="btn primary" data-pick-channels="${c.id}">בחר ערוצים</button></div>` : ''}
     </div></div>`;
   }
   const empty = c.structure === 'general' ? !c.slots.length : !c.grid.length;
   if (empty) {
     return `${campaignHead(c)}<div class="panel"><div class="empty">
       לקמפיין אין תאריכים, ולכן אין ממה לגזור כמה תוכן הוא צריך.
-      ${can('settings') ? 'קובעים אותם ב"ערוך קמפיין" — תאריך לפוסט הראשון ותקופה.' : ''}
+      ${can('settings') ? `<div class="empty-act">
+        <button class="btn primary" data-set-dates="${c.id}">קבע תאריכים</button></div>` : ''}
     </div></div>`;
   }
   if (c.structure === 'general') return generalBoard(c);
@@ -816,17 +837,18 @@ async function linkTo(campaign, channelId, index, item, reload) {
     body.replace = true;
   }
   const path = `/content/${linkMode.itemId}/link`;
+  let res;
   try {
-    await api(path, { method: 'POST', body });
+    res = await api(path, { method: 'POST', body });
   } catch (e) {
     // מישהו מילא את המשבצת בינתיים — אותה שאלה, ושוב עם אישור
     if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
     if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
-    await api(path, { method: 'POST', body: { ...body, replace: true } });
+    res = await api(path, { method: 'POST', body: { ...body, replace: true } });
   }
   const done = `${linkMode.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של המדיה שלה.`;
   exitLinkMode();
-  toast(done);
+  engineToast(res, done);
   await reload();
 }
 
@@ -1048,9 +1070,10 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           : item.linked_to_id
             ? `למחוק את הפוסט הזה? רק המשבצת הזו נמחקת — התוכן נשאר ב${names}.`
             : `למחוק את הפוסט הזה? המשבצות המקושרות (${names}) יישארו עם עותק משלהן של התוכן.`;
-        if (!(await confirmDialog(question, { danger: true }))) return;
-        await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
+        if (!(await confirmDialog(question, { okLabel: 'מחק פוסט', danger: true }))) return;
+        const res = await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         await closeGeneric({ force: true });
+        engineToast(res, 'הפוסט נמחק.');
         await reload();
       }));
       $('#genLink')?.addEventListener('click', () => {
@@ -1059,9 +1082,10 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
       });
       $$('#genBody [data-unlink]').forEach((b) =>
         b.addEventListener('click', run(async () => {
-          await api(`/content/${b.dataset.unlink}/unlink`, { method: 'POST', body: { week: state.week } });
+          const res = await api(`/content/${b.dataset.unlink}/unlink`,
+            { method: 'POST', body: { week: state.week } });
           await closeGeneric({ force: true });
-          toast('הקישור נותק — לכל משבצת עותק משלה של התוכן.');
+          engineToast(res, 'הקישור נותק — לכל משבצת עותק משלה של התוכן.');
           await reload();
         })));
     },
@@ -1231,15 +1255,17 @@ async function completeCampaign(campaign, reload) {
   const ok = await confirmDialog(`לסמן את "${campaign.name}" כמוכן?\n\n${lines.join('\n')}`,
     { okLabel: 'קמפיין מוכן' });
   if (!ok) return;
-  await api(`/campaigns/${campaign.id}/complete`, { method: 'POST', body: { week: state.week } });
-  toast('הקמפיין סומן מוכן — הפוסטים נפרסו על התקופה.');
+  const res = await api(`/campaigns/${campaign.id}/complete`,
+    { method: 'POST', body: { week: state.week } });
+  engineToast(res, 'הקמפיין סומן מוכן — הפוסטים נפרסו על התקופה.');
   await reload();
 }
 
 /** חזרה להקצאה לפי הקצב: המשבצות הריקות חוזרות, התוכן לא משתנה */
 async function reopenCampaign(campaign, reload) {
-  await api(`/campaigns/${campaign.id}/reopen`, { method: 'POST', body: { week: state.week } });
-  toast('הקמפיין נפתח מחדש — המשבצות הריקות חזרו.');
+  const res = await api(`/campaigns/${campaign.id}/reopen`,
+    { method: 'POST', body: { week: state.week } });
+  engineToast(res, 'הקמפיין נפתח מחדש — המשבצות הריקות חזרו.');
   await reload();
 }
 
@@ -1360,9 +1386,11 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
           if (await deleteAssetAsk(b)) filesChanged = true;
         })));
       $('#genDelete')?.addEventListener('click', run(async () => {
-        if (!(await confirmDialog('למחוק את הזווית וכל הגרסאות שלה?', { danger: true }))) return;
-        await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
+        if (!(await confirmDialog('למחוק את הזווית וכל הגרסאות שלה?',
+          { okLabel: 'מחק זווית', danger: true }))) return;
+        const res = await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         await closeGeneric({ force: true });
+        engineToast(res, 'הזווית נמחקה.');
         await reload();
       }));
     },

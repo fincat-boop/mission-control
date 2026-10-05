@@ -1171,3 +1171,6 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .vmail b { color: var(--ink-1); }
 .vacts { margin-inline-end: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .vacts #markReady { color: var(--st-good); }
+
+/* כפתור הפעולה הבאה בתוך מצב ריק */
+.empty .empty-act { margin-top: 14px; }
