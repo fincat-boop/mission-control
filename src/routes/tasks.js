@@ -81,8 +81,24 @@ r.post('/tasks', requirePerm('content'), wrap(async (req, res) => {
   res.status(201).json({ task: t });
 }));
 
+/**
+ * משימת אישור נסגרת רק בידי מי שמורשה לאשר: סגירה בלי אישור הפוסט
+ * משאירה אותו ממתין, והמשימה שהייתה התזכורת היחידה נעלמת. גם שינוי
+ * הסוג חסום — אחרת עוקפים דרך "general".
+ */
+export function approveTaskBlocked(task, body, user) {
+  if (task.kind !== 'approve') return false;
+  if (user.is_owner || user.perm_approve) return false;
+  return 'done' in body || 'kind' in body;
+}
+
 r.patch('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
   const body = { ...req.body };
+  const cur = await one('select kind from tasks where id = $1', [req.params.id]);
+  if (!cur) return bad(res, 'לא נמצאה משימה כזו', 404);
+  if (approveTaskBlocked(cur, body, req.user)) {
+    return bad(res, 'משימת אישור נסגרת רק על ידי מי שמורשה לאשר — הפוסט עדיין ממתין לאישור', 403);
+  }
   // סימון "בוצע" מחתים גם את השעה
   if (body.done === true) body.done_at = new Date().toISOString();
   if (body.done === false) body.done_at = null;

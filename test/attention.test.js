@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { waTaskAction } from '../src/publish/runner.js';
 import { endpointAirStatus, failedPostAlerts, missedPostAlerts } from '../src/alerts.js';
-import { groupTasks, localYmd } from '../src/routes/tasks.js';
+import { approveTaskBlocked, groupTasks, localYmd } from '../src/routes/tasks.js';
 
 /* ========================= משימת וואטסאפ: מה עושים ========================= */
 
@@ -86,4 +86,19 @@ test('groupTasks — היום / דורש טיפול / הושלם השבוע / מ
   assert.deepEqual(g.attention.map((t) => t.id), [2, 3]);
   assert.deepEqual(g.done_this_week.map((t) => t.id), [4]);
   assert.equal(g.open_count, 3);
+});
+
+/* ========================= משימת אישור — הרשאה ========================= */
+
+test('approveTaskBlocked — בלי perm_approve אי אפשר לסגור או לשנות סוג של משימת אישור', () => {
+  const content = { is_owner: false, perm_content: true, perm_approve: false };
+  assert.equal(approveTaskBlocked({ kind: 'approve' }, { done: true }, content), true);
+  assert.equal(approveTaskBlocked({ kind: 'approve' }, { kind: 'general' }, content), true);
+  assert.equal(approveTaskBlocked({ kind: 'approve' }, { title: 'x' }, content), false);
+  assert.equal(approveTaskBlocked({ kind: 'general' }, { done: true }, content), false);
+});
+
+test('approveTaskBlocked — מאשר או בעלים סוגרים כרגיל', () => {
+  assert.equal(approveTaskBlocked({ kind: 'approve' }, { done: true }, { perm_approve: true }), false);
+  assert.equal(approveTaskBlocked({ kind: 'approve' }, { done: true }, { is_owner: true }), false);
 });

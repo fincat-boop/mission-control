@@ -143,6 +143,13 @@ function alertsPanel({ alerts, counts }) {
   </div>`;
 }
 
+/** משימת אישור נסגרת רק בידי מי שמורשה לאשר (השרת אוכף; כאן רק לא מציעים) */
+function checkbox(t) {
+  const locked = t.kind === 'approve' && !can('approve');
+  return `<input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}${
+    locked ? ' disabled data-tt="רק מי שמורשה לאשר יכול לסגור משימת אישור"' : ''}>`;
+}
+
 function taskRow(t) {
   const sub = [t.subtitle, t.channel_name, t.scheduled_at ? hhmm(t.scheduled_at) : null]
     .filter(Boolean).join(' · ');
@@ -165,7 +172,7 @@ function taskRow(t) {
     ? `<button class="btn small act" data-open-post="${t.post_id}">פתח</button>` : '';
 
   return `<div class="task${t.urgent && !t.done ? ' urgent' : ''}"${t.done ? ' style="opacity:.5"' : ''}>
-    <input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}>
+    ${checkbox(t)}
     <div class="tx"><b>${esc(t.title)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</div>
     ${action}${open}</div>`;
 }
