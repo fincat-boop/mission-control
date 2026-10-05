@@ -705,11 +705,6 @@ const LINK_ICON = `<svg class="lnk" viewBox="0 0 24 24" width="13" height="13" f
   aria-hidden="true"><path d="m10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/>
   <path d="m14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>`;
 
-/**
- * מצב "בחירת משבצת לקישור" על הלוח של קמפיין כללי, או null.
- * {campaignId, itemId (המשבצת שנלחצה), rootId, rootChannelId, title, label}
- */
-let linkMode = null;
 
 /** המשבצות שחולקות תוכן עם item (בלי item עצמו), לפי סדר המדיות בקמפיין */
 function linkPartners(c, item) {
@@ -735,20 +730,38 @@ function linkLine(c, item) {
 }
 
 /**
- * במצב קישור: האם אפשר לבחור את המשבצת הזו כיעד, ואם לא — למה (לעמודה).
- * מדיה של המקור, ניוזלטר ומדיה שכבר יש בה משבצת מקושרת למקור — כל העמודה
- * סגורה. בעמודה פתוחה: משבצת ריקה, או משבצת עם תוכן שלא מקושרת לשום דבר.
+ * מצב "קשר תוכן" על הלוח של קמפיין כללי, או null. נדלק בכפתור שמעל הלוח
+ * ונשאר דלוק עד שמכבים אותו (או Esc). שני שלבים, שוב ושוב:
+ *   1. source = null — לוחצים על פוסט מקור (משבצת שיש בה תוכן)
+ *   2. source = {itemId, rootId, rootChannelId, title, label} — לוחצים על
+ *      משבצת יעד בערוץ אחר; הקישור נוצר והמצב חוזר לשלב 1
+ * {campaignId, source}
+ */
+let linkMode = null;
+let linkReload = null;
+
+/**
+ * האם אפשר לבחור משבצות בעמודה הזו, ואם לא — למה (לעמודה). ניוזלטר לא
+ * מתקשר בכלל. בשלב 2 סגורות גם המדיה של המקור ומדיה שכבר יש בה משבצת
+ * מקושרת למקור.
  */
 function columnBlock(c, channelId) {
-  if (channelId === linkMode.rootChannelId) return 'הערוץ של הפוסט';
   const ch = state.channels.find((x) => x.id === channelId);
   if (ch?.platform === 'newsletter') return 'ניוזלטר לא מתקשר';
+  const src = linkMode.source;
+  if (!src) return null;
+  if (channelId === src.rootChannelId) return 'הערוץ של המקור';
   const sibling = c.content.find((x) =>
-    x.linked_to_id === linkMode.rootId && x.slot_channel_id === channelId);
+    x.linked_to_id === src.rootId && x.slot_channel_id === channelId);
   return sibling ? `כבר מקושר: #${sibling.sort_order}` : null;
 }
+/** יעד אפשרי: משבצת ריקה, או משבצת עם תוכן שלא מקושרת לשום דבר */
 const slotPickable = (c, item) => !item ||
   (!item.linked_to_id && !c.content.some((x) => x.linked_to_id === item.id));
+
+/** המקור של הקבוצה שהמשבצת שייכת לה (או המשבצת עצמה) */
+const rootOf = (c, item) =>
+  c.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
 
 function exitLinkMode() {
   linkMode = null;
@@ -769,41 +782,63 @@ function activeLinkMode() {
   return linkMode;
 }
 
-let linkReload = null;
+/** Esc: בשלב 2 מבטל את בחירת המקור, בשלב 1 מכבה את המצב */
 function onLinkKey(e) {
   if (!activeLinkMode()) return;
   if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
   const reload = linkReload;
-  exitLinkMode();
+  if (linkMode.source) linkMode.source = null;
+  else exitLinkMode();
   reload?.();
 }
 
-/** נכנסים למצב קישור מטופס המשבצת: הטופס נסגר והלוח מסמן את היעדים */
-function enterLinkMode(campaign, item, reload) {
-  const rootId = item.linked_to_id ?? item.id;
-  const root = campaign.content.find((x) => x.id === rootId) ?? item;
-  linkMode = {
-    campaignId: campaign.id, itemId: item.id, rootId, rootChannelId: root.slot_channel_id,
-    title: root.title, label: slotLabel(root),
-  };
-  linkReload = reload;
-  document.addEventListener('keydown', onLinkKey);
-  reload();
+/** repaint — ציור הלוח מחדש מהנתונים שכבר יש (repaintBoard) */
+function toggleLinkMode(campaign, repaint) {
+  if (activeLinkMode()) {
+    exitLinkMode();
+  } else {
+    linkMode = { campaignId: campaign.id, source: null };
+    linkReload = repaint;
+    document.addEventListener('keydown', onLinkKey);
+  }
+  repaint();
 }
 
-/** הקישור עצמו, אחרי לחיצה על משבצת יעד בלוח */
+/** שלב 1: הפוסט שנלחץ הופך למקור (במשבצת מקושרת — המקור של הקבוצה שלה) */
+function pickSource(campaign, item, repaint) {
+  if (!item) {
+    toast('בוחרים פוסט שכבר יש בו תוכן — ממנו התוכן יועתק.');
+    return;
+  }
+  const root = rootOf(campaign, item);
+  const free = campaign.channels.some((ch) => ch.platform !== 'newsletter' &&
+    ch.id !== root.slot_channel_id &&
+    !campaign.content.some((x) => x.linked_to_id === root.id && x.slot_channel_id === ch.id));
+  if (!free) {
+    toast(`${slotLabel(root)} כבר מקושר בכל הערוצים של הקמפיין.`);
+    return;
+  }
+  linkMode.source = {
+    itemId: item.id, rootId: root.id, rootChannelId: root.slot_channel_id,
+    title: root.title, label: slotLabel(root),
+  };
+  repaint();
+}
+
+/** שלב 2: הקישור עצמו, אחרי לחיצה על משבצת יעד בלוח */
 async function linkTo(campaign, channelId, index, item, reload) {
+  const src = linkMode.source;
   const body = { target_campaign_slot: { channel_id: channelId, sort_order: index }, week: state.week };
   // משבצת חד-פעמית שכבר פורסמה לא תשובץ שוב — התוכן המקושר לא ייצא בה
   const published = item && !item.evergreen && item.posts?.some((p) => p.status === 'published');
-  const replaceQuestion = `התוכן הקיים במשבצת יוחלף בתוכן של "${linkMode.title}" ` +
-    `(${linkMode.label}) — הטקסט, הקבצים והמצב.` +
+  const replaceQuestion = `התוכן הקיים במשבצת יוחלף בתוכן של "${src.title}" ` +
+    `(${src.label}) — הטקסט, הקבצים והמצב.` +
     (published ? ' המשבצת הזו כבר פורסמה — התוכן המקושר לא ישובץ בה שוב.' : '') + ' להמשיך?';
   if (item) {
     if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
     body.replace = true;
   }
-  const path = `/content/${linkMode.itemId}/link`;
+  const path = `/content/${src.itemId}/link`;
   let res;
   try {
     res = await api(path, { method: 'POST', body });
@@ -813,29 +848,127 @@ async function linkTo(campaign, channelId, index, item, reload) {
     if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
     res = await api(path, { method: 'POST', body: { ...body, replace: true } });
   }
-  const done = `${linkMode.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של הערוץ שלה.`;
-  exitLinkMode();
+  const done = `${src.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של הערוץ שלה.`;
+  // המצב נשאר דלוק — הלחיצה הבאה בוחרת מקור חדש
+  if (activeLinkMode()) linkMode.source = null;
   engineToast(res, done + downgradeNote(res.downgraded));
   await reload();
 }
 
-/** הבר שמעל הלוח במצב קישור — הסבר וביטול (לא כפתור צף) */
-const linkBar = () => `
-  <div class="linkbar panel" role="status">
-    ${LINK_ICON}
-    <div>
-      <b>בוחרים משבצת בערוץ אחר</b>
-      <span class="d">היא תחלוק עם ${esc(linkMode.label)} את הטקסט, הקבצים והמצב.
-        כל משבצת תצא במועד של הערוץ שלה. Esc לביטול.</span>
-    </div>
-    <button class="btn small" id="linkCancel">ביטול</button>
+/** הכפתור שמעל הלוח, ולידו — מה עושים עכשיו */
+function linkTools(c, linking) {
+  if (!can('content')) return '';
+  if (c.channels.filter((ch) => ch.platform !== 'newsletter').length < 2) return '';
+  const src = linking ? linkMode.source : null;
+  const hint = !linking
+    ? 'מחבר פוסט לפוסט בערוץ דומה (למשל רילס באינסטגרם ובפייסבוק): תוכן אחד, מועד לכל ערוץ.'
+    : src
+      ? `<b>עכשיו פוסט יעד</b> בערוץ אחר — הוא יקבל את התוכן של ${esc(src.label)}.
+         Esc לבחירת מקור אחר.`
+      : '<b>לוחצים על פוסט מקור</b> — ממנו התוכן יועתק. Esc לסיום.';
+  return `<div class="gtools${linking ? ' on' : ''}" role="status">
+    <button type="button" class="btn small linktoggle${linking ? ' on' : ''}" data-link-toggle
+      aria-pressed="${linking}">${LINK_ICON} קשר תוכן</button>
+    <span class="d">${hint}</span>
   </div>`;
+}
+
+/* ---------- חיצים בין משבצות מקושרות ---------- */
+
+let arrowObserver = null;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * חץ מכל מקור לכל עוקבת שלו, מעל הלוח. מחושב מהמיקום של השורות על המסך,
+ * ולכן מצויר מחדש בכל שינוי גודל (חלון צר שבו העמודות נערמות, סינון "7 הימים").
+ */
+function drawLinkArrows(c) {
+  arrowObserver?.disconnect();
+  arrowObserver = null;
+  const board = $('#plan .gboard');
+  if (!board) return;
+  const pairs = c.content.filter((x) => x.linked_to_id && x.slot_channel_id)
+    .map((x) => [c.content.find((r) => r.id === x.linked_to_id), x])
+    .filter(([root]) => root?.slot_channel_id);
+  if (!pairs.length) return;
+
+  const paint = () => {
+    board.querySelector(':scope > svg.garrows')?.remove();
+    const box = board.getBoundingClientRect();
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'garrows');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('width', board.scrollWidth);
+    svg.setAttribute('height', board.scrollHeight);
+    svg.innerHTML = `<defs><marker id="garrowHead" viewBox="0 0 10 10" refX="8" refY="5"
+      markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>`;
+    for (const [root, follower] of pairs) {
+      const a = board.querySelector(`[data-cid="${root.id}"]`);
+      const b = board.querySelector(`[data-cid="${follower.id}"]`);
+      // שורה מוסתרת (סינון השבוע) — אין לאן לצייר
+      if (!a?.getClientRects().length || !b?.getClientRects().length) continue;
+      const ra = a.getBoundingClientRect();
+      const rb = b.getBoundingClientRect();
+      const rel = (x, y) => [x - box.left, y - box.top];
+      let d;
+      if (ra.right <= rb.left || rb.right <= ra.left) {
+        // עמודות זו לצד זו: מהקצה של המקור שפונה ליעד אל הקצה של היעד שפונה למקור
+        const toRight = rb.left >= ra.right;
+        const [x1, y1] = rel(toRight ? ra.right : ra.left, ra.top + ra.height / 2);
+        const [x2, y2] = rel(toRight ? rb.left : rb.right, rb.top + rb.height / 2);
+        const dx = Math.max(24, Math.abs(x2 - x1) / 2) * (toRight ? 1 : -1);
+        d = `M${x1} ${y1}C${x1 + dx} ${y1} ${x2 - dx} ${y2} ${x2} ${y2}`;
+      } else {
+        // עמודות נערמות: מהקצה הימני, מעוקל החוצה כדי לא לעבור על השורות
+        const [x1, y1] = rel(ra.right, ra.top + ra.height / 2);
+        const [x2, y2] = rel(rb.right, rb.top + rb.height / 2);
+        const bow = Math.min(40, 12 + Math.abs(y2 - y1) / 10);
+        d = `M${x1} ${y1}C${x1 + bow} ${y1} ${x2 + bow} ${y2} ${x2} ${y2}`;
+      }
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('marker-end', 'url(#garrowHead)');
+      svg.appendChild(path);
+    }
+    board.appendChild(svg);
+  };
+  paint();
+  arrowObserver = new ResizeObserver(() => paint());
+  arrowObserver.observe(board);
+}
 
 /**
  * עמודה לכל מדיה, ובה שורה לכל פוסט שהמדיה צריכה. כל שורה עומדת בפני
  * עצמה: אין זווית משותפת ואין ניסוח למדיה אחרת. במסך צר העמודות נערמות.
  */
+/** במצב קישור: מה אפשר ללחוץ בשורה הזו (src = המקור שנבחר, מסומן) */
+function pickClass(c, item, blocked) {
+  const src = linkMode.source;
+  if (!src) return !blocked && item ? ' pick' : ' nopick';
+  if (item?.id === src.itemId) return ' src';
+  return !blocked && slotPickable(c, item) ? ' pick' : ' nopick';
+}
+
 function generalBoard(c) {
+  return `
+    ${campaignHead(c)}
+    <div id="gboardWrap">${boardInner(c)}</div>
+    ${completeLine(c)}
+    ${c.orphaned ? `<div class="sumline">
+      <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} בערוצים שהוסרו מהקמפיין</span> —
+      נשמרים ולא משובצים. החזרת הערוץ לקמפיין מחזירה אותם.</div>` : ''}
+    <div class="sumline">
+      כל עמודה היא ערוץ, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.
+      חץ בין שני פוסטים = תוכן אחד משותף; כל אחד יוצא במועד של הערוץ שלו.
+    </div>`;
+}
+
+/**
+ * הכפתור "קשר תוכן" והעמודות. מצויר לבד (repaintBoard) כשרק מצב הקישור
+ * משתנה — בלי לטעון שוב מהשרת, כדי שהלחיצה תגיב מיד.
+ */
+function boardInner(c) {
   // מצב קישור שייך לקמפיין שבו התחיל; מעבר לקמפיין או לטאב אחר מבטל אותו
   const linking = !!activeLinkMode() && linkMode.campaignId === c.id && can('content');
 
@@ -845,10 +978,10 @@ function generalBoard(c) {
     const rows = col.slots.filter((s) => !s.extra || s.content).map((s) => {
       const st = CELL[s.state];
       const item = s.content;
-      const pick = linking ? (!blocked && slotPickable(c, item) ? ' pick' : ' nopick') : '';
       return `<li class="gslot${s.past ? ' past' : ''}${s.extra ? ' extra' : ''}${
           inWeek(s.date) ? ' inweek' : ''}${
-          can('content') ? '' : ' ro'}${pick}"
+          can('content') ? '' : ' ro'}${linking ? pickClass(c, item, blocked) : ''}"
+        ${item ? `data-cid="${item.id}"` : ''}
         ${can('content') ? `data-gslot="${s.index}" data-ch="${col.channel_id}"` : ''}>
         <span class="gnum">${s.index}</span>
         <span class="gdate">${s.date ? fmtDate(s.date) : 'נוסף'}</span>
@@ -874,40 +1007,48 @@ function generalBoard(c) {
     </section>`;
   }).join('');
 
-  return `
-    ${campaignHead(c)}
-    ${linking ? linkBar() : ''}
-    <div class="gboard${linking ? ' linking' : ''}">${cols}</div>
-    ${completeLine(c)}
-    ${c.orphaned ? `<div class="sumline">
-      <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} בערוצים שהוסרו מהקמפיין</span> —
-      נשמרים ולא משובצים. החזרת הערוץ לקמפיין מחזירה אותם.</div>` : ''}
-    <div class="sumline">
-      כל עמודה היא ערוץ, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.
-      ייבוא מטבלה זמין בקמפיין לפי זוויות.
-    </div>`;
+  return `${linkTools(c, linking)}
+    <div class="gboard${linking ? ' linking' : ''}">${cols}</div>`;
+}
+
+/** מצב הקישור השתנה (לא הנתונים) — רק הלוח מצויר מחדש */
+function repaintBoard(selected, reload) {
+  const wrap = $('#gboardWrap');
+  if (!wrap) return;
+  wrap.innerHTML = boardInner(selected);
+  wireGeneralBoard(selected, reload);
 }
 
 function wireGeneralBoard(selected, reload) {
+  const repaint = () => repaintBoard(selected, reload);
+  // Esc מצייר מחדש מהנתונים העדכניים (אחרי קישור הלוח נטען מחדש מהשרת)
+  if (activeLinkMode()) linkReload = repaint;
   $$('#plan [data-gslot]').forEach((b) =>
     b.addEventListener('click', () => {
       const channelId = Number(b.dataset.ch);
       const index = Number(b.dataset.gslot);
       const item = selected.content.find((x) =>
         x.slot_channel_id === channelId && x.sort_order === index) ?? null;
-      // במצב קישור הלחיצה בוחרת יעד; משבצת שלא אפשרית — לא עושה כלום
+      // במצב קישור הלחיצה בוחרת מקור, ואחריו יעד; משבצת שלא אפשרית — רק הסבר
       if (activeLinkMode()) {
-        if (b.classList.contains('pick')) run(() => linkTo(selected, channelId, index, item, reload))();
-        else toast('בוחרים אחת מהמשבצות המסומנות — בערוץ אחר, ריקה או לא מקושרת.');
+        if (!linkMode.source) {
+          if (b.classList.contains('pick')) pickSource(selected, item, repaint);
+          else toast('בוחרים פוסט מקור — משבצת שיש בה תוכן, לא בניוזלטר.');
+        } else if (b.classList.contains('src')) {
+          linkMode.source = null;
+          repaint();
+        } else if (b.classList.contains('pick')) {
+          run(() => linkTo(selected, channelId, index, item, reload))();
+        } else {
+          toast('בוחרים אחת מהמשבצות המסומנות — בערוץ אחר, ריקה או לא מקושרת.');
+        }
         return;
       }
       openSlotForm({ campaign: selected, channelId, index, item }, reload);
     }));
 
-  $('#linkCancel')?.addEventListener('click', () => {
-    exitLinkMode();
-    reload();
-  });
+  $('#plan [data-link-toggle]')?.addEventListener('click', () => toggleLinkMode(selected, repaint));
+  drawLinkArrows(selected);
 
   $$('#plan [data-gbulk]').forEach((b) =>
     b.addEventListener('click', () => {
@@ -931,9 +1072,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     .map((a) => assetLine(a, true, false)).join('');
   // משבצת מקושרת: שורת "מקושר ל:" בראש הטופס, עם ניתוק לכל משבצת
   const partners = linkPartners(campaign, item);
-  // אפשר לקשר כשיש בקמפיין עוד מדיה שאינה ניוזלטר
-  const canLink = item && !mail && can('content') && campaign.channels.some((ch) =>
-    ch.id !== channelId && ch.platform !== 'newsletter');
   // הגרסה שהטופס נפתח איתה — השרת דוחה שמירה מעל גרסה שמישהו שמר בינתיים
   let base = v?.updated_at ?? null;
   // הפוסט שהטופס עורך — מתעדכן אחרי השמירה הראשונה (גם כשקבצים נכשלו אחריה)
@@ -962,7 +1100,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     ],
     extraActions: (item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
-      : '') + (canLink ? '<button class="btn" id="genLink">קשר למשבצת אחרת</button>' : ''),
+      : ''),
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
       const input = $('#gen___files');
@@ -1046,10 +1184,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         engineToast(res, 'הפוסט נמחק.');
         await reload();
       }));
-      $('#genLink')?.addEventListener('click', () => {
-        closeGeneric({ force: true });
-        enterLinkMode(campaign, item, reload);
-      });
       $$('#genBody [data-unlink]').forEach((b) =>
         b.addEventListener('click', run(async () => {
           const res = await api(`/content/${b.dataset.unlink}/unlink`,
