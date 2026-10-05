@@ -127,3 +127,20 @@ test('setupSteps — מתג הפרסום האוטומטי: מידע, לא חוב
   assert.equal(step(off, 'autopublish').required, false);
   assert.equal(step(setupSteps({ autopublish: true }), 'autopublish').done, true);
 });
+
+/* ========================= הדלקת פרסום אוטומטי לערוץ ========================= */
+
+test('autoEnableBlocker — הדלקה רק אחרי בדיקה שעברה, בלי טוקן חדש באותה בקשה', async () => {
+  const { autoEnableBlocker } = await import('../src/routes/publish.js');
+  const msg = 'בודקים חיבור לפני שמדליקים פרסום אוטומטי';
+  // כיבוי / בלי שינוי — תמיד מותר
+  assert.equal(autoEnableBlocker({ wantsAuto: false, saved: null }), null);
+  assert.equal(autoEnableBlocker({ wantsAuto: undefined, newToken: true, saved: null }), null);
+  // הדלקה: אין חיבור / לא נבדק / נכשל
+  assert.equal(autoEnableBlocker({ wantsAuto: true, saved: null }), msg);
+  assert.equal(autoEnableBlocker({ wantsAuto: true, saved: { last_check_ok: null } }), msg);
+  assert.equal(autoEnableBlocker({ wantsAuto: true, saved: { last_check_ok: false } }), msg);
+  // נבדק ועבר — מותר; אבל טוקן חדש באותה בקשה עוד לא נבדק
+  assert.equal(autoEnableBlocker({ wantsAuto: true, saved: { last_check_ok: true } }), null);
+  assert.equal(autoEnableBlocker({ wantsAuto: true, newToken: true, saved: { last_check_ok: true } }), msg);
+});

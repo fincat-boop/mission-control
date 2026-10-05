@@ -527,14 +527,17 @@ function wireManage(ro, connections) {
 
   // מזהה, טוקן ופרסום אוטומטי לערוץ — נשמרים יחד, רק בכפתור. אחרי השמירה
   // הפוקוס עובר ל"בדוק חיבור", הצעד הבא.
+  // הדלקת פרסום אוטומטי רק על חיבור שנבדק ועבר — וטוקן חדש עוד לא נבדק.
+  // השרת אוכף את אותו כלל (autoEnableBlocker ב-routes/publish.js).
   $$('#manage [data-conn-save]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
       const id = btn.dataset.connSave;
       const body = connBody(id);
-      const saved = connections.some((c) => c.channel_id === Number(id) && c.has_token);
-      if (body.auto_enabled && !body.access_token && !saved) {
-        $(`#manage [data-conn-token="${id}"]`)?.focus();
-        throw new Error('כדי להדליק פרסום אוטומטי צריך קודם להדביק טוקן.');
+      const saved = connections.find((c) => c.channel_id === Number(id));
+      if (body.auto_enabled && (body.access_token || saved?.last_check_ok !== true)) {
+        ($(`#manage [data-conn-verify="${id}"]`) ?? $(`#manage [data-conn-token="${id}"]`))?.focus();
+        throw new Error('בודקים חיבור לפני שמדליקים פרסום אוטומטי — שומרים בלי הסימון, ' +
+          'לוחצים "בדוק חיבור", ואז מסמנים ושומרים.');
       }
       await api(`/channels/${id}/connection`, { method: 'PUT', body });
       toast('החיבור נשמר. כדאי ללחוץ "בדוק חיבור" כדי לוודא שהוא עובד.');
