@@ -13,7 +13,7 @@ import { KIND_HE } from '../core/format.js';
 const undoFill = run(async (fill) => {
   const r = await api('/engine/undo', {
     method: 'POST',
-    body: { post_ids: fill.created_ids ?? [], attached: fill.attached_items ?? [] },
+    body: { created: fill.created_items ?? [], attached: fill.attached_items ?? [] },
   });
   toast(r.removed || r.detached
     ? 'המילוי בוטל — הלוח חזר למה שהיה, והמנוע לא יחזיר את התוכן הזה לשבוע הזה.'

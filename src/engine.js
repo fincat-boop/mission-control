@@ -237,13 +237,14 @@ export function withEngineLock(fn) {
  * @param {string|Date} [anchorDate]
  * @param {{holes?:boolean, selected?:string[]|null}} [opts]
  * @returns {Promise<{placed:number, attached:number, holes:number, skipped:number,
- *   created_ids:number[], attached_items:object[], summary:object[]}>}
+ *   created_ids:number[], created_items:object[], attached_items:object[], summary:object[]}>}
  */
 export async function applyWeek(anchorDate, { holes: withHoles = true, selected = null } = {}) {
   const fresh = await planWeek(anchorDate, { holes: withHoles });
   const { plan, skipped } = selectPlanItems(fresh, selected);
 
   const createdIds = [];
+  const created = []; // { post_id, content_id } — "בטל" מוחק רק מה שלא השתנה מאז
   const summary = [];
   const brief = (x, attach = false) =>
     ({ title: x.title, channel_name: x.channel_name, day_label: x.day_label, attach });
@@ -256,6 +257,7 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
       [p.channel_id, p.endpoint_id, p.content_id, p.title, p.kind, p.scheduled_at, p.reason]
     );
     createdIds.push(post.id);
+    created.push({ post_id: post.id, content_id: p.content_id });
     summary.push(brief(p));
   }
 
@@ -264,8 +266,11 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
   for (const a of plan.attachments) {
     const done = await attachToPost(a.post_id, a);
     if (!done) continue; // מישהו שייך תוכן לפוסט הזה בינתיים, או שהמועד עבר
-    attached.push({ post_id: a.post_id, content_id: a.content_id,
-                    prev_title: a.prev_title, prev_kind: a.prev_kind });
+    // title — מה שהשיוך כתב; "בטל" מחזיר רק אם הכותרת לא נערכה מאז.
+    // closed_task_ids — בדיוק המשימות שהשיוך סגר, ש"בטל" יפתח מחדש.
+    attached.push({ post_id: a.post_id, content_id: a.content_id, title: a.title,
+                    prev_title: a.prev_title, prev_kind: a.prev_kind,
+                    closed_task_ids: done.closed_task_ids });
     summary.push(brief(a, true));
   }
 
@@ -280,6 +285,7 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
       [h.channel_id, h.endpoint_id, h.kind, h.scheduled_at, h.reason]
     );
     createdIds.push(post.id);
+    created.push({ post_id: post.id, content_id: null });
     holeCount += 1;
     await query(
       `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
@@ -296,6 +302,7 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
     holes: holeCount,
     skipped,
     created_ids: createdIds,
+    created_items: created,
     attached_items: attached,
     summary,
   };
