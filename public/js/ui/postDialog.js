@@ -1,4 +1,4 @@
-import { $, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
+import { $, $$, copyLinkButton, copyText, esc, fillSelect, run, toast, wireCopyLinks } from '../core/dom.js';
 import { confirmDialog } from '../core/confirm.js';
 import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
@@ -268,6 +268,96 @@ async function showAttachPicker(post) {
     })));
 }
 
+/* ========================= עריכת הפוסט ========================= */
+
+let editSnapshot = null; // ערכי הטופס כפי שנטענו — לזיהוי שינויים שלא נשמרו
+let resultsShown = false; // האם בלשונית התצוגה מוצג גם "מה זה עשה בפועל"
+
+/** עריכה — רק לפוסט שעוד לא יצא (השרת אוכף את אותו כלל ב-moveBlocker) */
+const editable = (post) => can('content') && !['published', 'publishing'].includes(post.status);
+
+const editValues = () => ({
+  date: $('#peDate').value, time: $('#peTime').value, channel: $('#peChannel').value,
+  assignee: $('#peAssignee').value, title: $('#peTitle').value.trim(), note: $('#peNote').value.trim(),
+});
+const editDirty = () => !!editSnapshot && JSON.stringify(editValues()) !== JSON.stringify(editSnapshot);
+
+function fillEditForm(post) {
+  $('#peDate').value = ymd(new Date(post.scheduled_at));
+  $('#peDate').min = ymd(new Date());
+  $('#peTime').value = hhmm(post.scheduled_at);
+  fillSelect($('#peChannel'), state.channels.filter((c) => c.active || c.id === post.channel_id), 'name');
+  $('#peChannel').value = String(post.channel_id);
+  fillSelect($('#peAssignee'), state.users, 'name', 'ללא אחראי');
+  $('#peAssignee').value = post.assignee_id ? String(post.assignee_id) : '';
+  $('#peTitle').value = post.title;
+  $('#peNote').value = post.note ?? '';
+  $('#peHint').textContent = post.status === 'approved'
+    ? 'הפוסט מאושר לפרסום אוטומטי. שינוי מועד משאיר את האישור; מעבר לערוץ אחר מבטל אותו.'
+    : post.content_id ? 'מעבר לערוץ אחר דורש שלתוכן יהיה ניסוח לערוץ הזה.' : '';
+  editSnapshot = editValues();
+}
+
+/** מעבר בין "תצוגה" ל"עריכה" — הפעולה הראשית בפוטר מתחלפת ב"שמור שינויים" */
+function setTab(tab) {
+  const edit = tab === 'edit';
+  $$('#pTabs [data-ptab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.ptab === tab)));
+  $('#postPreview').hidden = edit;
+  $('#pEdit').hidden = !edit;
+  $('#pResults').hidden = edit || !resultsShown;
+  $('#pActs').hidden = edit;
+  $('#postDlg .pmore').hidden = edit;
+  $('#peSave').hidden = !edit;
+  $('#pMenu').hidden = true;
+  if (edit) $('#peTitle').focus();
+}
+
+/**
+ * שמירת העריכה — רק השדות שהשתנו, דרך PATCH עם אזהרת המרווח הרגילה.
+ * השרת אוכף: לא לזמן שעבר, לא פוסט שיצא, יום חסום, אותה נקודה באותו יום.
+ */
+async function saveEdit() {
+  const post = previewPost;
+  if (!post) return;
+  const v = editValues();
+  if (!v.title) return toast('צריך כותרת לפוסט', true);
+  const when = new Date(`${v.date}T${v.time || '00:00'}:00`);
+  if (Number.isNaN(when.getTime())) return toast('צריך תאריך ושעה', true);
+
+  const body = {};
+  if (when.getTime() !== new Date(post.scheduled_at).getTime()) body.scheduled_at = when.toISOString();
+  if (Number(v.channel) !== post.channel_id) body.channel_id = Number(v.channel);
+  const assignee = v.assignee ? Number(v.assignee) : null;
+  if (assignee !== (post.assignee_id ?? null)) body.assignee_id = assignee;
+  if (v.title !== post.title) body.title = v.title;
+  if (v.note !== (post.note ?? '')) body.note = v.note || null;
+  if (Object.keys(body).length === 0) return toast('אין שינויים לשמור.');
+  if (body.scheduled_at && when <= new Date()) return toast('המועד שבחרת כבר עבר — בוחרים מועד עתידי', true);
+
+  const btn = $('#peSave');
+  btn.disabled = true;
+  try {
+    const res = await postWithGapCheck(`/posts/${post.id}`, body);
+    if (!res) return; // ביטול אחרי אזהרת המרווח
+    editSnapshot = null;
+    toast('הפוסט עודכן.' + (res.approval_reset
+      ? ' האישור לפרסום אוטומטי בוטל כי הערוץ השתנה — צריך לאשר שוב.'
+      : post.status === 'approved' && body.scheduled_at
+        ? ' האישור נשאר — הפוסט יפורסם במועד החדש.' : ''));
+    await afterChange(post.id);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/** סגירה — עם שינויים שלא נשמרו בעריכה שואלים קודם (עיקרון 4) */
+async function closePostDlg() {
+  if (editDirty() && !(await confirmDialog('יש שינויים שלא נשמרו בעריכת הפוסט. לסגור בלי לשמור?',
+    { okLabel: 'סגור בלי לשמור', danger: true }))) return;
+  editSnapshot = null;
+  $('#postDlg').close();
+}
+
 async function runAction(key) {
   if (!previewPost) return;
   $('#pMenu').hidden = true;
@@ -278,7 +368,15 @@ async function runAction(key) {
 }
 
 export function wirePostDialog() {
-  $('#pClose').addEventListener('click', () => $('#postDlg').close());
+  $('#pClose').addEventListener('click', run(closePostDlg));
+  // Esc — אותה שאלה כמו "סגור" כשיש שינויים שלא נשמרו
+  $('#postDlg').addEventListener('cancel', (e) => {
+    if (!editDirty()) return;
+    e.preventDefault();
+    run(closePostDlg)();
+  });
+  $$('#pTabs [data-ptab]').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.ptab)));
+  $('#peSave').addEventListener('click', run(saveEdit));
 
   $('#pMoreBtn').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -396,13 +494,18 @@ export async function openPostPreview(postId) {
   $('#pMoreBtn').hidden = true;
   $('#pMenu').hidden = true;
   $('#pStatusChip').hidden = true;
-  $('#pResults').hidden = true;
+  $('#pTabs').hidden = true;
+  editSnapshot = null;
+  resultsShown = false;
+  setTab('view');
   if (!$('#postDlg').open) $('#postDlg').showModal();
 
   const { post, variant, assets, results } = await api(`/posts/${postId}/preview`);
   previewPost = post;
   previewFacts = postFacts(post, variant);
   renderActions(post, previewFacts);
+  $('#pTabs').hidden = !editable(post);
+  if (editable(post)) fillEditForm(post);
   const attachable = !post.content_id && can('content') &&
     !['published', 'publishing'].includes(post.status);
 
@@ -414,6 +517,7 @@ export async function openPostPreview(postId) {
 
   // תוצאות נמדדות רק למה שכבר יצא לאוויר
   const showResults = can('content') && post.status === 'published';
+  resultsShown = showResults;
   $('#pResults').hidden = !showResults;
   if (showResults) {
     const set = (id, v) => { $(id).value = v ?? ''; };

@@ -233,7 +233,9 @@ function wireBoardDrag() {
       const moved = await postWithGapCheck(`/posts/${dragged.id}`,
         { scheduled_at: at.toISOString(), channel_id: channelId });
       if (!moved) return;   // המשתמש ביטל אחרי האזהרה
-      toast('השיבוץ הוזז.');
+      toast(moved.approval_reset
+        ? 'השיבוץ הוזז. האישור לפרסום אוטומטי בוטל כי הערוץ השתנה — צריך לאשר שוב.'
+        : 'השיבוץ הוזז.');
       await Promise.all([refreshBoard(), refreshAlerts()]);
     }));
   });

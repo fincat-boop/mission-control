@@ -99,7 +99,35 @@
     <h3 id="postDlgTitle"></h3>
     <span id="pStatusChip" class="pchip" hidden></span>
   </div>
+  <!-- תצוגה / עריכה — העריכה רק לפוסט שעוד לא יצא, ולמי שיש הרשאת תוכן -->
+  <div class="ptabs" id="pTabs" role="tablist" hidden>
+    <button type="button" role="tab" data-ptab="view" aria-selected="true">תצוגה</button>
+    <button type="button" role="tab" data-ptab="edit" aria-selected="false">עריכה</button>
+  </div>
   <div id="postPreview"></div>
+  <div id="pEdit" hidden>
+    <div class="frow frow2">
+      <label>תאריך<input type="date" id="peDate"></label>
+      <label>שעה<input type="time" id="peTime"></label>
+    </div>
+    <div class="frow">
+      <label for="peChannel">ערוץ</label>
+      <select id="peChannel"></select>
+    </div>
+    <div class="frow">
+      <label for="peAssignee">אחראי</label>
+      <select id="peAssignee"></select>
+    </div>
+    <div class="frow">
+      <label for="peTitle">כותרת</label>
+      <input id="peTitle" type="text">
+    </div>
+    <div class="frow">
+      <label for="peNote">הערה</label>
+      <textarea id="peNote" placeholder="לא חובה"></textarea>
+    </div>
+    <div class="fhint" id="peHint"></div>
+  </div>
 
   <!-- תוצאות בפועל — מוצג רק לפוסט שכבר פורסם -->
   <div id="pResults" hidden>
@@ -121,6 +149,7 @@
   <!-- הפעולה הראשית לפי מצב הפוסט (ולפעמים משנית) בפוטר; כל השאר בתפריט "עוד" -->
   <div class="dactions pfoot">
     <span class="pacts" id="pActs"></span>
+    <button class="btn primary" id="peSave" hidden>שמור שינויים</button>
     <span class="pmore">
       <button class="btn" id="pMoreBtn" hidden>עוד ⌄</button>
       <div class="pmenu" id="pMenu" hidden></div>

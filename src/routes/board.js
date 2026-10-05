@@ -140,9 +140,29 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     }
   }
 
-  const post = await updateById('posts', POST_FIELDS, req.params.id, b);
-  res.json({ post });
+  if ('title' in b) {
+    const title = String(b.title ?? '').trim();
+    if (!title) return bad(res, 'צריך כותרת לפוסט');
+    b.title = title.slice(0, 200);
+  }
+
+  let post = await updateById('posts', POST_FIELDS, req.params.id, b);
+  // האישור לפרסום אוטומטי ניתן לערוץ מסוים (החיבור שלו, הניסוח שלו) — מעבר
+  // לערוץ אחר מחזיר למתוכנן. שינוי מועד בלבד משאיר את האישור.
+  const approvalReset = current.status === 'approved' && approvalResetOnMove(current, b);
+  if (approvalReset) {
+    post = await one(
+      `update posts set status = 'scheduled', approved_by = null, approved_at = null
+        where id = $1 and status = 'approved' returning *`,
+      [current.id]) ?? post;
+  }
+  res.json({ post, approval_reset: approvalReset });
 }));
+
+/** האם שינוי מבטל אישור לפרסום אוטומטי: רק מעבר לערוץ אחר, לא שינוי מועד */
+export function approvalResetOnMove(current, b) {
+  return b.channel_id != null && Number(b.channel_id) !== current.channel_id;
+}
 
 /**
  * מה שאמור לצאת בפועל: הטקסט של המדיה הזו והקבצים שלה.

@@ -41,3 +41,12 @@ test('moveBlocker — מתוכנן / מאושר / נכשל לעתיד — מות
   // פוסט שהמועד שלו עבר מוזז קדימה — זה בדיוק התיקון שרוצים לאפשר
   assert.equal(moveBlocker(post({ scheduled_at: '2026-10-01T09:00:00+03:00' }), when, NOW), null);
 });
+
+test('approvalResetOnMove — מעבר ערוץ מבטל אישור, שינוי מועד לא', async () => {
+  const { approvalResetOnMove } = await import('../src/routes/board.js');
+  const p = post({ status: 'approved' });
+  assert.equal(approvalResetOnMove(p, { scheduled_at: '2026-10-09T09:00:00+03:00' }), false);
+  assert.equal(approvalResetOnMove(p, { channel_id: 6 }), false);
+  assert.equal(approvalResetOnMove(p, { channel_id: '7' }), true);
+  assert.equal(approvalResetOnMove(p, { title: 'x' }), false);
+});
