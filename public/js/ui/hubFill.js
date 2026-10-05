@@ -236,6 +236,10 @@ export function describeMailVariant(el, { item, channelId, variant, statusLabel 
 
 /* ========================= עורך הניוזלטר ========================= */
 
+/** 409 של הנעילה האופטימית — מישהו אחר שמר את הגרסה בזמן שהחלון היה פתוח */
+const STALE_MAIL = 'מישהו אחר שמר את הניוזלטר הזה בינתיים, ולכן השמירה לא בוצעה. ' +
+  'מה שבחלון נשאר — בודקים, ולוחצים "שמור" כדי לשמור אותו מעל הגרסה השמורה.';
+
 /** בלי כתובת הדשבורד אין עורך — לא פותחים חלון שלא יוכל לדבר איתנו */
 const NO_APP_URL = 'עורך ה-HUB לא מוגדר (HUB_APP_URL) — מה שכבר נשמר נשאר, אבל אי אפשר לערוך את המייל מכאן.';
 
@@ -295,17 +299,28 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
       subject: (subject ?? saved.meta.subject ?? '') || null,
       ...(template ? { field_values: cleanFillValues(values), template_id: template.id } : {}),
     };
-    const r = await api(`/content/${item.id}/variants/${channelId}`, {
-      method: 'PUT',
-      body: {
-        body: body ?? saved.body ?? null,
-        status: status ?? saved.status,
-        meta,
-        week: state.week,
-        // נעילה אופטימית (כשהשרת תומך) — שמירה מחלון ישן לא דורסת חדשה
-        ...(v?.updated_at ? { base_updated_at: v.updated_at } : {}),
-      },
-    });
+    let r;
+    try {
+      r = await api(`/content/${item.id}/variants/${channelId}`, {
+        method: 'PUT',
+        body: {
+          body: body ?? saved.body ?? null,
+          status: status ?? saved.status,
+          meta,
+          week: state.week,
+          // נעילה אופטימית (variant-lock.js): שמירה מחלון ישן לא דורסת שמירה של מישהו אחר
+          base_updated_at: v?.updated_at ?? null,
+        },
+      });
+    } catch (e) {
+      if (e.status === 409 && e.payload?.stale) {
+        // הבסיס מתעדכן לשמור עכשיו — "שמור" נוסף ישמור את מה שבחלון מעל
+        v = e.payload.current ?? v;
+        saved = { meta: { ...(v?.meta ?? {}) }, status: v?.status ?? 'draft', body: v?.body ?? '' };
+        throw new Error(STALE_MAIL);
+      }
+      throw e;
+    }
     v = r.variant ?? v;
     saved = { meta: { ...(v?.meta ?? meta) }, status: v?.status ?? status, body: v?.body ?? body ?? '' };
   }
