@@ -79,8 +79,10 @@ export async function buildBoard(anchorDate) {
   const to = new Date(week.endDate);
   to.setHours(23, 59, 59, 999);
 
-  const [channels, posts, endpoints, settings] = await Promise.all([
-    rows('select * from channels where active = true order by sort_order, id'),
+  // בזו אחר זו: כל השאילתות רצות על ה-client של הבקשה, ו-pg לא מריץ
+  // שאילתות במקביל על client אחד (Promise.all רק מתור אותן ומזהיר)
+  const channels = await rows('select * from channels where active = true order by sort_order, id');
+  const posts = await
     // שיבוצים של קמפיין מושהה יורדים מהלוח ולא נספרים בקיבולת.
     // הם נשארים במסד — ההשהיה הפיכה.
     // v.status — הגרסה הספציפית למדיה שהפוסט הזה משודר בה, כדי שהלוח
@@ -100,10 +102,9 @@ export async function buildBoard(anchorDate) {
           and (ca.paused_at is null or p.status = 'published')
         order by p.scheduled_at`,
       [from, to]
-    ),
-    rows('select * from endpoints where active = true order by importance desc, id'),
-    one('select * from engine_settings limit 1'),
-  ]);
+    );
+  const endpoints = await rows('select * from endpoints where active = true order by importance desc, id');
+  const settings = await one('select * from engine_settings limit 1');
 
   // content_hint — לפוסט חסר תוכן: האם יש לנקודה תוכן עם ניסוח לערוץ
   // הזה שאפשר לשייך ('ready' / 'draft'), כדי שהלוח יראה "יש טיוטה". אותו

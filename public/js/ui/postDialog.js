@@ -42,7 +42,7 @@ const ACT = {
   publishNow: {
     label: 'פרסם עכשיו',
     run: async (post) => {
-      if (!(await confirmDialog('לפרסם את הפוסט עכשיו, ישירות לערוץ? הפעולה מיידית.'))) return false;
+      if (!(await confirmDialog('לפרסם את הפוסט עכשיו, ישירות לערוץ? הפעולה מיידית.', { okLabel: 'פרסם עכשיו' }))) return false;
       const res = await api(`/posts/${post.id}/publish-now`, { method: 'POST' });
       toast(res.pending ? 'נשלח ל-HUB ✓ — הפוסט יסומן "פורסם" כשהשליחה תושלם שם.' : 'פורסם! ✓');
     },
@@ -142,7 +142,7 @@ const ACT = {
     label: 'הסר מהלוח',
     danger: true,
     run: async (post) => {
-      if (!(await confirmDialog('להסיר את הפוסט מהלוח? התוכן עצמו יישאר.', { danger: true }))) return false;
+      if (!(await confirmDialog('להסיר את הפוסט מהלוח? התוכן עצמו יישאר.', { danger: true, okLabel: 'הסר מהלוח' }))) return false;
       await api(`/posts/${post.id}`, { method: 'DELETE' });
       // המחיקה לא ממלאת מחדש — המקום נשאר פנוי (docs/ux-overhaul.md, עיקרון 1)
       toast('הפוסט הוסר.' + (post.content_id
@@ -461,7 +461,7 @@ export function wirePostDialog() {
 
   $('#rClear').addEventListener('click', run(async () => {
     if (!previewPost) return;
-    if (!(await confirmDialog('למחוק את המדידה של הפוסט הזה?', { danger: true }))) return;
+    if (!(await confirmDialog('למחוק את המדידה של הפוסט הזה?', { danger: true, okLabel: 'מחק מדידה' }))) return;
     await api(`/posts/${previewPost.id}/results`, { method: 'DELETE' });
     for (const id of ['#rReach', '#rEngagement', '#rClicks', '#rLeads', '#rNote']) $(id).value = '';
     $('#rClear').hidden = true;
