@@ -481,7 +481,7 @@ async function goToPerfSetting() {
 function performancePanel(p) {
   const head = `<tr><th>שם</th><th></th><th>ציון</th><th>מדגם</th></tr>`;
   const table = (title, list, labelKey) => `
-    <div class="subsec"><h3 class="bdtitle">${esc(title)}</h3><div class="panel">
+    <div class="subsec"><h3 class="bdtitle">${esc(title)}</h3><div class="panel restable-wrap">
       <table class="stattable"><thead>${head}</thead>
       <tbody>${effRows(list, labelKey)}</tbody></table>
     </div></div>`;
@@ -494,7 +494,7 @@ function performancePanel(p) {
   }
 
   const combos = p.combos.length
-    ? `<div class="subsec"><h3 class="bdtitle">שילובים שנמדדו בפועל</h3><div class="panel">
+    ? `<div class="subsec"><h3 class="bdtitle">שילובים שנמדדו בפועל</h3><div class="panel restable-wrap">
         <table class="stattable">
           <thead><tr><th>ערוץ</th><th>מתי</th><th></th><th>ציון</th><th>מדגם</th></tr></thead>
           <tbody>${p.combos.map((c) => `<tr>
@@ -605,13 +605,13 @@ function statTables(s) {
   ).join('');
 
   return `<div class="subsec"><h3 class="bdtitle">מי קיבל שטח</h3>
-    <div class="panel"><table class="stattable">
+    <div class="panel restable-wrap"><table class="stattable">
       <thead><tr><th>נקודת קצה</th><th>פורסם</th><th>שובץ</th><th>נתח בפועל</th>
                  <th>לפי חשיבות</th><th>פרסום אחרון</th></tr></thead>
       <tbody>${endpoints || emptyRow(6, 'אין נקודות קצה — מוסיפים בניהול.')}</tbody></table></div></div>
 
   <div class="subsec"><h3 class="bdtitle">פוסטים בשבוע לפי ערוץ</h3>
-    <div class="panel"><table class="stattable">
+    <div class="panel restable-wrap"><table class="stattable">
       <thead><tr><th>ערוץ</th><th>פורסם</th><th>שובץ</th><th>בשבוע בפועל</th>
                  <th>יעד</th><th>עמידה</th></tr></thead>
       <tbody>${channels || emptyRow(6, 'אין ערוצים — מוסיפים בניהול.')}</tbody></table></div>

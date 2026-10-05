@@ -84,8 +84,7 @@ async function boot() {
   }
   // שחזור התצוגה מה-hash — לפני הרינדור הראשון, כדי שרענון לא יחזיר לדף הבית
   restoreView();
-  $$('.tab').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.t === state.tab)));
-  for (const key of TABS) $(`#${key}`).hidden = key !== state.tab;
+  paintTabs(state.tab);
 
   try {
     const [{ channels }, { endpoints }, { users }] = await Promise.all([
@@ -135,15 +134,58 @@ const RENDERERS = {
 
 const renderTab = (tab) => RENDERERS[tab]();
 
+/**
+ * הטאב הנבחר: aria-selected, ה-tabindex המתגלגל (רק הנבחר נגיש ב-Tab),
+ * והאזור שמוצג. בטלפון רצועת הטאבים נגללת בתוכה — הנבחר נגלל לתצוגה.
+ */
+function paintTabs(tab) {
+  for (const t of $$('.tab')) {
+    const on = t.dataset.t === tab;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+    if (on) t.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  for (const key of TABS) $(`#${key}`).hidden = key !== tab;
+}
+
 /** מעבר לטאב מתוך קוד (למשל לחיצה על פעמון ההתראות) */
 async function showTab(tab) {
   // מצב "בחירת משבצת לקישור" שייך למסך הקמפיין — יציאה ממנו מבטלת אותו
   if (tab !== 'plan') leavePlanView();
   state.tab = tab;
-  $$('.tab').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.t === tab)));
-  for (const key of TABS) $(`#${key}`).hidden = key !== tab;
+  paintTabs(tab);
   persistView();
   await renderTab(tab);
+}
+
+/**
+ * מקלדת ברצועת הטאבים (תבנית tablist של WAI-ARIA, הפעלה ידנית): חיצים
+ * מזיזים את הפוקוס — ב-RTL שמאלה זה הבא — Home/End לקצוות, ו-Enter/רווח
+ * (הכפתור עצמו) פותח. ההפעלה לא נגררת אחרי הפוקוס: כל טאב טוען נתונים,
+ * ומעבר בחיצים היה מריץ בקשות על כל טאב בדרך.
+ */
+function wireTabKeys() {
+  const list = $('.tabs');
+  list.addEventListener('keydown', (e) => {
+    const tabs = $$('.tab', list);
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    const rtl = document.dir === 'rtl';
+    let j;
+    if (e.key === 'ArrowLeft') j = rtl ? i + 1 : i - 1;
+    else if (e.key === 'ArrowRight') j = rtl ? i - 1 : i + 1;
+    else if (e.key === 'Home') j = 0;
+    else if (e.key === 'End') j = tabs.length - 1;
+    else return;
+    e.preventDefault();
+    j = (j + tabs.length) % tabs.length;
+    tabs.forEach((t, k) => { t.tabIndex = k === j ? 0 : -1; });
+    tabs[j].focus();
+  });
+  // יציאה מהרצועה בלי לפתוח — Tab בחזרה נוחת על הטאב הנבחר, לא על האחרון שעבר
+  list.addEventListener('focusout', (e) => {
+    if (!list.contains(e.relatedTarget)) paintTabs(state.tab);
+  });
 }
 
 /** מונה ההתראות בפעמון. נקרא אחרי כל פעולה שעשויה לשנות את המצב. */
@@ -159,6 +201,7 @@ async function refreshAlertsImpl() {
 
 function wireChrome() {
   $$('.tab').forEach((t) => t.addEventListener('click', run(() => showTab(t.dataset.t))));
+  wireTabKeys();
 
   $('#btnAlerts').addEventListener('click', run(() => showTab('tasks')));
 
