@@ -1,7 +1,8 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { alertsForUser, storageAlert, storageLimitMb } from '../src/alerts.js';
+import { alertsForUser, storageAlert, storageLimitMb, systemAlertsAllowed } from '../src/alerts.js';
+import { isPlatformOrg, platformOrgId } from '../src/platform.js';
 import { backupAlerts } from '../src/backup-status.js';
 
 const MB = 1048576;
@@ -91,4 +92,29 @@ test('backupAlerts — שכבה לא מוגדרת או שעוד לא נוסתה:
   assert.deepEqual(backupAlerts([layer('r2', { last_attempt_at: null, last_result: null, last_success_at: null })], NOW), []);
   // 36 שעות בלי הצלחה רלוונטי רק ל-R2 (הגיבוי המלא)
   assert.deepEqual(backupAlerts([layer('drive', { last_success_at: hoursAgo(50) })], NOW), []);
+});
+
+/* ========================= ארגון הפלטפורמה ========================= */
+
+test('platformOrgId — מ-PLATFORM_ORG_ID, ברירת מחדל 1, ערך לא תקין = 1', () => {
+  assert.equal(platformOrgId({}), 1);
+  assert.equal(platformOrgId({ PLATFORM_ORG_ID: '3' }), 3);
+  assert.equal(platformOrgId({ PLATFORM_ORG_ID: 'x' }), 1);
+  assert.equal(platformOrgId({ PLATFORM_ORG_ID: '0' }), 1);
+});
+
+test('isPlatformOrg — רק הארגון שהוגדר; בלי ארגון — לא', () => {
+  assert.equal(isPlatformOrg(1, {}), true);
+  assert.equal(isPlatformOrg('1', {}), true);
+  assert.equal(isPlatformOrg(2, {}), false);
+  assert.equal(isPlatformOrg(2, { PLATFORM_ORG_ID: '2' }), true);
+  assert.equal(isPlatformOrg(null, {}), false);
+});
+
+test('systemAlertsAllowed — לפי הארגון של המשתמש, ובלי משתמש לפי הארגון הפעיל', () => {
+  assert.equal(systemAlertsAllowed({ org_id: 1 }, null, {}), true);
+  assert.equal(systemAlertsAllowed({ org_id: 2 }, 1, {}), false); // הארגון של המשתמש גובר
+  assert.equal(systemAlertsAllowed(null, 1, {}), true);            // העוזר, בהקשר ארגון 1
+  assert.equal(systemAlertsAllowed(null, 2, {}), false);
+  assert.equal(systemAlertsAllowed(null, null, {}), false);
 });

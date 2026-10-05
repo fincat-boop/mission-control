@@ -1,4 +1,5 @@
-import { one, rows } from './db.js';
+import { currentOrg, one, rows } from './db.js';
+import { isPlatformOrg } from './platform.js';
 import { effectiveCadenceDays, ymd } from './board.js';
 import { campaignsWithHealth } from './campaigns.js';
 import { postsOnBlockedDays } from './respace.js';
@@ -227,14 +228,16 @@ export async function buildAlerts(user = null) {
             pg_total_relation_size('backups') as backups,
             pg_total_relation_size('activity_log') as log`
   );
-  const storage = storageAlert({
+  // גיבוי ונפח המסד — של המערכת כולה, לא של ארגון; רק לארגון הפלטפורמה
+  const platformSignals = systemAlertsAllowed(user, currentOrg());
+  const storage = platformSignals && storageAlert({
     usedBytes: Number(size.bytes), assetsBytes: Number(size.assets),
     backupsBytes: Number(size.backups), logBytes: Number(size.log),
     limitMb: storageLimitMb(), mediaInR2: mediaReady(),
   });
   if (storage) alerts.push(storage);
 
-  alerts.push(...backupAlerts(backupLayers));
+  if (platformSignals) alerts.push(...backupAlerts(backupLayers));
 
   const order = { crit: 0, warn: 1, info: 2 };
   // סימן אחד לכל פוסט: משימה פתוחה היא ה-to-do, ההתראה המקבילה מתייתרת
@@ -250,6 +253,15 @@ export async function buildAlerts(user = null) {
       info: shown.filter((a) => a.level === 'info').length,
     },
   };
+}
+
+/**
+ * התראות כלל-מערכתיות (גיבוי, נפח המסד) — רק בארגון הפלטפורמה (PLATFORM_ORG_ID).
+ * הארגון: של המשתמש, ואם אין (העוזר) — הארגון הפעיל בהקשר. ההרשאה (settings)
+ * נבדקת בנפרד ב-alertsForUser.
+ */
+export function systemAlertsAllowed(user, ctxOrg = null, env = process.env) {
+  return isPlatformOrg(user?.org_id ?? ctxOrg, env);
 }
 
 /** האם המשתמש רשאי לראות התראה (perm = ההרשאה שנדרשת כדי לפעול עליה) */

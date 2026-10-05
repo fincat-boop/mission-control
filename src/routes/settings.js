@@ -3,6 +3,7 @@ import { autoFill, bad, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { PUBLIC_USER_COLS, hashPassword, requirePerm } from '../auth.js';
 import { readBackupLayers } from '../backup-status.js';
+import { isPlatformOrg } from '../platform.js';
 
 const r = Router();
 
@@ -35,10 +36,11 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
  * מטא-דאטה בלבד — בלי ה-payload עצמו, כדי שהרשימה תהיה קלה. layers = מצב
  * הניסיון האחרון של כל שכבת גיבוי (בתוך המסד / Drive / R2), לתצוגה בניהול.
  */
-r.get('/backups', requirePerm('settings'), wrap(async (_req, res) => {
+r.get('/backups', requirePerm('settings'), wrap(async (req, res) => {
+  // מצב השכבות גלובלי — רק לארגון הפלטפורמה (src/platform.js)
   const [list, layers] = await Promise.all([
     rows('select id, created_at, row_count from backups order by created_at desc'),
-    readBackupLayers(),
+    isPlatformOrg(req.org) ? readBackupLayers() : [],
   ]);
   res.json({ backups: list, layers });
 }));

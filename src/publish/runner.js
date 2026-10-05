@@ -1,4 +1,5 @@
-import { one, query, rows } from '../db.js';
+import { currentOrg, one, query, rows } from '../db.js';
+import { isPlatformOrg } from '../platform.js';
 import { decryptSecret } from './crypto.js';
 import { publishFacebook, publishInstagram } from './meta.js';
 import { deletePublicAssets, publicAssetsReady, uploadPublicAsset } from './public-assets.js';
@@ -99,8 +100,13 @@ async function logActivity(action, post, summary) {
   ));
 }
 
-/** המייל של בעלי הארגון (RLS מסנן לארגון הפעיל) — לאירוע הכשל ב-HUB */
+/**
+ * המייל של בעלי הארגון (RLS מסנן לארגון הפעיל) — לאירוע הכשל ב-HUB. רק
+ * לארגון הפלטפורמה: החיבור ל-HUB (HUB_API_*) אחד לכל השרת, ואנשי הקשר שם
+ * הם של הפלטפורמה — מייל של ארגון אחר היה מפעיל אוטומציה על איש קשר זר.
+ */
 async function ownerEmail() {
+  if (!isPlatformOrg(currentOrg())) return null;
   const u = await bestEffort('שליפת המייל של הבעלים נכשלה:', () =>
     one('select email from users where is_owner order by id limit 1'));
   return u?.email ?? null;
