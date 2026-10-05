@@ -76,7 +76,7 @@ function signature({ secretKey, dateOnly, region, stringToSign }) {
  */
 export function signRequest({
   method, host, bucket, key = '', query = {}, body = null, contentType,
-  accessKey, secretKey, amzDate, region = REGION,
+  accessKey, secretKey, amzDate, region = REGION, extraHeaders = {},
 }) {
   const dateOnly = amzDate.slice(0, 8);
   const payloadHash = sha256hex(body == null ? '' : body);
@@ -89,6 +89,8 @@ export function signRequest({
     'x-amz-date': amzDate,
   };
   if (contentType) headers['content-type'] = contentType;
+  // כותרות x-amz-* נוספות (למשל x-amz-copy-source) — חייבות להיחתם
+  for (const [k, v] of Object.entries(extraHeaders)) headers[k.toLowerCase()] = v;
 
   const signedHeaders = Object.keys(headers).sort().join(';');
   const canonicalHeaders = Object.keys(headers).sort()
@@ -170,10 +172,13 @@ export function presignPut(key, { bucket, expiresSec = 900, headers = {} } = {})
  * מבצע בקשה חתומה ל-R2. body הוא Buffer/מחרוזת (או null לבקשות בלי גוף).
  * מחזיר את ה-Response של fetch.
  */
-async function r2Request(method, { key = '', query = {}, body = null, contentType, bucket: bucketOverride } = {}) {
+async function r2Request(method, {
+  key = '', query = {}, body = null, contentType, bucket: bucketOverride, extraHeaders,
+} = {}) {
   const { accessKey, secretKey, bucket, host } = config(bucketOverride);
   const { url, headers } = signRequest({
     method, host, bucket, key, query, body, contentType, accessKey, secretKey, amzDate: amzStamp(),
+    extraHeaders,
   });
   return fetch(url, { method, headers, body: body ?? undefined });
 }
@@ -198,6 +203,22 @@ export async function headObject(key, bucket) {
     size: Number(res.headers.get('content-length') ?? 0),
     contentType: res.headers.get('content-type') ?? null,
   };
+}
+
+/**
+ * העתקה בתוך ה-bucket, בצד של R2 — הבייטים לא עוברים דרכנו (גם וידאו של 1GB).
+ * הסוג (content-type) נשמר מהמקור. S3 עלול להחזיר 200 עם <Error> בגוף.
+ */
+export async function copyObject(srcKey, dstKey, bucket) {
+  const { bucket: b } = config(bucket);
+  const res = await r2Request('PUT', {
+    key: dstKey, bucket,
+    extraHeaders: { 'x-amz-copy-source': `/${enc(b)}/${enc(srcKey, false)}` },
+  });
+  const text = await res.text();
+  if (!res.ok || text.includes('<Error>')) {
+    throw new Error(`R2 COPY ${srcKey} → ${dstKey} נכשל: ${res.status} ${text.slice(0, 200)}`);
+  }
 }
 
 export async function deleteObject(key, bucket) {

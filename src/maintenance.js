@@ -2,7 +2,7 @@ import { one, query, rows, withOrg } from './db.js';
 import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
-import { weekMeta } from './board.js';
+import { weekMeta, ymd } from './board.js';
 import { closeResolvedTasks } from './task-lifecycle.js';
 import { recordBackupLayer } from './backup-status.js';
 import {
@@ -154,13 +154,19 @@ export async function suggestContentSwaps() {
          join endpoints e on e.id = ci.endpoint_id and e.active = true
          left join campaigns ca on ca.id = ci.campaign_id
         where (ca.id is null or ca.paused_at is null)
+          and (ci.slot_channel_id is null or exists (
+                select 1 from campaign_channels cc
+                 where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
+          -- תוכן של קמפיין לא מוצע מחוץ לחלון התאריכים שלו
+          and (ca.id is null or ((ca.starts_on is null or ca.starts_on <= $4::date)
+                             and (ca.ends_on is null or ca.ends_on >= $4::date)))
           -- הצעה שכבר הוצעה לאותו פוסט (פתוחה, בוצעה או נדחתה) לא חוזרת:
           -- מי שסימן/מחק את ההצעה לא יקבל אותה שוב בעוד שעה
           and not exists (
             select 1 from tasks ts
-             where ts.post_id = $4 and ts.kind = 'swap'
+             where ts.post_id = $5 and ts.kind = 'swap'
                and ts.meta->>'suggested_content_id' = ci.id::text
-               and ts.created_at >= now() - make_interval(days => $5)
+               and ts.created_at >= now() - make_interval(days => $6)
           )
           and not exists (
             select 1 from posts p2
@@ -170,7 +176,8 @@ export async function suggestContentSwaps() {
           )
         order by e.importance desc, ci.created_at asc
         limit 1`,
-      [post.channel_id, week.startDate, week.endDate, post.id, SWAP_REOFFER_DAYS]
+      [post.channel_id, week.startDate, week.endDate, ymd(new Date(post.scheduled_at)),
+       post.id, SWAP_REOFFER_DAYS]
     );
     if (!suggestion) continue; // אין כרגע שום תוכן מוכן להציע במקומו
 

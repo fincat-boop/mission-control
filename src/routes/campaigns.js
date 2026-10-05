@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { autoFill, bad, updateById, wrap } from './_shared.js';
-import { campaignsWithHealth, currentAllocation } from '../campaigns.js';
-import { one, rows, tx } from '../db.js';
+import {
+  campaignsWithHealth, currentAllocation, resolvePeriod, structureChangeError,
+} from '../campaigns.js';
+import { currentOrg, one, rows, tx } from '../db.js';
+import { mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
 
 const r = Router();
@@ -22,7 +25,25 @@ r.get('/campaigns', wrap(async (_req, res) => {
 }));
 
 const CAMPAIGN_FIELDS = ['name', 'endpoint_id', 'starts_on', 'ends_on', 'share_pct',
-                         'importance', 'target_posts', 'goal', 'urgent', 'active'];
+                         'importance', 'target_posts', 'goal', 'urgent', 'active',
+                         'period', 'structure'];
+
+/** מחיל את resolvePeriod על גוף הבקשה. מחזיר הודעת שגיאה או null. */
+function applyPeriod(b, before) {
+  const r = resolvePeriod(b, before);
+  if (r.error) return r.error;
+  if ('period' in r) b.period = r.period;
+  if ('ends_on' in r) b.ends_on = r.ends_on;
+  const start = b.starts_on !== undefined ? b.starts_on : before?.starts_on;
+  const end = b.ends_on !== undefined ? b.ends_on : before?.ends_on;
+  if (start && end && start > end) return 'תאריך הסיום מוקדם מתאריך ההתחלה';
+  // בקמפיין כללי המשבצות נפרסות על החלון — בלי תאריכים אין משבצות
+  const structure = b.structure ?? before?.structure ?? 'angles';
+  if (structure === 'general' && (!start || !end)) {
+    return 'בקמפיין כללי צריך תאריך יעד לפוסט הראשון ותקופה';
+  }
+  return null;
+}
 
 /** מעדכן על אילו מדיות הקמפיין יושב */
 async function setCampaignChannels(client, campaignId, ids) {
@@ -36,37 +57,163 @@ async function setCampaignChannels(client, campaignId, ids) {
   }
 }
 
-r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
-  const b = req.body ?? {};
-  if (!b.endpoint_id || !b.name) return bad(res, 'צריך נקודת קצה ושם קמפיין');
-  if (b.starts_on && b.ends_on && b.starts_on > b.ends_on) {
-    return bad(res, 'תאריך הסיום מוקדם מתאריך ההתחלה');
-  }
+/** בדיקות של קמפיין חדש (גם בשכפול). מחזיר הודעת שגיאה או null. */
+function newCampaignError(b) {
+  if (!b.endpoint_id || !b.name) return 'צריך נקודת קצה ושם קמפיין';
+  const periodErr = applyPeriod(b, null);
+  if (periodErr) return periodErr;
+  // בלי מבנה מפורש (העוזר, קריאות API ישנות) — לפי זוויות, כמו עד היום.
+  // הטופס שולח 'general' כברירת מחדל לקמפיין חדש.
+  return structureChangeError('angles', b.structure ?? 'angles', 0);
+}
+
+async function insertCampaign(b) {
   const c = await one(
     `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
-                            importance, target_posts, goal, urgent)
+                            importance, target_posts, goal, urgent, period, structure)
      values ($1,$2,$3,$4,$5,
              coalesce($6,(select importance from endpoints where id = $1)),
-             $7,$8,coalesce($9,false))
+             $7,$8,coalesce($9,false),$10,coalesce($11,'angles'))
      returning *`,
     [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null, b.share_pct ?? null,
-     b.importance ?? null, b.target_posts ?? null, b.goal ?? null, b.urgent ?? false]
+     b.importance ?? null, b.target_posts ?? null, b.goal ?? null, b.urgent ?? false,
+     b.period ?? null, b.structure ?? null]
   );
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
   }
+  return c;
+}
+
+r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  const err = newCampaignError(b);
+  if (err) return bad(res, err);
+  const c = await insertCampaign(b);
   const engine = await autoFill(b.week);
   res.status(201).json({ campaign: c, engine });
 }));
 
-r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
-  const b = req.body ?? {};
-  if (b.starts_on && b.ends_on && b.starts_on > b.ends_on) {
-    return bad(res, 'תאריך הסיום מוקדם מתאריך ההתחלה');
+/**
+ * שכפול: קמפיין חדש עם ההגדרות שבגוף הבקשה (הטופס נפתח עם ההגדרות של
+ * המקור, ומשנים בו מה שרוצים), ואותו תוכן — זוויות, ניסוחים לכל מדיה
+ * וקבצים. השיבוצים בלוח לא מועתקים: המנוע משבץ את החדש לפי התאריכים שלו.
+ * קובץ ב-R2 מועתק לאובייקט חדש, כי מחיקה מאחד הקמפיינים מוחקת את האובייקט.
+ */
+r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res) => {
+  const src = await one('select * from campaigns where id = $1', [req.params.id]);
+  if (!src) return bad(res, 'לא נמצא קמפיין כזה', 404);
+
+  const b = { ...(req.body ?? {}), structure: src.structure };
+  const err = newCampaignError(b);
+  if (err) return bad(res, err);
+
+  const assets = await rows(
+    `select a.id, a.storage_key, a.filename from content_assets a
+       join content_items ci on ci.id = a.content_id
+      where ci.campaign_id = $1 and a.storage_key is not null`, [src.id]);
+  if (assets.length && !mediaReady()) {
+    return bad(res, 'אחסון המדיה לא מוגדר בשרת — אי אפשר להעתיק את הקבצים של הקמפיין', 503);
   }
+  // קודם הקבצים: אם העתקה נכשלת לא נוצר כלום במסד. מה שכבר הועתק נשאר
+  // יתום, וסריקת היתומים מנקה אותו.
+  const newKey = new Map();
+  for (const a of assets) {
+    const key = newMediaKey(currentOrg(), a.filename);
+    await mediaStore.copy(a.storage_key, key);
+    newKey.set(a.id, key);
+  }
+
+  const c = await insertCampaign(b);
+  const counts = await tx(async (client) => {
+    const items = await client.query(
+      'select * from content_items where campaign_id = $1 order by sort_order, id', [src.id]);
+    let variantsN = 0;
+    let assetsN = 0;
+    for (const it of items.rows) {
+      const { rows: [copy] } = await client.query(
+        `insert into content_items (endpoint_id, campaign_id, kind, title, body, ready_channel_ids,
+                                    sort_order, evergreen, reuse_after_days, slot_channel_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
+        [c.endpoint_id, c.id, it.kind, it.title, it.body, it.ready_channel_ids,
+         it.sort_order, it.evergreen, it.reuse_after_days, it.slot_channel_id]);
+
+      const vmap = new Map();
+      const vs = await client.query(
+        'select id, channel_id, body, status from content_variants where content_id = $1', [it.id]);
+      for (const v of vs.rows) {
+        const { rows: [nv] } = await client.query(
+          `insert into content_variants (content_id, channel_id, body, status)
+           values ($1,$2,$3,$4) returning id`, [copy.id, v.channel_id, v.body, v.status]);
+        vmap.set(v.id, nv.id);
+        variantsN++;
+      }
+
+      // קובץ ישן (bytea, בלי storage_key) מועתק בתוך Postgres — הבייטים לא
+      // עוברים דרך השרת
+      const as = await client.query(
+        'select id, variant_id, storage_key from content_assets where content_id = $1 order by id',
+        [it.id]);
+      for (const a of as.rows) {
+        await client.query(
+          `insert into content_assets (content_id, variant_id, filename, mime, size_bytes, data, storage_key)
+           select $1, $2, filename, mime, size_bytes,
+                  case when $3::text is null then data end, $3
+             from content_assets where id = $4`,
+          [copy.id, a.variant_id ? vmap.get(a.variant_id) ?? null : null,
+           newKey.get(a.id) ?? null, a.id]);
+        assetsN++;
+      }
+    }
+    return { items: items.rows.length, variants: variantsN, assets: assetsN };
+  });
+
+  const engine = await autoFill(b.week);
+  res.status(201).json({ campaign: c, copied: counts, engine });
+}));
+
+r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const b = { ...(req.body ?? {}) };
 
   const before = await one('select * from campaigns where id = $1', [req.params.id]);
   if (!before) return bad(res, 'לא נמצא קמפיין כזה', 404);
+
+  const periodErr = applyPeriod(b, before);
+  if (periodErr) return bad(res, periodErr);
+
+  if (b.structure == null) delete b.structure; // עמודה not null — "לא נשלח" = לא נוגעים
+  if (b.structure != null && b.structure !== before.structure) {
+    const n = await one('select count(*)::int as n from content_items where campaign_id = $1',
+      [before.id]);
+    const err = structureChangeError(before.structure, b.structure, n.n);
+    if (err) return bad(res, err, 409);
+  }
+
+  // הסרת מדיה מקמפיין כללי שיש לה פוסטים במשבצות: הפוסטים נשמרים (החזרת
+  // המדיה מחזירה אותם), אבל המנוע לא משבץ אותם כל עוד המדיה לא בקמפיין.
+  // אזהרה שאפשר לאשר — כמו המרווח בלוח (confirm_gap).
+  if (Array.isArray(b.channel_ids) && before.structure === 'general' && !b.confirm_gap) {
+    const keep = b.channel_ids.map(Number);
+    const orphans = await rows(
+      `select ch.name, count(*)::int as n
+         from content_items ci join channels ch on ch.id = ci.slot_channel_id
+        where ci.campaign_id = $1 and not (ci.slot_channel_id = any($2::int[]))
+          -- רק מדיות שיורדות עכשיו; מה שכבר הוסר קודם לא חוזר באזהרה
+          and ci.slot_channel_id in (select channel_id from campaign_channels where campaign_id = $1)
+        group by ch.name order by ch.name`,
+      [before.id, keep]);
+    if (orphans.length) {
+      const total = orphans.reduce((sum, o) => sum + o.n, 0);
+      const message =
+        `למדיות שיורדות מהקמפיין יש ${total === 1 ? 'פוסט אחד' : `${total} פוסטים`}: ` +
+        `${orphans.map((o) => `${o.name} (${o.n})`).join(', ')}. ` +
+        'אחרי ההסרה הפוסטים נשמרים אבל לא ישובצו יותר; מה שכבר בלוח נשאר. ' +
+        'החזרת המדיה לקמפיין מחזירה אותם.';
+      return res.status(409).json({
+        error: message, needs_confirm: true, warning: { message, orphans },
+      });
+    }
+  }
 
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (Array.isArray(b.channel_ids)) {

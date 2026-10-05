@@ -78,6 +78,16 @@ test('signRequest — LIST עם query זהה לפלט הקודם', () => {
     'Signature=b4689f110e09b7b622ae4364335b7c5ad362d303e196c64ee3ae305ad7db78ed');
 });
 
+test('signRequest — x-amz-copy-source נחתם עם שאר הכותרות (CopyObject)', () => {
+  const { headers } = signRequest({
+    ...creds, method: 'PUT', bucket: 'media-bkt', key: 'media/1/new/a.jpg',
+    extraHeaders: { 'X-Amz-Copy-Source': '/media-bkt/media/1/old/a.jpg' },
+  });
+  assert.equal(headers['x-amz-copy-source'], '/media-bkt/media/1/old/a.jpg');
+  assert.match(headers.Authorization,
+    /SignedHeaders=host;x-amz-content-sha256;x-amz-copy-source;x-amz-date,/);
+});
+
 test('enc — ASCII כמו קודם, ותו שאינו ASCII לפי בייטים של UTF-8', () => {
   assert.equal(enc('a b/c', false), 'a%20b/c');
   assert.equal(enc('a/b'), 'a%2Fb');
