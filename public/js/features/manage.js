@@ -23,7 +23,9 @@ export async function renderManage() {
   const ro = !can('settings'); // read-only
   const connOf = (id) => pub.connections.find((c) => c.channel_id === id) ?? null;
 
-  $('#manage').innerHTML = `
+  const root = $('#manage');
+  const restorePlace = keepPlace(root);
+  root.innerHTML = `
     <div class="setgroup" data-section="endpoints">
       <h2>נקודות קצה</h2>
       <p class="sub">ההגדרות של כל נקודה — חשיבות ותדירות. הקמפיינים והתוכן שלה בטאב "קמפיינים ותוכן".</p>
@@ -53,7 +55,26 @@ export async function renderManage() {
 
     ${systemGroup(users, settings, backupsRes?.backups ?? null, ro)}`;
 
+  restorePlace();
   wireManage(ro);
+}
+
+/**
+ * כל שמירה מציירת את המסך מחדש (innerHTML), וזה סגר כל <details> והקפיץ
+ * את הגלילה — בחיבור למטא: בוחרים פלטפורמה ← הערוץ נסגר ← פותחים ←
+ * שומרים ← נסגר שוב. לפני ההחלפה זוכרים מה פתוח (לפי data-open-id יציב)
+ * ואיפה הגלילה, ואחריה מחזירים. מחזיר את פונקציית ההחזרה.
+ */
+function keepPlace(root) {
+  const open = $$('details[open][data-open-id]', root).map((d) => d.dataset.openId);
+  const y = window.scrollY;
+  return () => {
+    for (const id of open) {
+      const d = root.querySelector(`details[data-open-id="${id}"]`);
+      if (d) d.open = true;
+    }
+    if (!root.hidden) window.scrollTo(0, y);
+  };
 }
 
 function endpointItem(e, channels, ro) {
@@ -272,7 +293,7 @@ function systemGroup(users, settings, backups, ro) {
   return `<div class="setgroup">
     <h2>מערכת</h2>
     <div class="panel">
-      ${can('users') ? `<details class="item">
+      ${can('users') ? `<details class="item" data-open-id="users">
         <summary><b>משתמשים והרשאות</b>
           <span class="info">${users.length} משתמשים</span></summary>
         <div class="ibody">
@@ -284,7 +305,7 @@ function systemGroup(users, settings, backups, ro) {
           <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
         </div>
       </details>` : ''}
-      <details class="item">
+      <details class="item" data-open-id="engine">
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
           ${eng('מרווח מינימלי לאותה נקודה באותו ערוץ (ימים)', 'min_gap_days', s.min_gap_days)}
@@ -441,12 +462,17 @@ function wireManage(ro) {
       : 'הפרסום האוטומטי כבוי — שום פוסט לא יתפרסם לבד.');
   }));
 
+  // אחרי שינוי פלטפורמה הערוץ נשאר פתוח (keepPlace), והפוקוס עובר לשדה
+  // הבא במסלול: הטוקן בפייסבוק/אינסטגרם, אחרת חזרה לבחירה עצמה
   $$('#manage [data-ch-platform]').forEach((sel) =>
     sel.addEventListener('change', run(async () => {
-      await api(`/channels/${sel.dataset.chPlatform}`,
+      const id = sel.dataset.chPlatform;
+      await api(`/channels/${id}`,
         { method: 'PATCH', body: { platform: sel.value, week: state.week } });
       toast('הפלטפורמה עודכנה.');
       await reload();
+      ($(`#manage [data-conn-token="${id}"]`) ?? $(`#manage [data-ch-platform="${id}"]`))
+        ?.focus();
     })));
 
   const connBody = (id) => {
