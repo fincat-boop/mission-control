@@ -26,6 +26,26 @@ export const run = (fn) => async (...args) => {
   catch (e) { toast(e.message, true); }
 };
 
+/**
+ * כפתור "העתק קישור" לקובץ שיש לו קישור ציבורי קבוע (מדיה ב-R2).
+ * בלי url — אין כפתור (קובץ ישן שעוד לא הועבר).
+ */
+export const copyLinkButton = (url) => (url
+  ? `<button type="button" class="btn small" data-copy-link="${esc(url)}"
+       title="קישור ציבורי קבוע — להדבקה ברשת חברתית או לשליחה לעורך">העתק קישור</button>`
+  : '');
+
+/** מחווט את כל כפתורי "העתק קישור" בתוך root */
+export function wireCopyLinks(root) {
+  root?.querySelectorAll('[data-copy-link]').forEach((b) =>
+    b.addEventListener('click', run(async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await navigator.clipboard.writeText(b.dataset.copyLink);
+      toast('הקישור הועתק');
+    })));
+}
+
 export function fillSelect(sel, items, labelKey, emptyLabel) {
   sel.innerHTML =
     (emptyLabel ? `<option value="">${esc(emptyLabel)}</option>` : '') +

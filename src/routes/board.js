@@ -7,6 +7,7 @@ import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
+import { assetView } from '../media.js';
 
 const r = Router();
 
@@ -140,11 +141,11 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
 
   const assets = p.content_id
     ? await rows(
-        `select id, filename, mime, size_bytes, variant_id
+        `select id, filename, mime, size_bytes, variant_id, storage_key
            from content_assets
           where content_id = $1 and (variant_id is null or variant_id = $2)
           order by variant_id nulls last, id`,
-        [p.content_id, variant?.id ?? null])
+        [p.content_id, variant?.id ?? null]).then((list) => list.map(assetView))
     : [];
 
   // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה

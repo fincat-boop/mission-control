@@ -1,4 +1,4 @@
-import { $, esc, run, toast } from '../core/dom.js';
+import { $, copyLinkButton, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { confirmDialog } from '../core/confirm.js';
 import { api } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
@@ -192,15 +192,13 @@ export async function openPostPreview(postId) {
   const when = new Date(post.scheduled_at)
     .toLocaleString('he-IL', { dateStyle: 'full', timeStyle: 'short' });
 
+  // קובץ ב-R2 מוצג ישירות מהקישור הציבורי הקבוע, ולצידו "העתק קישור"
   const media = assets.map((a) => {
-    if (isImage(a.mime)) {
-      return `<img class="pv" src="/api/assets/${a.id}" alt="${esc(a.filename)}">`;
-    }
-    if (isVideo(a.mime)) {
-      return `<video class="pv" src="/api/assets/${a.id}" controls></video>`;
-    }
-    return `<a class="pvfile" href="/api/assets/${a.id}" target="_blank" rel="noopener">
-      📄 ${esc(a.filename)}</a>`;
+    const src = esc(a.url ?? `/api/assets/${a.id}`);
+    const el = isImage(a.mime) ? `<img class="pv" src="${src}" alt="${esc(a.filename)}">`
+      : isVideo(a.mime) ? `<video class="pv" src="${src}" controls></video>`
+      : `<a class="pvfile" href="${src}" target="_blank" rel="noopener">📄 ${esc(a.filename)}</a>`;
+    return a.url ? `<div class="pvitem">${el}${copyLinkButton(a.url)}</div>` : el;
   }).join('');
 
   // ניוזלטר עם תבנית: התוכן חי ב-meta.field_values (ממלא התבניות),
@@ -249,4 +247,5 @@ export async function openPostPreview(postId) {
     ${post.status === 'published' && post.external_url
       ? `<div class="pvauto">✓ פורסם אוטומטית —
          <a href="${esc(post.external_url)}" target="_blank" rel="noopener">לצפייה בפוסט</a></div>` : ''}`;
+  wireCopyLinks($('#postPreview'));
 }

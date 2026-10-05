@@ -3,7 +3,7 @@ import { requirePerm } from '../auth.js';
 import { autoFill, bad, parseIdList, titleFromFilename, updateById, upload, wrap } from './_shared.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
-  MAX_MEDIA_BYTES, assetView, headMime, isOwnKey, mediaReady, mediaStore, newMediaKey,
+  MAX_MEDIA_BYTES, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl, newMediaKey,
   validateSignRequest, verifyUploaded,
 } from '../media.js';
 import { angleCount, channelNeeds } from '../campaigns.js';
@@ -123,14 +123,15 @@ r.get('/content', wrap(async (_req, res) => {
         order by ci.campaign_id nulls last, ci.sort_order, ci.id`
     ),
     rows('select * from content_variants order by content_id, channel_id'),
-    rows('select id, content_id, variant_id, filename, mime, size_bytes from content_assets order by id'),
+    rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
+            from content_assets order by id`),
   ]);
 
   res.json({
     content: items.map((x) => ({
       ...x,
       variants: variants.filter((v) => v.content_id === x.id),
-      assets: assets.filter((a) => a.content_id === x.id),
+      assets: assets.filter((a) => a.content_id === x.id).map(assetView),
     })),
   });
 }));
@@ -362,12 +363,23 @@ r.post('/content/:id/uploads/complete', requirePerm('content'), wrap(async (req,
 }));
 
 
-/** הגשת הקובץ עצמו. מאחורי אותה בדיקת התחברות כמו כל השאר. */
+/**
+ * הגשת הקובץ עצמו. מאחורי אותה בדיקת התחברות כמו כל השאר.
+ * קובץ ב-R2 — הפניה לקישור הציבורי הקבוע (הבייטים לא עוברים דרכנו);
+ * קובץ ישן (bytea) — מוגש מהמסד כמו קודם.
+ */
 r.get('/assets/:id', wrap(async (req, res) => {
   const a = await one(
-    'select filename, mime, data from content_assets where id = $1', [req.params.id]
+    `select filename, mime, storage_key,
+            case when storage_key is null then data end as data
+       from content_assets where id = $1`, [req.params.id]
   );
   if (!a) return bad(res, 'לא נמצא קובץ כזה', 404);
+  if (a.storage_key) {
+    const url = mediaUrl(a.storage_key);
+    if (!url) return bad(res, 'הכתובת הציבורית של המדיה לא מוגדרת (R2_PUBLIC_BASE_URL)', 503);
+    return res.redirect(302, url);
+  }
   res.setHeader('Content-Type', a.mime);
   // inline כדי שתמונות ייפתחו בתצוגה מקדימה ולא ירדו כקובץ
   res.setHeader('Content-Disposition',

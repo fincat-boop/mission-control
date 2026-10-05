@@ -1,6 +1,6 @@
 import { api } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
-import { $, $$, esc, run, toast } from '../core/dom.js';
+import { $, $$, copyLinkButton, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { openTemplateFiller } from '../ui/templateFiller.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
@@ -585,14 +585,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
   // תוכן שוטף: אין קמפיין לרשת ממנו נקודת קצה, אז היא נלקחת מההקשר
   const bgEndpoint = background?.endpoint_id;
 
-  const existingFiles = (item?.assets ?? []).map((a) => `
-    <div class="fileline">
-      ${isImage(a.mime) ? `<img src="/api/assets/${a.id}" alt="">` : '<span class="ic">📄</span>'}
-      <a href="/api/assets/${a.id}" target="_blank" rel="noopener">${esc(a.filename)}</a>
-      <span class="d">${kb(a.size_bytes)}</span>
-      <button type="button" class="btn small" data-del-asset="${a.id}"
-              style="color:var(--st-crit);margin-inline-start:auto">הסר</button>
-    </div>`).join('');
+  const existingFiles = (item?.assets ?? []).map((a) => assetLine(a, true, false)).join('');
 
   openGeneric({
     title: (item ? `זווית ${item.sort_order}` : `זווית חדשה${slot ? ` — מקום ${slot}` : ''}`)
@@ -648,6 +641,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
       await reload();
     },
     onOpen: () => {
+      wireCopyLinks($('#genBody'));
       $$('#genBody [data-del-asset]').forEach((b) =>
         b.addEventListener('click', run(async () => {
           await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
@@ -786,6 +780,7 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       await reload();
     },
     onOpen: () => {
+      wireCopyLinks($('#genBody'));
       $$('#genBody [data-del-asset]').forEach((b) =>
         b.addEventListener('click', run(async () => {
           await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
@@ -810,16 +805,24 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
 }
 
 
-/** שורת קובץ בטופס. ownOnly מבדיל בין קובץ של המדיה לקובץ משותף לזווית. */
-function assetLine(a, ownOnly) {
-  const thumb = isImage(a.mime) ? `<img src="/api/assets/${a.id}" alt="">`
+/**
+ * שורת קובץ בטופס. ownOnly מבדיל בין קובץ של המדיה לקובץ משותף לזווית
+ * (רק את שלה אפשר להסיר מכאן); sharedNote מוסיף "משותף לזווית" לצד הגודל.
+ * קובץ ב-R2 מוצג ישירות מהקישור הציבורי, ולידו "העתק קישור".
+ */
+function assetLine(a, ownOnly, sharedNote = !ownOnly) {
+  const src = a.url ?? `/api/assets/${a.id}`;
+  const thumb = isImage(a.mime) ? `<img src="${esc(src)}" alt="">`
               : isVideo(a.mime) ? '<span class="ic">🎬</span>'
               : '<span class="ic">📄</span>';
   return `<div class="fileline">
     ${thumb}
-    <a href="/api/assets/${a.id}" target="_blank" rel="noopener">${esc(a.filename)}</a>
-    <span class="d">${kb(a.size_bytes)}${ownOnly ? '' : ' · משותף לזווית'}</span>
-    ${ownOnly ? `<button type="button" class="btn small" data-del-asset="${a.id}"
-       style="color:var(--st-crit);margin-inline-start:auto">הסר</button>` : ''}
+    <a href="${esc(src)}" target="_blank" rel="noopener">${esc(a.filename)}</a>
+    <span class="d">${kb(a.size_bytes)}${sharedNote ? ' · משותף לזווית' : ''}</span>
+    <span class="fl-acts">
+      ${copyLinkButton(a.url)}
+      ${ownOnly ? `<button type="button" class="btn small" data-del-asset="${a.id}"
+         style="color:var(--st-crit)">הסר</button>` : ''}
+    </span>
   </div>`;
 }

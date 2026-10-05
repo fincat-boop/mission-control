@@ -1,5 +1,6 @@
 import { rows } from './db.js';
 import { ymd } from './board.js';
+import { assetView } from './media.js';
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -145,7 +146,8 @@ export async function campaignsWithHealth() {
                  p.channel_id, p.title, ch.name as channel_name
             from posts p left join channels ch on ch.id = p.channel_id
            where p.content_id is not null`),
-    rows('select id, content_id, variant_id, filename, mime, size_bytes from content_assets order by id'),
+    rows(`select id, content_id, variant_id, filename, mime, size_bytes, storage_key
+            from content_assets order by id`),
     rows('select * from content_variants order by content_id, channel_id'),
     rows('select * from channels order by sort_order, id'),
     rows('select * from campaign_channels'),
@@ -170,8 +172,8 @@ export async function campaignsWithHealth() {
       evergreen: x.evergreen, reuse_after_days: x.reuse_after_days,
       endpoint_id: x.endpoint_id, campaign_id: x.campaign_id,
       // קבצים משותפים לזווית מול קבצים של גרסה מסוימת
-      assets: assets.filter((a) => a.content_id === x.id && !a.variant_id),
-      variant_assets: assets.filter((a) => a.content_id === x.id && a.variant_id),
+      assets: assets.filter((a) => a.content_id === x.id && !a.variant_id).map(assetView),
+      variant_assets: assets.filter((a) => a.content_id === x.id && a.variant_id).map(assetView),
       variants: variants.filter((v) => v.content_id === x.id),
       posts: myPosts.filter((p) => p.content_id === x.id).map((p) => ({
         id: p.id, status: p.status, scheduled_at: p.scheduled_at,
