@@ -2,6 +2,7 @@ import { $, $$, esc, run, toast } from '../core/dom.js';
 import { confirmDialog } from '../core/confirm.js';
 import { acceptAttr, fileLimitLabel } from '../core/upload.js';
 import { PERIOD_PRESETS, parsePeriod, periodEnd, periodLabel } from '../core/period.js';
+import { multiSelectHtml, wireMultiSelects } from './multiSelect.js';
 
 /**
  * דיאלוג טופס כללי.
@@ -237,12 +238,10 @@ function fieldHtml(f) {
     </label></div></div>`;
   }
   if (f.type === 'multicheck') {
-    const chosen = new Set((f.value ?? []).map(String));
-    return `<div class="frow"><label>${esc(f.label)}</label><div class="checks">
-      ${f.options.map(([v, l]) =>
-        `<label><input type="checkbox" data-multi="${f.name}" value="${esc(v)}"${
-          chosen.has(String(v)) ? ' checked' : ''}> ${esc(l)}</label>`).join('')}
-    </div></div>`;
+    return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
+      ${multiSelectHtml({ id, options: f.options, value: f.value ?? [],
+        attrs: () => `data-multi="${esc(f.name)}"`, placeholder: f.placeholder })}
+      ${f.hint ? `<div class="fhint">${esc(f.hint)}</div>` : ''}</div>`;
   }
   if (f.type === 'select') {
     const cur = f.value ?? '';
@@ -324,6 +323,8 @@ export function openGeneric(spec) {
       .forEach((sel) => $(sel)?.addEventListener('input', sync));
     sync();
   }
+
+  wireMultiSelects($('#genBody'));
 
   $$('#genBody [data-auto-on]').forEach((r) => r.addEventListener('change', () => {
     const input = $(`#gen_${r.dataset.autoOn}`);

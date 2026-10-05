@@ -4,6 +4,7 @@ import { numOrNull, ymd } from '../core/format.js';
 import { api } from '../core/api.js';
 import { refreshAfterPostChange } from '../ui/refresh.js';
 import { defaultUrgentTime } from '../core/postActions.js';
+import { multiSelectHtml, wireMultiSelects } from './multiSelect.js';
 
 /* ========================= מבצע דחוף ========================= */
 
@@ -40,10 +41,11 @@ export function openUrgent() {
   if (!can('content')) return toast('אין לך הרשאה לשבץ תוכן', true);
 
   fillSelect($('#uEndpoint'), state.endpoints, 'name', 'ללא נקודת קצה');
-  $('#uChannels').innerHTML = state.channels
-    .filter((c) => c.active)
-    .map((c) => `<label><input type="checkbox" value="${c.id}"> ${esc(c.name)}</label>`)
-    .join('');
+  $('#uChannels').innerHTML = multiSelectHtml({
+    options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
+    placeholder: 'בחירת ערוצים…',
+  });
+  wireMultiSelects($('#uChannels'));
 
   const inTwoDays = new Date(Date.now() + 2 * 86400000);
   $('#uUntil').value = ymd(inTwoDays);

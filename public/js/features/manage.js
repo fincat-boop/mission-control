@@ -5,6 +5,7 @@ import { HE_DAYS, fmtDate, ymd } from '../core/format.js';
 import { refreshBoard } from '../ui/refresh.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openGeneric } from '../ui/dialog.js';
+import { multiSelectHtml, wireMultiSelects } from '../ui/multiSelect.js';
 import { engineToast } from '../ui/engineDialog.js';
 import { resetSetupStatus } from '../ui/setup.js';
 
@@ -265,11 +266,9 @@ function channelItem(c, ro, conn, hubReady) {
       <section class="chblock">
         <h4>ימים חסומים <span class="savenote">נשמר בכל סימון</span></h4>
         <div class="fhint">ימים שבהם הערוץ לא מקבל פוסטים. פוסט שכבר שובץ ביום שנחסם מוזז ליום פנוי.</div>
-        <div class="checks blockdays">
-          ${HE_DAYS.map((d, i) => `<label>
-            <input type="checkbox" data-blocked="${c.id}" value="${i}"
-                   ${(c.blocked_days ?? []).includes(i) ? 'checked' : ''} ${ro ? 'disabled' : ''}>
-            ${d}</label>`).join('')}
+        <div class="blockdays">
+          ${multiSelectHtml({ options: HE_DAYS.map((d, i) => [i, d]), value: c.blocked_days ?? [],
+            attrs: () => `data-blocked="${c.id}"`, placeholder: 'אין ימים חסומים', disabled: ro })}
         </div>
       </section>
 
@@ -467,6 +466,7 @@ async function teammateAdded(u) {
 }
 
 function wireManage(ro, connections) {
+  wireMultiSelects($('#manage'));
   const reload = run(async () => { await renderManage(); await refreshBoard(); });
 
   // חסימת יום מפנה את מי שכבר יושב עליו. מי שלא נמצא לו יום חוקי נשאר על
