@@ -8,6 +8,7 @@ import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
 import { confirmDialog } from '../core/confirm.js';
 import { isMissed } from '../core/postActions.js';
+import { newsletterHubTag } from '../core/hubFill.js';
 import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
 
 /* ========================= הלוח ========================= */
@@ -212,6 +213,8 @@ function statusTag(p) {
     return p.has_results ? { cls: 'auto', label: '✓ פורסם' } : { cls: 'yellow', label: '✓ פורסם · לא נמדד' };
   }
   if (isMissed(p)) return { cls: 'yellow', label: 'עבר המועד' };
+  const hub = newsletterHubTag(p); // ניוזלטר שהועבר — "ממתין לאישור ב-HUB"
+  if (hub) return hub;
   if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
   if (!p.content_id) return { cls: 'red', label: 'חסר תוכן' };
   return p.variant_status === 'ready' ? { cls: 'blue', label: 'יש תוכן' } : { cls: 'yellow', label: 'יש טיוטה' };
@@ -395,7 +398,7 @@ function postCard(p) {
   const hint = missing && p.content_hint
     ? `<i class="hint">${p.content_hint === 'ready' ? 'יש תוכן לשייך' : 'יש טיוטה'}</i>` : '';
 
-  const tag = AUTO_TAG[p.status] ?? contentTag;
+  const tag = newsletterHubTag(p) ?? AUTO_TAG[p.status] ?? contentTag;
   // מתוכנן (או מאושר שלא נתפס) שהמועד שלו עבר — לא יצא, וצריך החלטה
   const missed = isMissed(p);
   const cls = ['post', p.status === 'failed' && 'failed', missing && 'missing', missed && 'missed']

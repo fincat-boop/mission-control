@@ -48,6 +48,8 @@ export function postFacts(post, variant) {
     hasContent: !!post.content_id,
     variantReady: variant?.status === 'ready',
     publishingStartedAt: post.publishing_started_at ?? null,
+    // ניוזלטר שבידי ה-HUB: הקישור למסך האישור שם
+    hubUrl: post.platform === 'newsletter' && post.status === 'publishing' ? post.external_url ?? null : null,
   };
 }
 
@@ -61,7 +63,8 @@ export const publishingStuck = (f, now = new Date()) => f.status === 'publishing
 
 /** "קבע מועד חדש" גם מאשר מיד לפרסום אוטומטי? רק כשהאישור יעבור בשרת. */
 export function rescheduleApproves(f, perms) {
-  return ['scheduled', 'failed'].includes(f.status) && !!perms.approve &&
+  // ניוזלטר לא מאושר כאן — אחרי מועד חדש מעבירים אותו ל-HUB
+  return f.platform !== 'newsletter' && ['scheduled', 'failed'].includes(f.status) && !!perms.approve &&
     f.autoReady && f.hasContent && f.variantReady;
 }
 
@@ -79,6 +82,8 @@ export function choosePrimary(f, perms, now = new Date()) {
   const past = time(f) < now.getTime();
 
   if (f.status === 'published') return NONE;
+  // ניוזלטר שהועבר ל-HUB — האישור והשינויים שם
+  if (f.status === 'publishing' && f.hubUrl) return only('openHub');
   // בפרסום — רק אחרי 10 דקות זה "תקוע"; לפני זה הוא כנראה עוד רץ
   if (f.status === 'publishing') {
     return perms.approve && publishingStuck(f, now) ? only('resetPublishing') : NONE;
@@ -98,6 +103,12 @@ export function choosePrimary(f, perms, now = new Date()) {
     if (f.status === 'approved') return only('reschedule');
     // ערוץ ידני (וואטסאפ, ידני, או שהפרסום האוטומטי כבוי) — כנראה יצא ביד
     return only(f.autoReady ? 'reschedule' : 'markPublished');
+  }
+
+  // ניוזלטר עתידי עם תוכן מוכן: לא "מאשרים" כאן — מעבירים ל-HUB, ומאשרים שם
+  if (f.platform === 'newsletter' && !past && f.hasContent && f.variantReady &&
+      ['scheduled', 'approved', 'failed'].includes(f.status)) {
+    return perms.approve ? only('transferHub') : NONE;
   }
 
   if (f.status === 'failed') {

@@ -7,6 +7,9 @@ import { KIND_HE, hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
 import { AUTO_PLATFORMS, choosePrimary, editPatch, isMissed, nextFreeSlot, postFacts,
          publishingStuck, rescheduleApproves } from '../core/postActions.js';
+import { newsletterHubTag } from '../core/hubFill.js';
+import { mountHubPreview, newsletterPostNotes, openInHub, previewInput,
+         transferToHub } from './hubFill.js';
 
 /* ========================= תצוגת פוסט מהלוח ========================= */
 
@@ -71,6 +74,23 @@ const ACT = {
       if (!(await confirmDialog(q, { okLabel: 'שחרר' }))) return false;
       await api(`/posts/${post.id}/reset-publishing`, { method: 'POST' });
       toast('הפוסט שוחרר וסומן "נכשל". אם הוא עלה בפועל — "סמן כפורסם".');
+    },
+  },
+  // ניוזלטר: יוצר טיוטה לאישור ב-HUB עם המועד של הפוסט (ui/hubFill.js)
+  transferHub: {
+    label: 'העבר ל-HUB',
+    keepOpen: true,
+    run: async (post) => {
+      if (await transferToHub(post)) await afterChange(post.id);
+      return false; // החלון נשאר — עכשיו עם "ממתין לאישור ב-HUB" והקישור
+    },
+  },
+  openHub: {
+    label: 'פתח ב-HUB',
+    keepOpen: true,
+    run: async (post) => {
+      openInHub(post.external_url);
+      return false;
     },
   },
   // ממתין לאישור (מבצע דחוף של מי שאין לו הרשאת אישור)
@@ -482,7 +502,8 @@ function attemptsHtml(log) {
     return `<li class="${x.ok ? 'ok' : 'bad'}"${x.ok || !x.error ? '' : ` title="${esc(x.error)}"`}>
       <span class="when">${esc(when)}</span>
       <span class="st">${x.ok ? '✓ הצליח' : '✗ נכשל'}</span>
-      <span class="msg">${x.ok ? (x.external_id ? 'פורסם בערוץ' : '') : esc(x.message ?? '')}</span></li>`;
+      <span class="msg">${x.ok ? (x.external_id ? (x.platform === 'newsletter' ? 'הועבר ל-HUB' : 'פורסם בערוץ') : '')
+        : esc(x.message ?? '')}</span></li>`;
   }).join('');
   return `<details class="pvlog"><summary>היסטוריית ניסיונות (${log.length})</summary>
     <ul>${rowsHtml}</ul></details>`;
@@ -508,6 +529,7 @@ function menuKeys(post, f, p) {
   const connected = AUTO_PLATFORMS.includes(post.platform) && post.autopub_connected;
   const future = new Date(post.scheduled_at) > new Date();
   const menu = [];
+  if (post.platform === 'newsletter') return newsletterMenuKeys(post, f, p, future);
   if (['scheduled', 'failed'].includes(post.status)) {
     // אישור לפוסט שהמועד שלו עבר נדחה בשרת — אז "קבע מועד חדש" או "פרסם עכשיו"
     if (p.approve && f.autoReady && future) menu.push('approve');
@@ -531,6 +553,25 @@ function menuKeys(post, f, p) {
     !['published', 'publishing'].includes(post.status);
   if (attachable) menu.unshift('attach');
   else menu.push('openContent');
+  if (p.content && post.status !== 'publishing') menu.push('remove');
+  return menu;
+}
+
+/**
+ * "עוד" לניוזלטר: לא מאשרים ולא מפרסמים מכאן — מעבירים ל-HUB ומאשרים שם.
+ * מה שהועבר נפתח ב-HUB; שחרור (אם נתקע) מחזיר אותו ללוח כ"נכשל".
+ */
+function newsletterMenuKeys(post, f, p, future) {
+  const menu = [];
+  const transferable = ['scheduled', 'approved', 'failed'].includes(post.status);
+  if (transferable && future && p.approve && f.hasContent && f.variantReady) menu.push('transferHub');
+  if (post.external_url && ['publishing', 'published', 'failed'].includes(post.status)) menu.push('openHub');
+  if (transferable && p.content) menu.push('markPublished');
+  if (transferable && p.content && !future) menu.push('reschedule');
+  if (post.status === 'published' && p.content) menu.push('unpublish');
+  if (post.status === 'publishing' && p.approve && publishingStuck(f)) menu.push('resetPublishing');
+  if (post.content_id || post.status === 'publishing') menu.push('openContent');
+  else if (p.content) menu.unshift('attach');
   if (p.content && post.status !== 'publishing') menu.push('remove');
   return menu;
 }
@@ -616,7 +657,9 @@ export async function openPostPreview(postId) {
     !['published', 'publishing'].includes(post.status);
 
   const chip = $('#pStatusChip');
-  const [chipLabel, chipTone] = isMissed(post) ? MISSED_CHIP : STATUS_CHIP[post.status] ?? [null, ''];
+  const hubTag = newsletterHubTag(post); // ניוזלטר שבידי ה-HUB — "ממתין לאישור ב-HUB"
+  const [chipLabel, chipTone] = hubTag ? [hubTag.label, hubTag.tone]
+    : isMissed(post) ? MISSED_CHIP : STATUS_CHIP[post.status] ?? [null, ''];
   chip.hidden = !chipLabel;
   chip.textContent = chipLabel ?? '';
   chip.dataset.tone = chipTone;
@@ -655,6 +698,12 @@ export async function openPostPreview(postId) {
   const body = variant?.body?.trim() || filledContent;
   const subjectLine = post.platform === 'newsletter' && vMeta.subject
     ? `<div class="pvmeta" style="margin-top:10px">✉️ נושא: <b>${esc(vMeta.subject)}</b></div>` : '';
+  // ניוזלטר: התצוגה מה-HUB במקום הטקסט הגולמי, ושורות המצב מול ה-HUB
+  const nlInput = post.platform === 'newsletter' && variant
+    ? previewInput({ subject: vMeta.subject, body: variant.body, title: post.title,
+        scheduledAt: post.scheduled_at, templateId: vMeta.template_id, fieldValues: vMeta.field_values })
+    : null;
+  const nlNotes = newsletterPostNotes(post);
 
   $('#postDlgTitle').textContent = post.title;
   $('#postPreview').innerHTML = `
@@ -672,7 +721,7 @@ export async function openPostPreview(postId) {
     ${subjectLine}
     ${media ? `<div class="pvmedia">${media}</div>` : ''}
 
-    ${body ? `<div class="pvbody">${esc(body)}</div>
+    ${nlInput ? '<div id="pNlPreview" class="pvnl"></div>' : body ? `<div class="pvbody">${esc(body)}</div>
               <div class="pvcopy"><button type="button" class="btn small" id="pCopyBody">העתק טקסט</button></div>`
             : !post.content_id
               ? `<div class="pvempty">חסר תוכן — לפוסט הזה עוד לא שויך תוכן.</div>
@@ -693,15 +742,18 @@ export async function openPostPreview(postId) {
       ? `<div class="pvauto">⚡ מאושר לפרסום אוטומטי${
           post.approved_by_name ? ` — אישר: ${esc(post.approved_by_name)}` : ''}.
           יתפרסם ב-${esc(when)}.</div>` : ''}
-    ${post.status === 'publishing'
+    ${nlNotes ?? ''}
+    ${post.status === 'publishing' && !nlNotes
       ? (post.platform === 'newsletter'
           ? '<div class="pvauto">📧 התקבל ב-HUB — הניוזלטר בשליחה. הפוסט יסומן "פורסם" אוטומטית כשתושלם.</div>'
           : '<div class="pvauto">🚀 נשלח לערוץ ממש עכשיו…</div>') : ''}
-    ${post.status === 'publishing' && !publishingStuck(previewFacts) && can('approve')
+    ${post.status === 'publishing' && post.platform !== 'newsletter' && !publishingStuck(previewFacts) && can('approve')
       ? '<div class="pvnote">אם זה ייתקע — "שחרר פרסום תקוע" יופיע כאן אחרי 10 דקות בפרסום.</div>' : ''}
     ${post.status === 'failed'
       ? `<div class="pvwarn"><b>הפרסום האוטומטי נכשל:</b> ${esc(post.publish_error ?? 'ללא פירוט')}
-         <br>אפשר לקבוע מועד חדש ולאשר שוב, לפרסם עכשיו, או לפרסם ידנית ולסמן "פורסם".</div>` : ''}
+         <br>${post.platform === 'newsletter'
+           ? 'קובעים מועד חדש ולוחצים "העבר ל-HUB" — או, אם הניוזלטר כבר נשלח מה-HUB, מסמנים "פורסם".'
+           : 'אפשר לקבוע מועד חדש ולאשר שוב, לפרסם עכשיו, או לפרסם ידנית ולסמן "פורסם".'}</div>` : ''}
     ${isMissed(post)
       ? `<div class="pvwarn"><b>המועד עבר והפוסט לא יצא.</b> ${previewFacts.autoReady
           ? 'קובעים מועד חדש — או, אם פורסם ביד, מסמנים "פורסם".'
@@ -712,6 +764,7 @@ export async function openPostPreview(postId) {
       ? `<div class="pvauto">✓ פורסם אוטומטית —
          <a href="${esc(post.external_url)}" target="_blank" rel="noopener">לצפייה בפוסט</a></div>` : ''}`;
   wireCopyLinks($('#postPreview'));
+  if (nlInput) mountHubPreview($('#pNlPreview'), () => nlInput, { head: 'כך ייראה המייל אצל הנמען (מה-HUB)' });
   // מעתיק בדיוק את מה שהתצוגה מראה — לשליחה ידנית (וואטסאפ) או להדבקה
   const copyBtn = $('#pCopyBody');
   copyBtn?.addEventListener('click', run(async () => {
