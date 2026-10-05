@@ -14,6 +14,9 @@ import { one, rows, tx } from './db.js';
 import { METRICS, parseMetric } from './performance.js';
 import { POST_AT, inLocalDays, periodOf } from './stats.js';
 
+/** כמה פוסטים לכל היותר בטבלת ההזנה (הטאב אומר כמה לא מוצגים) */
+export const ENTRY_LIMIT = 500;
+
 /** כמה שורות לכל היותר בשמירה אחת — הגנה מפני גוף ענק, לא מגבלה מעשית */
 export const MAX_BATCH = 300;
 
@@ -207,7 +210,7 @@ export async function listForEntry(from, to, { all = false } = {}) {
       where ${IN_PERIOD}
         ${all ? '' : 'and r.post_id is null'}
       order by coalesce(p.published_at, p.scheduled_at) desc, p.id desc
-      limit 500`,
+      limit ${ENTRY_LIMIT}`,
     [period.from, period.to]
   );
   // המונה בכותרת תמיד סופר את מי שעוד לא נמדד, גם כשמוצגים כולם; וכמה

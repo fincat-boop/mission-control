@@ -23,7 +23,7 @@ r.get('/stats', wrap(async (req, res) => {
   }
 }));
 
-/** יעילות נמדדת: טבלאות לפי ממד + הפוסטים שממתינים להזנת תוצאות */
+/** ביצועים מנורמלים: טבלאות לפי ממד (הפוסטים שממתינים להזנה — ב-GET /results) */
 r.get('/performance', wrap(async (req, res) => {
   try {
     res.json(await buildPerformance(req.query.from, req.query.to));

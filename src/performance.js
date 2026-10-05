@@ -239,21 +239,7 @@ export async function buildPerformance(from, to) {
     ...(map.get(x.id) ?? { score: NEUTRAL, n: 0, raw: null }),
   })).sort((a, b) => b.score - a.score);
 
-  // פוסטים שפורסמו ועדיין אין להם שום תוצאה — רשימת המילוי
-  const pending = await rows(
-    `select p.id, p.title, p.published_at, p.scheduled_at,
-            c.name as channel_name, e.name as endpoint_name
-       from posts p
-       left join channels c  on c.id = p.channel_id
-       left join endpoints e on e.id = p.endpoint_id
-       left join post_results r on r.post_id = p.id
-      where p.status = 'published'
-        and ${inLocalDays(POST_AT)}
-        and r.post_id is null
-      order by p.published_at desc
-      limit 100`,
-    [period.from, period.to]
-  );
+  // רשימת "ממתינים להזנה" שהייתה כאן עברה ל-GET /results (src/results.js)
 
   return {
     period: { from: period.from, to: period.to, days: period.days },
@@ -271,7 +257,6 @@ export async function buildPerformance(from, to) {
       ...(byBucket.get(b) ?? { score: NEUTRAL, n: 0, raw: null }),
     })),
     combos,
-    pending,
   };
 }
 

@@ -3,7 +3,9 @@ import { KIND_HE, KIND_VAR, fmtDate, hhmm, ymd } from '../core/format.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { confirmDialog } from '../core/confirm.js';
-import { DATA_PERIODS, DEFAULT_DATA_PERIOD, isPreset, presetRange } from '../core/dataPeriod.js';
+import {
+  DATA_PERIODS, DEFAULT_DATA_PERIOD, isPreset, localYmd, presetRange,
+} from '../core/dataPeriod.js';
 import { goToTab } from '../ui/refresh.js';
 import { openPostPreview } from '../ui/postDialog.js';
 
@@ -94,6 +96,12 @@ const dirty = new Map();
 /** "כולל פוסטים שכבר נמדדו" — ברירת מחדל: רק מה שעוד מחכה */
 let resultsAll = false;
 
+/**
+ * כמה פוסטים בתקופה עוד בלי תוצאות — מהשרת, ולא ספירת השורות במסך:
+ * הרשימה נחתכת ב-500, והמונה חייב לספור גם את מה שלא מוצג.
+ */
+let pendingCount = 0;
+
 const isMeasuredRow = (r) => ['reach', 'engagement', 'clicks', 'leads'].some((m) => r[m] != null);
 
 function resultRow(p, editable) {
@@ -104,7 +112,7 @@ function resultRow(p, editable) {
       data-f="${f}" data-orig="${p[f] ?? ''}" value="${p[f] ?? ''}" ${aria(f)}${dis}></td>`;
   const cls = p.has_results && isMeasuredRow(p) ? ' class="measured"' : '';
   return `<tr data-res-row="${p.id}" data-had="${p.has_results ? 1 : 0}"${cls}>
-    <td class="when">${esc(fmtDate(ymd(new Date(p.published_at))))}</td>
+    <td class="when">${esc(fmtDate(localYmd(new Date(p.published_at))))}</td>
     <td>${esc(p.channel_name ?? '—')}</td>
     <td>${esc(p.endpoint_name ?? '—')}</td>
     <td class="restitle"><button type="button" class="linkbtn" data-open-post="${p.id}">${esc(p.title)}</button>
@@ -118,6 +126,7 @@ function resultRow(p, editable) {
 function resultsPanel(entry) {
   const editable = can('content');
   const list = entry.posts;
+  pendingCount = entry.pending;
   const head = `<h2>תוצאות לעדכון (<span id="resPending">${entry.pending}</span>)
       <label class="restoggle"><input type="checkbox" id="resAll"${resultsAll ? ' checked' : ''}>
         כולל פוסטים שכבר נמדדו</label></h2>`;
@@ -134,9 +143,15 @@ function resultsPanel(entry) {
       <div class="panel"><div class="empty">${msg} ${btn}</div></div></div>`;
   }
 
+  // הרשימה מוגבלת בשרת — אומרים כמה לא מוצגים, ולא מעמידים פנים שזה הכול
+  const total = resultsAll ? entry.published : entry.pending;
+  const trunc = list.length < total
+    ? `<p class="sechint">מוצגים ${list.length} מתוך ${total} — לצמצם את התקופה כדי לראות את השאר.</p>`
+    : '';
+
   return `<div class="subsec" id="resultsSec">${head}
     <p class="sechint">שדה ריק = לא נמדד (לא נספר בחישוב). 0 = נמדד ויצא אפס.
-      Enter עובר לאותו שדה בשורה הבאה.</p>
+      Enter עובר לאותו שדה בשורה הבאה.</p>${trunc}
     <div class="panel restable-wrap"><table class="stattable restable">
       <thead><tr><th>פורסם</th><th>ערוץ</th><th>נקודת קצה</th><th>פוסט</th>
         <th>חשיפות</th><th>מעורבות</th><th>קליקים</th><th>לידים</th><th>הערה</th></tr></thead>
@@ -238,13 +253,17 @@ async function saveResults() {
       inp.value = v;
       inp.dataset.orig = v;
     }
+    // המונה זז מהערך של השרת: פוסט שקיבל תוצאה ראשונה יורד, פוסט שנוקה חוזר
+    const had = tr.dataset.had === '1';
+    if (!had && !r.cleared) pendingCount -= 1;
+    if (had && r.cleared) pendingCount += 1;
     tr.dataset.had = r.cleared ? '0' : '1';
     tr.classList.remove('dirty', 'err');
     tr.classList.add('saved');
     tr.classList.toggle('measured', !r.cleared && isMeasuredRow(r));
     dirty.delete(r.post_id);
   }
-  $('#resPending').textContent = $$('#data [data-res-row][data-had="0"]').length;
+  $('#resPending').textContent = pendingCount;
   paintSaveButton();
   $('#resMsg').textContent = out.cleared
     ? `נשמרו ${out.saved} · נוקו ${out.cleared}` : `נשמרו ${out.saved}`;
@@ -402,7 +421,9 @@ function wireResults() {
       $('#postDlg').addEventListener('close', run(renderData), { once: true });
     })));
   $$('#data [data-goto]').forEach((b) =>
-    b.addEventListener('click', run(() => goToTab(b.dataset.goto))));
+    b.addEventListener('click', run(async () => {
+      if (await confirmDiscard()) await goToTab(b.dataset.goto);
+    })));
 }
 
 /* ---------- ביצועים מנורמלים ---------- */
@@ -447,6 +468,7 @@ function engineLine(p) {
 
 /** מעבר להגדרה עצמה: טאב ניהול, פתיחת "מתקדם — כללי המנוע" וגלילה אל המתג */
 async function goToPerfSetting() {
+  if (!(await confirmDiscard())) return;
   await goToTab('manage');
   const box = $('#engUsePerf');
   if (!box) return toast('ההגדרה נמצאת בניהול ← מערכת ← "מתקדם — כללי המנוע"');
