@@ -353,3 +353,32 @@ test('התראת תוכן — בקמפיין מוכן "טיוטות לסיום" 
   assert.match(normal.title, /^חסר תוכן/);
   assert.equal(normal.level, 'crit');
 });
+
+import { completionSummary } from '../src/campaigns.js';
+
+test('completionSummary — כמה משבצות ריקות יורדות, כמה נשארות לכל מדיה, כמה טיוטות', () => {
+  const content = [
+    slotItem(1, 1, 1, 'ready'), slotItem(2, 1, 4, 'draft'), slotItem(3, 2, 1, 'ready'),
+  ];
+  // כמו שורה של campaignsWithHealth לפני הסימון
+  const g = generalGridFor(month, content, [chA, chB], '2026-10-01', [month]);
+  const row = { ...month, id: 9, content, channels: [chA, chB], complete: false,
+                missing_content: g.missing, drafts: g.drafts };
+  const s = completionSummary(row, '2026-10-01');
+  assert.equal(s.removed_empty, g.total_cells - 3);  // כל מה שלא נכתב
+  assert.deepEqual(s.kept_by_channel, { 1: 2, 2: 1 });
+  assert.equal(s.posts, 3);
+  assert.equal(s.drafts, 1);
+  assert.equal(s.ready, 2);
+  assert.equal(s.starts_on, '2026-11-01');
+  assert.equal(s.ends_on, '2026-11-30');
+});
+
+test('completionSummary — מסרב בלי תאריכים או בלי תוכן', () => {
+  const base = { ...month, content: [slotItem(1, 1, 1, 'ready')], channels: [chA],
+                 missing_content: 0, drafts: 0 };
+  assert.match(completionSummary({ ...base, ends_on: null }).error, /אין תאריכים/);
+  assert.match(completionSummary({ ...base, content: [] }).error, /אין בקמפיין תוכן/);
+  // תוכן רק במדיה שהוסרה מהקמפיין — אין מה לפרוס
+  assert.ok(completionSummary({ ...base, content: [slotItem(1, 2, 1, 'ready')] }).error);
+});

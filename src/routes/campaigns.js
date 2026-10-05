@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { autoFill, bad, updateById, wrap } from './_shared.js';
 import {
-  campaignsWithHealth, currentAllocation, resolvePeriod, structureChangeError,
+  campaignsWithHealth, completionSummary, currentAllocation, resolvePeriod, structureChangeError,
 } from '../campaigns.js';
 import { currentOrg, one, rows, tx } from '../db.js';
 import { mediaReady, mediaStore, newMediaKey } from '../media.js';
@@ -170,6 +170,66 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
 
   const engine = await autoFill(b.week);
   res.status(201).json({ campaign: c, copied: counts, engine });
+}));
+
+/* ---------- "קמפיין מוכן": הקמפיין בגודל התוכן שקיים ---------- */
+
+/** הקמפיין עם המצב המלא שלו, או null */
+async function campaignWithHealth(id) {
+  return (await campaignsWithHealth()).find((c) => c.id === Number(id)) ?? null;
+}
+
+/** מה יקרה בלחיצה על "קמפיין מוכן" — לדיאלוג האישור. לא כותב כלום. */
+r.get('/campaigns/:id/complete-preview', wrap(async (req, res) => {
+  const c = await campaignWithHealth(req.params.id);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  const summary = completionSummary(c);
+  if (summary.error) return bad(res, summary.error);
+  res.json({ summary });
+}));
+
+/**
+ * המשבצות הריקות יורדות והקמפיין מצטמצם בדיוק לתוכן שקיים (גם טיוטות).
+ * הסדר נדחס ל-1..n — בכללי לכל מדיה בנפרד, בזוויות לכל הזוויות — בלי
+ * לשנות את הסדר היחסי, והמנוע פורס את הפוסטים על אותה תקופה.
+ */
+r.post('/campaigns/:id/complete', requirePerm('settings'), wrap(async (req, res) => {
+  const before = await campaignWithHealth(req.params.id);
+  if (!before) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  const summary = completionSummary(before);
+  if (summary.error) return bad(res, summary.error);
+
+  const campaign = await tx(async (client) => {
+    // דרך ערכים שליליים: האינדקס הייחודי על משבצות של כללי נבדק בכל שורה,
+    // ודחיסה ישירה (5→3 לפני ש-3→2) הייתה נתקלת בו באמצע
+    await client.query(
+      `with r as (
+         select id, row_number() over (partition by slot_channel_id
+                                       order by sort_order, id) as n
+           from content_items where campaign_id = $1)
+       update content_items ci set sort_order = -r.n from r where ci.id = r.id`,
+      [before.id]);
+    await client.query(
+      `update content_items set sort_order = -sort_order
+        where campaign_id = $1 and sort_order < 0`, [before.id]);
+    const { rows: [c] } = await client.query(
+      `update campaigns set content_complete_at = coalesce(content_complete_at, now())
+        where id = $1 returning *`, [before.id]);
+    return c;
+  });
+
+  const engine = await autoFill(req.body?.week);
+  res.json({ campaign, summary, engine });
+}));
+
+/** חזרה להקצאה לפי קצב: המשבצות הריקות חוזרות. שום דבר אחר לא משתנה. */
+r.post('/campaigns/:id/reopen', requirePerm('settings'), wrap(async (req, res) => {
+  const campaign = await one(
+    'update campaigns set content_complete_at = null where id = $1 returning *',
+    [req.params.id]);
+  if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  const engine = await autoFill(req.body?.week);
+  res.json({ campaign, engine });
 }));
 
 r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {

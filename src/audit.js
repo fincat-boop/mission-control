@@ -70,6 +70,8 @@ function describe(req, payload, deletedName) {
     'campaigns/pause':    ['pause',   `השהה קמפיין ${label}`],
     'campaigns/resume':   ['resume',  `הפעיל מחדש קמפיין ${label}`],
     'campaigns/order':    ['update',  `סידר מחדש את התוכן בקמפיין ${label}`],
+    'campaigns/complete': ['update',  `סימן את הקמפיין ${label} כמוכן — המשבצות הריקות ירדו`],
+    'campaigns/reopen':   ['update',  `פתח מחדש את הקמפיין ${label} להשלמת תוכן`],
     'campaigns/bulk':     ['create',  `העלה קבצים לקמפיין ${label}`],
     'campaigns/assets':   ['create',  `העלה קבצים לקמפיין ${label}`],
     'content/assets':     ['create',  `הוסיף קבצים לתוכן ${label}`],

@@ -612,8 +612,10 @@ async function bulkAngles(req, res, files, attach) {
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`,
     [campaign.id]
   );
-  // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו
-  const required = angleCount(campaign, channelNeeds(campaign, myChannels));
+  // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו. קמפיין
+  // שסומן מוכן הוא בגודל התוכן שלו: מה שנוסף נכנס בסוף ומגדיל אותו.
+  const required = campaign.content_complete_at
+    ? null : angleCount(campaign, channelNeeds(campaign, myChannels));
 
   // המשבצות הריקות, לפי הסדר. אם נגמרו — ממשיכים אחרי המשבצת האחרונה.
   const freeSlots = [];
@@ -674,7 +676,9 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   // אותו חשבון בדיוק כמו המסך (campaignsWithHealth) — כולל הנתח שנגזר
   // מהקמפיינים החופפים — כדי שהקבצים ימלאו את המשבצות שהמשתמש רואה
   const concurrent = await rows('select * from campaigns');
-  const need = channelNeeds(campaign, myChannels, concurrent).get(channelId) ?? null;
+  // קמפיין שסומן מוכן: אין משבצות ריקות — הקבצים נכנסים בסוף ומגדילים אותו
+  const need = campaign.content_complete_at
+    ? null : channelNeeds(campaign, myChannels, concurrent).get(channelId) ?? null;
 
   const existing = await rows(
     'select sort_order from content_items where campaign_id = $1 and slot_channel_id = $2',

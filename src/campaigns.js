@@ -365,6 +365,36 @@ export function resolvePeriod(b, before = null) {
   return {};
 }
 
+/**
+ * מה יקרה בלחיצה על "קמפיין מוכן", מתוך הקמפיין כפי שהוא עכשיו (שורה של
+ * campaignsWithHealth). removed_empty = המשבצות/התאים שלא נכתבו ויורדים;
+ * kept_by_channel = כמה פוסטים נשארים לכל מדיה; posts/drafts = סה"כ ומתוכם
+ * טיוטות. error = למה אי אפשר (בלי תאריכים / בלי תוכן).
+ */
+export function completionSummary(c, today = ymd(new Date())) {
+  if (!c.starts_on || !c.ends_on) {
+    return { error: 'לקמפיין אין תאריכים, ולכן אין על מה לפרוס את הפוסטים' };
+  }
+  if (!c.content?.length) return { error: 'אין בקמפיין תוכן — אין מה להשאיר' };
+
+  const after = { ...c, content_complete_at: c.content_complete_at ?? new Date().toISOString() };
+  const grid = c.structure === 'general'
+    ? generalGridFor(after, c.content, c.channels, today)
+    : gridFor(after, c.content, c.channels, today);
+  if (!grid.total_cells) {
+    return { error: 'אין בקמפיין פוסטים למדיות שלו — אין מה לפרוס' };
+  }
+  return {
+    removed_empty: c.complete ? 0 : Math.max(0, c.missing_content - (c.drafts ?? 0)),
+    kept_by_channel: grid.needs,
+    posts: grid.total_cells,
+    ready: grid.ready,
+    drafts: grid.drafts,
+    starts_on: c.starts_on,
+    ends_on: c.ends_on,
+  };
+}
+
 /** כל הקמפיינים עם מצב מלא */
 export async function campaignsWithHealth() {
   const [list, content, posts, assets, variants, channels, links] = await Promise.all([
