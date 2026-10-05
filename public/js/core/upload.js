@@ -50,7 +50,8 @@ function xhrSend(method, url, body, { headers = {}, onProgress } = {}) {
       try { data = JSON.parse(xhr.responseText || '{}'); } catch { /* R2 מחזיר XML/ריק */ }
       resolve({ status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, data });
     };
-    xhr.onerror = () => reject(new Error('ההעלאה נכשלה — בעיית רשת'));
+    // רשת / CORS: הדפדפן לא מגלה איזה מהשניים — status 0 ו-onerror
+    xhr.onerror = () => reject(Object.assign(new Error('ההעלאה נכשלה — בעיית רשת'), { network: true }));
     xhr.onabort = () => reject(new Error('ההעלאה בוטלה'));
     xhr.send(body);
   });
@@ -64,9 +65,21 @@ async function putToStorage(signPath, file, extra, onProgress) {
   // הכותרות חתומות ב-URL (סוג וגודל) — שולחים בדיוק את מה שהשרת חתם.
   // Content-Length הדפדפן קובע לבד, מגודל הקובץ.
   const res = await xhrSend('PUT', url, file, { headers: headers ?? {}, onProgress });
-  if (!res.ok) throw new Error(`ההעלאה של "${file.name}" לאחסון נכשלה (${res.status})`);
+  if (!res.ok) throw storageFailed(file);
   return key;
 }
+
+const LEGACY_MAX_BYTES = LEGACY_MAX_MB * 1048576;
+
+/** ה-PUT ל-R2 נכשל ואין מסלול חלופי — הודעה אחת ברורה */
+const storageFailed = (file) =>
+  new Error(`"${file.name}": ההעלאה לאחסון נכשלה — נסה שוב, ואם זה חוזר פנה לתמיכה`);
+
+/**
+ * כשל רשת/CORS מול R2 (למשל כלל CORS חסר ב-bucket) — קובץ עד 50MB עולה
+ * במסלול הישן דרך השרת (נשמר במסד, והתחזוקה מעבירה אותו ל-R2 אחר כך).
+ */
+const canFallBack = (e, files) => e?.network && files.every((f) => f.size <= LEGACY_MAX_BYTES);
 
 /** multipart לשרת — המסלול הישן (bytea) */
 async function legacyMultipart(path, files, extraFields, onProgress) {
@@ -101,11 +114,10 @@ export async function uploadFiles(contentId, files, { channelId = null, onProgre
   if (!list.length) return [];
   precheck(list);
 
-  const legacy = () => legacyMultipart(
-    channelId ? `/content/${contentId}/variants/${channelId}/assets` : `/content/${contentId}/assets`,
-    list, {}, onProgress).then((d) => d.assets ?? []);
+  const legacyPath = channelId
+    ? `/content/${contentId}/variants/${channelId}/assets` : `/content/${contentId}/assets`;
+  const legacy = () => legacyMultipart(legacyPath, list, {}, onProgress).then((d) => d.assets ?? []);
   if (!mediaOn()) return legacy();
-
   const saved = [];
   for (const [i, f] of list.entries()) {
     let key;
@@ -114,7 +126,12 @@ export async function uploadFiles(contentId, files, { channelId = null, onProgre
         channelId ? { channel_id: channelId } : {}, (l, t) => onProgress?.(i, l, t));
     } catch (e) {
       if (i === 0 && isNotConfigured(e)) return legacy();
-      throw e;
+      if (canFallBack(e, [f])) {
+        const d = await legacyMultipart(legacyPath, [f], {}, (_j, l, t) => onProgress?.(i, l, t));
+        saved.push(...(d.assets ?? []));
+        continue;
+      }
+      throw e.network ? storageFailed(f) : e;
     }
     const { asset } = await api(`/content/${contentId}/uploads/complete`, {
       method: 'POST',
@@ -144,7 +161,10 @@ export async function uploadBulk(campaignId, files, { kind, onProgress } = {}) {
       uploaded.push({ key, filename: f.name });
     } catch (e) {
       if (i === 0 && isNotConfigured(e)) return legacy();
-      throw e;
+      // המנה נוצרת בבת אחת — עוברים למסלול הישן לכולה. מה שכבר עלה ל-R2
+      // נשאר יתום ונאסף בסריקה.
+      if (canFallBack(e, list)) return legacy();
+      throw e.network ? storageFailed(f) : e;
     }
   }
   return api(`/campaigns/${campaignId}/bulk/media`, {
