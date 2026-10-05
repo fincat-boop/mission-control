@@ -30,3 +30,13 @@ test('סיבוב מלא — מה שנשמר הוא מה שחוזר', () => {
   const s = { tab: 'board', week: '2026-11-01', planEndpoint: null, planCampaign: null };
   assert.deepEqual(parseView(serializeView(s)), s);
 });
+
+test('parseView — תאריך שלא קיים בלוח השנה (30.2) לא נכנס; מזהים רק שלמים חיוביים', () => {
+  assert.equal(parseView('#board;w=2026-02-30').week, null);
+  assert.equal(parseView('#board;w=2026-02-28').week, '2026-02-28');
+  assert.equal(parseView('#board;w=2028-02-29').week, '2028-02-29'); // שנה מעוברת
+  assert.equal(parseView('#plan;e=1.5;c=-3').planEndpoint, null);
+  assert.equal(parseView('#plan;e=1.5;c=-3').planCampaign, null);
+  assert.equal(parseView('#plan;e=0x10').planEndpoint, null);
+  assert.equal(parseView('#plan;e=12').planEndpoint, 12);
+});

@@ -41,8 +41,20 @@ export function serializeView(s) {
   return `#${h}`;
 }
 
-const isYmd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v ?? '') &&
-  !Number.isNaN(new Date(`${v}T00:00:00`).getTime());
+/** YYYY-MM-DD של תאריך אמיתי: הלוך-חזור דרך Date מחזיר את אותה מחרוזת (2026-02-30 לא) */
+const isYmd = (v) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v ?? '')) return false;
+  const d = new Date(`${v}T00:00:00`);
+  const p = (n) => String(n).padStart(2, '0');
+  return !Number.isNaN(d.getTime()) &&
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` === v;
+};
+
+/** מזהה מה-hash: ספרות בלבד, מספר שלם חיובי — אחרת null (לא 1.5, -3, 0x10) */
+const idOf = (v) => {
+  const n = Number(v);
+  return /^\d+$/.test(v ?? '') && Number.isInteger(n) && n > 0 ? n : null;
+};
 
 /** hash → מה לשחזר, או null כשה-hash לא מוכר. טהורה — נבדקת בטסטים. */
 export function parseView(hash) {
@@ -51,8 +63,8 @@ export function parseView(hash) {
   const view = { tab: parts[0], planEndpoint: null, planCampaign: null, week: null };
   for (const p of parts.slice(1)) {
     const [k, v] = p.split('=');
-    if (k === 'e') view.planEndpoint = Number(v) || null;
-    if (k === 'c') view.planCampaign = Number(v) || null;
+    if (k === 'e') view.planEndpoint = idOf(v);
+    if (k === 'c') view.planCampaign = idOf(v);
     if (k === 'w' && isYmd(v)) view.week = v;
   }
   return view;
