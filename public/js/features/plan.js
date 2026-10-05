@@ -750,13 +750,30 @@ const slotPickable = (c, item) => !item ||
 
 function exitLinkMode() {
   linkMode = null;
+  linkReload = null;
   document.removeEventListener('keydown', onLinkKey);
 }
+
+/** יציאה ממסך התוכן (מעבר טאב) — מצב הקישור לא נשאר תלוי ברקע */
+export function leavePlanView() {
+  if (linkMode) exitLinkMode();
+}
+
+/** מצב הקישור, רק כשעדיין עומדים על הקמפיין שבו התחיל; אחרת הוא מתבטל */
+function activeLinkMode() {
+  if (linkMode && (state.tab !== 'plan' || state.planCampaign !== linkMode.campaignId)) {
+    exitLinkMode();
+  }
+  return linkMode;
+}
+
 let linkReload = null;
 function onLinkKey(e) {
-  if (e.key !== 'Escape' || !linkMode || document.querySelector('dialog[open]')) return;
+  if (!activeLinkMode()) return;
+  if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+  const reload = linkReload;
   exitLinkMode();
-  linkReload?.();
+  reload?.();
 }
 
 /** נכנסים למצב קישור מטופס המשבצת: הטופס נסגר והלוח מסמן את היעדים */
@@ -775,8 +792,11 @@ function enterLinkMode(campaign, item, reload) {
 /** הקישור עצמו, אחרי לחיצה על משבצת יעד בלוח */
 async function linkTo(campaign, channelId, index, item, reload) {
   const body = { target_campaign_slot: { channel_id: channelId, sort_order: index }, week: state.week };
+  // משבצת חד-פעמית שכבר פורסמה לא תשובץ שוב — התוכן המקושר לא ייצא בה
+  const published = item && !item.evergreen && item.posts?.some((p) => p.status === 'published');
   const replaceQuestion = `התוכן הקיים במשבצת יוחלף בתוכן של "${linkMode.title}" ` +
-    `(${linkMode.label}) — הטקסט, הקבצים והמצב. להמשיך?`;
+    `(${linkMode.label}) — הטקסט, הקבצים והמצב.` +
+    (published ? ' המשבצת הזו כבר פורסמה — התוכן המקושר לא ישובץ בה שוב.' : '') + ' להמשיך?';
   if (item) {
     if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
     body.replace = true;
@@ -813,9 +833,8 @@ const linkBar = () => `
  * עצמה: אין זווית משותפת ואין ניסוח למדיה אחרת. במסך צר העמודות נערמות.
  */
 function generalBoard(c) {
-  // מצב קישור שייך לקמפיין שבו התחיל; מעבר לקמפיין אחר מבטל אותו
-  if (linkMode && linkMode.campaignId !== c.id) exitLinkMode();
-  const linking = !!linkMode && can('content');
+  // מצב קישור שייך לקמפיין שבו התחיל; מעבר לקמפיין או לטאב אחר מבטל אותו
+  const linking = !!activeLinkMode() && linkMode.campaignId === c.id && can('content');
 
   const cols = c.slots.map((col) => {
     const blocked = linking ? columnBlock(c, col.channel_id) : null;
@@ -872,7 +891,7 @@ function wireGeneralBoard(selected, reload) {
       const item = selected.content.find((x) =>
         x.slot_channel_id === channelId && x.sort_order === index) ?? null;
       // במצב קישור הלחיצה בוחרת יעד; משבצת שלא אפשרית — לא עושה כלום
-      if (linkMode) {
+      if (activeLinkMode()) {
         if (b.classList.contains('pick')) run(() => linkTo(selected, channelId, index, item, reload))();
         else toast('בוחרים אחת מהמשבצות המסומנות — במדיה אחרת, ריקה או לא מקושרת.');
         return;
