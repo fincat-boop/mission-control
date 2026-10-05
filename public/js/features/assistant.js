@@ -97,8 +97,10 @@ function aiEntry(entry, i) {
       ${p.warnings?.length
         ? `<div class="w">${p.warnings.map((w) => `⚠ ${esc(w)}`).join('<br>')}</div>` : ''}
       <div class="args">${esc(args)}</div>
-      ${entry.state
-        ? `<div class="w" style="color:${entry.state === 'done' ? 'var(--st-ok)' : 'var(--ink-2)'}">${
+      ${entry.state === 'failed'
+        ? `<div class="w err">הביצוע נכשל: ${esc(entry.error)} — אפשר לבקש מהעוזר שוב</div>`
+        : entry.state
+        ? `<div class="w" style="color:${entry.state === 'done' ? 'var(--st-good)' : 'var(--ink-2)'}">${
             entry.state === 'done' ? '✓ בוצע' : 'בוטל'}</div>`
         : `<div class="acts">
              <button class="btn small" data-ai-skip="${i}">לא עכשיו</button>
@@ -201,13 +203,14 @@ async function confirmProposal(i) {
     toast('בוצע.');
     await refreshAfterAI();
   } catch (e) {
-    entry.state = null;
-    ai.log.push({ type: 'msg', role: 'sys', text: `הביצוע נכשל: ${e.message}` });
+    // ההצעה נצרכה בשרת גם כשהביצוע נכשל — כפתור "אשר ובצע" שחוזר היה
+    // מחזיר 410. הכישלון מוצג על הכרטיס עצמו, וניסיון נוסף = בקשה חדשה.
+    entry.state = 'failed';
+    entry.error = e.message;
     ai.history.push({
       role: 'user',
       content: `[הביצוע נכשל: ${e.message}. הסבר למשתמש ואל תנסה שוב בלי לתקן.]`,
     });
-    throw e;
   } finally {
     renderAI();
   }
