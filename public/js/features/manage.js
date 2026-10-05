@@ -586,8 +586,9 @@ function wireManage(ro) {
         (x.published
           ? `${x.published} פוסטים שכבר פורסמו בו${x.results ? ` ו־${x.results} רשומות תוצאות` : ''} יימחקו לצמיתות — כולל ההיסטוריה בטאב "נתונים".`
           : 'אין בו פוסטים שפורסמו.') +
-        (x.other ? `\n${x.other} פוסטים מתוכננים בו יימחקו מהלוח.` : '');
-      const choice = await deleteOrDisable(msg, x.active && (x.published || x.other),
+        (x.other ? `\n${x.other} פוסטים מתוכננים בו יימחקו מהלוח.` : '') +
+        (x.variants ? `\n${x.variants} ניסוחים שנכתבו לערוץ הזה יימחקו.` : '');
+      const choice = await deleteOrDisable(msg, x.active && (x.published || x.other || x.variants),
         'השבתה משאירה את ההיסטוריה ורק מוציאה את הערוץ מהשיבוץ.', 'מחק ערוץ');
       if (choice === 'disable') {
         await api(`/channels/${id}`, { method: 'PATCH', body: { active: false, week: state.week } });

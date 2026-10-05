@@ -70,7 +70,7 @@ r.delete('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
   const impact = await endpointImpact(req.params.id);
   if (!impact) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
   // תוכן שנכתב לא נמחק בלי בקשה מפורשת (?force=1)
-  if (impact.content > 0 && req.query.force !== '1') {
+  if ((impact.content > 0 || impact.campaigns > 0) && req.query.force !== '1') {
     return res.status(409).json({
       error: `לנקודת הקצה יש ${impact.content} פריטי תוכן ו־${impact.campaigns} קמפיינים — מחיקה תמחק אותם. אפשר להשבית את הנקודה במקום.`,
       impact, needs_force: true,

@@ -45,7 +45,9 @@ async function channelImpact(id) {
     `select c.id, c.name, c.active,
             count(p.id) filter (where p.status = 'published')::int  as published,
             count(p.id) filter (where p.status <> 'published')::int as other,
-            count(pr.post_id)::int                                  as results
+            count(pr.post_id)::int                                  as results,
+            (select count(*)::int from content_variants v
+              where v.channel_id = c.id and coalesce(btrim(v.body), '') <> '') as variants
        from channels c
        left join posts p         on p.channel_id = c.id
        left join post_results pr on pr.post_id = p.id
@@ -64,10 +66,10 @@ r.get('/channels/:id/delete-impact', requirePerm('settings'), wrap(async (req, r
 r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   const impact = await channelImpact(req.params.id);
   if (!impact) return bad(res, 'לא נמצא ערוץ כזה', 404);
-  // היסטוריה שפורסמה לא נמחקת בלי בקשה מפורשת (?force=1)
-  if (impact.published > 0 && req.query.force !== '1') {
+  // היסטוריה שפורסמה או ניסוחים שנכתבו לערוץ — לא נמחקים בלי בקשה מפורשת
+  if ((impact.published > 0 || impact.variants > 0) && req.query.force !== '1') {
     return res.status(409).json({
-      error: `בערוץ יש ${impact.published} פוסטים שפורסמו — מחיקה תמחק גם אותם ואת התוצאות שלהם. אפשר להשבית את הערוץ במקום.`,
+      error: `בערוץ יש ${impact.published} פוסטים שפורסמו ו־${impact.variants} ניסוחים שנכתבו לו — מחיקה תמחק את כולם. אפשר להשבית את הערוץ במקום.`,
       impact, needs_force: true,
     });
   }

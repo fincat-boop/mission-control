@@ -149,11 +149,6 @@ export async function renderBoard() {
   if (editable) wireBoardDrag();
 }
 
-/**
- * גרירת כרטיס ליום אחר על הלוח.
- * שינוי מדיה מותר רק אם לתוכן יש גרסה מוכנה למדיה היעד — אחרת היינו
- * מפרסמים שם ניסוח שנכתב למדיה אחרת.
- */
 const APPROVE_WEEK_LABEL = '⚡ אשר מוכנים לפרסום אוטומטי';
 
 /** סיכום האישור המרוכז כשחלק מהפוסטים לא אושרו — עד 10 עם הסיבה */
@@ -168,12 +163,17 @@ function skippedReport({ approved, skipped }, offNote) {
   ].join('\n');
 }
 
-const DRAGGABLE = new Set(['scheduled', 'approved', 'failed']);
+const DRAGGABLE = new Set(['scheduled', 'approved', 'failed', 'pending_approval']);
 
+/**
+ * גרירת כרטיס ליום אחר על הלוח.
+ * שינוי ערוץ מותר רק אם לתוכן יש גרסה מוכנה לערוץ היעד — אחרת היינו
+ * מפרסמים שם ניסוח שנכתב לערוץ אחר.
+ */
 function wireBoardDrag() {
   let dragged = null;
 
-  // רק מה שעוד לא יצא אפשר להזיז; פורסם / בשליחה / חסר תוכן / ממתין לאישור — לא.
+  // רק מה שעוד לא יצא אפשר להזיז; פורסם / בשליחה — לא.
   // השרת אוכף את אותו כלל (moveBlocker ב-routes/board.js).
   $$('#board [data-post-id]').forEach((el) => {
     if (!DRAGGABLE.has(JSON.parse(el.dataset.post).status)) return;

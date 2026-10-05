@@ -150,7 +150,9 @@ export async function openPostPreview(postId) {
   const menu = [];
 
   if (['scheduled', 'failed'].includes(post.status)) {
-    if (can('approve') && autoCapable) menu.push('approve', 'publishNow');
+    // אישור לפוסט שהמועד שלו עבר נדחה בשרת — אז רק "פרסם עכשיו"
+    const future = new Date(post.scheduled_at) > new Date();
+    if (can('approve') && autoCapable) menu.push(...(future ? ['approve'] : []), 'publishNow');
     if (can('content')) menu.push('markPublished');
   } else if (post.status === 'approved') {
     if (can('approve')) menu.push('unapprove', 'publishNow');

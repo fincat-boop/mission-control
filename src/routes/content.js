@@ -106,9 +106,25 @@ r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) =
       returning p.id`,
     [c.id]
   );
+  // מאושר שבזמן ההשהיה המנוע מילא את אותה נקודה+ערוץ+יום — היו יוצאים שניים,
+  // בניגוד לכלל של הלוח. האישור ניתן לפני שהיום התמלא, אז הוא מתפנה כמו השאר.
+  const clashed = await rows(
+    `delete from posts p using content_items ci
+      where ci.id = p.content_id and ci.campaign_id = $1
+        and p.status = 'approved' and p.scheduled_at >= now()
+        and exists (select 1 from posts o
+                     where o.id <> p.id and o.endpoint_id = p.endpoint_id
+                       and o.channel_id = p.channel_id
+                       and (o.scheduled_at at time zone 'Asia/Jerusalem')::date
+                         = (p.scheduled_at at time zone 'Asia/Jerusalem')::date
+                       and (o.content_id is null or o.content_id not in
+                            (select id from content_items where campaign_id = $1)))
+      returning p.id`,
+    [c.id]
+  );
 
   const engine = await autoFill(req.body?.week);
-  res.json({ campaign: c, cleared: cleared.length, engine });
+  res.json({ campaign: c, cleared: cleared.length + clashed.length, engine });
 }));
 
 /** סידור מחדש של התוכן בתוך קמפיין */

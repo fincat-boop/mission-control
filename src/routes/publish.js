@@ -259,6 +259,10 @@ r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) =>
       where p.scheduled_at >= $1 and p.scheduled_at <= $2
         and p.status in ('scheduled', 'failed')
         and c.platform in ('facebook', 'instagram', 'newsletter')
+        and c.active
+        and not exists (select 1 from content_items ci
+                          join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)
       order by p.scheduled_at`,
     [from, to]
   );

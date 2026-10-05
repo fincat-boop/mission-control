@@ -327,7 +327,7 @@ export async function publishTickForOrg() {
   const due = await rows(
     `select p.id, p.scheduled_at < now() - ($1 || ' hours')::interval as too_late
        from posts p
-       join channels c on c.id = p.channel_id
+       join channels c on c.id = p.channel_id and c.active
        left join channel_connections cc on cc.channel_id = c.id
       where p.status = 'approved' and p.scheduled_at <= now()
         and (cc.auto_enabled = true or c.platform = 'newsletter')
@@ -380,7 +380,7 @@ async function whatsappPrep() {
             t.id as task_id, t.done as task_done,
             (t.meta->>'wa_ready')::boolean as task_ready
        from posts p
-       join channels c on c.id = p.channel_id and c.platform = 'whatsapp'
+       join channels c on c.id = p.channel_id and c.platform = 'whatsapp' and c.active
        left join content_variants v on v.content_id = p.content_id
             and v.channel_id = p.channel_id
        left join lateral (
