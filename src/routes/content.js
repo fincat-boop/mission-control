@@ -26,7 +26,7 @@ const r = Router();
 async function slotChannelError(contentId, channelId) {
   const item = await one('select slot_channel_id from content_items where id = $1', [contentId]);
   if (!item?.slot_channel_id || Number(channelId) === item.slot_channel_id) return null;
-  return 'הפוסט הזה שייך למדיה אחת בקמפיין כללי — אין לו גרסה למדיה אחרת';
+  return 'הפוסט הזה שייך לערוץ אחד בקמפיין כללי — אין לו גרסה לערוץ אחר';
 }
 
 /** שגיאת קישור (LinkError) חוזרת למשתמש כמו שהיא; כל השאר — שגיאת שרת */
@@ -194,7 +194,7 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
   if (!Array.isArray(ids)) return bad(res, 'צריך רשימת מזהי תוכן');
   const c = await one('select structure from campaigns where id = $1', [req.params.id]);
   if (c?.structure === 'general') {
-    return bad(res, 'בקמפיין כללי אין סדר זוויות — כל פוסט יושב במשבצת של המדיה שלו');
+    return bad(res, 'בקמפיין כללי אין סדר זוויות — כל פוסט יושב במשבצת של הערוץ שלו');
   }
   await tx(async (client) => {
     for (const [i, contentId] of ids.entries()) {
@@ -282,7 +282,7 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     const onCampaign = slotChannel && await one(
       'select 1 from campaign_channels where campaign_id = $1 and channel_id = $2',
       [campaign.id, slotChannel]);
-    if (!onCampaign) return bad(res, 'בקמפיין כללי צריך לבחור מדיה מהמדיות של הקמפיין');
+    if (!onCampaign) return bad(res, 'בקמפיין כללי צריך לבחור ערוץ מהערוצים של הקמפיין');
   }
 
   // משבצת מפורשת מנצחת (מילוי משבצת מהציר). בלעדיה — סוף התור.
@@ -790,7 +790,7 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
     [campaign.id]
   );
   if (!myChannels.some((c) => c.id === channelId)) {
-    return bad(res, 'בקמפיין כללי ההעלאה המרוכזת היא למדיה אחת מהמדיות של הקמפיין');
+    return bad(res, 'בקמפיין כללי ההעלאה המרוכזת היא לערוץ אחד מהערוצים של הקמפיין');
   }
 
   // אותו חשבון בדיוק כמו המסך (campaignsWithHealth) — כולל הנתח שנגזר

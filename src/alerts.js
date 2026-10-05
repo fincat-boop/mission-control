@@ -121,8 +121,8 @@ export async function buildAlerts(user = null) {
       level: e.days_over >= cadence ? 'crit' : 'warn',
       title: `${e.name} לא מפרסמת`,
       detail: e.days_since === null
-        ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, הקצב הוא כל ${cadence}`
-        : `${e.days_since} ימים בלי פרסום — הקצב ${e.min_days_between == null ? 'האוטומטי' : 'שהוגדר'} הוא כל ${cadence}`,
+        ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, התדירות היא כל ${cadence}`
+        : `${e.days_since} ימים בלי פרסום — התדירות ${e.min_days_between == null ? 'האוטומטית' : 'שהוגדרה'} היא כל ${cadence}`,
       tab: 'plan',
       endpoint_id: e.id,
     });

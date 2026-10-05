@@ -1024,8 +1024,8 @@ export function chooseForSlot(ctx) {
   // רק כשהיעילות הנמדדת באמת הזיזה משהו — 1.0 הוא ניטרלי ולא מעניין
   if (p.performance != null && Math.abs(p.performance - 1) >= 0.08) {
     bits.push(p.performance > 1
-      ? `יעילות נמדדת גבוהה (${p.performance.toFixed(2)})`
-      : `יעילות נמדדת נמוכה (${p.performance.toFixed(2)})`);
+      ? `ביצועים גבוהים (${p.performance.toFixed(2)})`
+      : `ביצועים נמוכים (${p.performance.toFixed(2)})`);
   }
   bits.push(`חשיבות ${best.endpoint.importance}`);
 

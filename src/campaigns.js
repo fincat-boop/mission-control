@@ -383,7 +383,7 @@ export function completionSummary(c, today = ymd(new Date())) {
     ? generalGridFor(after, c.content, c.channels, today)
     : gridFor(after, c.content, c.channels, today);
   if (!grid.total_cells) {
-    return { error: 'אין בקמפיין פוסטים למדיות שלו — אין מה לפרוס' };
+    return { error: 'אין בקמפיין פוסטים לערוצים שלו — אין מה לפרוס' };
   }
   return {
     removed_empty: c.complete ? 0 : Math.max(0, c.missing_content - (c.drafts ?? 0)),
@@ -511,7 +511,7 @@ export function statusOf({ c, today, grid, myChannels }) {
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
   if (phase === 'ended') return { key: 'ended', label: 'הסתיים', tone: 'muted' };
   if (myChannels.length === 0) {
-    return { key: 'no_channels', label: 'לא נבחרו מדיות', tone: 'bad' };
+    return { key: 'no_channels', label: 'לא נבחרו ערוצים', tone: 'bad' };
   }
   if (!c.starts_on || !c.ends_on) {
     return { key: 'open', label: 'ללא תאריכים', tone: 'muted' };

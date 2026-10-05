@@ -183,11 +183,11 @@ export async function analyzeImport(campaignId, text) {
     warnings.push(`עמודות שלא זוהו ולא ייובאו: ${unknown.join(', ')}`);
   }
   if (notInCampaign.length) {
-    warnings.push(`המדיות ${notInCampaign.join(', ')} לא משויכות לקמפיין — ` +
+    warnings.push(`הערוצים ${notInCampaign.join(', ')} לא משויכים לקמפיין — ` +
                   'הניסוחים ייכתבו, אבל המנוע לא ישבץ אליהן עד שיתווספו');
   }
   if (!channelCols.length) {
-    warnings.push('אין עמודות מדיה — ייווצרו זוויות בלי ניסוחים, ותצטרך לכתוב אותם ידנית');
+    warnings.push('אין עמודות ערוץ — ייווצרו זוויות בלי ניסוחים, ותצטרך לכתוב אותם ידנית');
   }
 
   return {

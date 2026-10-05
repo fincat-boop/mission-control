@@ -156,7 +156,7 @@ export async function renderTasks({ force = false } = {}) {
   $$('#tasks [data-approve]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.approve}/approve`, { method: 'POST' });
-      toast('אושר. השיבוץ נכנס ללוח.');
+      toast('אושר. הפוסט נכנס ללוח.');
       await Promise.all([rerender(), refreshBoard()]);
     })));
 
@@ -182,7 +182,7 @@ export async function renderTasks({ force = false } = {}) {
         },
       });
       await api(`/tasks/${b.dataset.swapTask}`, { method: 'PATCH', body: { done: true } });
-      toast('הוחלף. השיבוץ מציג עכשיו את התוכן המוצע.');
+      toast('הוחלף. הפוסט מציג עכשיו את התוכן המוצע.');
       await Promise.all([rerender(), refreshBoard()]);
     })));
 }

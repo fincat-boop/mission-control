@@ -46,7 +46,7 @@ export async function renderManage() {
         </label>
         <div class="fhint">
           המתג הראשי של כל הפרסום האוטומטי. גם כשהוא דולק — שום פוסט לא מתפרסם בלי
-          אישור של הפוסט עצמו ("אשר לשליחה אוטומטית" בחלון הפוסט).
+          אישור של הפוסט עצמו ("אשר לפרסום אוטומטי" בחלון הפוסט).
         </div>
       </div>
       <div class="panel">${channels.map((c) => channelItem(c, ro, connOf(c.id), pub.hub_mail_ready)).join('')

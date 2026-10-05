@@ -281,10 +281,10 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     if (orphans.length) {
       const total = orphans.reduce((sum, o) => sum + o.n, 0);
       const message =
-        `למדיות שיורדות מהקמפיין יש ${total === 1 ? 'פוסט אחד' : `${total} פוסטים`}: ` +
+        `לערוצים שיורדים מהקמפיין יש ${total === 1 ? 'פוסט אחד' : `${total} פוסטים`}: ` +
         `${orphans.map((o) => `${o.name} (${o.n})`).join(', ')}. ` +
         'אחרי ההסרה הפוסטים נשמרים אבל לא ישובצו יותר; מה שכבר בלוח נשאר. ' +
-        'החזרת המדיה לקמפיין מחזירה אותם.';
+        'החזרת הערוץ לקמפיין מחזירה אותם.';
       return res.status(409).json({
         error: message, needs_confirm: true, warning: { message, orphans },
       });

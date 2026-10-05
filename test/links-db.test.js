@@ -235,7 +235,7 @@ test('כללי הקישור מול המסד: 400/409 בעברית, אישור ה
   // עוקבת שנייה באותה מדיה למקור — נחסם
   r = await call('POST', `/content/${a}/link`, { target_campaign_slot: { channel_id: ids.yt, sort_order: 8 } });
   assert.equal(r.status, 409);
-  assert.match(r.json.error, /אחת בכל מדיה/);
+  assert.match(r.json.error, /אחת בכל ערוץ/);
 
   // לחיצה על עוקבת מקשרת את המקור שלה (רמה אחת)
   r = await call('POST', `/content/${t}/link`, { target_campaign_slot: { channel_id: ids.fb, sort_order: 3 } });

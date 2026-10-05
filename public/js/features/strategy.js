@@ -138,7 +138,7 @@ function gantt(data) {
 
   return `<div class="gantt2">${header}${rows}
     <div class="gnote">קפסולה נגררת בקפיצות של חצי חודש. כמה פוסטים מגיעים לקמפיין
-      בכל ערוץ נגזר מהקצב הרצוי של הערוץ, מאורך הקמפיין ומהנתח שלו — נתח שנקבע ידנית,
+      בכל ערוץ נגזר ממספר הפוסטים בשבוע שהוגדר לערוץ, מאורך הקמפיין ומהנתח שלו — נתח שנקבע ידנית,
       או חלק יחסי לפי חשיבות הקמפיין מול כל הקמפיינים שרצים באותו זמן. מי תופס כל
       משבצת פנויה נקבע לפי חשיבות נקודת הקצה והזמן שעבר מהפוסט האחרון שלה.</div>
   </div>`;
@@ -147,7 +147,7 @@ function gantt(data) {
 function capsule(c, endpoint) {
   const pct = (n) => (n / HALVES) * 100;
   const tip = `${c.name} · ${endpoint.name} · ${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` +
-              (c.share_pct != null ? ` · נתח ${c.share_pct}%` : ' · נתח נגזר מהמשקל');
+              (c.share_pct != null ? ` · נתח ${c.share_pct}%` : ' · נתח נגזר מהחשיבות');
 
   return `<button class="caps${c.urgent ? ' urgent' : ''}${c.paused_at ? ' paused' : ''}"
     style="inset-inline-start:${pct(c.from)}%;width:${pct(c.to - c.from)}%;
@@ -232,7 +232,7 @@ function wireStrategy() {
 
         const steps = Math.abs(deltaHalves);
         const moved = res.moved_posts
-          ? ` · ${res.moved_posts} שיבוצים זזו איתו` : '';
+          ? ` · ${res.moved_posts} פוסטים זזו איתו` : '';
         engineToast(res, (steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
                                       : `הקמפיין הוזז ב-${steps} חצאי חודש.`) + moved);
         await Promise.all([renderStrategy(), refreshBoard()]);

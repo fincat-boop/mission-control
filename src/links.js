@@ -326,10 +326,10 @@ export function linkError(ctx) {
   if (!validSlot(target.sort_order)) {
     return { error: 'מספר המשבצת חייב להיות מספר שלם בין 1 ל-1000', status: 400 };
   }
-  if (!targetChannel?.in_campaign) return { error: 'המדיה הזו לא בקמפיין', status: 400 };
+  if (!targetChannel?.in_campaign) return { error: 'הערוץ הזה לא בקמפיין', status: 400 };
   if (Number(target.channel_id) === root.slot_channel_id) {
     return {
-      error: 'מקשרים למשבצת של מדיה אחרת — באותה מדיה כל משבצת היא פוסט נפרד', status: 400,
+      error: 'מקשרים למשבצת של ערוץ אחר — באותו ערוץ כל משבצת היא פוסט נפרד', status: 400,
     };
   }
   if (rootChannel?.platform === 'newsletter' || targetChannel.platform === 'newsletter') {
@@ -351,7 +351,7 @@ export function linkError(ctx) {
   if (sibling) {
     return {
       error: `לתוכן הזה כבר יש משבצת מקושרת ב${targetChannel.name} (פוסט ${sibling.sort_order}) — ` +
-        'אפשר משבצת אחת בכל מדיה',
+        'אפשר משבצת אחת בכל ערוץ',
       status: 409,
     };
   }
@@ -472,7 +472,7 @@ export async function linkSlots(clickedId, body = {}) {
       [targetItem.id]);
     await uniqueOr409(() => query(
       'update content_items set linked_to_id = $1 where id = $2', [root.id, targetItem.id]),
-      'לתוכן הזה כבר יש משבצת מקושרת במדיה הזו');
+      'לתוכן הזה כבר יש משבצת מקושרת בערוץ הזה');
     followerId = targetItem.id;
   } else {
     const created = await uniqueOr409(() => one(
@@ -483,7 +483,7 @@ export async function linkSlots(clickedId, body = {}) {
       [root.endpoint_id, root.campaign_id, root.kind, root.title, root.body,
        [target.channel_id], target.sort_order, root.evergreen, root.reuse_after_days,
        target.channel_id, root.id]),
-    'המשבצת תפוסה, או שכבר יש לתוכן הזה משבצת מקושרת במדיה הזו');
+    'המשבצת תפוסה, או שכבר יש לתוכן הזה משבצת מקושרת בערוץ הזה');
     followerId = created.id;
   }
   await syncFrom(root.id);
