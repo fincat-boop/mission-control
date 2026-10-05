@@ -141,6 +141,10 @@ function renderAI() {
     : 'מבצע רק אחרי אישור';
 }
 
+/** הצעה שנשמרת בשרת 30 דקות (PROPOSAL_TTL_MS ב-src/assistant.js) — אחריהן "אשר" יחזיר 410 */
+const PROPOSAL_TTL_MS = 30 * 60 * 1000;
+const proposalExpired = (entry) => !entry.state && entry.at != null && Date.now() - entry.at > PROPOSAL_TTL_MS;
+
 function aiEntry(entry, i) {
   if (entry.type === 'proposal') {
     const p = entry.proposal;
@@ -151,7 +155,7 @@ function aiEntry(entry, i) {
     });
     const raw = Object.entries(p.args ?? {})
       .map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
-    return `<div class="aiprop${entry.state ? ' done' : ''}">
+    return `<div class="aiprop${entry.state || proposalExpired(entry) ? ' done' : ''}">
       <div class="t">${esc(p.summary)}</div>
       ${p.warnings?.length
         ? `<div class="w">${p.warnings.map((w) => `⚠ ${esc(w)}`).join('<br>')}</div>` : ''}
@@ -161,6 +165,8 @@ function aiEntry(entry, i) {
         <div class="args">${esc(raw)}</div></details>` : ''}
       ${entry.state === 'failed'
         ? `<div class="w err">הביצוע נכשל: ${esc(entry.error)} — אפשר לבקש מהעוזר שוב</div>`
+        : proposalExpired(entry)
+        ? '<div class="w">פג תוקף — ההצעה כבר לא בשרת. אפשר לבקש מהעוזר שוב.</div>'
         : entry.state
         ? `<div class="w" style="color:${entry.state === 'done' ? 'var(--st-good)' : 'var(--ink-2)'}">${
             entry.state === 'done' ? '✓ בוצע' : 'בוטל'}</div>`
@@ -234,7 +240,10 @@ async function sendAI() {
     ai.usd += res.usage?.usd ?? 0;
     ai.log.pop(); // "חושב…"
     ai.log.push({ type: 'msg', role: 'bot', text: res.reply });
-    for (const proposal of res.proposals ?? []) ai.log.push({ type: 'proposal', proposal });
+    // at — כדי לדעת אחרי רענון שההצעה כבר פגה בשרת (PROPOSAL_TTL_MS)
+    for (const proposal of res.proposals ?? []) {
+      ai.log.push({ type: 'proposal', proposal, at: Date.now() });
+    }
   } catch (e) {
     ai.log.pop();
     ai.log.push({ type: 'msg', role: 'sys', text: `לא הצלחתי: ${e.message}` });
@@ -248,7 +257,7 @@ async function sendAI() {
 
 async function confirmProposal(i) {
   const entry = ai.log[i];
-  if (!entry || entry.state) return;
+  if (!entry || entry.state || proposalExpired(entry)) return;
 
   entry.state = 'running';
   renderAI();
@@ -264,6 +273,12 @@ async function confirmProposal(i) {
     });
     toast('בוצע.');
   } catch (e) {
+    // החיבור פג: הבקשה נעצרה בשער ההתחברות, ההצעה לא נצרכה ועדיין תקפה.
+    // הכרטיס חוזר לממתין, וחלון "החיבור פג" כבר פתוח — אחרי ההתחברות מאשרים שוב.
+    if (e.status === 401) {
+      delete entry.state;
+      return;
+    }
     // ההצעה נצרכה בשרת גם כשהביצוע נכשל — כפתור "אשר ובצע" שחוזר היה
     // מחזיר 410. הכישלון מוצג על הכרטיס עצמו, וניסיון נוסף = בקשה חדשה.
     entry.state = 'failed';
