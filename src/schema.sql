@@ -129,6 +129,12 @@ do $$ begin
     check (structure in ('angles', 'general'));
 exception when duplicate_object then null; end $$;
 
+-- "קמפיין מוכן": המשתמש הכריז שאין עוד תוכן. מכאן הקמפיין בגודל התוכן
+-- שקיים (משבצות ריקות יורדות), והפוסטים נפרסים על אותה תקופה במקום לצאת
+-- בקצב המלא של המדיה. null = הקצאה רגילה לפי קצב. ראו src/campaigns.js.
+alter table campaigns
+  add column if not exists content_complete_at timestamptz;
+
 -- על אילו מדיות הקמפיין יושב
 create table if not exists campaign_channels (
   campaign_id int not null references campaigns(id) on delete cascade,
