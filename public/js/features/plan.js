@@ -12,6 +12,7 @@ import {
 } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
 import { engineToast } from '../ui/engineDialog.js';
+import { goToSetupTarget } from '../ui/setup.js';
 
 /* ========================= ניוזלטר: תבנית המילוי ========================= */
 
@@ -258,6 +259,8 @@ function campaignList(endpoint, campaigns, content) {
         <span><b>${mine.filter((c) => c.phase === 'upcoming').length}</b> מתוכננים</span>
       </div>
       <div class="spacer"></div>
+      <button class="btn small" data-ep-settings="${endpoint.id}"
+        data-tt="חשיבות ותדירות של הנקודה — בטאב ניהול">הגדרות נקודה</button>
       ${can('settings') ? '<button class="btn primary" id="addCampaign">＋ קמפיין חדש</button>' : ''}
     </div>
     ${mine.length || bg.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}
@@ -446,6 +449,10 @@ function wirePlan(campaign, endpointId, content) {
 
   $('#addCampaign')?.addEventListener('click', () =>
     openCampaignForm(null, reload, endpointId));
+
+  // "הגדרות נקודה" — לניהול, עם הנקודה הזו פתוחה
+  $('#plan [data-ep-settings]')?.addEventListener('click', run((e) =>
+    goToSetupTarget({ tab: 'manage', endpoint: Number(e.currentTarget.dataset.epSettings) })));
 
   // מצב ריק של קמפיין בלי תאריכים — ישר לטופס, עם הפוקוס על התאריך
   $('#plan [data-set-dates]')?.addEventListener('click', () => {

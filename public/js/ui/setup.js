@@ -10,7 +10,7 @@ import { goToTab } from './refresh.js';
  *
  * שכבה 1: נשען על core ועל מתאם הרענון, ולא מכיר רנדרר של אף פיצ'ר. הניווט
  * למקום בתוך "ניהול" נשען על מאפיינים יציבים שם: data-section לאזור,
- * data-open-id="ch-<id>" לערוץ.
+ * data-open-id="ch-<id>" לערוץ, data-open-id="ep-<id>" לנקודת קצה.
  */
 
 /* ---------- הסתרה לפי צופה ---------- */
@@ -160,6 +160,10 @@ export async function goToSetupTarget(t) {
   let el = null;
   if (t.channel) {
     el = root.querySelector(`details[data-open-id="ch-${Number(t.channel)}"]`);
+    if (el) el.open = true;
+  } else if (t.endpoint) {
+    // נקודת קצה מסוימת (קישור "הגדרות נקודה" ממסך התוכן) — נפתחת
+    el = root.querySelector(`details[data-open-id="ep-${Number(t.endpoint)}"]`);
     if (el) el.open = true;
   } else if (t.section) {
     el = root.querySelector(`[data-section="${t.section}"]`);
