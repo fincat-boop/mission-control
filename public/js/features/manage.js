@@ -46,7 +46,7 @@ export async function renderManage() {
         </label>
         <div class="fhint">
           המתג הראשי של כל הפרסום האוטומטי. גם כשהוא דולק — שום פוסט לא מתפרסם בלי
-          אישור של הפוסט עצמו ("אשר לשליחה אוטומטית" בחלון הפוסט).
+          אישור של הפוסט עצמו ("אשר לפרסום אוטומטי" בחלון הפוסט).
         </div>
       </div>
       <div class="panel">${channels.map((c) => channelItem(c, ro, connOf(c.id), pub.hub_mail_ready)).join('')
@@ -126,7 +126,7 @@ function endpointItem(e, channels, ro) {
       ${ro ? '' : `<div style="margin-top:14px">
         <button class="btn small" data-toggle-endpoint="${e.id}" data-active="${e.active}">
           ${e.active ? 'השבת נקודת קצה' : 'הפעל נקודת קצה'}</button>
-        <button class="btn small" style="color:var(--st-crit)" data-del-endpoint="${e.id}">מחק נקודת קצה</button>
+        <button class="btn small danger" data-del-endpoint="${e.id}">מחק נקודת קצה</button>
       </div>`}
     </div>
   </details>`;
@@ -303,7 +303,7 @@ function systemGroup(users, settings, backupsRes, ro) {
         <div style="color:var(--muted);font-size:11.5px">${esc(u.email)}</div></td>
       <td>${cell('content')}</td><td>${cell('settings')}</td>
       <td>${cell('approve')}</td><td>${cell('users')}</td>
-      <td>${u.is_owner ? '' : `<button class="btn small" data-del-user="${u.id}" style="color:var(--st-crit)">מחק</button>`}</td>
+      <td>${u.is_owner ? '' : `<button class="btn small danger" data-del-user="${u.id}">מחק</button>`}</td>
     </tr>`;
   }).join('');
 
@@ -444,7 +444,7 @@ async function deleteOrDisable(message, offerDisable, disableNote, deleteLabel) 
   }
   return choiceDialog(`${message}\n\n${disableNote}`, [
     { label: 'ביטול', value: null },
-    { label: 'מחק לצמיתות', value: 'delete', cls: 'crit' },
+    { label: 'מחק לצמיתות', value: 'delete', cls: 'danger' },
     { label: 'השבת במקום למחוק', value: 'disable', cls: 'primary' },
   ]);
 }
@@ -632,7 +632,7 @@ function wireManage(ro, connections) {
 
   $$('#manage [data-conn-del]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
-      if (!(await confirmDialog('לנתק את הערוץ? הטוקן יימחק ותצטרך להזין אותו מחדש כדי לחבר.', { danger: true }))) return;
+      if (!(await confirmDialog('לנתק את הערוץ? הטוקן יימחק ותצטרך להזין אותו מחדש כדי לחבר.', { okLabel: 'נתק', danger: true }))) return;
       await api(`/channels/${btn.dataset.connDel}/connection`, { method: 'DELETE' });
       toast('הערוץ נותק.');
       await reload();
@@ -689,7 +689,7 @@ function wireManage(ro, connections) {
 
   $$('#manage [data-del-user]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!(await confirmDialog('למחוק את המשתמש?', { danger: true }))) return;
+      if (!(await confirmDialog('למחוק את המשתמש?', { okLabel: 'מחק', danger: true }))) return;
       await api(`/users/${b.dataset.delUser}`, { method: 'DELETE' });
       await reload();
     })));

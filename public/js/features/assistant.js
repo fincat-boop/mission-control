@@ -1,6 +1,8 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { rebuildEpColors, state } from '../core/state.js';
+import { describeArgs } from '../core/proposalArgs.js';
+import { AI_CHAT_PREFIX } from '../core/session.js';
 import { refreshAlerts, refreshCurrentTab, refreshTaskBadge } from '../ui/refresh.js';
 
 /* ========================= העוזר ========================= */
@@ -11,15 +13,65 @@ import { refreshAlerts, refreshCurrentTab, refreshTaskBadge } from '../ui/refres
  */
 const ai = { history: [], log: [], busy: false, ready: null, usd: 0 };
 
+/**
+ * השיחה שורדת רענון (sessionStorage — רק בלשונית הזו, ונמחקת כשסוגרים
+ * אותה). תקרה על הגודל: שיחה ארוכה מקצרת את ההתחלה, כמו trimHistory בשרת —
+ * ההיסטוריה נחתכת רק בהודעת משתמש רגילה, כדי לא להשאיר תוצאת כלי בלי הקריאה שלה.
+ * חסימת אחסון (גלישה פרטית, מכסה) לא מפילה כלום — פשוט לא נשמר.
+ */
+// לכל משתמש בארגון מפתח משלו — לשונית שעברה משתמש לא מציגה שיחה של אחר.
+// הקידומת (AI_CHAT_PREFIX) נמחקת כולה ביציאה ובהחלפת משתמש (core/session.js).
+const chatKey = () => `${AI_CHAT_PREFIX}${state.me?.org_id ?? 0}:${state.me?.id ?? 0}`;
+const AI_CHAT_MAX_CHARS = 400000;
+const AI_KEEP_LOG = 60;
+const AI_KEEP_HISTORY = 30;
+
+function trimForStorage({ history, log, usd }) {
+  const keptLog = log.slice(-AI_KEEP_LOG);
+  let keptHistory = [];
+  for (let i = Math.max(0, history.length - AI_KEEP_HISTORY); i < history.length; i += 1) {
+    const m = history[i];
+    if (m.role === 'user' && typeof m.content === 'string') { keptHistory = history.slice(i); break; }
+  }
+  return { history: keptHistory, log: keptLog, usd };
+}
+
+function saveAI() {
+  try {
+    let data = { history: ai.history, log: ai.log.filter((e) => !e.pending), usd: ai.usd };
+    let json = JSON.stringify(data);
+    if (json.length > AI_CHAT_MAX_CHARS) {
+      data = trimForStorage(data);
+      json = JSON.stringify(data);
+    }
+    if (json.length > AI_CHAT_MAX_CHARS) json = JSON.stringify({ history: [], log: data.log, usd: data.usd });
+    sessionStorage.setItem(chatKey(), json);
+  } catch { /* אחסון חסום או מלא — השיחה פשוט לא תשרוד רענון */ }
+}
+
+function loadAI() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(chatKey()) ?? 'null');
+    if (!saved || !Array.isArray(saved.log) || !Array.isArray(saved.history)) return;
+    ai.history = saved.history;
+    ai.usd = Number(saved.usd) || 0;
+    // הצעה שאושרה ממש לפני הרענון — לא ידוע אם הסתיימה
+    ai.log = saved.log.filter((e) => !e.pending).map((e) => (e.type === 'proposal' && e.state === 'running'
+      ? { ...e, state: 'failed', error: 'הדף נטען מחדש באמצע הביצוע — בודקים במסך אם זה קרה' }
+      : e));
+  } catch { /* שמור פגום או אחסון חסום — מתחילים שיחה חדשה */ }
+}
+
 const AI_INTRO = `<div class="aihint"><b>מה אני יכול</b>
-להסביר למה הלוח נראה כמו שהוא נראה, לאתר חורים ולהציע מה לעשות איתם.
-אני גם יודע לייצר קמפיינים, להזיז שיבוצים ולכתוב ניסוחים למדיות —
+להסביר למה הלוח נראה כמו שהוא נראה, למצוא פוסטים שחסר להם תוכן ולהציע מה לעשות איתם.
+אני גם יודע לייצר קמפיינים, להזיז פוסטים ולכתוב ניסוחים לכל ערוץ —
 אבל כל פעולה עוברת אצלך לאישור לפני שהיא קורית.
 במנוע השיבוץ אני לא נוגע: אני יכול להראות מה הוא היה מציע ולמה, לא לשנות אותו.</div>`;
 
 const AI_OPEN_KEY = 'mb_ai_open';
 
 export function wireAIWidget() {
+  loadAI();
   $('#aiFab').addEventListener('click', () => openAI(true));
   $('#aiClose').addEventListener('click', () => openAI(false));
   $('#aiSend').addEventListener('click', run(sendAI));
@@ -27,6 +79,7 @@ export function wireAIWidget() {
     ai.history = [];
     ai.log = [];
     ai.usd = 0;
+    try { sessionStorage.removeItem(chatKey()); } catch { /* אין מה למחוק */ }
     renderAI();
     $('#aiInput').focus();
   });
@@ -79,6 +132,7 @@ function renderAI() {
       ולהפעיל מחדש. אחרי זה הוא זמין כאן.</div>`;
     return;
   }
+  saveAI();
   log.innerHTML = (ai.log.length ? '' : AI_INTRO) + ai.log.map(aiEntry).join('');
   log.scrollTop = log.scrollHeight;
   // העלות המצטברת של השיחה — כדי שלא תהיה הפתעה בחשבון
@@ -87,18 +141,32 @@ function renderAI() {
     : 'מבצע רק אחרי אישור';
 }
 
+/** הצעה שנשמרת בשרת 30 דקות (PROPOSAL_TTL_MS ב-src/assistant.js) — אחריהן "אשר" יחזיר 410 */
+const PROPOSAL_TTL_MS = 30 * 60 * 1000;
+const proposalExpired = (entry) => !entry.state && entry.at != null && Date.now() - entry.at > PROPOSAL_TTL_MS;
+
 function aiEntry(entry, i) {
   if (entry.type === 'proposal') {
     const p = entry.proposal;
-    const args = Object.entries(p.args)
+    // מה ההצעה עושה, בעברית ובשמות; ה-JSON הגולמי מקופל למי שצריך אותו
+    const rows = describeArgs(p.args, {
+      channels: state.channels, endpoints: state.endpoints,
+      campaigns: state.campaigns, users: state.users,
+    });
+    const raw = Object.entries(p.args ?? {})
       .map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
-    return `<div class="aiprop${entry.state ? ' done' : ''}">
+    return `<div class="aiprop${entry.state || proposalExpired(entry) ? ' done' : ''}">
       <div class="t">${esc(p.summary)}</div>
       ${p.warnings?.length
         ? `<div class="w">${p.warnings.map((w) => `⚠ ${esc(w)}`).join('<br>')}</div>` : ''}
-      <div class="args">${esc(args)}</div>
+      ${rows.length ? `<dl class="aiargs">${rows.map(([k, v]) =>
+        `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      ${raw ? `<details class="aitech"><summary>פרטים טכניים</summary>
+        <div class="args">${esc(raw)}</div></details>` : ''}
       ${entry.state === 'failed'
         ? `<div class="w err">הביצוע נכשל: ${esc(entry.error)} — אפשר לבקש מהעוזר שוב</div>`
+        : proposalExpired(entry)
+        ? '<div class="w">פג תוקף — ההצעה כבר לא בשרת. אפשר לבקש מהעוזר שוב.</div>'
         : entry.state
         ? `<div class="w" style="color:${entry.state === 'done' ? 'var(--st-good)' : 'var(--ink-2)'}">${
             entry.state === 'done' ? '✓ בוצע' : 'בוטל'}</div>`
@@ -159,7 +227,7 @@ async function sendAI() {
   input.value = '';
   autosizeAI();
   ai.log.push({ type: 'msg', role: 'me', text });
-  ai.log.push({ type: 'msg', role: 'sys', text: 'חושב…' });
+  ai.log.push({ type: 'msg', role: 'sys', text: 'חושב…', pending: true });
   renderAI();
   $('#aiSend').disabled = true;
 
@@ -172,7 +240,10 @@ async function sendAI() {
     ai.usd += res.usage?.usd ?? 0;
     ai.log.pop(); // "חושב…"
     ai.log.push({ type: 'msg', role: 'bot', text: res.reply });
-    for (const proposal of res.proposals ?? []) ai.log.push({ type: 'proposal', proposal });
+    // at — כדי לדעת אחרי רענון שההצעה כבר פגה בשרת (PROPOSAL_TTL_MS)
+    for (const proposal of res.proposals ?? []) {
+      ai.log.push({ type: 'proposal', proposal, at: Date.now() });
+    }
   } catch (e) {
     ai.log.pop();
     ai.log.push({ type: 'msg', role: 'sys', text: `לא הצלחתי: ${e.message}` });
@@ -186,7 +257,7 @@ async function sendAI() {
 
 async function confirmProposal(i) {
   const entry = ai.log[i];
-  if (!entry || entry.state) return;
+  if (!entry || entry.state || proposalExpired(entry)) return;
 
   entry.state = 'running';
   renderAI();
@@ -202,6 +273,12 @@ async function confirmProposal(i) {
     });
     toast('בוצע.');
   } catch (e) {
+    // החיבור פג: הבקשה נעצרה בשער ההתחברות, ההצעה לא נצרכה ועדיין תקפה.
+    // הכרטיס חוזר לממתין, וחלון "החיבור פג" כבר פתוח — אחרי ההתחברות מאשרים שוב.
+    if (e.status === 401) {
+      delete entry.state;
+      return;
+    }
     // ההצעה נצרכה בשרת גם כשהביצוע נכשל — כפתור "אשר ובצע" שחוזר היה
     // מחזיר 410. הכישלון מוצג על הכרטיס עצמו, וניסיון נוסף = בקשה חדשה.
     entry.state = 'failed';

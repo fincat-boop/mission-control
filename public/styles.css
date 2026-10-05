@@ -1176,3 +1176,139 @@ details.item summary .epstate { width: 48px; }
 }
 /* שינוי בבלוק החיבור שעוד לא נשמר */
 button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
+
+/* ============ לוח וחלון פוסט (גל 3א) ============ */
+/* פוטר חלון הפוסט: ראשית (+משנית) ← "עוד" ← סגור בקצה */
+#postDlg .pfoot { flex-wrap: wrap; align-items: center; }
+.pacts { display: flex; gap: 8px; flex-wrap: wrap; }
+.pacts:empty { display: none; }
+/* תיבה קטנה בתוך החלון — "מועד חדש" */
+.pvbox { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--page); }
+.pvbox[hidden] { display: none; }
+.pvbox-title { font-size: 12.5px; font-weight: 650; margin-bottom: 8px; }
+.pvbox-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.frow2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.frow2 label { margin-bottom: 0; display: flex; flex-direction: column; gap: 4px; }
+#postDlg .pacts[hidden], #postDlg .pmore[hidden], #pEdit[hidden] { display: none; }
+/* לשוניות תצוגה / עריכה בחלון הפוסט */
+.ptabs { display: flex; gap: 4px; margin: -4px 0 14px; border-bottom: 1px solid var(--border); }
+.ptabs[hidden] { display: none; }
+.ptabs button {
+  all: unset; cursor: pointer; padding: 6px 12px; font-size: 12.5px; color: var(--ink-2);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.ptabs button[aria-selected="true"] { color: var(--ink-1); border-bottom-color: var(--accent); font-weight: 600; }
+.ptabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+#pEdit .frow2 { margin-bottom: 10px; }
+/* פוסט שהמועד שלו עבר ולא יצא — מסגרת ותג "עבר המועד" */
+.post.missed { outline: 2px dashed var(--st-warn); outline-offset: -2px; }
+.post .missed-tag {
+  display: inline-block; margin-top: 4px; font-style: normal; font-size: 9.5px; font-weight: 700;
+  padding: 1px 6px; border-radius: 4px; background: var(--st-warn); color: #1a1a1a;
+}
+/* היסטוריית ניסיונות הפרסום — מקופלת */
+.pvlog { margin-top: 14px; font-size: 12px; }
+.pvlog summary { cursor: pointer; color: var(--ink-2); }
+.pvlog ul { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.pvlog li { display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: baseline; line-height: 1.5; }
+.pvlog .when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pvlog li.ok .st { color: var(--st-good); white-space: nowrap; }
+.pvlog li.bad .st { color: var(--st-crit); white-space: nowrap; }
+.pvlog .msg { color: var(--ink-2); }
+.pverr { color: var(--st-crit); font-size: 13px; line-height: 1.6; padding: 6px 0 4px; }
+/* פוסט שפורסם ועוד לא נמדד — תג פינתי (במקום של תגית התוכן), לא בתוך ה-opacity */
+.post.published:has(.unmeasured) { overflow: visible; }
+.post .unmeasured {
+  position: absolute; inset-block-start: -7px; inset-inline-end: -6px; z-index: 1;
+  font-style: normal; font-size: 9.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+  background: #0c0c0e; color: var(--st-warn); border: 1px solid var(--st-warn);
+  box-shadow: 0 1px 3px rgba(0,0,0,.35);
+}
+/* היום בלוח — כותרת העמודה מודגשת, והמשבצות בעמודה ברקע עדין */
+.grid thead th.today { color: var(--accent); font-weight: 650; box-shadow: inset 0 -2px 0 var(--accent); }
+.grid td.day.today { background-color: rgba(77,163,255,.04); }
+/* יום חסום — הסיבה כטקסט גלוי, לא רק בריחוף */
+.day .daynote { display: block; font-size: 10.5px; color: var(--muted); margin-bottom: 4px; }
+/* שבב נקודת הקצה הוא כפתור (לחיצה מציגה את מצב האוויר) */
+button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
+/* במגע אין ריחוף — ה-+ גלוי תמיד */
+@media (hover: none) {
+  .day .addslot { opacity: .75; }
+}
+.pvnote { margin-top: 8px; font-size: 12px; color: var(--ink-2); line-height: 1.6; }
+
+/* ============ הלוח בטלפון (גל 3א): רשימה לפי ימים ============ */
+.mboard { display: flex; flex-direction: column; gap: 14px; }
+.mday { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.mday.today { border-color: var(--accent); }
+.mday-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 650; margin-bottom: 8px; }
+.mday.today .mday-head > span { color: var(--accent); }
+.mday-empty { font-size: 12px; color: var(--muted); padding: 4px 0; }
+.mpost {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer;
+  display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 10px;
+  padding: 9px 0; border-top: 1px solid var(--border);
+}
+.mday-head + .mpost { border-top: none; }
+.mpost:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.mpost.done .mbody { opacity: .65; }
+.mpost .mtime { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.mpost .sw { width: 10px; height: 10px; border-radius: 50%; }
+.mpost .mbody { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mpost .mbody b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpost .mbody .d { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mtag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; color: #fff; white-space: nowrap; }
+.mtag.red { background: var(--st-crit); }
+.mtag.yellow { background: var(--st-warn); color: #1a1a1a; }
+.mtag.blue { background: var(--accent); color: #0d1117; }
+.mtag.auto { background: var(--st-good); color: #0d1117; }
+@media (max-width: 600px) {
+  .toolbar .legend { display: none; }
+  .toolbar { gap: 8px; }
+}
+
+/* ===== גל 6: מעטפת ===== */
+
+/* החיבור פג (core/session.js) */
+#authDlg p { font-size: 13.5px; line-height: 1.6; margin: 0 0 10px; }
+#authDlg #authMsg:empty { display: none; }
+
+/* העלייה נכשלה — כרטיס במקום מסך ריק */
+.boot-err { display: grid; place-items: center; padding: 72px 16px; }
+.boot-err[hidden] { display: none; }
+.boot-err .panel { max-width: 420px; padding: 24px; text-align: center; }
+.boot-err h2 { font-size: 16px; margin-bottom: 8px; }
+.boot-err p { color: var(--ink-2); font-size: 13.5px; line-height: 1.6; margin-bottom: 18px; }
+
+/* טוסט: שגיאה ואזהרה נשארות עד ✕ (core/dom.js) */
+#toast { max-width: min(560px, calc(100vw - 32px)); line-height: 1.5; }
+#toast.warn { border-color: var(--st-warn); }
+#toast .toast-x {
+  margin-inline-start: 12px; background: none; border: none; color: var(--ink-2);
+  font: inherit; font-size: 13px; padding: 2px 6px; border-radius: 6px; cursor: pointer;
+}
+#toast .toast-x:hover, #toast .toast-x:focus-visible { color: var(--ink-1); background: var(--panel-2); }
+
+/* רצועת הטאבים: בטלפון נגללת בתוכה, בלי גלילה אופקית של כל הדף */
+.tabs { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: none; white-space: nowrap; }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+@media (max-width: 700px) {
+  header { padding: 12px 16px 0; }
+  main { padding: 16px; }
+  .tabs { gap: 18px; margin-top: 10px; margin-inline: -16px; padding-inline: 16px; }
+}
+/* שורת משימה בטלפון: הטקסט בשורה משלו, הכפתורים יורדים מתחתיו */
+@media (max-width: 600px) {
+  .task { flex-wrap: wrap; row-gap: 8px; }
+  .task .tx { flex: 1 1 calc(100% - 40px); min-width: 0; }
+}
+
+/* הצעה של העוזר: הפרמטרים בעברית, ה-JSON מקופל (features/assistant.js) */
+.aiargs { display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; margin: 8px 0 0; font-size: 12px; }
+.aiargs dt { color: var(--muted); }
+.aiargs dd { margin: 0; color: var(--ink-1); overflow-wrap: anywhere; white-space: pre-line; }
+.aitech { margin-top: 8px; font-size: 11.5px; }
+.aitech > summary { cursor: pointer; color: var(--muted); }
+.aitech > summary:hover { color: var(--ink-2); }

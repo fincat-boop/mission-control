@@ -9,7 +9,7 @@ import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
 import { assetView } from '../media.js';
 import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
-import { candidateColumnsSql } from '../candidates.js';
+import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
 
 const r = Router();
@@ -109,24 +109,25 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     }
 
     // יום שהמדיה לא מקבלת בו תוכן
-    const target = await one('select name, blocked_days from channels where id = $1', [channel]);
+    const target = await one('select name, blocked_days, active from channels where id = $1', [channel]);
     const dow = new Date(when).getDay();
     if ((target?.blocked_days ?? []).includes(dow)) {
       const names = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
       return bad(res, `${target.name} לא מקבל תוכן בימי ${names[dow]}`);
     }
 
-    // מעבר למדיה אחרת דורש שקיימת לתוכן גרסה למדיה הזו — אחרת היינו
-    // מפרסמים שם ניסוח שנכתב למדיה אחרת
-    if (b.channel_id && b.channel_id !== current.channel_id && current.content_id) {
-      const v = await one(
-        'select status from content_variants where content_id = $1 and channel_id = $2',
-        [current.content_id, b.channel_id]
-      );
-      if (!v) {
-        const ch = await one('select name from channels where id = $1', [b.channel_id]);
-        return bad(res, `אין לתוכן הזה גרסה ל${ch?.name ?? 'מדיה הזו'} — כותבים אותה קודם בתוכן`);
-      }
+    // מעבר לערוץ אחר — אותם כללים כמו שיוך תוכן (attach-content): ערוץ פעיל,
+    // ניסוח לתוכן בערוץ הזה שאינו "לא רלוונטי", ומשבצת-מדיה של קמפיין כללי
+    // רק בערוץ שלה. אחרת היינו מפרסמים שם ניסוח שנכתב למדיה אחרת.
+    if (Number(channel) !== current.channel_id) {
+      const contentId = 'content_id' in b ? b.content_id : current.content_id;
+      const item = contentId
+        ? await one('select id, slot_channel_id from content_items where id = $1', [contentId]) : null;
+      const variant = item
+        ? await one('select status from content_variants where content_id = $1 and channel_id = $2',
+                    [item.id, channel]) : null;
+      const blocker = channelChangeBlocker({ target, item, variant }, Number(channel));
+      if (blocker) return bad(res, blocker.error, blocker.status);
     }
 
     const warning = softWarning(
@@ -141,9 +142,57 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     }
   }
 
-  const post = await updateById('posts', POST_FIELDS, req.params.id, b);
-  res.json({ post });
+  if ('title' in b) {
+    const title = String(b.title ?? '').trim();
+    if (!title) return bad(res, 'צריך כותרת לפוסט');
+    b.title = title.slice(0, 200);
+  }
+
+  let post = await updateById('posts', POST_FIELDS, req.params.id, b);
+  // האישור לפרסום אוטומטי ניתן על מה שיוצא בפועל: הערוץ (החיבור, הניסוח),
+  // התוכן ונקודת הקצה — שינוי של אחד מהם מחזיר למתוכנן. מועד בלבד משאיר.
+  const approvalReset = current.status === 'approved' && approvalResetOnChange(current, b);
+  if (approvalReset) {
+    post = await one(
+      `update posts set status = 'scheduled', approved_by = null, approved_at = null
+        where id = $1 and status = 'approved' returning *`,
+      [current.id]) ?? post;
+  }
+  res.json({ post, approval_reset: approvalReset });
 }));
+
+/**
+ * למה אי אפשר להעביר פוסט לערוץ הזה, או null. טהורה (טסט ב-post-move.test.js).
+ * target — שורת הערוץ; item — פריט התוכן של הפוסט (או null); variant — הניסוח
+ * של התוכן לערוץ היעד (או null).
+ */
+export function channelChangeBlocker({ target, item, variant }, channelId) {
+  if (!target) return { status: 404, error: 'לא נמצא ערוץ כזה' };
+  if (!target.active) return { status: 409, error: `הערוץ ${target.name} מושבת` };
+  if (!item) return null;
+  if (!fitsSlotChannel(item, channelId)) {
+    return { status: 400, error: 'התוכן הזה הוא משבצת של ערוץ אחר בקמפיין — הוא לא עובר ערוץ' };
+  }
+  if (!variant) {
+    return { status: 400, error: `אין לתוכן הזה גרסה ל${target.name} — כותבים אותה קודם בתוכן` };
+  }
+  if (variant.status === 'not_relevant') {
+    return { status: 400, error: `התוכן הזה מסומן "לא רלוונטי" ל${target.name}` };
+  }
+  return null;
+}
+
+/** ערך מזהה מהבקשה מול הקיים: null/'' = ריק, אחרת מספר */
+const idOrNull = (v) => (v == null || v === '' ? null : Number(v));
+
+/**
+ * האם שינוי מבטל אישור לפרסום אוטומטי: ערוץ אחר, תוכן אחר (גם "החלף תוכן"
+ * ממשימת swap, שעובר ב-PATCH) או נקודת קצה אחרת. מועד, כותרת, אחראי — לא.
+ */
+export function approvalResetOnChange(current, b) {
+  const changed = (key) => key in b && idOrNull(b[key]) !== (current[key] ?? null);
+  return (b.channel_id != null && changed('channel_id')) || changed('content_id') || changed('endpoint_id');
+}
 
 /**
  * מה שאמור לצאת בפועל: הטקסט של המדיה הזו והקבצים שלה.
@@ -189,6 +238,15 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
 
   // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה
   const results = await one('select * from post_results where post_id = $1', [p.id]);
+
+  // מבצע דחוף שממתין לאישור: כמה פוסטים של אותו מבצע עוד ממתינים ואפשר
+  // לאשר אותם (המועד לא עבר) — כולל זה
+  p.group_pending = p.status === 'pending_approval' && p.urgent_group
+    ? (await one(
+        `select count(*)::int as n from posts
+          where urgent_group = $1 and status = 'pending_approval' and scheduled_at > now()`,
+        [p.urgent_group])).n
+    : 0;
 
   res.json({ post: p, variant, assets, results });
 }));
@@ -380,7 +438,15 @@ r.post('/posts/:id/unpublish', requirePerm('content'), wrap(async (req, res) => 
 }));
 
 /** אישור דחוף־דורס — הרשאה נפרדת */
+export const APPROVE_PAST = 'המועד עבר — קבעו מועד חדש ואז אשרו';
+
 r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
+  const cur = await one('select id, status, scheduled_at from posts where id = $1', [req.params.id]);
+  if (!cur || cur.status !== 'pending_approval') {
+    return bad(res, 'אין שיבוץ שממתין לאישור עם המזהה הזה', 404);
+  }
+  // מועד שעבר: אישור היה משאיר "מתוכנן" שכבר לא יצא — קודם מועד חדש
+  if (new Date(cur.scheduled_at) <= new Date()) return bad(res, APPROVE_PAST);
   const post = await one(
     `update posts set status = 'scheduled' where id = $1 and status = 'pending_approval'
       returning *`,
@@ -389,6 +455,51 @@ r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
   if (!post) return bad(res, 'אין שיבוץ שממתין לאישור עם המזהה הזה', 404);
   await query(`update tasks set done = true, done_at = now() where post_id = $1`, [post.id]);
   res.json({ post });
+}));
+
+/**
+ * "אשר את כל המבצע": כל הפוסטים של אותו מבצע דחוף (urgent_group) שעוד ממתינים
+ * לאישור עוברים למתוכנן, ומשימות האישור שלהם נסגרות — כמו אישור של כל אחד.
+ */
+r.post('/posts/:id/approve-group', requirePerm('approve'), wrap(async (req, res) => {
+  const group = `urgent_group is not null
+        and urgent_group = (select urgent_group from posts where id = $1)`;
+  // מה שהמועד שלו עבר לא מאושר — חוזר ב-skipped, כמו באישור בודד
+  const skipped = await rows(
+    `select id, title, channel_id from posts
+      where status = 'pending_approval' and ${group} and scheduled_at <= now()`,
+    [req.params.id]
+  );
+  const approved = await rows(
+    `update posts set status = 'scheduled'
+      where status = 'pending_approval' and ${group} and scheduled_at > now()
+      returning id`,
+    [req.params.id]
+  );
+  if (approved.length === 0) {
+    return skipped.length ? bad(res, APPROVE_PAST)
+      : bad(res, 'אין במבצע הזה פוסטים שממתינים לאישור', 404);
+  }
+  const ids = approved.map((x) => x.id);
+  await query(
+    `update tasks set done = true, done_at = now() where post_id = any($1::int[]) and done = false`, [ids]);
+  res.json({ approved: ids.length, ids, skipped });
+}));
+
+/**
+ * דחיית פוסט שממתין לאישור (מבצע דחוף של מי שאין לו הרשאת אישור) — הפוסט
+ * נמחק, ומשימת האישור שלו איתו (cascade). הרשאת approve, כמו האישור עצמו —
+ * לא DELETE /posts, שדורש הרשאת תוכן. בלי מילוי מחדש: המקום נשאר פנוי.
+ */
+r.post('/posts/:id/reject', requirePerm('approve'), wrap(async (req, res) => {
+  const post = await one(
+    `delete from posts where id = $1 and status = 'pending_approval'
+      returning id, content_id, channel_id, scheduled_at`,
+    [req.params.id]
+  );
+  if (!post) return bad(res, 'אין פוסט שממתין לאישור עם המזהה הזה', 404);
+  if (post.content_id) await recordDismissals([post]);
+  res.json({ ok: true });
 }));
 
 export default r;

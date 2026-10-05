@@ -1,4 +1,8 @@
 import { confirmDialog } from './confirm.js';
+import { sessionExpired } from './session.js';
+
+/** ההודעה של פעולה שנכשלה כי החיבור פג — החלון של session.js מסביר את השאר */
+export const SESSION_ERROR = 'החיבור פג — מתחברים מחדש וחוזרים על הפעולה';
 
 /** כל הנתונים מגיעים מ-/api. שכבה 0. */
 export async function api(path, options = {}) {
@@ -8,8 +12,11 @@ export async function api(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   if (res.status === 401) {
-    location.href = '/login.html';
-    throw new Error('נדרשת התחברות');
+    // לא עוזבים את הדף: טופס פתוח נשאר כמו שהוא עד שמתחברים מחדש
+    sessionExpired();
+    const err = new Error(SESSION_ERROR);
+    err.status = 401;
+    throw err;
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -22,6 +29,9 @@ export async function api(path, options = {}) {
   return data;
 }
 
+/** כפתור האישור אומר מה קורה — לא "אישור" (docs/ux-overhaul.md, כפתורים) */
+const GAP_VERBS = { 'לשבץ בכל זאת?': 'שבץ בכל זאת', 'לשמור בכל זאת?': 'שמור בכל זאת' };
+
 /**
  * שיבוץ שהשרת מזהיר עליו כצמוד מדי. האזהרה אינה חסימה: מציגים מה
  * שהשרת יודע ושואלים, ומי שמאשר שולח שוב עם confirm_gap.
@@ -32,7 +42,8 @@ export async function postWithGapCheck(path, body, method = 'PATCH', question = 
   } catch (e) {
     if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
     const w = e.payload.warning;
-    if (!(await confirmDialog(`${w.message}\n\n${question}`))) return null;
+    const okLabel = GAP_VERBS[question] ?? 'המשך בכל זאת';
+    if (!(await confirmDialog(`${w.message}\n\n${question}`, { okLabel }))) return null;
     return api(path, { method, body: { ...body, confirm_gap: true } });
   }
 }

@@ -197,8 +197,8 @@ export function publishBlocker({ post, variant, assets }) {
   // ניוזלטר: השליחה בפועל דרך ה-HUB — נדרשים חיבור, נושא ורשימת יעד
   if (post.platform === 'newsletter') {
     if (!hubMailReady()) return 'חיבור ה-HUB לא מוגדר (HUB_API_URL / HUB_API_KEY בשרת)';
-    if (!post.content_id) return 'אין תוכן משויך לשיבוץ';
-    if (!variant || variant.status !== 'ready') return 'הגרסה למדיה הזו עוד לא מסומנת "מוכן"';
+    if (!post.content_id) return 'אין תוכן משויך לפוסט';
+    if (!variant || variant.status !== 'ready') return 'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"';
     const m = variant.meta ?? {};
     // התוכן חי או בגוף הגרסה או במילוי הממלא של ה-HUB (שדה תוכן בתבנית)
     const hasFilledContent = Object.entries(m.field_values ?? {}).some(
@@ -217,8 +217,8 @@ export function publishBlocker({ post, variant, assets }) {
   if (!post.access_token_enc) return 'אין חיבור פעיל לערוץ — מגדירים בניהול → ערוצי פרסום';
   if (post.platform === 'facebook' && !post.page_id) return 'חסר מזהה עמוד פייסבוק בחיבור';
   if (post.platform === 'instagram' && !post.ig_user_id) return 'חסר מזהה חשבון אינסטגרם בחיבור';
-  if (!post.content_id) return 'אין תוכן משויך לשיבוץ';
-  if (!variant || variant.status !== 'ready') return 'הגרסה למדיה הזו עוד לא מסומנת "מוכן"';
+  if (!post.content_id) return 'אין תוכן משויך לפוסט';
+  if (!variant || variant.status !== 'ready') return 'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"';
 
   const media = assets.filter((a) => isImage(a.mime) || isVideo(a.mime));
   if (post.platform === 'instagram') {
@@ -485,15 +485,24 @@ async function failStuckPublishing(now = new Date(), hubState = new Map()) {
  * עובר ל-failed עם הערה מי איפס, ומקבל משימת כשל — בלי אירוע ל-HUB.
  * @returns {Promise<object|null>} הפוסט המעודכן, או null אם הוא לא ב-publishing
  */
+/** "שחרר פרסום תקוע" — רק אחרי 10 דקות בפרסום; לפני זה הוא כנראה עוד רץ */
+export const RESET_MIN_MS = 10 * 60000;
+export const RESET_TOO_SOON = 'הפרסום התחיל לפני פחות מ-10 דקות — מחכים עוד קצת';
+export const resetTooSoon = (startedAt, now = new Date()) =>
+  startedAt != null && now.getTime() - new Date(startedAt).getTime() < RESET_MIN_MS;
+
+/** מחזיר { post } או { error } (פרסום שהתחיל לפני פחות מ-RESET_MIN_MS) או null */
 export async function resetPublishing(postId, user) {
   const post = await loadPostBrief(postId);
   if (!post || post.status !== 'publishing') return null;
+  const started = await one('select publishing_started_at from posts where id = $1', [postId]);
+  if (resetTooSoon(started?.publishing_started_at)) return { error: RESET_TOO_SOON };
   const note = `הפרסום סומן כתקוע ידנית${user?.name ? ` על ידי ${user.name}` : ''} — ` +
     'בודקים בעמוד אם הפוסט עלה, ואז מסמנים פורסם או מפרסמים שוב';
   const r = await failPost(post, note,
     { title: `פרסום אופס ידנית — ${post.channel_name}`, from: ['publishing'], notify: false,
       internal: true });
-  return r ? one('select * from posts where id = $1', [postId]) : null;
+  return r ? { post: await one('select * from posts where id = $1', [postId]) } : null;
 }
 
 export const WA_SUB_READY = 'מעתיקים את הטקסט, שולחים לקבוצה ומסמנים פורסם';

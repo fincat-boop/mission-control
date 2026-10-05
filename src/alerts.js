@@ -26,52 +26,49 @@ export async function buildAlerts(user = null) {
   const settings = await one('select * from engine_settings limit 1');
   const alertHours = settings?.content_alert_hours ?? 48;
 
-  const [campaigns, endpoints, holes, pending, soonWithoutContent, failed, missed, openTasks,
-         backupLayers] = await Promise.all([
-    campaignsWithHealth(),
-    endpointsWithoutAir(),
-    rows(`select p.id, p.scheduled_at, e.name as endpoint_name, c.name as channel_name
-            from posts p
-            left join endpoints e on e.id = p.endpoint_id
-            left join channels c  on c.id = p.channel_id
-           where p.status = 'hole' and p.scheduled_at >= now() - interval '7 days'
-           order by p.scheduled_at`),
-    rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
-            from posts p left join channels c on c.id = p.channel_id
-           where p.status = 'pending_approval' order by p.scheduled_at`),
-    rows(
-      `select p.id, p.title, p.scheduled_at, c.name as channel_name
-         from posts p left join channels c on c.id = p.channel_id
-        where p.status = 'scheduled' and p.content_id is null
-          and p.scheduled_at between now() and now() + ($1 || ' hours')::interval
-        order by p.scheduled_at`,
-      [alertHours]
-    ),
-    // פרסום שנכשל — עד שבועיים אחורה. אחר כך זה כבר היסטוריה, לא מצב.
-    rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name
-            from posts p left join channels c on c.id = p.channel_id
-           where p.status = 'failed' and p.scheduled_at >= now() - interval '14 days'
-             and not exists (select 1 from content_items ci
-                               join campaigns ca on ca.id = ci.campaign_id
-                              where ci.id = p.content_id and ca.paused_at is not null)
-           order by p.scheduled_at`),
-    // המועד עבר ואף אחד לא פרסם/סימן. חצי שעה חסד — וואטסאפ נשלח ידנית,
-    // ופרסום אוטומטי עוד יכול להיות בדרך.
-    rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
-            from posts p left join channels c on c.id = p.channel_id
-           where p.status in ('scheduled','approved') and p.published_at is null
-             and not exists (select 1 from content_items ci
-                               join campaigns ca on ca.id = ci.campaign_id
-                              where ci.id = p.content_id and ca.paused_at is not null)
-             and p.scheduled_at between now() - interval '7 days'
-                                    and now() - interval '30 minutes'
-           order by p.scheduled_at`),
-    // משימות פתוחות (שלא נדחו) שכבר מכסות התראה על אותו פוסט — suppressTaskedAlerts
-    rows(`select post_id, kind from tasks
-           where not done and post_id is not null and kind in ('approve','write')
-             and (snoozed_until is null or snoozed_until <= now())`),
-    readBackupLayers(),
-  ]);
+  const campaigns = await campaignsWithHealth();
+  const endpoints = await endpointsWithoutAir();
+  const holes = await rows(`select p.id, p.scheduled_at, e.name as endpoint_name, c.name as channel_name
+          from posts p
+          left join endpoints e on e.id = p.endpoint_id
+          left join channels c  on c.id = p.channel_id
+         where p.status = 'hole' and p.scheduled_at >= now() - interval '7 days'
+         order by p.scheduled_at`);
+  const pending = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
+          from posts p left join channels c on c.id = p.channel_id
+         where p.status = 'pending_approval' order by p.scheduled_at`);
+  const soonWithoutContent = await rows(
+    `select p.id, p.title, p.scheduled_at, c.name as channel_name
+       from posts p left join channels c on c.id = p.channel_id
+      where p.status = 'scheduled' and p.content_id is null
+        and p.scheduled_at between now() and now() + ($1 || ' hours')::interval
+      order by p.scheduled_at`,
+    [alertHours]
+  );
+  // פרסום שנכשל — עד שבועיים אחורה. אחר כך זה כבר היסטוריה, לא מצב.
+  const failed = await rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name
+          from posts p left join channels c on c.id = p.channel_id
+         where p.status = 'failed' and p.scheduled_at >= now() - interval '14 days'
+           and not exists (select 1 from content_items ci
+                             join campaigns ca on ca.id = ci.campaign_id
+                            where ci.id = p.content_id and ca.paused_at is not null)
+         order by p.scheduled_at`);
+  // המועד עבר ואף אחד לא פרסם/סימן. חצי שעה חסד — וואטסאפ נשלח ידנית,
+  // ופרסום אוטומטי עוד יכול להיות בדרך.
+  const missed = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
+          from posts p left join channels c on c.id = p.channel_id
+         where p.status in ('scheduled','approved') and p.published_at is null
+           and not exists (select 1 from content_items ci
+                             join campaigns ca on ca.id = ci.campaign_id
+                            where ci.id = p.content_id and ca.paused_at is not null)
+           and p.scheduled_at between now() - interval '7 days'
+                                  and now() - interval '30 minutes'
+         order by p.scheduled_at`);
+  // משימות פתוחות (שלא נדחו) שכבר מכסות התראה על אותו פוסט — suppressTaskedAlerts
+  const openTasks = await rows(`select post_id, kind from tasks
+         where not done and post_id is not null and kind in ('approve','write')
+           and (snoozed_until is null or snoozed_until <= now())`);
+  const backupLayers = await readBackupLayers();
 
   const alerts = [];
   const today = ymd(new Date());
@@ -124,8 +121,8 @@ export async function buildAlerts(user = null) {
       level: e.days_over >= cadence ? 'crit' : 'warn',
       title: `${e.name} לא מפרסמת`,
       detail: e.days_since === null
-        ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, הקצב הוא כל ${cadence}`
-        : `${e.days_since} ימים בלי פרסום — הקצב ${e.min_days_between == null ? 'האוטומטי' : 'שהוגדר'} הוא כל ${cadence}`,
+        ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, התדירות היא כל ${cadence}`
+        : `${e.days_since} ימים בלי פרסום — התדירות ${e.min_days_between == null ? 'האוטומטית' : 'שהוגדרה'} היא כל ${cadence}`,
       tab: 'plan',
       endpoint_id: e.id,
     });

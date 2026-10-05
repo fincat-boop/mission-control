@@ -43,60 +43,58 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   const to = new Date(week.endDate);
   to.setHours(23, 59, 59, 999);
 
-  const [settings, channels, endpoints, content, existing, campaigns, dismissals] = await Promise.all([
-    one('select * from engine_settings limit 1'),
-    rows('select * from channels where active = true order by sort_order, id'),
-    // סדר קבוע: בשוויון ציון הנקודה הראשונה זוכה, ותכנון וביצוע חייבים
-    // לבחור אותה נקודה — אחרת המפתחות שהמשתמש סימן לא יימצאו בהצעה הטרייה
-    rows('select * from endpoints where active = true order by id'),
-    // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
-    // תוכן של קמפיין מושהה לא נכנס לתכנון.
-    //
-    // ready_channel_ids — רק גרסה שסומנה "מוכן". eligible_channel_ids — גם
-    // טיוטה: השיבוץ הולך לפי האסטרטגיה, לא לפי אם כבר נכתב טקסט סופי.
-    // המנוע ממשיך להעדיף מוכן על פני טיוטה כשיש ברירה (ראו chooseForSlot).
-    // תאריכי הקמפיין נשלפים עם התוכן: תוכן של קמפיין לא יוצא לפני
-    // starts_on ולא אחרי ends_on (ראו outsideCampaignWindow).
-    rows(`select ci.*,
-                 ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
-                 ${COMPLETE_SPREAD_COLUMNS},
-                 coalesce(
-                   array_agg(v.channel_id) filter (where v.status = 'ready'),
-                   '{}'
-                 ) as ready_channel_ids,
-                 coalesce(
-                   array_agg(v.channel_id) filter (where v.status in ('ready','draft')),
-                   '{}'
-                 ) as eligible_channel_ids
-            from content_items ci
-            left join content_variants v on v.content_id = ci.id
-            left join campaigns ca on ca.id = ci.campaign_id
-           where (ca.id is null or ca.paused_at is null)
-             -- משבצת של קמפיין כללי שהמדיה שלה הוסרה מהקמפיין: נשמרת, לא משובצת
-             and (ci.slot_channel_id is null or exists (
-                   select 1 from campaign_channels cc
-                    where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
-           group by ci.id, ca.id
-           order by ci.created_at, ci.id`),
-    // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
-    // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
-    // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
-    // שכבר קרתה, בדיוק כמו ב-board.js.
-    rows(
-      `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status,
-              p.title, p.published_at, p.auto_hole
-         from posts p
-         left join content_items ci on ci.id = p.content_id
-         left join campaigns ca     on ca.id = ci.campaign_id
-        where p.scheduled_at >= $1 and p.scheduled_at <= $2
-          and p.status in ('scheduled','approved','publishing','failed','published','pending_approval')
-          and (ca.paused_at is null or p.status = 'published')`,
-      [from, to]
-    ),
-    rows('select * from campaigns where active = true and paused_at is null'),
-    // תוכן שהמשתמש הוריד מהשבוע הזה (מחיקת פוסט / ביטול מילוי) — לא חוזר
-    rows('select content_id, channel_id from engine_dismissals where week_start = $1', [week.start]),
-  ]);
+  const settings = await one('select * from engine_settings limit 1');
+  const channels = await rows('select * from channels where active = true order by sort_order, id');
+  // סדר קבוע: בשוויון ציון הנקודה הראשונה זוכה, ותכנון וביצוע חייבים
+  // לבחור אותה נקודה — אחרת המפתחות שהמשתמש סימן לא יימצאו בהצעה הטרייה
+  const endpoints = await rows('select * from endpoints where active = true order by id');
+  // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
+  // תוכן של קמפיין מושהה לא נכנס לתכנון.
+  //
+  // ready_channel_ids — רק גרסה שסומנה "מוכן". eligible_channel_ids — גם
+  // טיוטה: השיבוץ הולך לפי האסטרטגיה, לא לפי אם כבר נכתב טקסט סופי.
+  // המנוע ממשיך להעדיף מוכן על פני טיוטה כשיש ברירה (ראו chooseForSlot).
+  // תאריכי הקמפיין נשלפים עם התוכן: תוכן של קמפיין לא יוצא לפני
+  // starts_on ולא אחרי ends_on (ראו outsideCampaignWindow).
+  const content = await rows(`select ci.*,
+               ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
+               ${COMPLETE_SPREAD_COLUMNS},
+               coalesce(
+                 array_agg(v.channel_id) filter (where v.status = 'ready'),
+                 '{}'
+               ) as ready_channel_ids,
+               coalesce(
+                 array_agg(v.channel_id) filter (where v.status in ('ready','draft')),
+                 '{}'
+               ) as eligible_channel_ids
+          from content_items ci
+          left join content_variants v on v.content_id = ci.id
+          left join campaigns ca on ca.id = ci.campaign_id
+         where (ca.id is null or ca.paused_at is null)
+           -- משבצת של קמפיין כללי שהמדיה שלה הוסרה מהקמפיין: נשמרת, לא משובצת
+           and (ci.slot_channel_id is null or exists (
+                 select 1 from campaign_channels cc
+                  where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
+         group by ci.id, ca.id
+         order by ci.created_at, ci.id`);
+  // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
+  // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
+  // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
+  // שכבר קרתה, בדיוק כמו ב-board.js.
+  const existing = await rows(
+    `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status,
+            p.title, p.published_at, p.auto_hole
+       from posts p
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.scheduled_at >= $1 and p.scheduled_at <= $2
+        and p.status in ('scheduled','approved','publishing','failed','published','pending_approval')
+        and (ca.paused_at is null or p.status = 'published')`,
+    [from, to]
+  );
+  const campaigns = await rows('select * from campaigns where active = true and paused_at is null');
+  // תוכן שהמשתמש הוריד מהשבוע הזה (מחיקת פוסט / ביטול מילוי) — לא חוזר
+  const dismissals = await rows('select content_id, channel_id from engine_dismissals where week_start = $1', [week.start]);
 
   const notes = [];
   if (channels.length === 0) notes.push('אין ערוצים פעילים.');
@@ -1026,8 +1024,8 @@ export function chooseForSlot(ctx) {
   // רק כשהיעילות הנמדדת באמת הזיזה משהו — 1.0 הוא ניטרלי ולא מעניין
   if (p.performance != null && Math.abs(p.performance - 1) >= 0.08) {
     bits.push(p.performance > 1
-      ? `יעילות נמדדת גבוהה (${p.performance.toFixed(2)})`
-      : `יעילות נמדדת נמוכה (${p.performance.toFixed(2)})`);
+      ? `ביצועים גבוהים (${p.performance.toFixed(2)})`
+      : `ביצועים נמוכים (${p.performance.toFixed(2)})`);
   }
   bits.push(`חשיבות ${best.endpoint.importance}`);
 

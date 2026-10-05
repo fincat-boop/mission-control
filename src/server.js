@@ -92,6 +92,13 @@ app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 
 // eslint-disable-next-line no-unused-vars -- express מזהה error handler לפי 4 ארגומנטים
 app.use((err, _req, res, _next) => {
+  // גוף בקשה שאינו JSON תקין (express.json) — טעות של הבקשה, לא תקלה בשרת
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'הבקשה לא תקינה' });
+  }
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'הבקשה גדולה מדי' });
+  }
   console.error(err);
   // שגיאות העלאה מ-multer מקבלות הודעה מובנת במקום "משהו נשבר"
   if (err?.code === 'LIMIT_FILE_SIZE') {
@@ -110,6 +117,8 @@ await migrate();
 
 const server = app.listen(port, () => {
   console.log(`Mission Control — מאזין על פורט ${port}`);
+  // "היום", שעות עגולות וימים חסומים מחושבים בשעון התהליך — חייב להיות ישראל
+  if (Intl.DateTimeFormat().resolvedOptions().timeZone !== 'Asia/Jerusalem') console.warn(`⚠ אזור הזמן של השרת הוא ${Intl.DateTimeFormat().resolvedOptions().timeZone} ולא Asia/Jerusalem — הגדירו TZ=Asia/Jerusalem, אחרת "היום" ושעות השיבוץ יזוזו`);
 });
 
 // תחזוקה ברקע: גיבוי יומי, וניקוי מבצעים דחופים שעברו זמנם בלי תוכן —

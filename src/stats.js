@@ -50,65 +50,54 @@ export async function buildStats(from, to) {
   // תאריכים ולא רגעים — הגבולות מחושבים ב-SQL לפי שעון ישראל (inLocalDays)
   const args = [period.from, period.to];
 
-  const [totals, byKind, byChannel, byEndpoint, contentMade, tasks, engine, activity, settings] =
-    await Promise.all([
-      one(
-        `select
-           count(*) filter (where status = 'published')::int      as published,
-           count(*) filter (where status in ('scheduled','approved','publishing','failed'))::int as scheduled,
-           count(*) filter (where status = 'pending_approval')::int as pending,
-           count(*) filter (where status = 'hole'
-             or (status = 'scheduled' and content_id is null))::int as holes,
-           count(*) filter (where urgent)::int                    as urgent
-         from posts p where ${inLocalDays(POST_AT)}`, args),
-
-      rows(
-        `select kind, count(*)::int as n
-           from posts p where ${inLocalDays(POST_AT)} and status = 'published'
-          group by kind`, args),
-
-      rows(
-        `select c.id, c.name, c.target_per_week, c.max_per_week,
-                count(p.id) filter (where p.status = 'published')::int as published,
-                count(p.id) filter (where p.status <> 'hole')::int     as placed
-           from channels c
-           left join posts p on p.channel_id = c.id and ${inLocalDays(POST_AT)}
-          group by c.id order by c.sort_order, c.id`, args),
-
-      rows(
-        `select e.id, e.name, e.importance,
-                count(p.id) filter (where p.status = 'published')::int as published,
-                count(p.id) filter (where p.status <> 'hole')::int     as placed,
-                max(p.published_at)                                    as last_published
-           from endpoints e
-           left join posts p on p.endpoint_id = e.id and ${inLocalDays(POST_AT)}
-          group by e.id order by e.importance desc, e.id`, args),
-
-      one(
-        `select
-           count(*)::int as created,
-           count(*) filter (where evergreen)::int as evergreen
-         from content_items where ${inLocalDays('created_at')}`, args),
-
-      one(
-        `select
-           count(*) filter (where ${inLocalDays('created_at')})::int as opened,
-           count(*) filter (where done and ${inLocalDays('done_at')})::int as closed,
-           avg(extract(epoch from (done_at - created_at)) / 3600)
-             filter (where done and ${inLocalDays('done_at')}) as avg_hours
-         from tasks`, args),
-
-      one(
-        `select count(*)::int as runs
-           from activity_log
-          where action = 'apply' and ${inLocalDays('created_at')}`, args),
-
-      rows(
-        `select via, count(*)::int as n
-           from activity_log where ${inLocalDays('created_at')} group by via`, args),
-
-      one('select hybrid_weight from engine_settings limit 1'),
-    ]);
+  const totals = await one(
+    `select
+       count(*) filter (where status = 'published')::int      as published,
+       count(*) filter (where status in ('scheduled','approved','publishing','failed'))::int as scheduled,
+       count(*) filter (where status = 'pending_approval')::int as pending,
+       count(*) filter (where status = 'hole'
+         or (status = 'scheduled' and content_id is null))::int as holes,
+       count(*) filter (where urgent)::int                    as urgent
+     from posts p where ${inLocalDays(POST_AT)}`, args);
+  const byKind = await rows(
+    `select kind, count(*)::int as n
+       from posts p where ${inLocalDays(POST_AT)} and status = 'published'
+      group by kind`, args);
+  const byChannel = await rows(
+    `select c.id, c.name, c.target_per_week, c.max_per_week,
+            count(p.id) filter (where p.status = 'published')::int as published,
+            count(p.id) filter (where p.status <> 'hole')::int     as placed
+       from channels c
+       left join posts p on p.channel_id = c.id and ${inLocalDays(POST_AT)}
+      group by c.id order by c.sort_order, c.id`, args);
+  const byEndpoint = await rows(
+    `select e.id, e.name, e.importance,
+            count(p.id) filter (where p.status = 'published')::int as published,
+            count(p.id) filter (where p.status <> 'hole')::int     as placed,
+            max(p.published_at)                                    as last_published
+       from endpoints e
+       left join posts p on p.endpoint_id = e.id and ${inLocalDays(POST_AT)}
+      group by e.id order by e.importance desc, e.id`, args);
+  const contentMade = await one(
+    `select
+       count(*)::int as created,
+       count(*) filter (where evergreen)::int as evergreen
+     from content_items where ${inLocalDays('created_at')}`, args);
+  const tasks = await one(
+    `select
+       count(*) filter (where ${inLocalDays('created_at')})::int as opened,
+       count(*) filter (where done and ${inLocalDays('done_at')})::int as closed,
+       avg(extract(epoch from (done_at - created_at)) / 3600)
+         filter (where done and ${inLocalDays('done_at')}) as avg_hours
+     from tasks`, args);
+  const engine = await one(
+    `select count(*)::int as runs
+       from activity_log
+      where action = 'apply' and ${inLocalDays('created_at')}`, args);
+  const activity = await rows(
+    `select via, count(*)::int as n
+       from activity_log where ${inLocalDays('created_at')} group by via`, args);
+  const settings = await one('select hybrid_weight from engine_settings limit 1');
 
   // הנתח בפועל: כמה מהשטח שיצא בתקופה הלך לכל נקודת קצה
   const placedTotal = byEndpoint.reduce((s, e) => s + e.placed, 0);

@@ -40,11 +40,11 @@ const SCHEMA = {
           kind: { type: 'string', enum: ['promo', 'value', 'hybrid'] },
           variants: {
             type: 'array',
-            description: 'הניסוח לכל מדיה. רק מדיות שיש להן טקסט במסמך.',
+            description: 'הניסוח לכל ערוץ. רק ערוצים שיש להם טקסט במסמך.',
             items: {
               type: 'object',
               properties: {
-                channel: { type: 'string', description: 'שם המדיה בדיוק כפי שהוא במערכת' },
+                channel: { type: 'string', description: 'שם הערוץ בדיוק כפי שהוא במערכת' },
                 body: { type: 'string' },
               },
               required: ['channel', 'body'],
@@ -74,8 +74,8 @@ function prompt(campaign, channels) {
   return `אתה ממיר מסמך תוכן פרסומי לטבלה מבנית עבור "Mission Control" של חתול פיננסי.
 
 ## מה אתה מפיק
-שורה לכל **זווית** — מסר או רעיון אחד. לכל זווית ניסוח נפרד לכל מדיה
-שיש לה טקסט במסמך. אותה זווית נאמרת אחרת בפייסבוק ובניוזלטר, וזה בדיוק
+שורה לכל **זווית** — מסר או רעיון אחד. לכל זווית ניסוח נפרד לכל ערוץ
+שיש לו טקסט במסמך. אותה זווית נאמרת אחרת בפייסבוק ובניוזלטר, וזה בדיוק
 מה שהעמודות מייצגות.
 
 ## הקמפיין שאליו זה נכנס
@@ -83,12 +83,12 @@ function prompt(campaign, channels) {
 מטרה: ${campaign.goal ?? 'לא הוגדרה'}
 תאריכים: ${campaign.starts_on ?? '?'} עד ${campaign.ends_on ?? '?'}
 
-## המדיות שקיימות במערכת
-${channels.map((c) => `- ${c.name}${c.inCampaign ? ' (משויכת לקמפיין)' : ''}`).join('\n')}
+## הערוצים שקיימים במערכת
+${channels.map((c) => `- ${c.name}${c.inCampaign ? ' (משויך לקמפיין)' : ''}`).join('\n')}
 
-**חובה:** בשדה channel כתוב את שם המדיה **בדיוק** כפי שהוא מופיע ברשימה
-למעלה. אם במסמך כתוב "פייסבוק" והמדיה במערכת נקראת "קבוצת פייסבוק ראשית" —
-כתוב את השם מהמערכת. אם עמודה במסמך לא מתאימה לאף מדיה, אל תמציא לה שם:
+**חובה:** בשדה channel כתוב את שם הערוץ **בדיוק** כפי שהוא מופיע ברשימה
+למעלה. אם במסמך כתוב "פייסבוק" והערוץ במערכת נקרא "קבוצת פייסבוק ראשית" —
+כתוב את השם מהמערכת. אם עמודה במסמך לא מתאימה לאף ערוץ, אל תמציא לה שם:
 דלג עליה וכתוב על כך ב-notes.
 
 ## סוג התוכן
@@ -99,7 +99,7 @@ ${channels.map((c) => `- ${c.name}${c.inCampaign ? ' (משויכת לקמפיי�
 אם המסמך לא אומר, הכרע לפי הניסוח עצמו.
 
 ## מה אתה לא עושה
-- לא ממציא תוכן. אם אין ניסוח למדיה מסוימת — לא כותב לה variant.
+- לא ממציא תוכן. אם אין ניסוח לערוץ מסוים — לא כותב לו variant.
 - לא מתרגם ולא משכתב את הניסוחים. מעביר אותם כפי שהם.
   היוצא מן הכלל היחיד: ניקוי סימני עימוד שנשארו מהמסמך.
 - לא מפצל זווית אחת לכמה שורות ולא מאחד כמה זוויות לשורה אחת.
@@ -119,11 +119,9 @@ export async function analyzeDocument(campaignId, doc) {
   const campaign = await one('select * from campaigns where id = $1', [campaignId]);
   if (!campaign) throw new Error('לא נמצא קמפיין כזה');
 
-  const [all, mine] = await Promise.all([
-    rows('select id, name from channels where active = true order by sort_order, id'),
-    rows(`select ch.id from campaign_channels cc join channels ch on ch.id = cc.channel_id
-           where cc.campaign_id = $1`, [campaignId]),
-  ]);
+  const all = await rows('select id, name from channels where active = true order by sort_order, id');
+  const mine = await rows(`select ch.id from campaign_channels cc join channels ch on ch.id = cc.channel_id
+         where cc.campaign_id = $1`, [campaignId]);
   const mineIds = new Set(mine.map((m) => m.id));
   const channels = all.map((c) => ({ ...c, inCampaign: mineIds.has(c.id) }));
 

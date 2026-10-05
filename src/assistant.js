@@ -72,29 +72,27 @@ export function takeProposal(id, userId) {
  * הפרטים הכבדים — לוח, תוכן, התראות — מגיעים דרך כלי קריאה לפי הצורך.
  */
 async function snapshot() {
-  const [endpoints, channels, campaigns, settings, counts] = await Promise.all([
-    rows('select id, name, importance, min_days_between, active from endpoints order by id'),
-    rows(`select id, name, max_per_week, target_per_week, max_promo_per_week,
-                 max_value_per_week, max_hybrid_per_week, urgent_reserve_pct,
-                 blocked_days, active
-            from channels order by sort_order, id`),
-    rows(`select c.id, c.name, c.endpoint_id, c.starts_on, c.ends_on, c.share_pct,
-                 c.importance, c.target_posts, c.active, c.paused_at,
-                 (select count(*)::int from content_items ci where ci.campaign_id = c.id) as content_count,
-                 (select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
-                    from campaign_channels cc where cc.campaign_id = c.id) as channel_ids
-            from campaigns c order by c.starts_on nulls last, c.id`),
-    one('select * from engine_settings limit 1'),
-    one(`select
-           (select count(*)::int from content_items) as content,
-           (select count(*)::int from posts where status in ('scheduled','approved','publishing','failed','pending_approval')) as scheduled,
-           -- "חסר תוכן": פוסטים עתידיים בלי תוכן משויך. המנוע כבר לא יוצר
-           -- status='hole' — משבצת בלי תוכן היא scheduled עם content_id ריק
-           (select count(*)::int from posts
-             where content_id is null and scheduled_at >= now()
-               and status in ('scheduled','approved','pending_approval')) as missing_content,
-           (select count(*)::int from tasks where done = false) as open_tasks`),
-  ]);
+  const endpoints = await rows('select id, name, importance, min_days_between, active from endpoints order by id');
+  const channels = await rows(`select id, name, max_per_week, target_per_week, max_promo_per_week,
+               max_value_per_week, max_hybrid_per_week, urgent_reserve_pct,
+               blocked_days, active
+          from channels order by sort_order, id`);
+  const campaigns = await rows(`select c.id, c.name, c.endpoint_id, c.starts_on, c.ends_on, c.share_pct,
+               c.importance, c.target_posts, c.active, c.paused_at,
+               (select count(*)::int from content_items ci where ci.campaign_id = c.id) as content_count,
+               (select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
+                  from campaign_channels cc where cc.campaign_id = c.id) as channel_ids
+          from campaigns c order by c.starts_on nulls last, c.id`);
+  const settings = await one('select * from engine_settings limit 1');
+  const counts = await one(`select
+         (select count(*)::int from content_items) as content,
+         (select count(*)::int from posts where status in ('scheduled','approved','publishing','failed','pending_approval')) as scheduled,
+         -- "חסר תוכן": פוסטים עתידיים בלי תוכן משויך. המנוע כבר לא יוצר
+         -- status='hole' — משבצת בלי תוכן היא scheduled עם content_id ריק
+         (select count(*)::int from posts
+           where content_id is null and scheduled_at >= now()
+             and status in ('scheduled','approved','pending_approval')) as missing_content,
+         (select count(*)::int from tasks where done = false) as open_tasks`);
   return { today: ymd(new Date()), endpoints, channels, campaigns, settings, counts };
 }
 
@@ -110,19 +108,19 @@ function systemPrompt(user, snap) {
 הסבר מה זה אומר ומה ההשלכות, ורק אז הצע את הפעולה.
 
 ## איך המערכת בנויה
-- **נקודת קצה** = מוצר או יעד שיווקי. לכל אחת משקל (importance) שקובע כמה שטח אוויר מגיע לה.
-- **קמפיין** שייך לנקודת קצה אחת, יש לו חלון תאריכים, נתח (share_pct) או משקל, ורשימת מדיות.
-- **תוכן** (זווית) שייך לקמפיין או רץ ברקע (evergreen). לכל זווית יש **גרסה נפרדת לכל מדיה** —
+- **נקודת קצה** = מוצר או יעד שיווקי. לכל אחת חשיבות (importance) שקובעת כמה שטח אוויר מגיע לה.
+- **קמפיין** שייך לנקודת קצה אחת, יש לו חלון תאריכים, נתח (share_pct) או חשיבות, ורשימת ערוצים.
+- **תוכן** (זווית) שייך לקמפיין או רץ ברקע (evergreen). לכל זווית יש **גרסה נפרדת לכל ערוץ** —
   אותו רעיון, ניסוח אחר לפייסבוק ולניוזלטר.
-- **פוסט** = שיבוץ בפועל של תוכן בערוץ בתאריך.
-- **המנוע** משבץ אוטומטית לפי "חוב אוויר": ותק בלי פרסום, פער מול הנתח שמגיע, ומשקל.
+- **פוסט** = תוכן ששובץ בערוץ בתאריך. פוסט בלי תוכן משויך הוא "חסר תוכן".
+- **המנוע** משבץ אוטומטית לפי "חוב אוויר": ותק בלי פרסום, פער מול הנתח שמגיע, וחשיבות.
 
 ## כללים שאתה לא עוקף
 1. **אסור לך לגעת במנוע.** לא לשנות את כללי המנוע (engine_settings) ולא להריץ שיבוץ
    אוטומטי. אתה יכול להראות מה המנוע היה מציע (engine_preview) ולהסביר למה — זה הכול.
 2. **לפני כל פעולה — לוודא.** אל תציע כתיבה על סמך הנחה. תמיד קרא קודם את המצב
    הרלוונטי בכלי קריאה: שהמזהים קיימים, שהתאריכים בטווח הקמפיין, שאין התנגשות,
-   שהמדיה לא חסומה באותו יום. אם חסר לך מידע — שאל את המשתמש, אל תנחש.
+   שהערוץ לא חסום באותו יום. אם חסר לך מידע — שאל את המשתמש, אל תנחש.
 3. **פעולה אחת = הצעה אחת.** כלי כתיבה לא מבצע כלום. הוא מייצר הצעה שהמשתמש
    רואה ומאשר. אחרי שהצעת — תאר בקצרה מה יקרה ומה ההשלכה, ואל תגיד שזה בוצע.
 4. **אל תערום הצעות.** מקסימום 3 הצעות בתשובה אחת, ורק אם הן באמת קשורות זו לזו.
@@ -137,6 +135,8 @@ function systemPrompt(user, snap) {
 - פותחים בשורה התחתונה: מה המצב או מה מצאת. הפירוט אחר כך.
 - עברית, ישיר, בלי הקדמות. מספרים ותאריכים מדויקים.
 - כשאתה מסביר החלטה — תגיד על מה היא מבוססת (איזה נתון ראית).
+- המונחים של המערכת, כמו שהמשתמש רואה אותם במסך: ערוץ (לא "מדיה"), חשיבות (לא "משקל"),
+  פוסט (לא "שיבוץ"), פרסום אוטומטי, "חסר תוכן", פוסטים בשבוע (לערוץ), תדירות (לנקודת קצה).
 
 ## מי מולך
 ${user.name}${user.is_owner ? ' (בעלים — כל ההרשאות)' : ''}
@@ -158,7 +158,7 @@ ${user.name}${user.is_owner ? ' (בעלים — כל ההרשאות)' : ''}
 
 const READ_TOOLS = {
   get_board: {
-    description: 'הלוח השבועי: כל השיבוצים של שבוע מסוים, לפי ערוץ ויום. ' +
+    description: 'הלוח השבועי: כל הפוסטים של שבוע מסוים, לפי ערוץ ויום. ' +
       'בלי week מקבלים את השבוע הנוכחי.',
     input_schema: {
       type: 'object',
@@ -169,7 +169,7 @@ const READ_TOOLS = {
 
   get_campaigns: {
     description: 'כל הקמפיינים עם מצב המלאות שלהם: כמה תוכן חסר, מה הנתח בפועל מול המתוכנן. ' +
-      'לפירוט ברמת הזווית והמדיה — get_content עם campaign_id.',
+      'לפירוט ברמת הזווית והערוץ — get_content עם campaign_id.',
     input_schema: { type: 'object', properties: {} },
     run: async () => ({
       // grid היא מטריצת התאים שהממשק מצייר — כ-10KB לקמפיין, ואותו מידע
@@ -186,7 +186,7 @@ const READ_TOOLS = {
 
   get_content: {
     description: 'ספריית התוכן. אפשר לסנן לפי קמפיין או נקודת קצה. ' +
-      'עם content_id מקבלים גם את הטקסט המלא של כל גרסה לפי מדיה.',
+      'עם content_id מקבלים גם את הטקסט המלא של כל גרסה לפי ערוץ.',
     input_schema: {
       type: 'object',
       properties: {
@@ -199,7 +199,7 @@ const READ_TOOLS = {
   },
 
   get_post: {
-    description: 'שיבוץ בודד: מה בדיוק אמור לצאת שם — הטקסט של המדיה והקבצים.',
+    description: 'פוסט בודד: מה בדיוק אמור לצאת שם — הטקסט לערוץ והקבצים.',
     input_schema: {
       type: 'object',
       properties: { post_id: { type: 'integer' } },
@@ -237,7 +237,7 @@ const READ_TOOLS = {
 
   get_stats: {
     description: 'סטטיסטיקה לתקופה: כמה פורסם, לפי סוג ולפי ערוץ, חלוקת השטח בין ' +
-      'נקודות הקצה, קצב בפועל מול היעד, ומשימות. בלי תאריכים — 30 הימים האחרונים.',
+      'נקודות הקצה, פוסטים בשבוע בפועל מול היעד, ומשימות. בלי תאריכים — 30 הימים האחרונים.',
     input_schema: {
       type: 'object',
       properties: {
@@ -266,7 +266,7 @@ const READ_TOOLS = {
 
   engine_preview: {
     description: 'מה המנוע היה משבץ השבוע ולמה — תצוגה מקדימה בלבד. ' +
-      'לא כותב כלום ואי אפשר להפעיל ממנה שיבוץ. משמש להסביר את שיקולי המנוע.',
+      'לא כותב כלום ואי אפשר לשבץ ממנה. משמש להסביר את שיקולי המנוע.',
     input_schema: {
       type: 'object',
       properties: { week: { type: 'string', description: 'תאריך עוגן, YYYY-MM-DD' } },
@@ -332,7 +332,7 @@ async function readPost(id) {
        left join endpoints e on e.id = p.endpoint_id
        left join content_items ci on ci.id = p.content_id
       where p.id = $1`, [id]);
-  if (!p) return { error: 'לא נמצא שיבוץ עם המזהה הזה' };
+  if (!p) return { error: 'לא נמצא פוסט עם המזהה הזה' };
   const variant = p.content_id
     ? await one('select status, body from content_variants where content_id = $1 and channel_id = $2',
         [p.content_id, p.channel_id])
@@ -358,11 +358,11 @@ const WRITE_TOOLS = {
         name: { type: 'string' },
         starts_on: { type: 'string', description: 'YYYY-MM-DD' },
         ends_on: { type: 'string', description: 'YYYY-MM-DD' },
-        share_pct: { type: 'integer', description: 'נתח קבוע באחוזים. בלעדיו הנתח נגזר מהמשקל.' },
+        share_pct: { type: 'integer', description: 'נתח קבוע באחוזים. בלעדיו הנתח נגזר מהחשיבות.' },
         importance: { type: 'integer' },
         target_posts: { type: 'integer' },
         goal: { type: 'string' },
-        channel_ids: { type: 'array', items: { type: 'integer' }, description: 'המדיות שהקמפיין יושב עליהן' },
+        channel_ids: { type: 'array', items: { type: 'integer' }, description: 'הערוצים שהקמפיין יושב עליהם' },
       },
       required: ['endpoint_id', 'name'],
     },
@@ -372,7 +372,7 @@ const WRITE_TOOLS = {
 
   update_campaign: {
     perm: 'settings',
-    description: 'עדכון קמפיין קיים. שינוי starts_on גורר איתו את השיבוצים העתידיים של הקמפיין.',
+    description: 'עדכון קמפיין קיים. שינוי starts_on גורר איתו את הפוסטים העתידיים של הקמפיין.',
     input_schema: {
       type: 'object',
       properties: {
@@ -397,7 +397,7 @@ const WRITE_TOOLS = {
 
   pause_campaign: {
     perm: 'settings',
-    description: 'השהיית קמפיין. לא מוחק כלום — השיבוצים נשמרים ומוסתרים עד להפעלה מחדש.',
+    description: 'השהיית קמפיין. לא מוחק כלום — הפוסטים נשמרים ומוסתרים עד להפעלה מחדש.',
     input_schema: {
       type: 'object',
       properties: { campaign_id: { type: 'integer' } },
@@ -412,7 +412,7 @@ const WRITE_TOOLS = {
         `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
           where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
             and p.scheduled_at >= now()`, [a.campaign_id]);
-      return { warnings: held.n ? [`${held.n} שיבוצים עתידיים ייעלמו מהלוח עד להפעלה מחדש`] : [] };
+      return { warnings: held.n ? [`${held.n} פוסטים עתידיים ייעלמו מהלוח עד להפעלה מחדש`] : [] };
     },
   },
 
@@ -430,7 +430,7 @@ const WRITE_TOOLS = {
   create_content: {
     perm: 'content',
     description: 'זווית תוכן חדשה. אם היא שייכת לקמפיין — נקודת הקצה נגזרת ממנו. ' +
-      'channel_ids פותח טיוטה לכל מדיה; את הניסוח לכל מדיה כותבים אחר כך ב-write_variant.',
+      'channel_ids פותח טיוטה לכל ערוץ; את הניסוח לכל ערוץ כותבים אחר כך ב-write_variant.',
     input_schema: {
       type: 'object',
       properties: {
@@ -478,7 +478,7 @@ const WRITE_TOOLS = {
 
   write_variant: {
     perm: 'content',
-    description: 'כתיבת הניסוח של זווית למדיה מסוימת. status=ready מסמן שהוא מוכן לשיבוץ.',
+    description: 'כתיבת הניסוח של זווית לערוץ מסוים. status=ready מסמן שהוא מוכן לשיבוץ.',
     input_schema: {
       type: 'object',
       properties: {
@@ -493,24 +493,24 @@ const WRITE_TOOLS = {
       method: 'PUT', path: `/content/${content_id}/variants/${channel_id}`, body: rest,
     }),
     check: async (a) => {
-      // פוסט של קמפיין כללי שייך למדיה אחת — השרת ידחה גרסה למדיה אחרת
+      // פוסט של קמפיין כללי שייך לערוץ אחד — השרת ידחה גרסה לערוץ אחר
       const item = await one('select slot_channel_id from content_items where id = $1',
         [a.content_id]);
       if (item?.slot_channel_id && item.slot_channel_id !== Number(a.channel_id)) {
-        return { error: 'הפוסט הזה שייך למדיה אחת בקמפיין כללי — אין לו גרסה למדיה אחרת' };
+        return { error: 'הפוסט הזה שייך לערוץ אחד בקמפיין כללי — אין לו גרסה לערוץ אחר' };
       }
       const v = await one(
         'select status, body from content_variants where content_id = $1 and channel_id = $2',
         [a.content_id, a.channel_id]);
       return {
-        warnings: v?.body?.trim() ? ['יש כבר ניסוח למדיה הזו — הוא יידרס'] : [],
+        warnings: v?.body?.trim() ? ['יש כבר ניסוח לערוץ הזה — הוא יידרס'] : [],
       };
     },
   },
 
   move_post: {
     perm: 'content',
-    description: 'הזזת שיבוץ ליום אחר או למדיה אחרת.',
+    description: 'הזזת פוסט ליום אחר או לערוץ אחר.',
     input_schema: {
       type: 'object',
       properties: {
@@ -528,7 +528,7 @@ const WRITE_TOOLS = {
 
   delete_post: {
     perm: 'content',
-    description: 'הסרת שיבוץ מהלוח. התוכן עצמו נשאר בספרייה.',
+    description: 'הסרת פוסט מהלוח. התוכן עצמו נשאר בספרייה.',
     input_schema: {
       type: 'object',
       properties: { post_id: { type: 'integer' } },
@@ -537,8 +537,8 @@ const WRITE_TOOLS = {
     request: (a) => ({ method: 'DELETE', path: `/posts/${a.post_id}` }),
     check: async (a) => {
       const p = await one('select title, status, scheduled_at from posts where id = $1', [a.post_id]);
-      if (!p) return { error: 'לא נמצא שיבוץ עם המזהה הזה' };
-      return { warnings: p.status === 'published' ? ['השיבוץ הזה כבר סומן כפורסם'] : [] };
+      if (!p) return { error: 'לא נמצא פוסט עם המזהה הזה' };
+      return { warnings: p.status === 'published' ? ['הפוסט הזה כבר סומן כפורסם'] : [] };
     },
   },
 
@@ -576,14 +576,14 @@ const WRITE_TOOLS = {
     }),
     check: async (a) => ({
       warnings: a.importance != null
-        ? ['שינוי משקל משנה את הנתח של כל שאר נקודות הקצה']
+        ? ['שינוי חשיבות משנה את הנתח של כל שאר נקודות הקצה']
         : [],
     }),
   },
 
   create_channel: {
     perm: 'settings',
-    description: 'ערוץ מדיה חדש.',
+    description: 'ערוץ חדש.',
     input_schema: {
       type: 'object',
       properties: { name: { type: 'string' }, max_per_week: { type: 'integer' } },
@@ -594,7 +594,7 @@ const WRITE_TOOLS = {
 
   update_channel: {
     perm: 'settings',
-    description: 'עדכון ערוץ: קצב שבועי, תקרות לפי סוג, וימים חסומים. ' +
+    description: 'עדכון ערוץ: פוסטים בשבוע, תקרות לפי סוג, וימים חסומים. ' +
       'blocked_days הוא מערך מספרי ימים, 0=ראשון עד 6=שבת.',
     input_schema: {
       type: 'object',
@@ -679,10 +679,10 @@ async function checkCampaignWindow(a) {
     const found = await rows('select id from channels where id = any($1::int[]) and active = true',
       [a.channel_ids]);
     if (found.length !== a.channel_ids.length) {
-      return { error: 'חלק מהמדיות שנבחרו לא קיימות או לא פעילות' };
+      return { error: 'חלק מהערוצים שנבחרו לא קיימים או לא פעילים' };
     }
   } else {
-    warnings.push('לא נבחרו מדיות — הקמפיין לא יקבל שיבוצים עד שיוגדרו');
+    warnings.push('לא נבחרו ערוצים — הקמפיין לא יקבל פוסטים עד שיוגדרו');
   }
   return { warnings };
 }
@@ -703,7 +703,7 @@ async function checkCampaignUpdate(a) {
       `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
         where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
           and p.scheduled_at >= now()`, [c.id]);
-    if (moving.n) warnings.push(`${moving.n} שיבוצים עתידיים יזוזו יחד עם הקמפיין`);
+    if (moving.n) warnings.push(`${moving.n} פוסטים עתידיים יזוזו יחד עם הקמפיין`);
   }
   return { warnings };
 }
@@ -729,7 +729,7 @@ async function checkChannelUpdate(a) {
         [a.channel_id, added]);
       if (clash.length) {
         warnings.push(
-          `${clash.length} שיבוצים עתידיים כבר יושבים על ימים שייחסמו — הם לא יוזזו אוטומטית ` +
+          `${clash.length} פוסטים עתידיים כבר יושבים על ימים שייחסמו — הם לא יוזזו אוטומטית ` +
           `(${clash.slice(0, 3).map((p) => p.title).join(', ')})`);
       }
     }
@@ -743,8 +743,8 @@ async function checkChannelUpdate(a) {
 
 async function checkMove({ post_id, scheduled_at, channel_id }) {
   const p = await one('select * from posts where id = $1', [post_id]);
-  if (!p) return { error: 'לא נמצא שיבוץ עם המזהה הזה' };
-  if (!scheduled_at && !channel_id) return { error: 'צריך תאריך חדש או מדיה חדשה' };
+  if (!p) return { error: 'לא נמצא פוסט עם המזהה הזה' };
+  if (!scheduled_at && !channel_id) return { error: 'צריך תאריך חדש או ערוץ חדש' };
 
   const when = scheduled_at ?? p.scheduled_at;
   const target = channel_id ?? p.channel_id;
@@ -752,7 +752,7 @@ async function checkMove({ post_id, scheduled_at, channel_id }) {
   if (Number.isNaN(when_.getTime())) return { error: 'התאריך לא תקין' };
 
   const ch = await one('select name, blocked_days from channels where id = $1', [target]);
-  if (!ch) return { error: 'לא נמצאה מדיה עם המזהה הזה' };
+  if (!ch) return { error: 'לא נמצא ערוץ עם המזהה הזה' };
   if ((ch.blocked_days ?? []).includes(when_.getDay())) {
     return { error: `${ch.name} לא מקבל תוכן בימי ${HE_DAYS[when_.getDay()]}` };
   }
@@ -763,7 +763,7 @@ async function checkMove({ post_id, scheduled_at, channel_id }) {
         where id <> $1 and endpoint_id = $2 and channel_id = $3 and scheduled_at::date = $4::date`,
       [p.id, p.endpoint_id, target, when]);
     if (clash) {
-      return { error: `כבר יש פוסט לאותה נקודת קצה במדיה הזו באותו יום: ${clash.title}` };
+      return { error: `כבר יש פוסט לאותה נקודת קצה בערוץ הזה באותו יום: ${clash.title}` };
     }
   }
 

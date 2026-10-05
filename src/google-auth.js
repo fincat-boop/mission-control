@@ -41,9 +41,17 @@ export function authUrl(req, state) {
 
 /* ---- state חתום (נגד CSRF ב-OAuth) ---- */
 const stateSecret = () => process.env.SESSION_SECRET;
-export const signState = () => jwt.sign({ n: Date.now() }, stateSecret(), { expiresIn: '10m' });
+
+/**
+ * next — לאן לחזור אחרי הכניסה (כבר עבר safeNext). נשמר בתוך ה-state
+ * החתום ולא בקוקי נפרד: אי אפשר לזייף אותו, והוא פג יחד עם ה-state.
+ */
+export const signState = (next = null) =>
+  jwt.sign({ n: Date.now(), ...(next ? { next } : {}) }, stateSecret(), { expiresIn: '10m' });
+
+/** @returns {{next?: string}|null} התוכן החתום, או null אם פסול/פג */
 export function verifyState(s) {
-  try { jwt.verify(s, stateSecret()); return true; } catch { return false; }
+  try { return jwt.verify(s, stateSecret()); } catch { return null; }
 }
 
 /**

@@ -27,11 +27,11 @@ test('weekApprovalReason — מועד שעבר מדולג לפני כל בדיק
 
 test('weekApprovalReason — הסיבה של publishBlocker חוזרת כמו שהיא', () => {
   assert.equal(weekApprovalReason(ready({}, { status: 'draft' }), NOW),
-    'הגרסה למדיה הזו עוד לא מסומנת "מוכן"');
+    'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"');
   assert.equal(weekApprovalReason(ready({ access_token_enc: null }), NOW),
     'אין חיבור פעיל לערוץ — מגדירים בניהול → ערוצי פרסום');
 });
 
 test('weekApprovalReason — שליחה אוטומטית כבויה לערוץ', () => {
-  assert.match(weekApprovalReason(ready({ auto_enabled: false }), NOW), /השליחה האוטומטית כבויה/);
+  assert.match(weekApprovalReason(ready({ auto_enabled: false }), NOW), /הפרסום האוטומטי כבוי/);
 });

@@ -14,14 +14,48 @@ let toastTimer;
 let toastHold = false; // הטוסט הנוכחי מחכה ללחיצה — ריחוף/פוקוס עוצרים את ההסתרה
 const hideToast = () => { $('#toast').style.display = 'none'; };
 
+/**
+ * מכריזים: הודעה רגילה בנימוס (status), שגיאה מיד (alert). אותו אלמנט —
+ * התפקיד מתחלף לפני שהטקסט נכנס, כדי שקורא המסך יכריז לפי החדש.
+ */
+function setToastRole(t, urgent) {
+  t.setAttribute('role', urgent ? 'alert' : 'status');
+  t.setAttribute('aria-live', urgent ? 'assertive' : 'polite');
+}
+
+/**
+ * הודעה קצרה בתחתית המסך.
+ *
+ * מידע נעלם אחרי 3.2 שניות. שגיאה (isError) ואזהרה (טקסט שמתחיל ב-⚠)
+ * נשארות עד שסוגרים ב-✕ או שהודעה חדשה מחליפה אותן — שגיאה שנעלמת לפני
+ * שקראו אותה היא שגיאה שלא קרתה.
+ */
 export function toast(msg, isError = false) {
   const t = $('#toast');
+  const warn = !isError && String(msg).trimStart().startsWith('⚠');
+  const sticky = isError || warn;
   toastHold = false;
-  t.textContent = msg;
-  t.classList.toggle('err', isError);
-  t.style.display = 'block';
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, 3200);
+  setToastRole(t, isError);
+  t.classList.toggle('err', isError);
+  t.classList.toggle('warn', warn);
+
+  const text = document.createElement('span');
+  text.textContent = msg;
+  if (!sticky) {
+    t.replaceChildren(text);
+    t.style.display = 'block';
+    toastTimer = setTimeout(hideToast, 3200);
+    return;
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'toast-x';
+  close.textContent = '✕';
+  close.setAttribute('aria-label', 'סגור את ההודעה');
+  close.addEventListener('click', hideToast, { once: true });
+  t.replaceChildren(text, close);
+  t.style.display = 'block';
 }
 
 /** ריחוף או פוקוס על טוסט עם פעולה עוצרים את הספירה; היציאה מחדשת אותה */
@@ -60,8 +94,9 @@ export function toastAction(msg, label, onClick, ms = 8000) {
     hideToast();
     onClick();
   }, { once: true });
+  setToastRole(t, false);
   t.replaceChildren(text, btn);
-  t.classList.remove('err');
+  t.classList.remove('err', 'warn');
   t.style.display = 'block';
   toastHold = true;
   clearTimeout(toastTimer);
