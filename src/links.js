@@ -1,5 +1,5 @@
 import { currentOrg, one, query, rows } from './db.js';
-import { mediaReady, mediaStore, newMediaKey } from './media.js';
+import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from './media.js';
 
 /**
  * משבצות מקושרות בקמפיין כללי.
@@ -240,4 +240,201 @@ export async function releaseLinks(contentId, { sourceGoing = false, ...opts } =
     return unlinkFollower(item.id, opts);
   }
   return detachFollowers(item.id, { sourceGoing, ...opts });
+}
+
+/* ========================= קישור ========================= */
+
+/** מקום במשבצת: מספר שלם 1–1000 (כמו בנתיבי התוכן) */
+const validSlot = (n) => Number.isInteger(Number(n)) && Number(n) >= 1 && Number(n) <= 1000;
+
+/**
+ * כללי הקישור, בלי DB. מחזיר {error, status, needs_confirm?} או null כשמותר.
+ *
+ * @param ctx.campaign      הקמפיין של המקור {structure}
+ * @param ctx.root          המקור {id, slot_channel_id, campaign_id} — אחרי שעוקבת
+ *                          שנלחצה הוחלפה במקור שלה (רמה אחת בלבד)
+ * @param ctx.rootChannel   המדיה של המקור {name, platform}
+ * @param ctx.target        היעד {channel_id, sort_order, campaign_id}
+ * @param ctx.targetChannel המדיה של היעד {name, platform, in_campaign} או null
+ * @param ctx.targetItem    הפריט שכבר במשבצת היעד {id, linked_to_id, followers} או null
+ * @param ctx.sibling       עוקבת קיימת של המקור באותה מדיה {sort_order} או null
+ * @param ctx.replace       המשתמש אישר שהתוכן הקיים ביעד יוחלף
+ */
+export function linkError(ctx) {
+  const { campaign, root, rootChannel, target, targetChannel, targetItem, sibling, replace } = ctx;
+  if (!root.slot_channel_id || campaign?.structure !== 'general') {
+    return { error: 'קישור משבצות זמין רק בקמפיין כללי', status: 400 };
+  }
+  if (!target || target.campaign_id !== root.campaign_id) {
+    return { error: 'אפשר לקשר רק למשבצת באותו קמפיין', status: 400 };
+  }
+  if (!validSlot(target.sort_order)) {
+    return { error: 'מספר המשבצת חייב להיות מספר שלם בין 1 ל-1000', status: 400 };
+  }
+  if (!targetChannel?.in_campaign) return { error: 'המדיה הזו לא בקמפיין', status: 400 };
+  if (Number(target.channel_id) === root.slot_channel_id) {
+    return {
+      error: 'מקשרים למשבצת של מדיה אחרת — באותה מדיה כל משבצת היא פוסט נפרד', status: 400,
+    };
+  }
+  if (rootChannel?.platform === 'newsletter' || targetChannel.platform === 'newsletter') {
+    return {
+      error: 'ניוזלטר לא מתקשר למשבצת אחרת — התוכן שלו (נושא, תבנית, גוף המייל) שונה מפוסט רגיל',
+      status: 400,
+    };
+  }
+  if (targetItem) {
+    if (targetItem.id === root.id) return { error: 'זו אותה משבצת', status: 400 };
+    if (targetItem.linked_to_id === root.id) return { error: 'המשבצות כבר מקושרות', status: 409 };
+    if (targetItem.linked_to_id) {
+      return { error: 'המשבצת הזו כבר מקושרת למשבצת אחרת — מנתקים אותה קודם', status: 409 };
+    }
+    if (targetItem.followers > 0) {
+      return { error: 'למשבצת הזו מקושרות משבצות אחרות — מנתקים אותן קודם', status: 409 };
+    }
+  }
+  if (sibling) {
+    return {
+      error: `לתוכן הזה כבר יש משבצת מקושרת ב${targetChannel.name} (פוסט ${sibling.sort_order}) — ` +
+        'אפשר משבצת אחת בכל מדיה',
+      status: 409,
+    };
+  }
+  if (targetItem && !replace) {
+    return { error: 'התוכן הקיים במשבצת יוחלף', status: 409, needs_confirm: true };
+  }
+  return null;
+}
+
+/** savepoint סביב כתיבה שעלולה להיתקל באינדקס ייחודי (שני משתמשים באותו רגע) */
+async function uniqueOr409(fn, message) {
+  await query('savepoint link_unique');
+  try {
+    const out = await fn();
+    await query('release savepoint link_unique');
+    return out;
+  } catch (e) {
+    await query('rollback to savepoint link_unique');
+    if (e.code === '23505') throw new LinkError(message, 409);
+    throw e;
+  }
+}
+
+/**
+ * מקשר את המשבצת שנלחצה למשבצת של מדיה אחרת באותו קמפיין. המשבצת שנלחצה
+ * (או המקור שלה, אם היא עצמה עוקבת) היא המקור — התוכן שלה הוא התוכן המשותף.
+ * משבצת יעד ריקה — נוצר בה פריט עוקב; משבצת עם תוכן — התוכן שלה מוחלף (הקבצים
+ * שלה לסל המחזור) והפריט עצמו נשאר, כדי שפוסטים שכבר בלוח ימשיכו להצביע עליו.
+ *
+ * @param body {target_campaign_slot: {channel_id, sort_order}} או {target_content_id},
+ *             ו-replace: true אחרי שהמשתמש אישר החלפה של תוכן קיים
+ * @returns {Promise<{source:object, follower:object}>}
+ */
+export async function linkSlots(clickedId, body = {}) {
+  const clicked = await one(
+    'select id, linked_to_id, campaign_id from content_items where id = $1', [clickedId]);
+  if (!clicked) throw new LinkError('לא נמצא תוכן כזה', 404);
+  const rootId = clicked.linked_to_id ?? clicked.id;
+
+  // היעד: פריט קיים לפי מזהה, או מקום (מדיה + מספר משבצת) בקמפיין של המקור
+  let target;
+  let targetItemId = null;
+  if (body.target_content_id != null) {
+    const t = await one(
+      'select id, campaign_id, slot_channel_id, sort_order from content_items where id = $1',
+      [Number(body.target_content_id) || 0]);
+    if (!t) throw new LinkError('לא נמצאה משבצת כזו', 404);
+    if (!t.slot_channel_id) throw new LinkError('קישור משבצות זמין רק בקמפיין כללי');
+    target = { channel_id: t.slot_channel_id, sort_order: t.sort_order, campaign_id: t.campaign_id };
+    targetItemId = t.id;
+  } else if (body.target_campaign_slot && typeof body.target_campaign_slot === 'object') {
+    const ts = body.target_campaign_slot;
+    target = {
+      channel_id: Number(ts.channel_id) || 0, sort_order: Number(ts.sort_order),
+      campaign_id: clicked.campaign_id,
+    };
+  } else {
+    throw new LinkError('צריך לבחור משבצת לקישור');
+  }
+
+  // נעילה של המקור ושל היעד (לפי סדר המזהים, בלי דדלוק): שני קישורים במקביל
+  // לא יוצרים שרשרת (עוקבת של עוקבת) ולא שתי עוקבות באותה מדיה
+  if (!targetItemId && validSlot(target.sort_order)) {
+    targetItemId = (await one(
+      `select id from content_items
+        where campaign_id = $1 and slot_channel_id = $2 and sort_order = $3`,
+      [target.campaign_id, target.channel_id, target.sort_order]))?.id ?? null;
+  }
+  await query(
+    'select id from content_items where id = any($1::int[]) order by id for update',
+    [[rootId, targetItemId].filter(Boolean)]);
+
+  const root = await one(
+    `select ci.*, ca.structure from content_items ci
+       left join campaigns ca on ca.id = ci.campaign_id where ci.id = $1`, [rootId]);
+  if (!root) throw new LinkError('לא נמצא תוכן כזה', 404);
+  const targetItem = targetItemId ? await one(
+    `select id, linked_to_id,
+            (select count(*)::int from content_items f where f.linked_to_id = ci.id) as followers
+       from content_items ci where id = $1`, [targetItemId]) : null;
+  const [rootChannel, targetChannel, sibling] = await Promise.all([
+    one('select name, platform from channels where id = $1', [root.slot_channel_id]),
+    one(
+      `select ch.name, ch.platform,
+              exists (select 1 from campaign_channels cc
+                       where cc.campaign_id = $2 and cc.channel_id = ch.id) as in_campaign
+         from channels ch where ch.id = $1`,
+      [target.channel_id, root.campaign_id]),
+    one(
+      `select id, sort_order from content_items
+        where linked_to_id = $1 and slot_channel_id = $2 and id <> coalesce($3, 0)`,
+      [root.id, target.channel_id, targetItemId]),
+  ]);
+
+  const err = linkError({
+    campaign: { structure: root.structure }, root, rootChannel, target, targetChannel,
+    targetItem, sibling, replace: body.replace === true,
+  });
+  if (err) {
+    throw new LinkError(err.error, err.status, err.needs_confirm ? { needs_confirm: true } : {});
+  }
+
+  let followerId;
+  if (targetItem) {
+    // התוכן הקיים מוחלף: הקבצים שלו לסל המחזור (כמו הסרה מהממשק), גרסאות
+    // למדיה אחרת (לא אמורות להיות) יורדות, והטקסט נדרס ב-syncFrom
+    await query(
+      `with gone as (delete from content_assets where content_id = $1 returning storage_key)
+       insert into media_trash (bucket, storage_key, delete_after)
+       select $2, storage_key, now() + make_interval(days => $3)
+         from gone where storage_key is not null
+       on conflict (bucket, storage_key) do nothing`,
+      [targetItem.id, process.env.R2_PUBLIC_BUCKET ?? '', TRASH_DAYS]);
+    await query(
+      `delete from content_variants v using content_items ci
+        where ci.id = v.content_id and ci.id = $1 and v.channel_id <> ci.slot_channel_id`,
+      [targetItem.id]);
+    await uniqueOr409(() => query(
+      'update content_items set linked_to_id = $1 where id = $2', [root.id, targetItem.id]),
+      'לתוכן הזה כבר יש משבצת מקושרת במדיה הזו');
+    followerId = targetItem.id;
+  } else {
+    const created = await uniqueOr409(() => one(
+      `insert into content_items (endpoint_id, campaign_id, kind, title, body, ready_channel_ids,
+                                  sort_order, evergreen, reuse_after_days, slot_channel_id,
+                                  linked_to_id)
+       values ($1,$2,$3,$4,$5,$6::int[],$7,$8,$9,$10,$11) returning id`,
+      [root.endpoint_id, root.campaign_id, root.kind, root.title, root.body,
+       [target.channel_id], target.sort_order, root.evergreen, root.reuse_after_days,
+       target.channel_id, root.id]),
+    'המשבצת תפוסה, או שכבר יש לתוכן הזה משבצת מקושרת במדיה הזו');
+    followerId = created.id;
+  }
+  await syncFrom(root.id);
+
+  const [source, follower] = await Promise.all([
+    one('select * from content_items where id = $1', [root.id]),
+    one('select * from content_items where id = $1', [followerId]),
+  ]);
+  return { source, follower };
 }

@@ -12,7 +12,7 @@ import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
 import {
-  LinkError, assetOwnerId, linkGroup, mediaOwner, releaseLinks, syncFrom, unlink,
+  LinkError, assetOwnerId, linkGroup, linkSlots, mediaOwner, releaseLinks, syncFrom, unlink,
 } from '../links.js';
 
 const r = Router();
@@ -413,6 +413,19 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   }
   const engine = await autoFill(b.week);
   res.json({ content: c, engine });
+}));
+
+/**
+ * קישור משבצת למשבצת של מדיה אחרת באותו קמפיין כללי — מכאן הן חולקות תוכן
+ * אחד (טקסט וקבצים), וכל אחת מתוזמנת לפי המדיה שלה. ראו src/links.js.
+ * {target_campaign_slot: {channel_id, sort_order}} או {target_content_id};
+ * יעד עם תוכן דורש replace: true (אחרת 409 עם needs_confirm).
+ */
+r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
+  let out;
+  try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
+  const engine = await autoFill(req.body?.week);
+  res.json({ content: out.source, follower: out.follower, engine });
 }));
 
 /**
