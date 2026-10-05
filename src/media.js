@@ -160,3 +160,21 @@ export async function verifyUploaded(key, { store = mediaStore, max = MAX_MEDIA_
 /** הסוג כפי ש-R2 שמר אותו, בלי פרמטרים (charset וכו') */
 export const headMime = (head) =>
   (head?.contentType ?? '').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+
+/** שעות שאובייקט בלי שורה צריך לחכות לפני שהוא נחשב יתום (העלאה באמצע) */
+export const ORPHAN_GRACE_HOURS = 24;
+
+/**
+ * יתומים: אובייקטים ישנים מ-ORPHAN_GRACE_HOURS שאף שורה לא מצביעה עליהם
+ * ושעוד לא בסל המחזור. known = מפתחות שמוכרים (שורות + סל).
+ */
+export function pickOrphans(objects, known, now = new Date()) {
+  const cutoff = now.getTime() - ORPHAN_GRACE_HOURS * 3600000;
+  return objects
+    .filter((o) => o.lastModified && o.lastModified.getTime() < cutoff && !known.has(o.key))
+    .map((o) => o.key);
+}
+
+/** הסוג שבו קובץ ישן עולה ל-bucket הציבורי: סוג לא מותר יוגש כהורדה בלבד */
+export const legacyUploadMime = (mime) =>
+  (isAllowedMime(mime) ? mime : 'application/octet-stream');

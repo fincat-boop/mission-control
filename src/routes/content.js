@@ -3,7 +3,8 @@ import { requirePerm } from '../auth.js';
 import { autoFill, bad, parseIdList, titleFromFilename, updateById, upload, wrap } from './_shared.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
-  MAX_MEDIA_BYTES, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl, newMediaKey,
+  MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
+  newMediaKey,
   validateSignRequest, verifyUploaded,
 } from '../media.js';
 import { angleCount, channelNeeds } from '../campaigns.js';
@@ -387,8 +388,20 @@ r.get('/assets/:id', wrap(async (req, res) => {
   res.send(a.data);
 }));
 
+/**
+ * מחיקת קובץ. קובץ ב-R2 לא נמחק מה-bucket מיד: השורה יורדת והמפתח עובר
+ * לסל המחזור לשלושים יום (חלון לשחזור מגיבוי) — באותה פקודה, כך שאין
+ * מצב ביניים של שורה שנמחקה בלי רישום בסל. התחזוקה מוחקת כשמגיע הזמן.
+ */
 r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
-  await query('delete from content_assets where id = $1', [req.params.id]);
+  await query(
+    `with gone as (delete from content_assets where id = $1 returning storage_key)
+     insert into media_trash (bucket, storage_key, delete_after)
+     select $2, storage_key, now() + make_interval(days => $3)
+       from gone where storage_key is not null
+     on conflict (bucket, storage_key) do nothing`,
+    [req.params.id, process.env.R2_PUBLIC_BUCKET ?? '', TRASH_DAYS]
+  );
   res.json({ ok: true });
 }));
 

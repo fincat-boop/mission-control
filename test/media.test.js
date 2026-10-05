@@ -141,3 +141,26 @@ test('verifyUploaded — חורג נמחק, חסר לא נמחק, תקין מח�
   const ok = await verifyUploaded('k4', { store: store({ size: 3, contentType: 'image/png' }), max: 10 });
   assert.deepEqual(ok, { head: { size: 3, contentType: 'image/png' } });
 });
+
+test('pickOrphans — רק ישנים מ-24 שעות שאינם מוכרים', async () => {
+  const { pickOrphans } = await import('../src/media.js');
+  const now = new Date('2026-10-05T12:00:00Z');
+  const h = (n) => new Date(now.getTime() - n * 3600000);
+  const objects = [
+    { key: 'media/1/a/old-orphan.png', lastModified: h(30) },
+    { key: 'media/1/b/old-known.png', lastModified: h(30) },
+    { key: 'media/1/c/fresh.png', lastModified: h(2) },     // העלאה שעוד לא הושלמה
+    { key: 'media/1/d/no-date.png', lastModified: null },
+    { key: 'media/1/e/trashed.png', lastModified: h(48) },
+  ];
+  const known = new Set(['media/1/b/old-known.png', 'media/1/e/trashed.png']);
+  assert.deepEqual(pickOrphans(objects, known, now), ['media/1/a/old-orphan.png']);
+});
+
+test('legacyUploadMime — סוג לא מותר עולה כ-octet-stream', async () => {
+  const { legacyUploadMime } = await import('../src/media.js');
+  assert.equal(legacyUploadMime('image/png'), 'image/png');
+  assert.equal(legacyUploadMime('text/html'), 'application/octet-stream');
+  assert.equal(legacyUploadMime('application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+    'application/octet-stream');
+});

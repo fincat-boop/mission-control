@@ -3,6 +3,7 @@ import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
 import { weekMeta } from './board.js';
+import { TRASH_DAYS, mediaReady, mediaStore, orgMediaPrefix, pickOrphans } from './media.js';
 
 /**
  * מריץ fn פעם אחת לכל ארגון, בתוך הקשר הטננט שלו. עבודות רקע לא נובעות
@@ -150,5 +151,95 @@ export async function suggestContentSwaps() {
     );
     console.log(`הצעת החלפה נוצרה לפוסט #${post.id} (${post.endpoint_name ?? 'ללא נקודת קצה'}) — מוצע: "${suggestion.title}"`);
   }
+  });
+}
+
+/* ========================= מדיה ב-R2: סל מחזור ויתומים ========================= */
+
+const TRASH_BATCH = 200;                 // כמה מחיקות סופיות לארגון בהרצה
+const SWEEP_EVERY_MS = 24 * 3600000;     // סריקת יתומים — לכל היותר פעם ביום
+const lastSweep = new Map();             // org → זמן הסריקה האחרונה (בזיכרון התהליך)
+
+/**
+ * מוחק סופית מ-R2 את מה שהגיע זמנו בסל המחזור. fail-soft: כשל במחיקה
+ * משאיר את השורה בסל, וננסה שוב בהרצה הבאה. מפתח שחזר להיות בשימוש
+ * (שחזור מגיבוי, העברת legacy שהצליחה בניסיון חוזר) יוצא מהסל בלי מחיקה.
+ */
+export async function purgeMediaTrash(store = mediaStore) {
+  const due = await rows(
+    `select id, bucket, storage_key from media_trash
+      where delete_after <= now() order by delete_after limit $1`,
+    [TRASH_BATCH]
+  );
+  let purged = 0;
+  let kept = 0;
+  for (const t of due) {
+    if (await one('select 1 from content_assets where storage_key = $1', [t.storage_key])) {
+      await query('delete from media_trash where id = $1', [t.id]);
+      kept += 1;
+      continue;
+    }
+    try {
+      await store.del(t.storage_key, t.bucket || process.env.R2_PUBLIC_BUCKET);
+      await query('delete from media_trash where id = $1', [t.id]);
+      purged += 1;
+    } catch (e) {
+      console.error(`מחיקה סופית של מדיה ${t.storage_key} נכשלה (ננסה שוב):`, e.message);
+    }
+  }
+  return { purged, kept };
+}
+
+/**
+ * יתומים: אובייקטים תחת media/<org>/ שאף שורה לא מצביעה עליהם — העלאה
+ * שלא הושלמה, או קובץ שנמחק בשרשור (מחיקת זווית/גרסה מוחקת שורות בלי
+ * לעבור דרך הסל). עוברים לסל לשלושים יום, לא נמחקים מיד.
+ */
+export async function sweepMediaOrphans(orgId, store = mediaStore, now = new Date()) {
+  const { objects } = await store.list(orgMediaPrefix(orgId));
+  if (!objects.length) return { orphans: 0 };
+  const keys = objects.map((o) => o.key);
+  const known = new Set((await rows(
+    `select storage_key from content_assets where storage_key = any($1::text[])
+     union
+     select storage_key from media_trash where storage_key = any($1::text[])`,
+    [keys]
+  )).map((r) => r.storage_key));
+
+  const orphans = pickOrphans(objects, known, now);
+  if (orphans.length) {
+    await query(
+      `insert into media_trash (bucket, storage_key, delete_after)
+       select $1, k, now() + make_interval(days => $3) from unnest($2::text[]) as k
+       on conflict (bucket, storage_key) do nothing`,
+      [process.env.R2_PUBLIC_BUCKET, orphans, TRASH_DAYS]
+    );
+  }
+  return { orphans: orphans.length };
+}
+
+/**
+ * תחזוקת המדיה, שעתית, לכל ארגון: מחיקה סופית ממה שבסל, העברת קבצים ישנים
+ * מהמסד ל-R2, ופעם ביום סריקת יתומים. רץ רק כשאחסון המדיה מוגדר. כשל
+ * בארגון אחד לא עוצר את האחרים (forEachOrg).
+ */
+export async function mediaMaintenance({ store = mediaStore, now = new Date() } = {}) {
+  if (!mediaReady()) return;
+  await forEachOrg(async (orgId) => {
+    const trash = await purgeMediaTrash(store);
+    if (trash.purged || trash.kept) {
+      console.log(`מדיה (ארגון ${orgId}): ${trash.purged} נמחקו סופית מהסל` +
+        (trash.kept ? `, ${trash.kept} חזרו לשימוש ויצאו מהסל` : ''));
+    }
+
+    if (now.getTime() - (lastSweep.get(orgId) ?? 0) >= SWEEP_EVERY_MS) {
+      try {
+        const { orphans } = await sweepMediaOrphans(orgId, store, now);
+        lastSweep.set(orgId, now.getTime());
+        if (orphans) console.log(`מדיה (ארגון ${orgId}): ${orphans} קבצים יתומים עברו לסל המחזור`);
+      } catch (e) {
+        console.error(`סריקת יתומים במדיה נכשלה לארגון ${orgId}:`, e.message);
+      }
+    }
   });
 }
