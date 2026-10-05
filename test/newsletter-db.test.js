@@ -481,10 +481,12 @@ test('אשר את כל השבוע — ניוזלטרים לא נבחרים בכ�
 
 test('SSO: jti נוצל פעם אחת בלבד; שורות שפגו נמחקות', { skip }, async () => {
   const exp = Math.floor(Date.now() / 1000) + 20;
-  assert.equal(await sso.consumeSsoJti('jti-a', exp), true);
-  assert.equal(await sso.consumeSsoJti('jti-a', exp), false);
-  await db.pool.query(`insert into sso_used_jti (jti, expires_at) values ('old', now() - interval '1 minute')`);
-  assert.equal(await sso.consumeSsoJti('jti-b', exp), true);
+  const run = Date.now(); // מסד הבדיקה נשאר בין ריצות — jti ייחודי לכל ריצה
+  assert.equal(await sso.consumeSsoJti(`jti-a-${run}`, exp), true);
+  assert.equal(await sso.consumeSsoJti(`jti-a-${run}`, exp), false);
+  await db.pool.query(`insert into sso_used_jti (jti, expires_at) values ('old', now() - interval '1 minute')
+                       on conflict (jti) do nothing`);
+  assert.equal(await sso.consumeSsoJti(`jti-b-${run}`, exp), true);
   const left = await db.pool.query(`select jti from sso_used_jti where jti = 'old'`);
   assert.equal(left.rowCount, 0);
 });
