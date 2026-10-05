@@ -78,6 +78,15 @@ test('מטא — המדיה לא התקבלה (9004 / 2207052 / הודעת עי�
   assert.match(friendlyPublishError('אינסטגרם דחה את המדיה: ERROR').message, /פורמט/);
 });
 
+test('אינסטגרם לא סיים לעבד בזמן — הודעת זמן, לא "פורמט"', () => {
+  const byKind = friendlyPublishError(Object.assign(new Error('x'), { kind: 'processing_timeout' }),
+    { platform: 'instagram' });
+  assert.match(byKind.message, /אינסטגרם לא סיים לעבד את התמונה או הסרטון בזמן/);
+  assert.doesNotMatch(byKind.message, /פורמט/);
+  assert.match(friendlyPublishError('אינסטגרם לא סיים לעבד את המדיה בזמן סביר', { platform: 'instagram' }).message,
+    /עומס/);
+});
+
 test('תקלת רשת בפרסום לרשת — בודקים שלא עלה לפני שמנסים שוב', () => {
   const f = friendlyPublishError(new TypeError('fetch failed'), { platform: 'facebook' });
   assert.match(f.message, /לא הצלחנו להגיע לפייסבוק/);

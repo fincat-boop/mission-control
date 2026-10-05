@@ -134,11 +134,16 @@ async function loadPostBrief(postId) {
  *
  * from: מאילו סטטוסים מותר להעביר (null = מכל סטטוס — publishOne כבר תפס
  * את הפוסט). notify=false — בלי אירוע ל-HUB (מי שאיפס ידנית כבר יודע).
+ * internal=true — הודעה שלנו, כבר בעברית ובניסוח הסופי (איחור, תקיעה, איפוס
+ * ידני, דיווח ה-HUB): עוברת כמו שהיא, בלי מיפוי — שם משתמש באנגלית בהערת
+ * האיפוס לא יהפוך אותה ל"סיבה שלא זיהינו".
  * @returns {Promise<{ok:false, error:string}|null>} null = הפוסט כבר לא היה בסטטוס המותר
  */
-export async function failPost(post, err, { title, from = null, notify = true } = {}) {
+export async function failPost(post, err, { title, from = null, notify = true, internal = false } = {}) {
   const raw = typeof err === 'string' ? err : err?.message ?? String(err);
-  const { message, who } = friendlyPublishError(err, { platform: post.platform });
+  const { message, who } = internal
+    ? { message: raw, who: 'owner' }
+    : friendlyPublishError(err, { platform: post.platform });
   const moved = await one(
     `update posts set status = 'failed', publish_error = $2
       where id = $1 and ($3::text[] is null or status = any($3::text[])) returning id`,
@@ -412,8 +417,9 @@ export async function publishTickForOrg() {
       await bestEffort(`סימון פוסט #${id} שאיחר כנכשל נכשל:`, async () => {
         const post = await loadPostBrief(id);
         if (post) {
-          await failPost(post, TOO_LATE_ERROR,
-            { title: `פרסום אוטומטי לא בוצע — ${post.channel_name}`, from: ['approved'] });
+          await failPost(post, TOO_LATE_ERROR, {
+            title: `פרסום אוטומטי לא בוצע — ${post.channel_name}`, from: ['approved'], internal: true,
+          });
         }
       });
       continue;
@@ -468,7 +474,7 @@ async function failStuckPublishing(now = new Date(), hubState = new Map()) {
       const title = post.platform === 'newsletter'
         ? `שליחת ניוזלטר לא הושלמה — ${post.channel_name}`
         : `פרסום נקטע באמצע — ${post.channel_name}`;
-      if (await failPost(post, error, { title, from: ['publishing'] })) {
+      if (await failPost(post, error, { title, from: ['publishing'], internal: true })) {
         console.log(`פוסט #${post.id} ("${post.title}") נתקע ב-publishing — סומן כנכשל`);
       }
     });
@@ -486,7 +492,8 @@ export async function resetPublishing(postId, user) {
   const note = `הפרסום סומן כתקוע ידנית${user?.name ? ` על ידי ${user.name}` : ''} — ` +
     'בודקים בעמוד אם הפוסט עלה, ואז מסמנים פורסם או מפרסמים שוב';
   const r = await failPost(post, note,
-    { title: `פרסום אופס ידנית — ${post.channel_name}`, from: ['publishing'], notify: false });
+    { title: `פרסום אופס ידנית — ${post.channel_name}`, from: ['publishing'], notify: false,
+      internal: true });
   return r ? one('select * from posts where id = $1', [postId]) : null;
 }
 
@@ -583,7 +590,7 @@ async function saveNewsletterMetrics(postId, counts) {
 /** כשל שה-HUB דיווח אחרי שהפוסט כבר התקבל שם (השליחה אסינכרונית אצלו) */
 async function failFromHub(post, error) {
   await failPost(post, error,
-    { title: `שליחת ניוזלטר נכשלה — ${post.channel_name}`, from: ['publishing'] });
+    { title: `שליחת ניוזלטר נכשלה — ${post.channel_name}`, from: ['publishing'], internal: true });
 }
 
 /**

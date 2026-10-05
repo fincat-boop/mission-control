@@ -102,8 +102,16 @@ export function friendlyPublishError(err, { platform } = {}) {
         'בודקים את הטקסט והקישורים, מתקנים, ומפרסמים שוב. אם זה חוזר — מחכים יום.',
     };
   }
+  // אינסטגרם לא סיים לעבד בזמן — לא בעיית פורמט; לרוב עומס אצלם או סרטון כבד
+  if (err?.kind === 'processing_timeout' || /לא סיים לעבד את המדיה/.test(raw)) {
+    return {
+      who: 'owner',
+      message: `${meta} לא סיים לעבד את התמונה או הסרטון בזמן — לפעמים זה רק עומס אצלם. ` +
+        'בודקים בחשבון אם הפוסט עלה; אם לא — מפרסמים שוב, ואם זה חוזר עם סרטון — מקצרים או מקטינים אותו.',
+    };
+  }
   if (META_MEDIA.includes(code) || META_MEDIA_SUB.includes(sub) ||
-      /media download|download.*fail|fetch.*(image|video|media)|image_url|video_url|aspect ratio|unsupported (format|file|media)|דחה את המדיה|לעבד את המדיה/i.test(raw)) {
+      /media download|download.*fail|fetch.*(image|video|media)|image_url|video_url|aspect ratio|unsupported (format|file|media)|דחה את המדיה/i.test(raw)) {
     return {
       who: 'owner',
       message: `${meta} לא הצליחה לקבל את התמונה או הסרטון. בודקים שהקובץ נפתח ושהוא בפורמט ` +

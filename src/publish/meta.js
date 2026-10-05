@@ -134,7 +134,8 @@ async function waitForContainer(creationId, token, timeoutMs = 5 * 60000) {
       throw new Error(`אינסטגרם דחה את המדיה: ${r.status ?? 'ללא פירוט'}`);
     }
     if (Date.now() - started > timeoutMs) {
-      throw new Error('אינסטגרם לא סיים לעבד את המדיה בזמן סביר');
+      throw Object.assign(new Error('אינסטגרם לא סיים לעבד את המדיה בזמן סביר'),
+        { kind: 'processing_timeout' });
     }
     await new Promise((res) => setTimeout(res, 5000));
   }
