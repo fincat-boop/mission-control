@@ -382,19 +382,19 @@ export async function linkSlots(clickedId, body = {}) {
     `select id, linked_to_id,
             (select count(*)::int from content_items f where f.linked_to_id = ci.id) as followers
        from content_items ci where id = $1`, [targetItemId]) : null;
-  const [rootChannel, targetChannel, sibling] = await Promise.all([
-    one('select name, platform from channels where id = $1', [root.slot_channel_id]),
-    one(
-      `select ch.name, ch.platform,
-              exists (select 1 from campaign_channels cc
-                       where cc.campaign_id = $2 and cc.channel_id = ch.id) as in_campaign
-         from channels ch where ch.id = $1`,
-      [target.channel_id, root.campaign_id]),
-    one(
-      `select id, sort_order from content_items
-        where linked_to_id = $1 and slot_channel_id = $2 and id <> coalesce($3, 0)`,
-      [root.id, target.channel_id, targetItemId]),
-  ]);
+  // ברצף ולא ב-Promise.all: כל השאילתות על אותו client של הבקשה
+  const rootChannel = await one('select name, platform from channels where id = $1',
+    [root.slot_channel_id]);
+  const targetChannel = await one(
+    `select ch.name, ch.platform,
+            exists (select 1 from campaign_channels cc
+                     where cc.campaign_id = $2 and cc.channel_id = ch.id) as in_campaign
+       from channels ch where ch.id = $1`,
+    [target.channel_id, root.campaign_id]);
+  const sibling = await one(
+    `select id, sort_order from content_items
+      where linked_to_id = $1 and slot_channel_id = $2 and id <> coalesce($3, 0)`,
+    [root.id, target.channel_id, targetItemId]);
 
   const err = linkError({
     campaign: { structure: root.structure }, root, rootChannel, target, targetChannel,
@@ -437,9 +437,7 @@ export async function linkSlots(clickedId, body = {}) {
   }
   await syncFrom(root.id);
 
-  const [source, follower] = await Promise.all([
-    one('select * from content_items where id = $1', [root.id]),
-    one('select * from content_items where id = $1', [followerId]),
-  ]);
+  const source = await one('select * from content_items where id = $1', [root.id]);
+  const follower = await one('select * from content_items where id = $1', [followerId]);
   return { source, follower };
 }
