@@ -2,6 +2,9 @@ import { Router } from 'express';
 import { bad, wrap } from './_shared.js';
 import { buildStats, readActivity } from '../stats.js';
 import { buildPerformance } from '../performance.js';
+import { buildResultsSummary, listForEntry, saveBatch } from '../results.js';
+import { isPreset, presetRange } from '../../public/js/core/dataPeriod.js';
+import { requirePerm } from '../auth.js';
 import { assistantReady, chat, execute, takeProposal } from '../assistant.js';
 
 const r = Router();
@@ -20,13 +23,67 @@ r.get('/stats', wrap(async (req, res) => {
   }
 }));
 
-/** יעילות נמדדת: טבלאות לפי ממד + הפוסטים שממתינים להזנת תוצאות */
+/** ביצועים מנורמלים: טבלאות לפי ממד (הפוסטים שממתינים להזנה — ב-GET /results) */
 r.get('/performance', wrap(async (req, res) => {
   try {
     res.json(await buildPerformance(req.query.from, req.query.to));
   } catch (e) {
     return bad(res, e.message);
   }
+}));
+
+/* ========================= תוצאות ========================= */
+
+/**
+ * התקופה מהבקשה: ?preset=prev_month / this_month / 14 (מחושב בשעון ישראל,
+ * מאותה פונקציה שהטאב משתמש בה), או from/to מפורשים.
+ */
+function rangeOf(q) {
+  if (q.preset != null && q.preset !== '') {
+    if (!isPreset(q.preset)) throw new Error('תקופה לא מוכרת');
+    return presetRange(q.preset);
+  }
+  return { from: q.from, to: q.to };
+}
+
+/** טבלת ההזנה: פוסטים שפורסמו בתקופה. ?all=1 — גם מי שכבר נמדד. */
+r.get('/results', wrap(async (req, res) => {
+  try {
+    const { from, to } = rangeOf(req.query);
+    res.json(await listForEntry(from, to, { all: req.query.all === '1' }));
+  } catch (e) {
+    return bad(res, e.message);
+  }
+}));
+
+/** סיכום גולמי + פילוח לפי ערוץ, נקודת קצה, סוג וקמפיין */
+r.get('/results/summary', wrap(async (req, res) => {
+  try {
+    const { from, to } = rangeOf(req.query);
+    res.json(await buildResultsSummary(from, to));
+  } catch (e) {
+    return bad(res, e.message);
+  }
+}));
+
+/**
+ * שמירה מרוכזת: { items: [{ post_id, reach, engagement, clicks, leads, note }] }.
+ * הכול או כלום — שורה לא תקינה אחת מחזירה 400 עם שגיאה לכל שורה, ושום
+ * דבר לא נשמר (ראו saveBatch).
+ */
+r.put('/results', requirePerm('content'), wrap(async (req, res) => {
+  const out = await saveBatch(req.body?.items);
+  if (out.errors.length) {
+    const n = out.errors.length;
+    const whole = out.errors[0].index < 0;            // הבקשה עצמה, לא שורה מסוימת
+    return res.status(400).json({
+      error: whole ? out.errors[0].error
+        : n === 1 ? 'שורה אחת לא תקינה — שום דבר לא נשמר'
+          : `${n} שורות לא תקינות — שום דבר לא נשמר`,
+      errors: out.errors,
+    });
+  }
+  res.json(out);
 }));
 
 /** מי עשה מה. פתוח לכל מי שמחובר — שקיפות, לא סוד. */

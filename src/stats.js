@@ -10,6 +10,23 @@ import { one, rows } from './db.js';
 import { ymd } from './board.js';
 import { valuePerPromo } from './engine.js';
 
+export const LOCAL_TZ_SQL = 'Asia/Jerusalem';
+
+/**
+ * הגדרת התקופה היחידה לכל הטאב: הרגע expr נופל באחד הימים from..to לפי
+ * שעון ישראל — שקול ל-(expr at time zone 'Asia/Jerusalem')::date between,
+ * אבל בצורה שאינדקס על העמודה עדיין משרת. $1/$2 הם YYYY-MM-DD.
+ * כך "פורסם בפועל", הסיכום הגולמי והביצועים סופרים בדיוק אותם פוסטים,
+ * בלי תלות בשעון של התהליך.
+ */
+export function inLocalDays(expr, a = '$1', b = '$2') {
+  return `${expr} >= (${a}::date::timestamp at time zone '${LOCAL_TZ_SQL}')
+      and ${expr} < ((${b}::date + 1)::timestamp at time zone '${LOCAL_TZ_SQL}')`;
+}
+
+/** הרגע שקובע לאיזו תקופה פוסט שייך: הפרסום בפועל, ואם עוד לא — המתוכנן */
+export const POST_AT = 'coalesce(p.published_at, p.scheduled_at)';
+
 /** ברירות מחדל: החודש האחרון */
 export function periodOf(from, to) {
   const end = to ? new Date(`${String(to).slice(0, 10)}T23:59:59`) : new Date();
@@ -30,7 +47,8 @@ export function periodOf(from, to) {
 
 export async function buildStats(from, to) {
   const period = periodOf(from, to);
-  const args = [period.start, period.end];
+  // תאריכים ולא רגעים — הגבולות מחושבים ב-SQL לפי שעון ישראל (inLocalDays)
+  const args = [period.from, period.to];
 
   const [totals, byKind, byChannel, byEndpoint, contentMade, tasks, engine, activity, settings] =
     await Promise.all([
@@ -42,11 +60,11 @@ export async function buildStats(from, to) {
            count(*) filter (where status = 'hole'
              or (status = 'scheduled' and content_id is null))::int as holes,
            count(*) filter (where urgent)::int                    as urgent
-         from posts where scheduled_at between $1 and $2`, args),
+         from posts p where ${inLocalDays(POST_AT)}`, args),
 
       rows(
         `select kind, count(*)::int as n
-           from posts where scheduled_at between $1 and $2 and status = 'published'
+           from posts p where ${inLocalDays(POST_AT)} and status = 'published'
           group by kind`, args),
 
       rows(
@@ -54,7 +72,7 @@ export async function buildStats(from, to) {
                 count(p.id) filter (where p.status = 'published')::int as published,
                 count(p.id) filter (where p.status <> 'hole')::int     as placed
            from channels c
-           left join posts p on p.channel_id = c.id and p.scheduled_at between $1 and $2
+           left join posts p on p.channel_id = c.id and ${inLocalDays(POST_AT)}
           group by c.id order by c.sort_order, c.id`, args),
 
       rows(
@@ -63,31 +81,31 @@ export async function buildStats(from, to) {
                 count(p.id) filter (where p.status <> 'hole')::int     as placed,
                 max(p.published_at)                                    as last_published
            from endpoints e
-           left join posts p on p.endpoint_id = e.id and p.scheduled_at between $1 and $2
+           left join posts p on p.endpoint_id = e.id and ${inLocalDays(POST_AT)}
           group by e.id order by e.importance desc, e.id`, args),
 
       one(
         `select
            count(*)::int as created,
            count(*) filter (where evergreen)::int as evergreen
-         from content_items where created_at between $1 and $2`, args),
+         from content_items where ${inLocalDays('created_at')}`, args),
 
       one(
         `select
-           count(*) filter (where created_at between $1 and $2)::int as opened,
-           count(*) filter (where done and done_at between $1 and $2)::int as closed,
+           count(*) filter (where ${inLocalDays('created_at')})::int as opened,
+           count(*) filter (where done and ${inLocalDays('done_at')})::int as closed,
            avg(extract(epoch from (done_at - created_at)) / 3600)
-             filter (where done and done_at between $1 and $2) as avg_hours
+             filter (where done and ${inLocalDays('done_at')}) as avg_hours
          from tasks`, args),
 
       one(
         `select count(*)::int as runs
            from activity_log
-          where action = 'apply' and created_at between $1 and $2`, args),
+          where action = 'apply' and ${inLocalDays('created_at')}`, args),
 
       rows(
         `select via, count(*)::int as n
-           from activity_log where created_at between $1 and $2 group by via`, args),
+           from activity_log where ${inLocalDays('created_at')} group by via`, args),
 
       one('select hybrid_weight from engine_settings limit 1'),
     ]);
@@ -135,8 +153,8 @@ export async function buildStats(from, to) {
 /** יומן הפעולות לתקופה, עם סינון אופציונלי */
 export async function readActivity({ from, to, user_id, via, entity, limit = 200 } = {}) {
   const period = periodOf(from, to);
-  const params = [period.start, period.end];
-  const where = ['created_at between $1 and $2'];
+  const params = [period.from, period.to];
+  const where = [inLocalDays('created_at')];
 
   for (const [col, val] of [['user_id', user_id], ['via', via], ['entity', entity]]) {
     if (val != null && val !== '') {

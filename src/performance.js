@@ -1,5 +1,6 @@
-import { rows } from './db.js';
-import { periodOf } from './stats.js';
+import { one, rows } from './db.js';
+import { POST_AT, inLocalDays, periodOf } from './stats.js';
+import { presetRange } from '../public/js/core/dataPeriod.js';
 
 /**
  * יעילות נמדדת — כמה טוב באמת עבד כל שילוב של נקודת קצה, ערוץ וזמן.
@@ -30,6 +31,9 @@ export const METRIC_HE = {
   leads: 'לידים',
 };
 
+/** הגבול העליון של int ב-Postgres */
+export const METRIC_MAX = 2147483647;
+
 /**
  * המרת ערך שהוזן בטופס למספר או ל-null.
  *
@@ -37,7 +41,7 @@ export const METRIC_HE = {
  * ריקה, רווחים בלבד, או ערך חסר — כולם "לא נמדד" (null), ולא אפס.
  * אפס מפורש הוא מדידה לגיטימית ונשמר כמו שהוא.
  *
- * @throws {Error} על ערך שאינו מספר אי-שלילי
+ * @throws {Error} על ערך שאינו מספר אי-שלילי, או גדול מ-METRIC_MAX
  */
 export function parseMetric(v) {
   if (v == null) return null;
@@ -46,7 +50,10 @@ export function parseMetric(v) {
   if (!Number.isFinite(n) || n < 0) {
     throw new Error('הערכים חייבים להיות מספרים אי-שליליים');
   }
-  return Math.round(n);
+  const r = Math.round(n);
+  // העמודות הן int של Postgres — מעל התקרה המסד היה זורק 500 באמצע השמירה
+  if (r > METRIC_MAX) throw new Error('המספר גדול מדי');
+  return r;
 }
 
 /** תקרה ליחס של פוסט בודד — פוסט ויראלי אחד לא הופך נקודה ל"יעילה" */
@@ -174,7 +181,7 @@ export function scoreAll(results) {
   return { baselines, scored };
 }
 
-/** כל השורות שיש להן תוצאה כלשהי בתקופה */
+/** כל השורות שיש להן תוצאה כלשהי בתקופה ({from, to} — ימים בשעון ישראל) */
 async function loadResults(period) {
   return rows(
     `select r.post_id, r.reach, r.engagement, r.clicks, r.leads,
@@ -182,8 +189,8 @@ async function loadResults(period) {
        from post_results r
        join posts p on p.id = r.post_id
       where p.status = 'published'
-        and p.published_at between $1 and $2`,
-    [period.start, period.end]
+        and ${inLocalDays(POST_AT)}`,
+    [period.from, period.to]
   );
 }
 
@@ -193,10 +200,11 @@ async function loadResults(period) {
  */
 export async function buildPerformance(from, to) {
   const period = periodOf(from, to);
-  const [results, endpoints, channels] = await Promise.all([
+  const [results, endpoints, channels, settings] = await Promise.all([
     loadResults(period),
     rows('select id, name from endpoints order by id'),
     rows('select id, name from channels order by sort_order, id'),
+    one('select use_performance from engine_settings limit 1'),
   ]);
 
   const { scored } = scoreAll(results);
@@ -231,26 +239,14 @@ export async function buildPerformance(from, to) {
     ...(map.get(x.id) ?? { score: NEUTRAL, n: 0, raw: null }),
   })).sort((a, b) => b.score - a.score);
 
-  // פוסטים שפורסמו ועדיין אין להם שום תוצאה — רשימת המילוי
-  const pending = await rows(
-    `select p.id, p.title, p.published_at, p.scheduled_at,
-            c.name as channel_name, e.name as endpoint_name
-       from posts p
-       left join channels c  on c.id = p.channel_id
-       left join endpoints e on e.id = p.endpoint_id
-       left join post_results r on r.post_id = p.id
-      where p.status = 'published'
-        and p.published_at between $1 and $2
-        and r.post_id is null
-      order by p.published_at desc
-      limit 100`,
-    [period.start, period.end]
-  );
+  // רשימת "ממתינים להזנה" שהייתה כאן עברה ל-GET /results (src/results.js)
 
   return {
     period: { from: period.from, to: period.to, days: period.days },
     measured: scored.length,
     shrink_k: SHRINK_K,
+    // האם הציונים האלה מזיזים בפועל את השיבוץ (מתג בניהול → מתקדם)
+    use_performance: !!settings?.use_performance,
     endpoints: named(byEndpoint, endpoints),
     channels: named(byChannel, channels),
     days: [...byDow].map(([dow, v]) => ({ dow, label: HE_DAYS[dow], ...v }))
@@ -261,7 +257,6 @@ export async function buildPerformance(from, to) {
       ...(byBucket.get(b) ?? { score: NEUTRAL, n: 0, raw: null }),
     })),
     combos,
-    pending,
   };
 }
 
@@ -272,10 +267,7 @@ export async function buildPerformance(from, to) {
  *                    dow: Map<number,number>, bucket: Map<string,number>}>}
  */
 export async function performanceMultipliers(days = 180) {
-  const end = new Date();
-  const start = new Date(end);
-  start.setDate(start.getDate() - days);
-  const results = await loadResults({ start, end });
+  const results = await loadResults(presetRange(String(days + 1)));
 
   const { scored } = scoreAll(results);
   const flat = (map) => new Map([...map].map(([key, v]) => [key, v.score]));

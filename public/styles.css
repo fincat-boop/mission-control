@@ -930,3 +930,58 @@ button.btn.bell .badge {
 .pvattach { margin-top: 12px; }
 #addPostDlg .ap-hint { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
 .pick-item .pick-meta { display: block; font-weight: 400; margin-top: 2px; }
+
+/* ============ נתונים: הזנת תוצאות מרוכזת (גל 5א) ============ */
+.restoggle { font-size: 12px; font-weight: 400; color: var(--ink-2); margin-inline-start: 12px; cursor: pointer; }
+.restoggle input { vertical-align: -2px; margin-inline-end: 4px; }
+.sechint { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.6; }
+.restable-wrap { overflow-x: auto; }
+.restable td { padding: 6px 10px; vertical-align: middle; }
+.restable th { padding: 9px 10px; }
+.restable .when { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.restable input {
+  font: inherit; font-size: 12.5px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--ink-1);
+}
+.restable input:focus { outline: none; border-color: var(--accent); }
+.restable input:disabled { opacity: .6; }
+.restable .resnum input { width: 82px; font-variant-numeric: tabular-nums; }
+.restable .resnote input { width: 150px; }
+.restable .restitle { min-width: 160px; max-width: 280px; }
+/* מצב השורה: פס דק בצד, לא רקע צבעוני — העמודות לא זזות */
+.restable tr td:first-child { border-inline-start: 3px solid transparent; }
+.restable tr.measured td:first-child { border-inline-start-color: var(--border); }
+.restable tr.dirty td:first-child { border-inline-start-color: var(--st-warn); }
+.restable tr.saved td:first-child { border-inline-start-color: var(--st-good); }
+.restable tr.err td:first-child { border-inline-start-color: var(--st-crit); }
+.restable tr.err input { border-color: var(--st-crit); }
+.reserr { font-size: 11.5px; color: var(--st-crit); margin-top: 3px; }
+.linkbtn {
+  font: inherit; font-size: 12.5px; background: none; border: none; padding: 0;
+  color: var(--ink-1); cursor: pointer; text-align: start;
+}
+.linkbtn:hover { color: var(--accent); text-decoration: underline; }
+.resbar { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.resmsg { font-size: 12px; color: var(--muted); }
+.empty .btn { margin-inline-start: 8px; }
+
+/* סיכום גולמי ופילוחים: סכום, ומתחתיו ממוצע קטן לפוסט */
+.bdtitle { font-size: 13px; font-weight: 650; color: var(--ink-2); margin-bottom: 6px; }
+.bdtable td { font-variant-numeric: tabular-nums; }
+.bdtable .avg { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.bdtable .nm { color: var(--muted); }
+/* "הכי טוב": נקודה + טקסט, בלי קפסולה */
+.topmark { font-size: 11px; color: var(--st-good); margin-inline-start: 8px; white-space: nowrap; }
+.topmark i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--st-good); margin-inline-end: 5px; vertical-align: 0; }
+.bdtable tr.top td:first-child { font-weight: 600; }
+
+/* סרגל התקופות בטאב הנתונים: שמונה אפשרויות — נשבר לשורה שנייה במסך צר */
+#data .toolbar .periodpick { flex-wrap: wrap; }
+
+/* "השפעה על השיבוץ" מעל הציונים המנורמלים: נקודה + טקסט */
+.engline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; }
+.engstate { font-weight: 600; white-space: nowrap; }
+.engstate i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-inline-end: 6px; vertical-align: 0; background: var(--muted); }
+.engstate.on i { background: var(--st-good); }
+.enghint { color: var(--muted); }
+.viatag.system { border-style: dashed; color: var(--muted); }
