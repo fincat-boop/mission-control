@@ -34,16 +34,20 @@ export async function renderData() {
   }
 
   const qs = `?from=${from}&to=${to}`;
-  const [stats, activity, perf, entry] = await Promise.all([
+  const [stats, activity, perf, entry, summary] = await Promise.all([
     api(`/stats${qs}`),
     api(`/activity${qs}${state.dataVia ? `&via=${state.dataVia}` : ''}&limit=200`),
     api(`/performance${qs}`),
     api(`/results${qs}${resultsAll ? '&all=1' : ''}`),
+    api(`/results/summary${qs}`),
   ]);
 
+  // הסדר עונה על "מה עבד": מזינים, רואים סכומים, מפרקים, ורק אז הציון היחסי
   $('#data').innerHTML =
-    dataToolbar(stats.period) + resultsPanel(entry) + statCards(stats) + statTables(stats)
-    + `<div id="perfSec">${performancePanel(perf)}</div>` + activityPanel(activity);
+    dataToolbar(stats.period) + resultsPanel(entry)
+    + `<div id="sumSec">${summaryPanel(summary)}</div>`
+    + `<div id="perfSec">${performancePanel(perf)}</div>`
+    + statCards(stats) + statTables(stats) + activityPanel(activity);
   wireData();
   restoreDirty();
 }
@@ -221,8 +225,79 @@ async function saveResults() {
 /** מה שמחושב מהתוצאות — מתעדכן אחרי שמירה בלי לגעת בטבלת ההזנה */
 async function refreshBelow() {
   const { from, to } = dataRange();
-  const perf = await api(`/performance?from=${from}&to=${to}`);
+  const qs = `?from=${from}&to=${to}`;
+  const [summary, perf] = await Promise.all([
+    api(`/results/summary${qs}`), api(`/performance${qs}`),
+  ]);
+  $('#sumSec').innerHTML = summaryPanel(summary);
   $('#perfSec').innerHTML = performancePanel(perf);
+}
+
+/* ---------- סיכום גולמי ופילוחים ---------- */
+
+const METRIC_COLS = [['reach', 'חשיפות'], ['engagement', 'מעורבות'],
+                     ['clicks', 'קליקים'], ['leads', 'לידים']];
+
+/** לפי מה נבחר "הכי טוב" — לכותרת המשנה של הטבלה */
+const TOP_BY_HE = {
+  leads: 'לידים לפוסט נמדד',
+  clicks: 'קליקים לפוסט נמדד (אין עדיין לידים להשוואה)',
+  engagement: 'מעורבות לפוסט נמדד (אין עדיין לידים או קליקים להשוואה)',
+};
+
+const num = (v) => (v == null ? '—' : Number(v).toLocaleString('he-IL'));
+
+/** סכום גולמי, ומתחתיו הממוצע לפוסט שבו המדד נמדד. ריק = "—", לא 0. */
+const metricCell = (r, m) => (r[m] == null
+  ? '<td class="metric"><span class="nm">—</span></td>'
+  : `<td class="metric">${num(r[m])}<span class="avg">${num(r[`avg_${m}`])} לפוסט</span></td>`);
+
+function breakdownTable(title, block) {
+  const rows = block.rows.map((r) => `<tr${r.top ? ' class="top"' : ''}>
+    <td>${esc(r.name)}${r.top ? '<span class="topmark"><i></i>הכי טוב</span>' : ''}</td>
+    <td>${r.posts}</td>
+    <td>${r.measured}<span class="avg">${r.measured_pct}%</span></td>
+    ${METRIC_COLS.map(([m]) => metricCell(r, m)).join('')}
+  </tr>`).join('');
+  const note = block.top_metric ? `<p class="sechint">"הכי טוב" לפי ${TOP_BY_HE[block.top_metric]}.</p>` : '';
+  return `<div class="subsec"><h3 class="bdtitle">${esc(title)}</h3>${note}
+    <div class="panel restable-wrap"><table class="stattable bdtable">
+      <thead><tr><th>${esc(title.replace('לפי ', ''))}</th><th>פוסטים</th><th>נמדדו</th>
+        ${METRIC_COLS.map(([, l]) => `<th>${l}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody></table></div></div>`;
+}
+
+function summaryPanel(s) {
+  const t = s.totals;
+  if (!t.posts) {
+    return `<div class="subsec"><h2>סיכום</h2><div class="panel">
+      <div class="empty">אין פוסטים שפורסמו בתקופה הזו — אין מה לסכם. נסו תקופה ארוכה יותר.</div>
+    </div></div>`;
+  }
+
+  const card = (label, value, note = '') => `<div class="statcard">
+      <div class="v">${esc(value)}</div><div class="l">${esc(label)}</div>
+      ${note ? `<div class="n">${esc(note)}</div>` : ''}</div>`;
+  const metricCard = (m, label) => card(label, num(t[m]),
+    t[m] == null ? 'לא נמדד' : `${num(t[`avg_${m}`])} לפוסט נמדד`);
+
+  const cards = `<div class="statgrid">
+    ${card('פוסטים שפורסמו', num(t.posts))}
+    ${METRIC_COLS.map(([m, l]) => metricCard(m, l)).join('')}
+    ${card('% פוסטים שנמדדו', `${t.measured_pct}%`, `${t.measured} מתוך ${t.posts}`)}
+  </div>`;
+
+  const hint = t.measured
+    ? ''
+    : '<p class="sechint">עוד לא הוזנו תוצאות בתקופה הזו — ממלאים בטבלה למעלה, והסכומים יופיעו כאן.</p>';
+
+  return `<div class="subsec"><h2>סיכום</h2>${hint}${cards}</div>
+    <div class="subsec"><h2>פילוחים</h2>
+      <p class="sechint">סכומים כמו שהוזנו; מתחת לכל סכום — הממוצע לפוסט שבו המדד נמדד.</p></div>
+    ${breakdownTable('לפי ערוץ', s.by_channel)}
+    ${breakdownTable('לפי נקודת קצה', s.by_endpoint)}
+    ${breakdownTable('לפי סוג', s.by_kind)}
+    ${breakdownTable('לפי קמפיין', s.by_campaign)}`;
 }
 
 /** יציאה מהטאב / שינוי תקופה כשיש שורות שלא נשמרו */
@@ -292,7 +367,7 @@ function wireResults() {
     b.addEventListener('click', run(() => goToTab(b.dataset.goto))));
 }
 
-/* ---------- יעילות נמדדת ---------- */
+/* ---------- ביצועים מנורמלים ---------- */
 
 /**
  * הציון מרוכז סביב 1.0: מעל = עבד טוב יותר מהממוצע, מתחת = פחות.
@@ -326,9 +401,9 @@ function performancePanel(p) {
     </div></div>`;
 
   if (!p.measured) {
-    return `<div class="subsec"><h2>יעילות נמדדת</h2><div class="panel">
+    return `<div class="subsec"><h2>ביצועים מנורמלים</h2><div class="panel">
       <div class="empty">עוד אין תוצאות מוזנות בתקופה הזו.
-      פותחים פוסט שפורסם בלוח וממלאים כמה מספרים — אחרי כמה פוסטים יופיע כאן מדד יעילות.</div>
+      ממלאים כמה מספרים בטבלה למעלה — אחרי כמה פוסטים יופיע כאן ציון ביצועים.</div>
     </div></div>`;
   }
 
@@ -349,9 +424,9 @@ function performancePanel(p) {
       </div></div>`;
 
   // רשימת "ממתינים להזנת תוצאות" שהייתה כאן עברה לטבלת ההזנה בראש הטאב
-  return `<div class="subsec"><h2>יעילות נמדדת</h2>
-      <p class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px">
-        1.00 = ממוצע. הציון מנורמל בתוך כל מדיה ומכווץ לפי גודל המדגם,
+  return `<div class="subsec"><h2>ביצועים מנורמלים</h2>
+      <p class="sechint">
+        1.00 = ממוצע. הציון מנורמל בתוך כל ערוץ ומכווץ לפי גודל המדגם,
         כך שפוסט בודד מוצלח לא קובע. ${p.measured} פוסטים נמדדו בתקופה.
       </p></div>
     ${table('לפי נקודת קצה', p.endpoints, 'name')}
