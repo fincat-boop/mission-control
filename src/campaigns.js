@@ -731,17 +731,23 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
 }
 
 /**
- * חלוקת השטח בפועל מול הנתח שהוגדר, לקמפיינים שרצים עכשיו.
+ * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין.
+ *
+ * הנתח (target_pct): מה שנקבע ידנית בקמפיין, ובלעדיו החלק היחסי לפי חשיבות
+ * מול הקמפיינים החופפים (effectiveShare — אותו חשבון כמו המנוע והטופס).
+ * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
+ * הקמפיין מתוך כל הפרסומים בחלון.
  */
 export async function currentAllocation() {
   const today = ymd(new Date());
+  const all = await rows('select * from campaigns');
   const running = await rows(
     `select c.*, e.name as endpoint_name
        from campaigns c join endpoints e on e.id = c.endpoint_id
-      where c.active = true and c.paused_at is null and c.share_pct is not null
+      where c.active = true and c.paused_at is null
         and (c.starts_on is null or c.starts_on <= $1)
         and (c.ends_on is null or c.ends_on >= $1)
-      order by c.share_pct desc`,
+      order by c.id`,
     [today]
   );
   if (running.length === 0) return { window: null, rows: [] };
@@ -749,31 +755,38 @@ export async function currentAllocation() {
   const from = running.map((c) => c.starts_on).filter(Boolean).sort()[0] ?? today;
 
   const counts = await rows(
-    `select endpoint_id, count(*)::int as n
-       from posts
-      where status = 'published' and endpoint_id is not null
-        and published_at >= $1::date and published_at < ($2::date + 1)
-      group by endpoint_id`,
+    `select ci.campaign_id, count(*)::int as n
+       from posts p join content_items ci on ci.id = p.content_id
+      where p.status = 'published' and ci.campaign_id = any($3::int[])
+        and p.published_at >= $1::date and p.published_at < ($2::date + 1)
+      group by ci.campaign_id`,
+    [from, today, running.map((c) => c.id)]
+  );
+  const totalRow = await rows(
+    `select count(*)::int as n from posts
+      where status = 'published' and published_at >= $1::date and published_at < ($2::date + 1)`,
     [from, today]
   );
-  const total = counts.reduce((s, c) => s + c.n, 0);
-  const countMap = new Map(counts.map((c) => [c.endpoint_id, c.n]));
+  const total = totalRow[0]?.n ?? 0;
+  const countMap = new Map(counts.map((c) => [c.campaign_id, c.n]));
 
   return {
     window: { from, to: today, total_published: total },
     rows: running.map((c) => {
-      const n = countMap.get(c.endpoint_id) ?? 0;
+      const n = countMap.get(c.id) ?? 0;
       const actual = total > 0 ? Math.round((n / total) * 100) : 0;
+      const target = Math.round(effectiveShare(c, all) * 100);
       return {
         campaign_id: c.id,
         campaign_name: c.name,
         endpoint_id: c.endpoint_id,
         endpoint_name: c.endpoint_name,
-        target_pct: c.share_pct,
+        target_pct: target,
+        auto: c.share_pct == null,
         actual_pct: actual,
         published: n,
-        lagging: c.share_pct - actual > 8,
+        lagging: target - actual > 8,
       };
-    }),
+    }).sort((a, b) => b.target_pct - a.target_pct),
   };
 }

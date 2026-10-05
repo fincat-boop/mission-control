@@ -160,23 +160,27 @@ function capsule(c, endpoint) {
 
 function allocPanel(alloc) {
   if (!alloc?.window || !alloc.rows.length) {
-    return '<div class="alloc"><div class="empty">אין קמפיינים רצים עם נתח מוגדר.</div></div>';
+    return '<div class="alloc"><div class="empty">אין קמפיינים שרצים עכשיו.</div></div>';
   }
+  // שורה לכל קמפיין: הנתח (קבוע או אוטומטי לפי חשיבות) מול מה שפורסם בפועל
   const rows = alloc.rows.map((r) => `
     <div class="arow">
-      <span class="an">${esc(r.endpoint_name)}</span>
+      <span class="an">${esc(r.campaign_name)}<small>${esc(r.endpoint_name)}</small></span>
       <div class="abar">
         <div class="target" style="width:${r.target_pct}%"></div>
         <div class="actual" style="width:${r.actual_pct}%"></div>
       </div>
-      <span class="at">נתח ${r.target_pct}% · בפועל ${r.actual_pct}%
+      <span class="at">נתח ${r.target_pct}%${r.auto ? ' (אוטומטי)' : ''} · בפועל ${r.actual_pct}%
         ${r.lagging ? '<span class="off">⚠ מפגר</span>' : '<span class="ok">✓</span>'}</span>
     </div>`).join('');
 
   return `<div class="alloc">
     <h4>יעד מול ביצוע — ${fmtDate(alloc.window.from)} עד היום</h4>
     ${rows}
-    <p class="sumline" style="margin-top:10px">נמדד על ${alloc.window.total_published} פרסומים שיצאו בתקופה.</p>
+    <p class="sumline alloc-how">איך נקבע הנתח: נתח שנקבע ידנית בקמפיין גובר. בלעדיו הנתח
+      אוטומטי — החלק של חשיבות הקמפיין מתוך החשיבות של כל הקמפיינים שרצים באותו זמן
+      (למשל חשיבות 6 מול 4 = 60% ו-40%).</p>
+    <p class="sumline">נמדד על ${alloc.window.total_published} פרסומים שיצאו בתקופה.</p>
   </div>`;
 }
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { bad, wrap } from './_shared.js';
-import { currentAllocation, shareTimeline } from '../campaigns.js';
+import { currentAllocation } from '../campaigns.js';
 import { one, query, rows } from '../db.js';
 import { buildAlerts } from '../alerts.js';
 import { requirePerm } from '../auth.js';
@@ -14,8 +14,8 @@ const r = Router();
  * וכמה כל אחת קיבלה בפועל.
  */
 r.get('/strategy', wrap(async (_req, res) => {
-  const [timeline, allocation, milestones, endpoints, campaigns] = await Promise.all([
-    shareTimeline(),
+  // ציר "נתח לפי חודש" (shareTimeline) לא מוצג במסך — נשאר רק לעוזר
+  const [allocation, milestones, endpoints, campaigns] = await Promise.all([
     currentAllocation(),
     rows(`select m.*, e.name as endpoint_name from strategy_milestones m
             left join endpoints e on e.id = m.endpoint_id order by m.on_date`),
@@ -49,7 +49,7 @@ r.get('/strategy', wrap(async (_req, res) => {
     };
   });
 
-  res.json({ timeline, allocation, milestones, endpoints: byEndpoint });
+  res.json({ allocation, milestones, endpoints: byEndpoint });
 }));
 
 /* ========================= התראות ========================= */

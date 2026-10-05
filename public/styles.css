@@ -1202,3 +1202,9 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .choice-dlg .choice input { margin-top: 3px; }
 .choice-dlg .choice > span { display: flex; flex-direction: column; gap: 3px; }
 .choice-dlg .choice .d { color: var(--ink-2); font-size: 12px; line-height: 1.5; }
+
+/* אסטרטגיה: שורת נתח לכל קמפיין, נקודת הקצה מתחת לשם */
+.arow .an small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; margin-top: 2px; }
+.alloc .alloc-how { margin-top: 12px; line-height: 1.6; }
+/* הפסים באותו קו בכל השורות, גם כש"(אוטומטי)" מאריך את הטקסט */
+.alloc .arow .at { min-width: 220px; }
