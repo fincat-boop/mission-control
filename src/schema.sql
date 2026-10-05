@@ -569,6 +569,20 @@ create table if not exists engine_dismissals (
 create unique index if not exists engine_dismissals_key_idx
   on engine_dismissals (org_id, week_start, content_id, channel_id);
 
+-- ========================= ניוזלטר: העברה ל-HUB =========================
+-- ניוזלטר נשאר טיוטה בלוח עד "העבר ל-HUB" (runner.js transferNewsletter).
+-- אז נוצרת טיוטה ב-HUB (מזהה הקמפיין ב-external_id, מסך האישור שם
+-- ב-external_url) והפוסט עובר ל-publishing — "בידי ה-HUB".
+--   hub_status          — הסטטוס האחרון שה-HUB דיווח (draft = ממתין לאישור שם)
+--   hub_ref             — ה-external_ref שנשלח (post-<id>, או post-<id>-N אחרי כשל)
+--   hub_digest          — טביעת מה שהועבר; שינוי בלוח אחרי ההעברה = אזהרה
+--   hub_transferred_at  — מתי הועבר
+alter table posts
+  add column if not exists hub_status         text,
+  add column if not exists hub_ref            text,
+  add column if not exists hub_digest         text,
+  add column if not exists hub_transferred_at timestamptz;
+
 -- ========================= מולטי-טננט שלב 2: RLS =========================
 -- שלב 2b: הבידוד יורד ל-DB. שלוש אבני יסוד:
 --   1. engine_settings הופכת מסינגלטון (id=1) לשורה-לכל-ארגון (PK org_id).

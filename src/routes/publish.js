@@ -5,9 +5,11 @@ import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
 import { encryptSecret, decryptSecret } from '../publish/crypto.js';
 import { verifyConnection } from '../publish/meta.js';
-import { loadPayload, publishBlocker, publishOne, resetPublishing } from '../publish/runner.js';
-import { HubMailError, audienceLists, hubMailReady,
+import { loadPayload, publishBlocker, publishOne, resetPublishing,
+         transferNewsletter } from '../publish/runner.js';
+import { HubMailError, audienceLists, hubFillUrl, hubMailReady, hubOrigins,
          newsletterTemplate, newsletterPreview } from '../hub-mail.js';
+import { NEWSLETTER_NO_APPROVE, hubStale } from '../publish/newsletter.js';
 import { weekMeta } from '../board.js';
 import { friendlyPublishError } from '../publish/errors.js';
 
@@ -37,37 +39,39 @@ r.get('/publish/status', wrap(async (_req, res) => {
  * רשימות הקהל מה-HUB — לבורר בעריכת גרסת המייל. שגיאת HUB חוזרת עם
  * ההודעה הידידותית שלו (העברית של HubMailError), לא כ"משהו נשבר".
  */
+/** שגיאת HUB → תשובה עם ההודעה הידידותית שלו (או הסבר על מפתח שנדחה) */
+function hubFail(res, e) {
+  const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
+  const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
+  return bad(res, msg, status);
+}
+
 r.get('/publish/hub-lists', wrap(async (_req, res) => {
   try {
     res.json({ lists: await audienceLists() });
   } catch (e) {
-    if (e instanceof HubMailError) {
-      const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
-      const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
-      return bad(res, msg, status);
-    }
+    if (e instanceof HubMailError) return hubFail(res, e);
     throw e;
   }
 }));
 
 /**
- * תבנית הניוזלטר שמוגדרת ב-HUB — מזינה את טופס המילוי בעריכת גרסת המייל.
- * null = אין תבנית, הלוח מציג רק נושא+תוכן+רשימה.
+ * תבנית הניוזלטר שמוגדרת ב-HUB + איפה עורך המייל שלו.
+ * null = אין תבנית, הלוח מציג נושא + גוף HTML חופשי.
+ * fill_url — עורך המייל של ה-HUB (נפתח בחלון חדש, מחזיר ערכים ב-postMessage);
+ * hub_origins — המקורות היחידים שהלוח מקבל מהם את ההודעות של העורך.
  */
 r.get('/publish/newsletter-template', wrap(async (_req, res) => {
   try {
-    // fill_url — הממלא המלא ב-HUB (נפתח בטאב, מחזיר ערכים ב-postMessage)
-    const hubBase = String(process.env.HUB_API_URL ?? '').trim().replace(/\/+$/, '');
+    const template = await newsletterTemplate();
+    // ה-HTML של התבנית לא נחוץ ללוח (העורך והתצוגה ב-HUB) — רק התיאור
     res.json({
-      template: await newsletterTemplate(),
-      fill_url: hubBase ? `${hubBase}/dashboard/mission-control/fill` : null,
+      template: template ? { id: template.id, name: template.name, fields: template.fields ?? [] } : null,
+      fill_url: hubFillUrl(),
+      hub_origins: hubOrigins(),
     });
   } catch (e) {
-    if (e instanceof HubMailError) {
-      const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
-      const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
-      return bad(res, msg, status);
-    }
+    if (e instanceof HubMailError) return hubFail(res, e);
     throw e;
   }
 }));
@@ -114,6 +118,7 @@ r.post('/publish/newsletter-preview', wrap(async (req, res) => {
       htmlBody: b.htmlBody,
       name: b.name,
       scheduledAt: b.scheduledAt,
+      templateId: b.templateId,
       fieldValues: b.fieldValues ?? {},
     });
     const warn = preview.unsafe_vars?.length
@@ -121,11 +126,7 @@ r.post('/publish/newsletter-preview', wrap(async (req, res) => {
       : '';
     res.json({ ...preview, frame_token: stashPreview(warn + (preview.html ?? '')) });
   } catch (e) {
-    if (e instanceof HubMailError) {
-      const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
-      const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
-      return bad(res, msg, status);
-    }
+    if (e instanceof HubMailError) return hubFail(res, e);
     throw e;
   }
 }));
@@ -225,6 +226,8 @@ r.delete('/channels/:id/connection', requirePerm('settings'), wrap(async (req, r
 r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, res) => {
   const payload = await loadPayload(req.params.id);
   if (!payload) return bad(res, 'לא נמצא פוסט כזה', 404);
+  // ניוזלטר מאושר ב-HUB, לא כאן: "העבר ל-HUB" יוצר שם טיוטה לאישור
+  if (payload.post.platform === 'newsletter') return bad(res, NEWSLETTER_NO_APPROVE);
   if (!['scheduled', 'failed'].includes(payload.post.status)) {
     return bad(res, 'אפשר לאשר רק פוסט מתוכנן (או כזה שנכשל)');
   }
@@ -233,9 +236,7 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, re
 
   const blocker = publishBlocker(payload);
   if (blocker) return bad(res, blocker);
-  // ניוזלטר לא צריך channel_connection — החיבור שלו הוא HUB_API_* בסביבה,
-  // ו-publishBlocker כבר בדק אותו
-  if (!payload.post.auto_enabled && payload.post.platform !== 'newsletter') {
+  if (!payload.post.auto_enabled) {
     return bad(res, 'הפרסום האוטומטי כבוי לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
   }
 
@@ -256,10 +257,11 @@ const isPast = (post, now = new Date()) => new Date(post.scheduled_at).getTime()
  * (ניוזלטר — החיבור שלו ב-HUB_API_*), ו-publishBlocker.
  */
 export function weekApprovalReason(payload, now = new Date()) {
+  // ניוזלטר לא מאושר כאן — עובר ל-HUB בכפתור משלו, ומאושר שם
+  if (payload.post.platform === 'newsletter') return NEWSLETTER_NO_APPROVE;
   if (isPast(payload.post, now)) return 'המועד עבר';
-  const autoOk = payload.post.auto_enabled || payload.post.platform === 'newsletter';
   return publishBlocker(payload) ??
-    (autoOk ? null : 'הפרסום האוטומטי כבוי לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
+    (payload.post.auto_enabled ? null : 'הפרסום האוטומטי כבוי לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
 }
 
 /**
@@ -314,6 +316,49 @@ r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) =>
   });
 }));
 
+/**
+ * "העבר ל-HUB" — הרגע היחיד שבו ניוזלטר נוצר ב-HUB: טיוטה שממתינה לאישור
+ * בעל העסק שם, עם המועד של הפוסט. idempotent — לחיצה שנייה מחזירה את מה
+ * שכבר הועבר. הרשאת approve, כמו אישור לפרסום אוטומטי.
+ */
+r.post('/posts/:id/newsletter/transfer', requirePerm('approve'), wrap(async (req, res) => {
+  let out;
+  try {
+    out = await transferNewsletter(req.params.id, req.user);
+  } catch (e) {
+    if (e instanceof HubMailError) return hubFail(res, e);
+    throw e;
+  }
+  if (out.error) return bad(res, out.error, out.status);
+  res.json(out);
+}));
+
+/**
+ * הפוסטים של ניוזלטר מסוים (תוכן + ערוץ) ומצב ההעברה שלהם ל-HUB —
+ * לעורך הניוזלטר, שמציג "העבר ל-HUB" / "ממתין לאישור ב-HUB" לכל אחד.
+ * stale — השתנה משהו בלוח מאז ההעברה (השינוי לא יגיע ל-HUB).
+ */
+r.get('/publish/newsletter-posts', wrap(async (req, res) => {
+  const contentId = Number(req.query.content_id);
+  const channelId = Number(req.query.channel_id);
+  if (!contentId || !channelId) return bad(res, 'חסרים content_id ו-channel_id');
+  const variant = await one(
+    'select * from content_variants where content_id = $1 and channel_id = $2', [contentId, channelId]);
+  const posts = await rows(
+    `select p.id, p.title, p.status, p.scheduled_at, p.external_id, p.external_url,
+            p.hub_status, p.hub_digest, p.hub_transferred_at, p.publish_error, c.platform
+       from posts p join channels c on c.id = p.channel_id
+      where p.content_id = $1 and p.channel_id = $2
+        and p.status in ('scheduled','approved','publishing','published','failed')
+      order by p.scheduled_at`,
+    [contentId, channelId]);
+  res.json({
+    posts: posts.map(({ hub_digest: _d, ...p }) => ({
+      ...p, hub_stale: hubStale({ post: { ...p, hub_digest: _d }, variant }),
+    })),
+  });
+}));
+
 /** ביטול אישור — חוזר למתוכנן, שום דבר לא נשלח */
 r.post('/posts/:id/unapprove-publish', requirePerm('approve'), wrap(async (req, res) => {
   const post = await one(
@@ -327,6 +372,13 @@ r.post('/posts/:id/unapprove-publish', requirePerm('approve'), wrap(async (req, 
 
 /** שליחה מיידית, בלי לחכות לטיק — למי שרוצה לראות את זה קורה עכשיו */
 r.post('/posts/:id/publish-now', requirePerm('approve'), wrap(async (req, res) => {
+  // ניוזלטר לא "מתפרסם עכשיו" מכאן — הוא עובר ל-HUB ומאושר שם
+  const target = await one(
+    `select c.platform from posts p join channels c on c.id = p.channel_id where p.id = $1`,
+    [req.params.id]);
+  if (target?.platform === 'newsletter') {
+    return bad(res, 'ניוזלטר לא נשלח מכאן — לוחצים "העבר ל-HUB" ומאשרים את השליחה ב-HUB');
+  }
   const result = await publishOne(req.params.id, {
     allowedFrom: ['scheduled', 'approved', 'failed'],
   });

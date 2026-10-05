@@ -12,12 +12,42 @@
  * משתני סביבה:
  *   HUB_API_URL — בסיס ה-HUB (למשל https://app.yourdomain.com), בלי / בסוף.
  *   HUB_API_KEY — Bearer; זהה ל-MISSION_CONTROL_API_KEY שמוגדר ב-HUB.
+ *   HUB_APP_URL — (רשות) כתובת הדשבורד של ה-HUB, כשהיא שונה מ-HUB_API_URL
+ *                 (למשל API ב-app.backbone.co.il והדשבורד ב-backbone.co.il).
+ *                 ממנה נפתחים עורך המייל ומסך האישור, והיא המקור היחיד
+ *                 שהלוח מקבל ממנו הודעות של העורך. בלי — HUB_API_URL.
  * אם חסרים — hubMailReady() מחזיר false והערוץ פשוט לא זמין, כלום לא נשבר.
  */
 
 export const hubMailReady = () => !!(process.env.HUB_API_URL && process.env.HUB_API_KEY);
 
 const base = () => String(process.env.HUB_API_URL ?? '').replace(/\/+$/, '');
+
+/** בסיס הדשבורד של ה-HUB (HUB_APP_URL, אחרת HUB_API_URL), בלי / בסוף; '' כשלא מוגדר */
+export const hubAppBase = (env = process.env) =>
+  String(env.HUB_APP_URL || env.HUB_API_URL || '').trim().replace(/\/+$/, '');
+
+/** עורך המייל של ה-HUB לבקרת שיגור (מילוי התבנית, חוזר ללוח ב-postMessage) */
+export const hubFillUrl = (env = process.env) =>
+  (hubAppBase(env) ? `${hubAppBase(env)}/dashboard/mission-control/fill` : null);
+
+/** מסך העריכה והאישור של קמפיין ב-HUB */
+export const hubCampaignUrl = (campaignId, env = process.env) =>
+  (hubAppBase(env) && campaignId
+    ? `${hubAppBase(env)}/dashboard/campaigns/${encodeURIComponent(campaignId)}/edit` : null);
+
+/**
+ * המקורות (origin) שהלוח מקבל מהם הודעות של עורך המייל: הדשבורד, ובנוסף
+ * כתובת ה-API — אם הדשבורד לא הוגדר בנפרד וה-HUB מפנה את הדף לכתובת אחרת,
+ * ההודעה תגיע מהיעד; מה שלא ברשימה נזרק בצד הלקוח.
+ */
+export function hubOrigins(env = process.env) {
+  const out = new Set();
+  for (const u of [env.HUB_APP_URL, env.HUB_API_URL]) {
+    try { if (u?.trim()) out.add(new URL(u.trim()).origin); } catch { /* כתובת לא תקינה — מדלגים */ }
+  }
+  return [...out];
+}
 
 /** שגיאה עם message ידידותי מה-HUB (הוא מחזיר {error} בעברית) + סטטוס. */
 export class HubMailError extends Error {
@@ -84,8 +114,10 @@ async function call(method, path, body, fetchImpl = fetch) {
     /* גוף לא-JSON — נטופל לפי הסטטוס */
   }
   if (!res.ok || data?.ok === false) {
+    // answered — ה-HUB עצמו ענה (JSON עם ok:false), לא דף שגיאה של פרוקסי/נתיב
+    // שגוי. 404 "קמפיין לא נמצא" אמיתי נבדל כך מתקלת ניתוב.
     throw Object.assign(new HubMailError(data?.error || `שגיאת HUB (${res.status})`, res.status),
-      { retryable: res.status >= 500 });
+      { retryable: res.status >= 500, answered: data?.ok === false });
   }
   return data;
 }
@@ -94,15 +126,19 @@ async function call(method, path, body, fetchImpl = fetch) {
  * יצירת/תזמון ניוזלטר ב-HUB.
  * fieldValues — מילוי שדות התבנית מהטופס בלוח ({שם שדה: ערך}); גובר על
  * המילוי האוטומטי של ה-HUB (תוכן/כותרת/תאריך).
+ * ה-HUB יוצר תמיד **טיוטה שממתינה לאישור** (status "draft",
+ * requires_approval) — בעל העסק מאשר במסך העריכה שם (hubCampaignUrl).
+ * scheduledAt נשמר שם כזמן המוצע; templateId — התבנית שהערכים מולאו מולה.
  * @param {{externalRef:string, subject:string, htmlBody:string, listIds?:string[],
  *          segmentIds?:string[], name?:string, scheduledAt?:string|Date,
- *          fieldValues?:Record<string,string>}} input
+ *          templateId?:string, fieldValues?:Record<string,string>}} input
  * retry: תקלה זמנית (רשת/5xx) — עד שני ניסיונות נוספים; בטוח בזכות external_ref.
  * @returns {Promise<{campaign_id:string, status:string, recipient_count?:number,
- *                    scheduled_at:string, idempotent?:boolean}>}
+ *                    scheduled_at:string, idempotent?:boolean, requires_approval?:boolean}>}
  */
 export async function createNewsletter(input, fetchImpl = fetch, retry = {}) {
-  const { externalRef, subject, htmlBody, listIds = [], segmentIds = [], name, scheduledAt, fieldValues } = input;
+  const { externalRef, subject, htmlBody, listIds = [], segmentIds = [], name, scheduledAt,
+          templateId, fieldValues } = input;
   if (!externalRef) throw new HubMailError('externalRef חסר — מזהה הפוסט שלנו', 400);
   return withRetry(() => call('POST', '/api/v1/mission-control/newsletters', {
     external_ref: String(externalRef),
@@ -112,6 +148,7 @@ export async function createNewsletter(input, fetchImpl = fetch, retry = {}) {
     segment_ids: segmentIds,
     ...(name ? { name } : {}),
     ...(scheduledAt ? { scheduled_at: new Date(scheduledAt).toISOString() } : {}),
+    ...(templateId ? { template_id: String(templateId) } : {}),
     ...(fieldValues && Object.keys(fieldValues).length ? { field_values: fieldValues } : {}),
   }, fetchImpl), retry);
 }
@@ -129,16 +166,18 @@ export const newsletterTemplate = async (fetchImpl = fetch) =>
  * תצוגה מקדימה — ה-HUB מרנדר את מה שהנמען יראה (תבנית, מותג, פוטר,
  * ערכי דוגמה). הלוח רק מציג את ה-HTML שחוזר (iframe srcdoc).
  * @param {{subject:string, htmlBody:string, name?:string, scheduledAt?:string|Date,
- *          fieldValues?:Record<string,string>}} input
+ *          templateId?:string, fieldValues?:Record<string,string>}} input
  * @returns {Promise<{subject:string, html:string, unsafe_vars:string[]}>}
  */
 export async function newsletterPreview(input, fetchImpl = fetch) {
-  const { subject, htmlBody, name, scheduledAt, fieldValues } = input;
+  const { subject, htmlBody, name, scheduledAt, templateId, fieldValues } = input;
+  const when = scheduledAt ? new Date(scheduledAt) : null;
   return call('POST', '/api/v1/mission-control/newsletter-preview', {
     subject,
     html_body: htmlBody,
     ...(name ? { name } : {}),
-    ...(scheduledAt ? { scheduled_at: new Date(scheduledAt).toISOString() } : {}),
+    ...(when && !Number.isNaN(when.getTime()) ? { scheduled_at: when.toISOString() } : {}),
+    ...(templateId ? { template_id: String(templateId) } : {}),
     ...(fieldValues && Object.keys(fieldValues).length ? { field_values: fieldValues } : {}),
   }, fetchImpl);
 }

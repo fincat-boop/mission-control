@@ -7,6 +7,7 @@ import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
+import { hubStale } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
 import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
 import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
@@ -67,7 +68,10 @@ export function moveBlocker(current, when, now = new Date()) {
     return { status: 409, error: 'אי אפשר להזיז פוסט שכבר פורסם' };
   }
   if (current.status === 'publishing') {
-    return { status: 409, error: 'הפוסט נשלח ברגע זה — אי אפשר להזיז אותו' };
+    // ניוזלטר שהועבר ל-HUB: המועד שם הוא הקובע (אין ל-HUB נתיב עדכון)
+    return current.hub_transferred_at
+      ? { status: 409, error: 'הניוזלטר כבר הועבר ל-HUB — משנים את המועד שם, במסך האישור' }
+      : { status: 409, error: 'הפוסט נשלח ברגע זה — אי אפשר להזיז אותו' };
   }
   if (new Date(when).getTime() < now.getTime()) {
     return { status: 400, error: 'אי אפשר להזיז פוסט לזמן שעבר' };
@@ -235,6 +239,9 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
         itemAssetsSql('a.id, a.filename, a.mime, a.size_bytes, a.variant_id, a.storage_key'),
         [p.content_id, p.channel_id]).then((list) => list.map(assetView))
     : [];
+
+  // ניוזלטר שהועבר ל-HUB: האם השתנה משהו בלוח מאז (השינוי לא יגיע לשם)
+  if (p.platform === 'newsletter') p.hub_stale = hubStale({ post: p, variant });
 
   // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה
   const results = await one('select * from post_results where post_id = $1', [p.id]);

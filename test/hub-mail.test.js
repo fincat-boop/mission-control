@@ -175,3 +175,26 @@ test('newsletterPreview — בקשה נכונה ותשובה מלאה', async ()
   assert.deepEqual(body.field_values, { 'פתיחה': 'היי' });
   assert.ok(f.calls[0].url.endsWith('/api/v1/mission-control/newsletter-preview'));
 });
+
+test('createNewsletter / newsletterPreview — template_id נשלח כשידוע, ולא כשלא', async () => {
+  const f = fakeFetch(201, { ok: true, campaign_id: 'c1', status: 'draft' });
+  await createNewsletter({ externalRef: 'post-1', subject: 'א', htmlBody: '', templateId: 't-9',
+    scheduledAt: '2026-10-07T09:00:00+03:00' }, f);
+  const body = JSON.parse(f.calls[0].init.body);
+  assert.equal(body.template_id, 't-9');
+  assert.equal(body.scheduled_at, '2026-10-07T06:00:00.000Z');
+  const f2 = fakeFetch(200, { ok: true, html: '' });
+  await newsletterPreview({ subject: 'א', htmlBody: '', scheduledAt: 'לא תאריך' }, f2);
+  const b2 = JSON.parse(f2.calls[0].init.body);
+  assert.equal('template_id' in b2, false);
+  assert.equal('scheduled_at' in b2, false); // תאריך פסול לא מפיל את התצוגה
+});
+
+test('HubMailError.answered — ה-HUB עצמו ענה (JSON ok:false) מול דף שגיאה של פרוקסי', async () => {
+  const f = fakeFetch(404, { ok: false, error: 'קמפיין לא נמצא' });
+  await assert.rejects(() => newsletterStatus('c1', f, { delays: [] }),
+    (e) => e.status === 404 && e.answered === true && e.message === 'קמפיין לא נמצא');
+  const html = async () => ({ ok: false, status: 404, json: async () => { throw new SyntaxError('x'); } });
+  await assert.rejects(() => newsletterStatus('c1', html, { delays: [] }),
+    (e) => e.status === 404 && e.answered === false);
+});

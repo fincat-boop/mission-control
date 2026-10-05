@@ -4,10 +4,15 @@ import { decryptSecret } from './crypto.js';
 import { publishFacebook, publishInstagram } from './meta.js';
 import { deletePublicAssets, publicAssetsReady, uploadPublicAsset } from './public-assets.js';
 import { mediaUrl } from '../media.js';
-import { createNewsletter, hubMailReady, newsletterStatus } from '../hub-mail.js';
+import { HubMailError, createNewsletter, hubCampaignUrl, hubMailReady, newsletterStatus } from '../hub-mail.js';
 import { emitHubEventSafe, postEventInput } from '../hub-events.js';
 import { friendlyPublishError } from './errors.js';
 import { itemAssetsSql } from '../links.js';
+import {
+  HUB_MISSING_ERROR, NOT_APPROVED_ERROR, NOT_TRANSFERRED_ERROR, alreadyTransferred,
+  cleanFieldValues, hubWaitState, newsletterBlocker, newsletterClockStart, newsletterDigest,
+  nextHubRef, reusableHubStatus, transferBlocker,
+} from './newsletter.js';
 
 /**
  * מסלול הפרסום האוטומטי.
@@ -19,6 +24,10 @@ import { itemAssetsSql } from '../links.js';
  *
  * וואטסאפ (קבוצה) — אין API רשמי, ולכן חצי-אוטומטי: כשמגיע הזמן נוצרת
  * משימה דחופה עם הטקסט המוכן, והמשתמש שולח ומסמן "פורסם" בעצמו.
+ *
+ * ניוזלטר — לא נשלח מכאן ולא נוצר מכאן ב-HUB. המשתמש לוחץ "העבר ל-HUB"
+ * (transferNewsletter), בעל העסק מאשר שם, והטיק רק שואל על הסטטוס. הגיע
+ * המועד ולא הועבר — משימה (newsletterNotTransferred), לא שליחה.
  */
 
 const MAX_LATE_HOURS = 12;   // approved שפוספס ביותר מזה — נכשל, לא מתפרסם באיחור
@@ -33,9 +42,9 @@ export const TOO_LATE_ERROR =
 export const STUCK_SOCIAL_ERROR =
   'הפרסום נקטע באמצע — בודקים בעמוד אם הפוסט עלה, ואז מסמנים פורסם או מפרסמים שוב';
 export const STUCK_NEWSLETTER_ERROR =
-  'ה-HUB לא אישר שליחה תוך יממה — בודקים ב-HUB מה קרה לקמפיין, ואז מסמנים פורסם או מפרסמים שוב';
+  'ה-HUB לא ענה על הניוזלטר יממה אחרי המועד — בודקים ב-HUB מה קרה לקמפיין, ואז מסמנים פורסם או מעבירים שוב';
 export const STUCK_NEWSLETTER_CAP_ERROR =
-  'ה-HUB עדיין לא סיים לשלוח אחרי 3 ימים — בודקים ב-HUB מה קרה לקמפיין, ואז מסמנים פורסם או מפרסמים שוב';
+  'ה-HUB עדיין לא סיים לשלוח 3 ימים אחרי המועד — בודקים ב-HUB מה קרה לקמפיין, ואז מסמנים פורסם או מעבירים שוב';
 
 const isImage = (m) => /^image\//.test(m);
 const isVideo = (m) => /^video\//.test(m);
@@ -194,22 +203,8 @@ export async function loadPayload(postId) {
 
 /** מה חוסם את הפוסט מפרסום אוטומטי? null = כלום, אפשר לפרסם. */
 export function publishBlocker({ post, variant, assets }) {
-  // ניוזלטר: השליחה בפועל דרך ה-HUB — נדרשים חיבור, נושא ורשימת יעד
-  if (post.platform === 'newsletter') {
-    if (!hubMailReady()) return 'חיבור ה-HUB לא מוגדר (HUB_API_URL / HUB_API_KEY בשרת)';
-    if (!post.content_id) return 'אין תוכן משויך לפוסט';
-    if (!variant || variant.status !== 'ready') return 'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"';
-    const m = variant.meta ?? {};
-    // התוכן חי או בגוף הגרסה או במילוי הממלא של ה-HUB (שדה תוכן בתבנית)
-    const hasFilledContent = Object.entries(m.field_values ?? {}).some(
-      ([k, val]) => ['תוכן', 'גוף הגיליון', 'גוף ההודעה'].includes(k) && String(val ?? '').trim());
-    if (!variant.body?.trim() && !hasFilledContent) {
-      return 'אין תוכן למייל — ממלאים בעריכת הגרסה (כפתור המילוי או שדה התוכן)';
-    }
-    if (!m.subject?.trim()) return 'חסר נושא למייל — ממלאים בעריכת הגרסה של ערוץ המייל';
-    // בלי רשימה — ה-HUB שולח לרשימת העל (ברירת המחדל שלו); אין חסימה.
-    return null;
-  }
+  // ניוזלטר: השליחה בפועל דרך ה-HUB — נדרשים חיבור, תוכן ונושא (newsletter.js)
+  if (post.platform === 'newsletter') return newsletterBlocker({ post, variant }, hubMailReady());
 
   if (!['facebook', 'instagram'].includes(post.platform)) {
     return `הערוץ "${post.channel_name}" לא מחובר לפרסום אוטומטי (${post.platform === 'whatsapp' ? 'וואטסאפ נשלח ידנית' : 'אין אינטגרציה'})`;
@@ -313,34 +308,11 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
   try {
     let result;
     if (post.platform === 'newsletter') {
-      // השליחה בפועל אצל ה-HUB. external_ref = מזהה הפוסט — idempotent:
-      // retry לעולם לא שולח פעמיים. ה-HUB רשאי לסרב (HubMailError עם הודעה
-      // בעברית) — ההודעה מוצגת כמו שהיא דרך מסלול הכשל הרגיל.
-      const m = variant.meta ?? {};
-      const r = await createNewsletter({
-        externalRef: `post-${post.id}`,
-        subject: m.subject,
-        htmlBody: variant.body,
-        listIds: m.list_ids ?? [],
-        segmentIds: m.segment_ids ?? [],
-        name: post.title,
-        fieldValues: m.field_values ?? {},
-      });
-      if (r.status !== 'sent') {
-        // ה-HUB קיבל והשליחה אסינכרונית אצלו — נשארים publishing,
-        // ו-pollNewsletterOutcomes יסגור ל-published/failed לפי הסטטוס שם.
-        await query(
-          `update posts set external_id = $2, publish_error = null where id = $1`,
-          [post.id, r.campaign_id]);
-        await logPublish(post, true, { externalId: r.campaign_id });
-        await logActivity('publish', post,
-          `ניוזלטר "${post.title}" התקבל ב-HUB` +
-          (r.recipient_count != null ? ` (${r.recipient_count} נמענים)` : '') +
-          ' — ממתין לשליחה בפועל');
-        console.log(`ניוזלטר #${post.id} ("${post.title}") התקבל ב-HUB — קמפיין ${r.campaign_id}`);
-        return { ok: true, pending: true, post: await one('select * from posts where id = $1', [post.id]) };
-      }
-      result = { id: r.campaign_id, url: null };
+      // ניוזלטר לא נוצר ב-HUB מכאן לעולם — רק "העבר ל-HUB" (transferNewsletter)
+      // יוצר, ושם בעל העסק מאשר. פוסט שהגיע לכאן לא הועבר: כשל עם הסבר.
+      return (await failPost(post, NOT_TRANSFERRED_ERROR, {
+        title: `ניוזלטר לא הועבר ל-HUB — ${post.channel_name}`, internal: true,
+      })) ?? { ok: false, error: NOT_TRANSFERRED_ERROR };
     } else if (post.platform === 'facebook') {
       const token = decryptToken(post);
       if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
@@ -390,19 +362,23 @@ export async function publishTickForOrg() {
   // וואטסאפ נשלח ידנית — המשימה שלו לא תלויה במתג הפרסום האוטומטי
   await bestEffort('הכנת משימות וואטסאפ נכשלה:', whatsappPrep);
 
+  // ניוזלטר שהגיע מועדו ולא הועבר ל-HUB — משימה, לא שליחה (וגם לא תלוי
+  // במתג: שום דבר לא יוצא מכאן)
+  await bestEffort('בדיקת ניוזלטרים שלא הועברו נכשלה:', newsletterNotTransferred);
+
   const settings = await one('select autopublish_enabled from engine_settings limit 1');
   if (!settings?.autopublish_enabled) return;
 
   // פוסטים שאושרו והגיע זמנם. איחור גדול מדי לא מתפרסם — נכשל עם הסבר.
   // קמפיין מושהה לא יוצא — גם פוסט שאושר לפני ההשהיה (הלוח כבר מסתיר אותו).
-  // ניוזלטר לא צריך channel_connection (החיבור שלו הוא HUB_API_* בסביבה).
+  // ניוזלטר לא כאן: הוא לא נשלח מהטיק (newsletterNotTransferred / transferNewsletter).
   const due = await rows(
     `select p.id, p.scheduled_at < now() - ($1 || ' hours')::interval as too_late
        from posts p
        join channels c on c.id = p.channel_id and c.active
        left join channel_connections cc on cc.channel_id = c.id
       where p.status = 'approved' and p.scheduled_at <= now()
-        and (cc.auto_enabled = true or c.platform = 'newsletter')
+        and cc.auto_enabled = true and c.platform <> 'newsletter'
         and not exists (select 1 from content_items ci
                           join campaigns ca on ca.id = ci.campaign_id
                          where ci.id = p.content_id and ca.paused_at is not null)
@@ -432,18 +408,24 @@ export async function publishTickForOrg() {
  * (טהורה). started — מתי נתפס (publishing_started_at; schema.sql ממלא
  * אותו לפוסטים שהיו ב-publishing לפני העמודה).
  * hub — לניוזלטר: מה ה-HUB ענה בבדיקת הסטטוס של הטיק הזה. 'active'
- * (scheduled/sending) = עוד שולח: נשארים publishing עד 72 שעות. כל השאר
- * (לא ענה, לא נבדק, לא מוגדר) — כשל אחרי יממה. סטטוס סופי (failed/cancelled)
+ * (scheduled/sending) = עוד שולח: נשארים publishing עד 72 שעות. 'draft' =
+ * ממתין לאישור בעל העסק ב-HUB: אחרי יממה — "לא אושר". כל השאר (לא ענה,
+ * לא נבדק, לא מוגדר) — כשל אחרי יממה. סטטוס סופי (failed/cancelled/נמחק)
  * כבר נסגר ב-pollNewsletterOutcomes.
+ * scheduled — לניוזלטר: המועד (של ה-HUB אם ידוע, אחרת שלנו). השעון מתחיל
+ * מהמאוחר מבין ההעברה למועד — ניוזלטר שהועבר ימים מראש לא "תקוע".
  */
-export function stuckPublishingError({ platform, started, hub = null }, now = new Date()) {
+export function stuckPublishingError({ platform, started, scheduled = null, hub = null }, now = new Date()) {
   if (!started) return null;
-  const age = now.getTime() - new Date(started).getTime();
   if (platform === 'newsletter') {
+    const from = newsletterClockStart({ started, scheduled });
+    const age = now.getTime() - from.getTime();
     if (age > STUCK_NEWSLETTER_CAP_HOURS * 3600000) return STUCK_NEWSLETTER_CAP_ERROR;
     if (hub === 'active') return null;
-    return age > STUCK_NEWSLETTER_HOURS * 3600000 ? STUCK_NEWSLETTER_ERROR : null;
+    if (age <= STUCK_NEWSLETTER_HOURS * 3600000) return null;
+    return hub === 'draft' ? NOT_APPROVED_ERROR : STUCK_NEWSLETTER_ERROR;
   }
+  const age = now.getTime() - new Date(started).getTime();
   return age > STUCK_SOCIAL_MINUTES * 60000 ? STUCK_SOCIAL_ERROR : null;
 }
 
@@ -451,12 +433,12 @@ export function stuckPublishingError({ platform, started, hub = null }, now = ne
  * פוסטים שנתקעו ב-publishing → failed דרך מסלול הכשל הרגיל. פייסבוק/
  * אינסטגרם אחרי 30 דקות (הפרסום נקטע — אולי עלה ואולי לא, ולכן לא מנסים
  * שוב לבד), ניוזלטר לפי stuckPublishingError. קמפיין מושהה וערוץ מושבת לא נוגעים.
- * hubState: Map<post id, 'active'|'unreachable'> מ-pollNewsletterOutcomes.
+ * hubState: Map<post id, {hub, scheduled}> מ-pollNewsletterOutcomes.
  */
 async function failStuckPublishing(now = new Date(), hubState = new Map()) {
   const stuck = await rows(
     `select p.id, c.platform,
-            p.publishing_started_at as started
+            p.publishing_started_at as started, p.scheduled_at
        from posts p
        join channels c on c.id = p.channel_id and c.active
       where p.status = 'publishing'
@@ -465,13 +447,19 @@ async function failStuckPublishing(now = new Date(), hubState = new Map()) {
                          where ci.id = p.content_id and ca.paused_at is not null)`
   );
   for (const s of stuck) {
-    const error = stuckPublishingError({ ...s, hub: hubState.get(s.id) ?? null }, now);
+    const h = hubState.get(s.id);
+    const error = stuckPublishingError({
+      platform: s.platform, started: s.started,
+      scheduled: h?.scheduled ?? s.scheduled_at, hub: h?.hub ?? null,
+    }, now);
     if (!error) continue;
     await bestEffort(`סגירת פוסט #${s.id} שנתקע נכשלה:`, async () => {
       const post = await loadPostBrief(s.id);
       if (!post) return;
       const title = post.platform === 'newsletter'
-        ? `שליחת ניוזלטר לא הושלמה — ${post.channel_name}`
+        ? (error === NOT_APPROVED_ERROR
+          ? `ניוזלטר לא אושר ב-HUB — ${post.channel_name}`
+          : `שליחת ניוזלטר לא הושלמה — ${post.channel_name}`)
         : `פרסום נקטע באמצע — ${post.channel_name}`;
       if (await failPost(post, error, { title, from: ['publishing'], internal: true })) {
         console.log(`פוסט #${post.id} ("${post.title}") נתקע ב-publishing — סומן כנכשל`);
@@ -580,6 +568,134 @@ async function whatsappPrep() {
   }
 }
 
+/* ========================= ניוזלטר: העברה ל-HUB ========================= */
+
+/** כמה אחורה מחפשים ניוזלטר שהמועד שלו הגיע ולא הועבר — לא מציפים פוסטים ישנים */
+export const NOT_TRANSFERRED_WINDOW_HOURS = 24;
+
+/**
+ * ניוזלטר (מתוכנן או מאושר) שהמועד שלו הגיע ולא הועבר ל-HUB: עובר ל"נכשל"
+ * עם משימה דחופה — "ניוזלטר לא הועבר ל-HUB". לא שולחים ולא יוצרים כלום ב-HUB.
+ * רק מהיממה האחרונה, כדי שפוסטים ישנים שנשארו "מתוכנן" לא יציפו משימות.
+ */
+async function newsletterNotTransferred() {
+  const due = await rows(
+    `select p.id from posts p
+       join channels c on c.id = p.channel_id and c.active and c.platform = 'newsletter'
+      where p.status in ('scheduled', 'approved')
+        and p.scheduled_at <= now()
+        and p.scheduled_at > now() - ($1 || ' hours')::interval
+        and not exists (select 1 from content_items ci
+                          join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)
+      order by p.scheduled_at`,
+    [NOT_TRANSFERRED_WINDOW_HOURS]
+  );
+  for (const { id } of due) {
+    await bestEffort(`סימון ניוזלטר #${id} שלא הועבר נכשל:`, async () => {
+      const post = await loadPostBrief(id);
+      if (!post) return;
+      const r = await failPost(post, NOT_TRANSFERRED_ERROR, {
+        title: `ניוזלטר לא הועבר ל-HUB — ${post.channel_name}`,
+        from: ['scheduled', 'approved'], internal: true,
+      });
+      if (r) console.log(`ניוזלטר #${id} ("${post.title}") — המועד הגיע והוא לא הועבר ל-HUB`);
+    });
+  }
+}
+
+/** HUB ענה "לא נמצא" בעצמו (JSON) — לא 404 של פרוקסי/נתיב שגוי */
+const hubNotFound = (e) => e instanceof HubMailError && e.status === 404 && e.answered === true;
+
+/**
+ * "העבר ל-HUB" — הרגע היחיד שבו נוצר ניוזלטר ב-HUB. רץ בתוך טרנזקציית
+ * הבקשה: השורה ננעלת (for update), כך שלחיצה כפולה מחכה ורואה שכבר הועבר.
+ *
+ *   כבר בידי ה-HUB (publishing/published) — מוחזר כמו שהוא (idempotent).
+ *   הועבר פעם וחזר אלינו (שוחרר/נכשל) — שואלים את ה-HUB על הקמפיין הקודם:
+ *     עדיין קיים ופעיל → מחברים אליו מחדש, בלי ליצור שני;
+ *     נמחק → יוצרים באותו מפתח; נכשל סופית → מפתח חדש (nextHubRef).
+ *   אחרת — יוצרים טיוטה ב-HUB עם מועד הפוסט, ומסמנים "בידי ה-HUB".
+ *
+ * @returns {Promise<{post:object, idempotent?:boolean, reused?:boolean} |
+ *                   {error:string, status:number}>}
+ *          שגיאת HUB (HubMailError) עולה למעלה — הנתיב מתרגם אותה.
+ */
+export async function transferNewsletter(postId, user, { now = new Date(), fetchImpl = fetch } = {}) {
+  const locked = await one('select id from posts where id = $1 for update', [postId]);
+  if (!locked) return { error: 'לא נמצא פוסט כזה', status: 404 };
+  const payload = await loadPayload(postId);
+  const { post, variant } = payload;
+  if (post.platform === 'newsletter' && alreadyTransferred(post)) {
+    return { post: await one('select * from posts where id = $1', [postId]), idempotent: true };
+  }
+  const blocked = transferBlocker(payload, { now, hubReady: hubMailReady() });
+  if (blocked) return { error: blocked, status: 400 };
+
+  // קמפיין קודם של הפוסט — עדיין חי ב-HUB?
+  let prior = null;
+  let reuse = null;
+  if (post.external_id) {
+    try {
+      const s = await newsletterStatus(post.external_id, fetchImpl, { delays: [] });
+      if (reusableHubStatus(s.status)) reuse = s;
+      else prior = s.status === 'failed' ? 'failed' : null;
+    } catch (e) {
+      if (!hubNotFound(e)) throw e;
+      prior = 'missing';
+    }
+  }
+
+  const m = variant.meta ?? {};
+  const create = (ref) => createNewsletter({
+    externalRef: ref,
+    subject: m.subject,
+    htmlBody: variant.body ?? '',
+    listIds: m.list_ids ?? [],
+    segmentIds: m.segment_ids ?? [],
+    name: post.title,
+    scheduledAt: post.scheduled_at,
+    templateId: m.template_id ?? null,
+    fieldValues: cleanFieldValues(m.field_values),
+  }, fetchImpl);
+
+  let ref = post.hub_ref ?? null;
+  let r;
+  if (reuse) {
+    r = { campaign_id: reuse.campaign_id ?? post.external_id, status: reuse.status };
+  } else {
+    ref = nextHubRef(post.id, post.hub_ref, prior);
+    r = await create(ref);
+    // אותו מפתח החזיר קמפיין שנכשל סופית (נוצר פעם בלי שנשמר אצלנו) — מפתח חדש
+    if (r.idempotent && r.status === 'failed') {
+      ref = nextHubRef(post.id, ref, 'failed');
+      r = await create(ref);
+    }
+  }
+
+  const updated = await one(
+    `update posts set status = 'publishing', publishing_started_at = now(),
+            external_id = $2, external_url = $3, hub_status = $4, hub_ref = $5,
+            hub_digest = case when $6::text is null then hub_digest else $6 end,
+            hub_transferred_at = now(), publish_error = null,
+            approved_by = $7, approved_at = now()
+      where id = $1 returning *`,
+    [post.id, r.campaign_id, hubCampaignUrl(r.campaign_id), r.status ?? 'draft', ref,
+     reuse ? null : newsletterDigest(payload), user?.id ?? null]
+  );
+  // משימת "לא הועבר" / כשל קודם — נסגרת: הניוזלטר בידי ה-HUB עכשיו
+  await query(
+    `update tasks set done = true, done_at = now()
+      where post_id = $1 and kind = 'failed' and done = false`, [post.id]);
+  await logPublish(post, true, { externalId: r.campaign_id });
+  await logActivity('publish', post,
+    `ניוזלטר "${post.title}" ${reuse ? 'חובר מחדש לקמפיין הקיים' : 'הועבר'} ב-HUB` +
+    (r.recipient_count != null ? ` (${r.recipient_count} נמענים)` : '') +
+    (user?.name ? ` על ידי ${user.name}` : '') + ' — ממתין לאישור שם');
+  console.log(`ניוזלטר #${post.id} ("${post.title}") הועבר ל-HUB — קמפיין ${r.campaign_id}`);
+  return { post: updated, reused: !!reuse };
+}
+
 /* ========================= ניוזלטר: סגירת מעגל מול ה-HUB ========================= */
 
 /** מדדי שליחה מה-HUB אל post_results. לא נוגע ב-note/leads שהוזנו ידנית. */
@@ -601,21 +717,29 @@ async function failFromHub(post, error) {
     { title: `שליחת ניוזלטר נכשלה — ${post.channel_name}`, from: ['publishing'], internal: true });
 }
 
+/** הסטטוס האחרון שה-HUB דיווח — לתצוגה בלוח ("ממתין לאישור ב-HUB") */
+async function saveHubStatus(post, status) {
+  if (status === post.hub_status) return;
+  await bestEffort(`שמירת סטטוס ה-HUB לפוסט #${post.id} נכשלה:`, () =>
+    query('update posts set hub_status = $2 where id = $1', [post.id, status]));
+}
+
 /**
- * פוסטים של ערוץ המייל שכבר התקבלו ב-HUB (external_id) — שואל את ה-HUB מה
- * קרה איתם. publishing → published / failed לפי הסטטוס שם. גם failed מהשבוע
- * האחרון נבדק: ניוזלטר שסומן כנכשל כי ה-HUB לא ענה, ונשלח בסוף — עובר
- * ל-published, שהצלחה מאוחרת לא תלך לאיבוד. רץ בכל טיק; זול, כי בדרך כלל
- * אין אף פוסט במצב הזה.
- * @returns {Promise<Map<number, 'active'|'unreachable'>>} מה ה-HUB ענה על
- *          כל פוסט ב-publishing — failStuckPublishing מחליט לפיו
+ * פוסטים של ערוץ המייל שכבר בידי ה-HUB (external_id = מזהה הקמפיין) — שואל
+ * את ה-HUB מה קרה איתם. publishing → published / failed לפי הסטטוס שם. גם
+ * failed מהשבוע האחרון נבדק: ניוזלטר שסומן כנכשל כי ה-HUB לא ענה, ונשלח
+ * בסוף — עובר ל-published, שהצלחה מאוחרת לא תלך לאיבוד. קמפיין שה-HUB
+ * אומר שלא קיים (נמחק שם) — נכשל עם הסבר, לא נשאל לנצח. רץ בכל טיק; זול,
+ * כי בדרך כלל אין אף פוסט במצב הזה.
+ * @returns {Promise<Map<number, {hub:'active'|'draft'|'unreachable'|null, scheduled?:string|null}>>}
+ *          מה ה-HUB ענה על כל פוסט ב-publishing — failStuckPublishing מחליט לפיו
  */
-export async function pollNewsletterOutcomes() {
+export async function pollNewsletterOutcomes(fetchImpl = fetch) {
   const state = new Map();
   if (!hubMailReady()) return state;
   const pending = await rows(
     `select p.id, p.title, p.channel_id, p.endpoint_id, p.kind, p.status,
-            c.name as channel_name, c.platform
+            p.external_id, p.hub_status, c.name as channel_name, c.platform
        from posts p
        join channels c on c.id = p.channel_id and c.platform = 'newsletter'
       where p.external_id is not null
@@ -627,13 +751,22 @@ export async function pollNewsletterOutcomes() {
     let s;
     try {
       // פוסט שכבר failed — בדיקה אחת בלי ניסיונות חוזרים, שלא יאט כל טיק כשה-HUB למטה
-      s = await newsletterStatus(`post-${post.id}`, fetch,
+      s = await newsletterStatus(post.external_id, fetchImpl,
         post.status === 'failed' ? { delays: [] } : {});
     } catch (e) {
+      if (hubNotFound(e)) {
+        // הקמפיין לא קיים ב-HUB (נמחק שם) — אין למה לחכות
+        if (post.status === 'publishing') {
+          await saveHubStatus(post, 'missing');
+          await failFromHub(post, HUB_MISSING_ERROR);
+        }
+        continue;
+      }
       console.error(`בדיקת סטטוס ניוזלטר #${post.id} נכשלה:`, e.message);
-      if (post.status === 'publishing') state.set(post.id, 'unreachable');
+      if (post.status === 'publishing') state.set(post.id, { hub: 'unreachable' });
       continue; // תקלה זמנית מול ה-HUB — ננסה שוב בטיק הבא
     }
+    await saveHubStatus(post, s.status);
 
     if (s.status === 'sent') {
       const moved = await one(
@@ -654,8 +787,8 @@ export async function pollNewsletterOutcomes() {
       await failFromHub(post,
         s.status === 'cancelled' ? 'הקמפיין בוטל בצד ה-HUB' : 'ה-HUB דיווח על כשל בשליחה');
     } else {
-      // scheduled / sending — עוד באוויר, בודקים שוב בטיק הבא
-      state.set(post.id, 'active');
+      // draft (ממתין לאישור) / scheduled / sending — עוד באוויר, בודקים שוב בטיק הבא
+      state.set(post.id, { hub: hubWaitState(s.status), scheduled: s.scheduled_at ?? null });
     }
   }
   return state;
@@ -668,15 +801,15 @@ export async function pollNewsletterOutcomes() {
 export async function refreshNewsletterMetrics() {
   if (!hubMailReady()) return;
   const recent = await rows(
-    `select p.id from posts p
+    `select p.id, p.external_id from posts p
        join channels c on c.id = p.channel_id and c.platform = 'newsletter'
       where p.status = 'published' and p.external_id is not null
         and p.published_at >= now() - interval '7 days'`
   );
 
-  for (const { id } of recent) {
+  for (const { id, external_id: ext } of recent) {
     try {
-      const s = await newsletterStatus(`post-${id}`);
+      const s = await newsletterStatus(ext);
       await saveNewsletterMetrics(id, s.counts);
     } catch (e) {
       console.error(`רענון מדדי ניוזלטר #${id} נכשל:`, e.message);
