@@ -22,7 +22,9 @@ process.env.R2_BUCKET ??= 'backup';
 process.env.R2_PUBLIC_BUCKET ??= 'media-test';
 process.env.R2_PUBLIC_BASE_URL ??= 'https://media.example.test';
 
-let db, server, base, org, ids, pending, copies;
+let db, server, base, org, ids, copies;
+// בקשות שה-commit שלהן עוד לא הסתיים (גם כשכמה רצות במקביל)
+const pending = new Set();
 
 async function call(method, path, body, { form } = {}) {
   const res = await fetch(`${base}${path}`, {
@@ -31,7 +33,7 @@ async function call(method, path, body, { form } = {}) {
     body: form ?? (body ? JSON.stringify(body) : undefined),
   });
   const json = await res.json().catch(() => null);
-  await pending;   // ה-commit של הבקשה קורה אחרי שהתשובה נשלחה (כמו בשרת)
+  await Promise.all([...pending]);   // ה-commit קורה אחרי שהתשובה נשלחה (כמו בשרת)
   return { status: res.status, json };
 }
 
@@ -77,6 +79,7 @@ before(async () => {
   const { default: express } = await import('express');
   const { default: content } = await import('../src/routes/content.js');
   const { default: campaigns } = await import('../src/routes/campaigns.js');
+  const { default: channels } = await import('../src/routes/channels.js');
   const { mediaStore } = await import('../src/media.js');
 
   await db.migrate();
@@ -113,14 +116,16 @@ before(async () => {
   app.use(express.json());
   app.use((req, res, next) => {
     req.user = { id: null, name: 'בדיקה', is_owner: true };
-    pending = db.withOrg(org, () => new Promise((resolve) => {
+    const p = db.withOrg(org, () => new Promise((resolve) => {
       res.on('finish', resolve);
       res.on('close', resolve);
       next();
-    })).catch(() => {});
+    })).catch(() => {}).finally(() => pending.delete(p));
+    pending.add(p);
   });
   app.use(content);
   app.use(campaigns);
+  app.use(channels);
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => res.status(500).json({ error: err.message }));
   server = app.listen(0);
@@ -432,4 +437,117 @@ test('המנוע: שתי המשבצות המקושרות משובצות, כל א
   assert.ok(onYt.length >= 1, 'העוקבת שובצה');
   assert.ok(onIg.every((p) => p.channel_id === ids.ig));
   assert.ok(onYt.every((p) => p.channel_id === ids.yt));
+});
+
+/* ---------- סבב תיקונים: מרוצים, נעילות, FK, מחיקת מדיה ---------- */
+
+/** אין שרשרת: אף פריט לא מצביע על פריט שמצביע בעצמו על מישהו */
+async function assertNoChains() {
+  const chains = await q(
+    `select f.id from content_items f join content_items s on s.id = f.linked_to_id
+      where s.linked_to_id is not null`);
+  assert.deepEqual(chains, []);
+}
+
+test('מרוץ: קישור מקביל לא יוצר שרשרת (מקור שהפך לעוקבת נבדק אחרי הנעילה)', { skip }, async () => {
+  for (let i = 0; i < 6; i += 1) {
+    const n = 40 + i;
+    const x = await slot(ids.ig, n);
+    const y = await slot(ids.yt, n);
+    // X→Y הופך את Y לעוקבת; Y→FB במקביל מנסה להפוך את Y למקור
+    const [r1, r2] = await Promise.all([
+      call('POST', `/content/${x}/link`, { target_content_id: y, replace: true }),
+      call('POST', `/content/${y}/link`, { target_campaign_slot: { channel_id: ids.fb, sort_order: n } }),
+    ]);
+    assert.ok([r1.status, r2.status].every((st) => [200, 409].includes(st)),
+      `${r1.status} ${r2.status} ${JSON.stringify([r1.json, r2.json])}`);
+    await assertNoChains();
+  }
+});
+
+test('מקביל: עריכת המקור ועריכת העוקבת באותו רגע — בלי דדלוק, והקבוצה זהה', { skip }, async () => {
+  const a = await slot(ids.ig, 50);
+  const b = (await call('POST', `/content/${a}/link`, {
+    target_campaign_slot: { channel_id: ids.yt, sort_order: 50 } })).json.follower.id;
+  for (let i = 0; i < 8; i += 1) {
+    const [r1, r2] = await Promise.all([
+      call('PATCH', `/content/${a}`, { body: `מקור ${i}`, status: 'ready' }),
+      call('PATCH', `/content/${b}`, { body: `עוקבת ${i}`, status: 'draft' }),
+    ]);
+    assert.equal(r1.status, 200, JSON.stringify(r1.json));
+    assert.equal(r2.status, 200, JSON.stringify(r2.json));
+    assert.deepEqual(await variant(a, ids.ig), await variant(b, ids.yt));
+    assert.equal((await item(a)).title, (await item(b)).title);
+  }
+});
+
+test('מקביל: מחיקת מקור מול קישור עוקבת חדשה — אף עוקבת לא נשארת בלי מדיה', { skip }, async () => {
+  for (let i = 0; i < 4; i += 1) {
+    const n = 60 + i;
+    const a = await slot(ids.ig, n);
+    await uploadBytes(a);
+    await call('POST', `/content/${a}/link`, { target_campaign_slot: { channel_id: ids.yt, sort_order: n } });
+    await Promise.all([
+      call('DELETE', `/content/${a}`, {}),
+      call('POST', `/content/${a}/link`, { target_campaign_slot: { channel_id: ids.fb, sort_order: n } }),
+    ]);
+    const left = await q(
+      `select ci.id, (select count(*)::int from content_assets a where a.content_id = ci.id) as files
+         from content_items ci where ci.campaign_id = $1 and ci.sort_order = $2`, [ids.campaign, n]);
+    for (const x of left) assert.equal(x.files, 1, `פריט ${x.id} בלי הקובץ`);
+    await assertNoChains();
+  }
+});
+
+test('FK: initially immediate באפליקציה; השחזור דוחה בתוך הטרנזקציה שלו', { skip }, async () => {
+  const fk = (await db.pool.query(
+    `select condeferrable, condeferred from pg_constraint
+      where conname = 'content_items_linked_to_id_fkey'`)).rows[0];
+  assert.deepEqual(fk, { condeferrable: true, condeferred: false });
+
+  const ins = (client, id, linkTo) => client.query(
+    `insert into content_items (id, org_id, endpoint_id, kind, title, linked_to_id)
+     values ($1,$2,$3,'value','שחזור',$4)`, [id, org, ids.endpoint, linkTo]);
+  const client = await db.pool.connect();
+  try {
+    // בלי דחייה: עוקבת לפני המקור נכשלת מיד (לא ב-commit, אחרי שהתשובה כבר יצאה)
+    await client.query('begin');
+    await assert.rejects(ins(client, 990001, 990002), (e) => e.code === '23503');
+    await client.query('rollback');
+    // כמו restore.js: set constraints all deferred — הסדר בקובץ לא משנה
+    await client.query('begin');
+    await client.query('set constraints all deferred');
+    await ins(client, 990001, 990002);
+    await ins(client, 990002, null);
+    await client.query('rollback');
+  } finally {
+    client.release();
+  }
+});
+
+test('קישור כשלמקור אין גרסה: גם הגרסה הישנה של היעד יורדת — הקבוצה עקבית', { skip }, async () => {
+  const a = await slot(ids.ig, 70);
+  assert.equal((await call('DELETE', `/content/${a}/variants/${ids.ig}`, {})).status, 200);
+  const t = await slot(ids.yt, 70, { body: 'טקסט ישן ביעד' });
+  const r = await call('POST', `/content/${a}/link`, { target_content_id: t, replace: true });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(await variant(t, ids.yt), null);
+});
+
+test('מחיקת מדיה (force) של מקור: העוקבות מתנתקות עם עותק של הקבצים והטקסט', { skip }, async () => {
+  const tiktok = await q1(
+    "insert into channels (name, platform, max_per_week) values ('טיקטוק','manual',7) returning id");
+  await q('insert into campaign_channels (campaign_id, channel_id) values ($1,$2)', [ids.campaign, tiktok.id]);
+  const a = (await call('POST', '/content', {
+    title: 'בטיקטוק', kind: 'value', campaign_id: ids.campaign, slot_channel_id: tiktok.id,
+    sort_order: 1, body: 'שורד את המחיקה', status: 'ready' })).json.content.id;
+  await uploadBytes(a);
+  const b = (await call('POST', `/content/${a}/link`, {
+    target_campaign_slot: { channel_id: ids.yt, sort_order: 71 } })).json.follower.id;
+
+  const r = await call('DELETE', `/channels/${tiktok.id}?force=1`, {});
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal((await item(b)).linked_to_id, null);
+  assert.equal((await assetsOf(b)).length, 1);
+  assert.deepEqual(await variant(b, ids.yt), { body: 'שורד את המחיקה', status: 'ready', meta: null });
 });
