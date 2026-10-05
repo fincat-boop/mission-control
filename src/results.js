@@ -118,14 +118,21 @@ export function summarize(posts) {
 
 /* ========================= ולידציה (טהור) ========================= */
 
+/** השדות שאפשר לעדכן בשורת תוצאות */
+export const RESULT_FIELDS = [...METRICS, 'note'];
+
 /**
  * בודק את כל השורות לפני שנוגעים במסד. אותם כללים כמו בהזנה מתוך חלון
  * הפוסט (PUT /posts/:id/results): ריק = null ("לא נמדד"), אחרת מספר
  * אי-שלילי שמעוגל לשלם.
  *
+ * עדכון חלקי: רק שדה שמופיע בשורה נחשב "נשלח". שדה שלא נשלח לא נוגעים
+ * בו — כך שני אנשים שממלאים שדות שונים של אותו פוסט לא דורסים זה את זה.
+ * כל שורה מוחזרת כ-{ post_id, set: {שדה: ערך} } עם השדות שנשלחו בלבד.
+ *
  * @param {unknown} items
  * @param {Map<number,string>} statusById הסטטוס של כל פוסט שנמצא במסד
- * @returns {{ok: object[], errors: {index:number, post_id:any, error:string}[]}}
+ * @returns {{ok: {post_id:number, set:object}[], errors: {index:number, post_id:any, error:string}[]}}
  */
 export function validateBatch(items, statusById) {
   if (!Array.isArray(items) || items.length === 0) {
@@ -150,17 +157,31 @@ export function validateBatch(items, statusById) {
     if (!status) return fail('הפוסט לא נמצא');
     if (status !== 'published') return fail('אפשר להזין תוצאות רק לפוסט שפורסם');
 
-    const row = { post_id: id };
+    const set = {};
+    const sent = (f) => Object.prototype.hasOwnProperty.call(it, f);
     try {
-      for (const m of METRICS) row[m] = parseMetric(it[m]);
+      for (const m of METRICS) if (sent(m)) set[m] = parseMetric(it[m]);
     } catch (e) {
       return fail(e.message);
     }
-    const note = it.note == null ? '' : String(it.note).trim();
-    row.note = note || null;
-    ok.push(row);
+    if (sent('note')) set.note = it.note == null ? null : String(it.note).trim() || null;
+    ok.push({ post_id: id, set });
   });
   return { ok, errors };
+}
+
+/**
+ * המצב המלא של שורת התוצאות אחרי העדכון: מה שנשלח גובר, השאר נשאר כמו
+ * שהיה במסד (או null אם אין עדיין שורה). clear = אחרי המיזוג לא נשאר
+ * שום מדד ושום הערה — אז מוחקים את השורה והפוסט חוזר ל"לא נמדד".
+ * @returns {{row: object, clear: boolean}}
+ */
+export function mergeResult(existing, set) {
+  const row = {};
+  for (const f of RESULT_FIELDS) {
+    row[f] = Object.prototype.hasOwnProperty.call(set, f) ? set[f] : existing?.[f] ?? null;
+  }
+  return { row, clear: !isMeasured(row) && !row.note };
 }
 
 /* ========================= מסד ========================= */
@@ -232,12 +253,27 @@ export async function buildResultsSummary(from, to) {
 }
 
 /**
+ * ה-upsert של שורה אחת. שורה חדשה נכנסת במצב הממוזג המלא; בהתנגשות
+ * (שורה שנוצרה במקביל אחרי הקריאה) מתעדכנים רק השדות שנשלחו — שמות
+ * העמודות מגיעים מ-RESULT_FIELDS בלבד, לא מהבקשה.
+ */
+export function upsertSql(set) {
+  const cols = RESULT_FIELDS.filter((f) => Object.prototype.hasOwnProperty.call(set, f));
+  const updates = [...cols.map((f) => `${f} = excluded.${f}`), 'updated_at = now()'];
+  return `insert into post_results (post_id, reach, engagement, clicks, leads, note)
+     values ($1,$2,$3,$4,$5,$6)
+     on conflict (post_id) do update set ${updates.join(', ')}
+     returning post_id, reach, engagement, clicks, leads, note`;
+}
+
+/**
  * שמירה מרוכזת. קודם בודקים הכול, ורק אם כל השורות תקינות כותבים — כולן
  * בטרנזקציה אחת. שורה לא תקינה דוחה את כל השמירה ומחזירה שגיאה לכל
  * שורה, כדי שהמסך יסמן בדיוק את מה שצריך לתקן ולא יישאר חצי שמור.
  *
- * שורה שכל המדדים וההערה בה ריקים מוחקת את התוצאה — הפוסט חוזר להיות
- * "לא נמדד" ולא נשאר עם שורה ריקה שנספרת כמדידה.
+ * כל שורה מעדכנת רק את השדות שנשלחו (ראו validateBatch/mergeResult).
+ * השורות הקיימות ננעלות (for update) לפני המיזוג, כדי ששמירה מקבילה לא
+ * תיכנס בין הקריאה לכתיבה. שורה שאחרי המיזוג ריקה לגמרי נמחקת.
  *
  * @returns {{saved:number, cleared:number, errors:object[], results:object[]}}
  */
@@ -252,28 +288,27 @@ export async function saveBatch(items) {
   if (errors.length) return { saved: 0, cleared: 0, errors, results: [] };
 
   return tx(async (c) => {
+    const { rows: current } = await c.query(
+      `select post_id, reach, engagement, clicks, leads, note
+         from post_results where post_id = any($1::int[]) for update`,
+      [ok.map((r) => r.post_id)]
+    );
+    const existing = new Map(current.map((r) => [r.post_id, r]));
+
     const results = [];
     let cleared = 0;
-    for (const r of ok) {
-      if (!isMeasured(r) && !r.note) {
-        await c.query('delete from post_results where post_id = $1', [r.post_id]);
+    for (const { post_id, set } of ok) {
+      const { row, clear } = mergeResult(existing.get(post_id), set);
+      if (clear) {
+        await c.query('delete from post_results where post_id = $1', [post_id]);
         cleared += 1;
-        results.push({ post_id: r.post_id, cleared: true });
+        results.push({ post_id, cleared: true });
         continue;
       }
-      const { rows: [saved] } = await c.query(
-        `insert into post_results (post_id, reach, engagement, clicks, leads, note)
-         values ($1,$2,$3,$4,$5,$6)
-         on conflict (post_id) do update set
-           reach = excluded.reach, engagement = excluded.engagement,
-           clicks = excluded.clicks, leads = excluded.leads,
-           note = excluded.note, updated_at = now()
-         returning post_id, reach, engagement, clicks, leads, note`,
-        [r.post_id, r.reach, r.engagement, r.clicks, r.leads, r.note]
-      );
+      const { rows: [saved] } = await c.query(upsertSql(set),
+        [post_id, row.reach, row.engagement, row.clicks, row.leads, row.note]);
       results.push(saved);
     }
     return { saved: results.length - cleared, cleared, errors: [], results };
   });
 }
-

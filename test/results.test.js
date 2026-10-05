@@ -1,7 +1,9 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { markTop, summarize, validateBatch, MAX_BATCH } from '../src/results.js';
+import {
+  markTop, mergeResult, summarize, upsertSql, validateBatch, MAX_BATCH,
+} from '../src/results.js';
 import { presetRange, isPreset } from '../public/js/core/dataPeriod.js';
 
 const post = (o) => ({
@@ -99,12 +101,54 @@ test('markTop — שוויון בממוצע: הסכום מכריע', () => {
 
 const statuses = new Map([[1, 'published'], [2, 'published'], [3, 'scheduled']]);
 
-test('validateBatch — ריק = null, מספרים מעוגלים, הערה נחתכת', () => {
+test('validateBatch — ריק = null, מספרים מעוגלים, הערה נחתכת; רק שדות שנשלחו', () => {
   const { ok, errors } = validateBatch(
-    [{ post_id: 1, reach: '120', engagement: '', clicks: ' ', leads: 0, note: '  טוב  ' }],
+    [{ post_id: 1, reach: '120', engagement: '', leads: 0, note: '  טוב  ' }],
     statuses);
   assert.deepEqual(errors, []);
-  assert.deepEqual(ok, [{ post_id: 1, reach: 120, engagement: null, clicks: null, leads: 0, note: 'טוב' }]);
+  // clicks לא נשלח — לא מופיע ב-set ולא יידרס
+  assert.deepEqual(ok, [{ post_id: 1, set: { reach: 120, engagement: null, leads: 0, note: 'טוב' } }]);
+});
+
+/* ---------- מיזוג עדכון חלקי ---------- */
+
+test('mergeResult — מה שנשלח גובר, השאר נשאר מהמסד', () => {
+  const existing = { reach: 500, engagement: 40, clicks: 7, leads: 2, note: 'ישן' };
+  const { row, clear } = mergeResult(existing, { leads: 5 });
+  assert.deepEqual(row, { reach: 500, engagement: 40, clicks: 7, leads: 5, note: 'ישן' });
+  assert.equal(clear, false);
+});
+
+test('mergeResult — ריקון שדה אחד מוחק רק אותו', () => {
+  const existing = { reach: 500, engagement: null, clicks: 7, leads: null, note: null };
+  const { row, clear } = mergeResult(existing, { clicks: null });
+  assert.deepEqual(row, { reach: 500, engagement: null, clicks: null, leads: null, note: null });
+  assert.equal(clear, false);
+});
+
+test('mergeResult — clear רק כשהמצב המלא אחרי המיזוג ריק', () => {
+  // ריקון השדה היחיד שהיה — נמחק
+  assert.equal(mergeResult({ reach: 500, engagement: null, clicks: null, leads: null, note: null },
+    { reach: null }).clear, true);
+  // ריקון שדה כשנשארו אחרים — לא נמחק
+  assert.equal(mergeResult({ reach: 500, engagement: 3, clicks: null, leads: null, note: null },
+    { reach: null }).clear, false);
+  // הערה בלבד מחזיקה את השורה
+  assert.equal(mergeResult({ reach: 1, engagement: null, clicks: null, leads: null, note: 'x' },
+    { reach: null }).clear, false);
+  // אין שורה קיימת ונשלח רק ריק — אין מה לשמור
+  assert.equal(mergeResult(null, { reach: null, note: null }).clear, true);
+  // אין שורה קיימת: מה שלא נשלח הוא null, לא 0
+  assert.deepEqual(mergeResult(undefined, { clicks: 4 }).row,
+    { reach: null, engagement: null, clicks: 4, leads: null, note: null });
+});
+
+test('upsertSql — בהתנגשות מתעדכנים רק השדות שנשלחו', () => {
+  const sql = upsertSql({ leads: 5, note: null });
+  assert.match(sql, /do update set leads = excluded\.leads, note = excluded\.note, updated_at = now\(\)/);
+  assert.doesNotMatch(sql, /reach = excluded/);
+  // מפתח זר בבקשה לא נכנס לשאילתה
+  assert.doesNotMatch(upsertSql({ leads: 1, 'x; drop table posts': 1 }), /drop/);
 });
 
 test('validateBatch — שגיאה לכל שורה בעייתית, עם האינדקס שלה', () => {

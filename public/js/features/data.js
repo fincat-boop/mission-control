@@ -82,7 +82,9 @@ export async function renderData() {
 const RES_FIELDS = ['reach', 'engagement', 'clicks', 'leads', 'note'];
 
 /**
- * שורות ששונו ועוד לא נשמרו: post_id -> הערכים כמו שהוקלדו (מחרוזות).
+ * שורות ששונו ועוד לא נשמרו: post_id -> רק השדות שהשתנו (מחרוזות כמו
+ * שהוקלדו). רק הם נשלחים, והשרת מעדכן רק אותם — כך ערך שמישהו הזין
+ * בינתיים מחלון הפוסט לא נדרס בערך הישן שנטען לטבלה.
  * חי מחוץ ל-DOM, כדי שרינדור מחדש של הטאב (סגירת חלון פוסט, רענון)
  * לא ימחק מה שהוקלד — הערכים נשתלים בחזרה בשורות שעדיין מוצגות.
  */
@@ -144,18 +146,16 @@ function resultsPanel(entry) {
   </div>`;
 }
 
-/** הערכים הנוכחיים בשורה, ואם משהו בהם שונה ממה שנטען */
+/** השדות בשורה ששונו ממה שנטען (רק הם), והאם יש קלט שאינו מספר */
 function readRow(tr) {
-  const vals = {};
-  let changed = false;
+  const changed = {};
   let bad = false;
   for (const f of RES_FIELDS) {
     const inp = tr.querySelector(`[data-f="${f}"]`);
-    vals[f] = inp.value;
-    if (inp.value !== inp.dataset.orig) changed = true;
+    if (inp.value !== inp.dataset.orig) changed[f] = inp.value;
     if (inp.validity?.badInput) bad = true;          // "abc" בשדה מספר — הערך נקרא כריק
   }
-  return { vals, changed, bad };
+  return { changed, bad };
 }
 
 function paintSaveButton() {
@@ -167,9 +167,10 @@ function paintSaveButton() {
 
 function markRow(tr) {
   const id = Number(tr.dataset.resRow);
-  const { vals, changed } = readRow(tr);
-  if (changed) dirty.set(id, vals); else dirty.delete(id);
-  tr.classList.toggle('dirty', changed);
+  const { changed } = readRow(tr);
+  const isDirty = Object.keys(changed).length > 0;
+  if (isDirty) dirty.set(id, changed); else dirty.delete(id);
+  tr.classList.toggle('dirty', isDirty);
   tr.classList.remove('err', 'saved');
   tr.querySelector('.reserr').hidden = true;
   paintSaveButton();
@@ -180,7 +181,7 @@ function restoreDirty() {
   for (const [id, vals] of [...dirty]) {
     const tr = $(`#data [data-res-row="${id}"]`);
     if (!tr) { dirty.delete(id); continue; }
-    for (const f of RES_FIELDS) tr.querySelector(`[data-f="${f}"]`).value = vals[f];
+    for (const [f, v] of Object.entries(vals)) tr.querySelector(`[data-f="${f}"]`).value = v;
     markRow(tr);
   }
   paintSaveButton();
@@ -206,6 +207,7 @@ async function saveResults() {
     return;
   }
 
+  // רק השדות שהשתנו — השרת לא נוגע בשאר (עדכון חלקי)
   const items = [...dirty].map(([post_id, v]) => ({ post_id, ...v }));
   const btn = $('#resSave');
   btn.disabled = true;
@@ -222,7 +224,8 @@ async function saveResults() {
     throw e;
   }
 
-  // עדכון במקום — בלי רינדור של הטאב, כדי שהגלילה והמיקום יישארו
+  // עדכון במקום — בלי רינדור של הטאב, כדי שהגלילה והמיקום יישארו. השרת
+  // מחזיר את המצב המלא אחרי המיזוג, כולל שדות שמישהו אחר מילא בינתיים.
   for (const r of out.results) {
     const tr = $(`#data [data-res-row="${r.post_id}"]`);
     if (!tr) continue;
@@ -388,8 +391,13 @@ function wireResults() {
     resultsAll = true;
     await renderData();
   })));
+  // חלון הפוסט יכול לשנות את התוצאות של אותו פוסט — בסגירה מרנדרים מחדש
+  // (השורות שלא נשמרו נשתלות בחזרה), כדי שהטבלה לא תציג ערכים ישנים
   $$('#data [data-open-post]').forEach((b) =>
-    b.addEventListener('click', run(() => openPostPreview(b.dataset.openPost))));
+    b.addEventListener('click', run(async () => {
+      await openPostPreview(b.dataset.openPost);
+      $('#postDlg').addEventListener('close', run(renderData), { once: true });
+    })));
   $$('#data [data-goto]').forEach((b) =>
     b.addEventListener('click', run(() => goToTab(b.dataset.goto))));
 }
