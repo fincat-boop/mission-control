@@ -17,27 +17,27 @@ test('parseTime — HH:MM תקין בלבד', () => {
 });
 
 test('urgentSlotTime — יום עתידי: בדיוק בשעה שנבחרה', () => {
-  const now = at('2026-10-05T15:20:00+03:00');
-  assert.equal(iso(urgentSlotTime(day('2026-10-06T12:00:00+03:00'), [10, 0], now)),
-    iso(at('2026-10-06T10:00:00+03:00')));
+  const now = at('2026-10-05T15:20:00');
+  assert.equal(iso(urgentSlotTime(day('2026-10-06T12:00:00'), [10, 0], now)),
+    iso(at('2026-10-06T10:00:00')));
 });
 
 test('urgentSlotTime — היום, השעה עוד לא עברה: השעה שנבחרה', () => {
-  const now = at('2026-10-05T08:20:00+03:00');
-  assert.equal(iso(urgentSlotTime(day('2026-10-05T12:00:00+03:00'), [10, 0], now)),
-    iso(at('2026-10-05T10:00:00+03:00')));
+  const now = at('2026-10-05T08:20:00');
+  assert.equal(iso(urgentSlotTime(day('2026-10-05T12:00:00'), [10, 0], now)),
+    iso(at('2026-10-05T10:00:00')));
 });
 
 test('urgentSlotTime — היום, השעה עברה: השעה העגולה הבאה (לא משבצת שעברה)', () => {
-  const now = at('2026-10-05T15:20:00+03:00');
-  assert.equal(iso(urgentSlotTime(day('2026-10-05T12:00:00+03:00'), [10, 0], now)),
-    iso(at('2026-10-05T16:00:00+03:00')));
+  const now = at('2026-10-05T15:20:00');
+  assert.equal(iso(urgentSlotTime(day('2026-10-05T12:00:00'), [10, 0], now)),
+    iso(at('2026-10-05T16:00:00')));
   // 15:50 → לפחות רבע שעה קדימה → 17:00
-  assert.equal(iso(urgentSlotTime(day('2026-10-05T12:00:00+03:00'), [10, 0], at('2026-10-05T15:50:00+03:00'))),
-    iso(at('2026-10-05T17:00:00+03:00')));
+  assert.equal(iso(urgentSlotTime(day('2026-10-05T12:00:00'), [10, 0], at('2026-10-05T15:50:00'))),
+    iso(at('2026-10-05T17:00:00')));
 });
 
 test('urgentSlotTime — היום מאוחר מדי: אין מועד היום (עוברים למחר)', () => {
-  const now = at('2026-10-05T21:30:00+03:00');
-  assert.equal(urgentSlotTime(day('2026-10-05T12:00:00+03:00'), [10, 0], now), null);
+  const now = at('2026-10-05T21:30:00');
+  assert.equal(urgentSlotTime(day('2026-10-05T12:00:00'), [10, 0], now), null);
 });

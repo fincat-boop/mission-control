@@ -110,6 +110,8 @@ await migrate();
 
 const server = app.listen(port, () => {
   console.log(`Mission Control — מאזין על פורט ${port}`);
+  // "היום", שעות עגולות וימים חסומים מחושבים בשעון התהליך — חייב להיות ישראל
+  if (Intl.DateTimeFormat().resolvedOptions().timeZone !== 'Asia/Jerusalem') console.warn(`⚠ אזור הזמן של השרת הוא ${Intl.DateTimeFormat().resolvedOptions().timeZone} ולא Asia/Jerusalem — הגדירו TZ=Asia/Jerusalem, אחרת "היום" ושעות השיבוץ יזוזו`);
 });
 
 // תחזוקה ברקע: גיבוי יומי, וניקוי מבצעים דחופים שעברו זמנם בלי תוכן —

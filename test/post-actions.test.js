@@ -5,9 +5,9 @@ import {
   choosePrimary, isMissed, nextFullHour, postFacts, rescheduleApproves,
 } from '../public/js/core/postActions.js';
 
-const NOW = new Date('2026-10-05T12:00:00+03:00');
-const FUTURE = '2026-10-07T10:00:00+03:00';
-const PAST = '2026-10-04T10:00:00+03:00';
+const NOW = new Date('2026-10-05T12:00:00');
+const FUTURE = '2026-10-07T10:00:00';
+const PAST = '2026-10-04T10:00:00';
 const ALL = { content: true, approve: true };
 const CONTENT = { content: true, approve: false };
 const NONE = { content: false, approve: false };
@@ -80,8 +80,8 @@ test('עבר המועד בערוץ אוטומטי — "קבע מועד חדש"',
 });
 
 test('בפרסום — "שחרר פרסום תקוע" רק אחרי 10 דקות, ורק עם הרשאת אישור', () => {
-  const old = '2026-10-05T11:45:00+03:00';   // רבע שעה לפני NOW
-  const fresh = '2026-10-05T11:55:00+03:00'; // חמש דקות לפני NOW
+  const old = '2026-10-05T11:45:00';   // רבע שעה לפני NOW
+  const fresh = '2026-10-05T11:55:00'; // חמש דקות לפני NOW
   assert.equal(pick(facts({ status: 'publishing', scheduled_at: PAST, publishingStartedAt: old })).primary,
     'resetPublishing');
   assert.equal(pick(facts({ status: 'publishing', scheduled_at: PAST, publishingStartedAt: fresh })).primary, null);
@@ -102,8 +102,8 @@ test('פורסם — אין פעולה ראשית (המדידה בגוף החל�
 test('isMissed — מתוכנן שעבר; מאושר רק אחרי רבע שעה; נכשל/ממתין לא', () => {
   assert.equal(isMissed({ status: 'scheduled', scheduled_at: PAST }, NOW), true);
   assert.equal(isMissed({ status: 'scheduled', scheduled_at: FUTURE }, NOW), false);
-  assert.equal(isMissed({ status: 'approved', scheduled_at: '2026-10-05T11:50:00+03:00' }, NOW), false);
-  assert.equal(isMissed({ status: 'approved', scheduled_at: '2026-10-05T11:40:00+03:00' }, NOW), true);
+  assert.equal(isMissed({ status: 'approved', scheduled_at: '2026-10-05T11:50:00' }, NOW), false);
+  assert.equal(isMissed({ status: 'approved', scheduled_at: '2026-10-05T11:40:00' }, NOW), true);
   assert.equal(isMissed({ status: 'failed', scheduled_at: PAST }, NOW), false);
   assert.equal(isMissed({ status: 'pending_approval', scheduled_at: PAST }, NOW), false);
   assert.equal(isMissed({ status: 'published', scheduled_at: PAST }, NOW), false);
@@ -119,48 +119,48 @@ test('rescheduleApproves — רק כשהאישור יעבור, ולא למאוש
 
 test('nextFullHour — שעה עגולה, לפחות רבע שעה קדימה', () => {
   const at = (s) => nextFullHour(new Date(s));
-  assert.equal(at('2026-10-05T10:40:00+03:00').toISOString(), new Date('2026-10-05T11:00:00+03:00').toISOString());
-  assert.equal(at('2026-10-05T10:50:00+03:00').toISOString(), new Date('2026-10-05T12:00:00+03:00').toISOString());
-  assert.equal(at('2026-10-05T10:45:00+03:00').toISOString(), new Date('2026-10-05T11:00:00+03:00').toISOString());
+  assert.equal(at('2026-10-05T10:40:00').toISOString(), new Date('2026-10-05T11:00:00').toISOString());
+  assert.equal(at('2026-10-05T10:50:00').toISOString(), new Date('2026-10-05T12:00:00').toISOString());
+  assert.equal(at('2026-10-05T10:45:00').toISOString(), new Date('2026-10-05T11:00:00').toISOString());
 });
 
 test('defaultUrgentTime — 10:00, או השעה העגולה הבאה כשכבר מאוחר מזה היום', async () => {
   const { defaultUrgentTime } = await import('../public/js/core/postActions.js');
   const t = (s) => defaultUrgentTime(new Date(s));
-  assert.equal(t('2026-10-05T08:20:00+03:00'), '10:00');
+  assert.equal(t('2026-10-05T08:20:00'), '10:00');
   // 09:50 — עשר דקות לפני 10:00 זה צפוף מדי; לפחות רבע שעה קדימה → 11:00
-  assert.equal(t('2026-10-05T09:50:00+03:00'), '11:00');
-  assert.equal(t('2026-10-05T15:20:00+03:00'), '16:00');
-  assert.equal(t('2026-10-05T21:30:00+03:00'), '10:00'); // מאוחר מדי — מחר
+  assert.equal(t('2026-10-05T09:50:00'), '11:00');
+  assert.equal(t('2026-10-05T15:20:00'), '16:00');
+  assert.equal(t('2026-10-05T21:30:00'), '10:00'); // מאוחר מדי — מחר
 });
 
 test('nextFreeSlot — השעה העגולה הפנויה הבאה בערוץ', async () => {
   const { nextFreeSlot } = await import('../public/js/core/postActions.js');
   const d = (s) => new Date(s).toISOString();
-  const now = new Date('2026-10-05T15:20:00+03:00'); // יום שני
+  const now = new Date('2026-10-05T15:20:00'); // יום שני
   // בלי כלום על הלוח — 16:00
-  assert.equal(nextFreeSlot({ now }).toISOString(), d('2026-10-05T16:00:00+03:00'));
+  assert.equal(nextFreeSlot({ now }).toISOString(), d('2026-10-05T16:00:00'));
   // 16:00 תפוס בערוץ — 17:00
-  assert.equal(nextFreeSlot({ now, busy: [{ at: '2026-10-05T16:00:00+03:00' }] }).toISOString(),
-    d('2026-10-05T17:00:00+03:00'));
+  assert.equal(nextFreeSlot({ now, busy: [{ at: '2026-10-05T16:00:00' }] }).toISOString(),
+    d('2026-10-05T17:00:00'));
   // מאוחר מדי היום — מחר ב-9:00
-  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T20:50:00+03:00') }).toISOString(),
-    d('2026-10-06T09:00:00+03:00'));
+  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T20:50:00') }).toISOString(),
+    d('2026-10-06T09:00:00'));
   // מחר (שלישי=2) חסום לערוץ — מחרתיים
-  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T20:50:00+03:00'), blockedDays: [2] }).toISOString(),
-    d('2026-10-07T09:00:00+03:00'));
+  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T20:50:00'), blockedDays: [2] }).toISOString(),
+    d('2026-10-07T09:00:00'));
   // לאותה נקודה כבר יש פוסט היום בערוץ — מחר
-  assert.equal(nextFreeSlot({ now, endpointId: 4, busy: [{ at: '2026-10-05T09:00:00+03:00', endpoint_id: 4 }] })
-    .toISOString(), d('2026-10-06T09:00:00+03:00'));
+  assert.equal(nextFreeSlot({ now, endpointId: 4, busy: [{ at: '2026-10-05T09:00:00', endpoint_id: 4 }] })
+    .toISOString(), d('2026-10-06T09:00:00'));
   // לפני שעות הפעילות — 9:00 של אותו יום
-  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T06:10:00+03:00') }).toISOString(),
-    d('2026-10-05T09:00:00+03:00'));
+  assert.equal(nextFreeSlot({ now: new Date('2026-10-05T06:10:00') }).toISOString(),
+    d('2026-10-05T09:00:00'));
 });
 
 test('resetTooSoon (שרת) — אותו סף של 10 דקות', async () => {
   const { resetTooSoon } = await import('../src/publish/runner.js');
-  const now = new Date('2026-10-05T12:00:00+03:00');
-  assert.equal(resetTooSoon('2026-10-05T11:55:00+03:00', now), true);
-  assert.equal(resetTooSoon('2026-10-05T11:50:00+03:00', now), false);
+  const now = new Date('2026-10-05T12:00:00');
+  assert.equal(resetTooSoon('2026-10-05T11:55:00', now), true);
+  assert.equal(resetTooSoon('2026-10-05T11:50:00', now), false);
   assert.equal(resetTooSoon(null, now), false);
 });
