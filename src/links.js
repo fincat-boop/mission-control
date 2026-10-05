@@ -55,6 +55,35 @@ export async function linkGroup(contentId) {
 }
 
 /**
+ * סדר הנעילה של כל שינוי בקבוצה מקושרת: קודם שורת הקמפיין (כמו "קמפיין
+ * מוכן" והעלאה מרוכזת — קמפיין ← פריטים), ואחר כך שורות הקבוצה לפי מזהה.
+ * כך שתי בקשות על אותה קבוצה (עריכה של המקור ושל העוקבת במקביל, מחיקה מול
+ * קישור) רצות בתור ולא נתקעות זו בזו. חייב לרוץ לפני שהבקשה נוגעת בשורה של
+ * הפריט עצמו (updateById נועל אותה).
+ * רק משבצת של קמפיין כללי — רק להן יש קישורים; זווית ותוכן שוטף לא ננעלים.
+ * @returns {Promise<object|null>} שורת הפריט, נקראת אחרי הנעילה
+ */
+export async function lockLinkScope(contentId) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const it = await one(
+      'select id, campaign_id, slot_channel_id from content_items where id = $1', [contentId]);
+    if (!it || !it.campaign_id || !it.slot_channel_id) return it;
+    await query('select id from campaigns where id = $1 for update', [it.campaign_id]);
+    // הפריט עבר קמפיין בין הקריאה לנעילה — מנסים שוב מול הקמפיין החדש
+    const now = await one('select campaign_id from content_items where id = $1', [contentId]);
+    if (now && now.campaign_id !== it.campaign_id) continue;
+    await query(
+      `with root as (select coalesce(linked_to_id, id) as id from content_items where id = $1)
+       select ci.id from content_items ci, root
+        where ci.id = root.id or ci.linked_to_id = root.id
+        order by ci.id for update of ci`,
+      [contentId]);
+    return one('select * from content_items where id = $1', [contentId]);
+  }
+  throw new LinkError('התוכן השתנה בזמן הפעולה — נסו שוב', 409);
+}
+
+/**
  * מעתיק את התוכן של $1 לכל שאר הפריטים בקבוצה שלו: כותרת, סוג, גוף, וגרסה
  * למדיה של כל אחד (טקסט, מצב, meta). עריכה של עוקבת עוברת כך גם למקור
  * ומשם לשאר העוקבות. פריט לא מקושר — לא נוגע בכלום.
@@ -71,6 +100,20 @@ export async function syncFrom(contentId) {
       returning ci.id`,
     [contentId]);
   if (!others.length) return 0;
+
+  // לפריט שנערך אין גרסה (נמחקה) — גם לשאר אין: הקבוצה תמיד זהה
+  const hasVariant = await one(
+    `select 1 from content_variants v join content_items ci
+        on ci.id = v.content_id and v.channel_id = ci.slot_channel_id
+      where ci.id = $1`, [contentId]);
+  if (!hasVariant) {
+    await query(
+      `delete from content_variants v using content_items ci
+        where ci.id = v.content_id and v.channel_id = ci.slot_channel_id
+          and ci.id = any($1::int[])`,
+      [others.map((x) => x.id)]);
+    return others.length;
+  }
 
   // הגרסה של המקור-לרגע (הפריט שנערך) למדיה שלו → הגרסה של כל אחד למדיה שלו
   await query(
@@ -96,6 +139,8 @@ export async function syncFrom(contentId) {
  * @returns {Promise<{contentId:number, channelId:number|null}|null>} null = אין פריט
  */
 export async function mediaOwner(contentId, channelId = null) {
+  // העלאה מול מחיקת המקור / ניתוק באותו רגע — אותו סדר נעילה
+  await lockLinkScope(contentId);
   const item = await one(
     `select ci.id, ci.linked_to_id, src.slot_channel_id as source_channel_id
        from content_items ci
@@ -142,8 +187,12 @@ async function slotVariantId(contentId) {
  * @returns {Promise<number>} כמה קבצים הועתקו
  */
 export async function copyAssetsTo(sourceId, targetId, { store = mediaStore } = {}) {
+  // for update: התחזוקה מעבירה קבצים ישנים (bytea) ל-R2 ברקע ומאפסת את
+  // הבייטים. נעילת השורות מחכה להעברה שבאמצע (ורואה את התוצאה שלה), או
+  // מעכבת אותה עד סוף הבקשה — כך לא מעתיקים שורה בלי בייטים ובלי מפתח.
   const list = await rows(
-    'select id, variant_id, storage_key, filename from content_assets where content_id = $1 order by id',
+    `select id, variant_id, storage_key, filename from content_assets
+      where content_id = $1 order by id for update`,
     [sourceId]);
   if (!list.length) return 0;
   if (list.some((a) => a.storage_key) && !mediaReady()) {
@@ -215,6 +264,7 @@ export async function detachFollowers(sourceId, { sourceGoing = false, ...opts }
  * שלו מתנתקות. בכל מקרה כל משבצת נשארת עם תוכן משלה.
  */
 export async function unlink(contentId, opts = {}) {
+  await lockLinkScope(contentId);
   const item = await one('select id, linked_to_id from content_items where id = $1', [contentId]);
   if (!item) throw new LinkError('לא נמצא תוכן כזה', 404);
   if (item.linked_to_id) return unlinkFollower(item.id, opts);
@@ -229,6 +279,7 @@ export async function unlink(contentId, opts = {}) {
  * המקור נמחק, והראשונה יורשת את הקבצים שלו).
  */
 export async function releaseLinks(contentId, { sourceGoing = false, ...opts } = {}) {
+  await lockLinkScope(contentId);
   const item = await one('select id, linked_to_id from content_items where id = $1', [contentId]);
   if (!item) return { unlinked: 0, copied: 0 };
   if (item.linked_to_id) {
@@ -264,6 +315,10 @@ export function linkError(ctx) {
   const { campaign, root, rootChannel, target, targetChannel, targetItem, sibling, replace } = ctx;
   if (!root.slot_channel_id || campaign?.structure !== 'general') {
     return { error: 'קישור משבצות זמין רק בקמפיין כללי', status: 400 };
+  }
+  // רמה אחת: המקור לא מקושר בעצמו (אם בינתיים הפך לעוקבת — מנסים שוב)
+  if (root.linked_to_id) {
+    return { error: 'המשבצת הזו התקשרה בינתיים למשבצת אחרת — נסו שוב', status: 409 };
   }
   if (!target || target.campaign_id !== root.campaign_id) {
     return { error: 'אפשר לקשר רק למשבצת באותו קמפיין', status: 400 };
@@ -331,15 +386,11 @@ async function uniqueOr409(fn, message) {
  * @returns {Promise<{source:object, follower:object}>}
  */
 export async function linkSlots(clickedId, body = {}) {
-  const clicked = await one(
-    'select id, linked_to_id, campaign_id from content_items where id = $1', [clickedId]);
+  // קודם הנעילה (קמפיין ← הקבוצה של המשבצת שנלחצה), ורק אחריה הקריאה: מה
+  // שנקרא לפני הנעילה יכול להתיישן — קישור מקביל היה יוצר שרשרת
+  const clicked = await lockLinkScope(clickedId);
   if (!clicked) throw new LinkError('לא נמצא תוכן כזה', 404);
   const rootId = clicked.linked_to_id ?? clicked.id;
-  // נעילת שורת הקמפיין, כמו בהעלאה המרוכזת וב"קמפיין מוכן" (שדוחס את הסדר):
-  // משבצת היעד נקראת ונוצרת מול סדר יציב
-  if (clicked.campaign_id) {
-    await query('select id from campaigns where id = $1 for update', [clicked.campaign_id]);
-  }
 
   // היעד: פריט קיים לפי מזהה, או מקום (מדיה + מספר משבצת) בקמפיין של המקור
   let target;

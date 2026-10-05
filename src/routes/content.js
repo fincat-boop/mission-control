@@ -12,7 +12,8 @@ import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
 import {
-  LinkError, assetOwnerId, linkGroup, linkSlots, mediaOwner, releaseLinks, syncFrom, unlink,
+  LinkError, assetOwnerId, linkGroup, linkSlots, lockLinkScope, mediaOwner, releaseLinks, syncFrom,
+  unlink,
 } from '../links.js';
 
 const r = Router();
@@ -62,6 +63,8 @@ async function uniqueOrNull(fn) {
 /** יצירה או עדכון של הגרסה של זווית מסוימת במדיה מסוימת */
 r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
+  // משבצת מקושרת: סדר הנעילה של הקבוצה (קמפיין ← פריטים) לפני כל כתיבה
+  try { await lockLinkScope(req.params.id); } catch (e) { return linkFail(res, e); }
   const slotErr = await slotChannelError(req.params.id, req.params.channelId);
   if (slotErr) return bad(res, slotErr);
   const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
@@ -84,6 +87,7 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
 }));
 
 r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
+  try { await lockLinkScope(req.params.id); } catch (e) { return linkFail(res, e); }
   await query('delete from content_variants where content_id = $1 and channel_id = $2',
     [req.params.id, req.params.channelId]);
   // משבצת מקושרת: הגרסה המשותפת יורדת מכל המשבצות בקבוצה, כל אחת במדיה שלה
@@ -205,6 +209,8 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
 }));
 
 r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  // נעילת הקמפיין לפני הקבוצות (אותו סדר כמו בכל שינוי של משבצות מקושרות)
+  await query('select id from campaigns where id = $1 for update', [req.params.id]);
   // משבצות מקושרות מתפרקות קודם: בתוכן שוטף אין משבצות לקשר ביניהן, וכל
   // אחת נשארת עם עותק משלה של התוכן (קבצים מועתקים מהמקור)
   const sources = await rows(
@@ -352,6 +358,9 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
 
 r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   const b = { ...req.body };
+  // משבצת מקושרת: נעילת הקמפיין ואז הקבוצה — לפני ש-updateById נועל את
+  // הפריט עצמו. עריכה של המקור ושל העוקבת במקביל רצות בתור, לא בדדלוק.
+  try { await lockLinkScope(req.params.id); } catch (e) { return linkFail(res, e); }
   const current = await one('select id, campaign_id, slot_channel_id from content_items where id = $1',
     [req.params.id]);
   if (!current) return bad(res, 'לא נמצא תוכן כזה', 404);

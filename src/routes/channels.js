@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { autoFill, bad, evictBlocked, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
+import { LinkError, releaseLinks } from '../links.js';
 
 const r = Router();
 
@@ -72,6 +73,20 @@ r.delete('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
       error: `בערוץ יש ${impact.published} פוסטים שפורסמו ו־${impact.variants} ניסוחים שנכתבו לו — מחיקה תמחק את כולם. אפשר להשבית את הערוץ במקום.`,
       impact, needs_force: true,
     });
+  }
+  // משבצות מקושרות במדיה שנמחקת: הגרסה והקבצים שלהן יורדים עם המדיה, והשאר
+  // בקבוצה היו נשארות בלי מקור. מתפרקות קודם — כל אחת עם עותק משלה.
+  const linked = await rows(
+    `select ci.id from content_items ci
+      where ci.slot_channel_id = $1
+        and (ci.linked_to_id is not null
+             or exists (select 1 from content_items f where f.linked_to_id = ci.id))
+      order by ci.campaign_id, ci.id`, [req.params.id]);
+  try {
+    for (const x of linked) await releaseLinks(x.id);
+  } catch (e) {
+    if (e instanceof LinkError) return bad(res, e.message, e.status);
+    throw e;
   }
   await query('delete from channels where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
