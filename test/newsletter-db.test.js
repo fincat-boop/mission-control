@@ -266,6 +266,10 @@ test('טיק: ניוזלטר שהגיע מועדו בלי העברה — נכש�
   const scheduled = await newsletter({ at: inHours(-2), status: 'scheduled' });
   const old = await newsletter({ at: inHours(-30), status: 'scheduled' });
   const future = await newsletter({ at: inHours(5), status: 'approved' });
+  // משבצת ניוזלטר ריקה (בלי תוכן) — לא נכשלת ולא פותחת משימה
+  const empty = await db.withOrg(org, () => db.one(
+    `insert into posts (channel_id, title, kind, scheduled_at, status)
+     values ($1, 'משבצת ריקה', 'value', $2, 'scheduled') returning id`, [ids.nl, inHours(-1)]));
 
   await tick();
   assert.equal(hubPosts().length, 0);
@@ -280,6 +284,8 @@ test('טיק: ניוזלטר שהגיע מועדו בלי העברה — נכש�
   // ישן מיממה — לא מציפים; עתידי — לא נוגעים
   assert.equal((await post(old.post)).status, 'scheduled');
   assert.equal((await post(future.post)).status, 'approved');
+  assert.equal((await post(empty.id)).status, 'scheduled');
+  assert.equal((await q1(`select count(*)::int as n from tasks where post_id = $1`, [empty.id])).n, 0);
 
   // טיק שני — לא עוד משימה
   await tick();

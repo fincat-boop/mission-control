@@ -576,13 +576,15 @@ export const NOT_TRANSFERRED_WINDOW_HOURS = 24;
 /**
  * ניוזלטר (מתוכנן או מאושר) שהמועד שלו הגיע ולא הועבר ל-HUB: עובר ל"נכשל"
  * עם משימה דחופה — "ניוזלטר לא הועבר ל-HUB". לא שולחים ולא יוצרים כלום ב-HUB.
- * רק מהיממה האחרונה, כדי שפוסטים ישנים שנשארו "מתוכנן" לא יציפו משימות.
+ * רק מהיממה האחרונה, כדי שפוסטים ישנים שנשארו "מתוכנן" לא יציפו משימות,
+ * ורק פוסט עם תוכן: משבצת ניוזלטר ריקה נשארת "עבר המועד" כמו כל משבצת ריקה.
  */
 async function newsletterNotTransferred() {
   const due = await rows(
     `select p.id from posts p
        join channels c on c.id = p.channel_id and c.active and c.platform = 'newsletter'
       where p.status in ('scheduled', 'approved')
+        and p.content_id is not null
         and p.scheduled_at <= now()
         and p.scheduled_at > now() - ($1 || ' hours')::interval
         and not exists (select 1 from content_items ci
