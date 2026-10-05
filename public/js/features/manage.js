@@ -1,7 +1,7 @@
 import { api } from '../core/api.js';
 import { can, rebuildEpColors, state } from '../core/state.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
-import { HE_DAYS, KIND_VAR, fmtDate, ymd } from '../core/format.js';
+import { HE_DAYS, fmtDate, ymd } from '../core/format.js';
 import { refreshBoard } from '../ui/refresh.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openGeneric } from '../ui/dialog.js';
@@ -36,7 +36,7 @@ export async function renderManage() {
 
     <div class="setgroup" data-section="channels">
       <h2>ערוצי פרסום</h2>
-      <p class="sub">כמה שטח יש בכל ערוץ ומה הכללים שלו.</p>
+      <p class="sub">כמה פוסטים כל ערוץ מקבל, איך מפרסמים אליו ובאילו ימים הוא סגור.</p>
       <div class="autopub" data-section="autopublish">
         <label class="cbline">
           <input type="checkbox" id="autopubGlobal" ${pub.autopublish_enabled ? 'checked' : ''}
@@ -56,7 +56,7 @@ export async function renderManage() {
     ${systemGroup(users, settings, backupsRes?.backups ?? null, ro)}`;
 
   restorePlace();
-  wireManage(ro);
+  wireManage(ro, pub.connections);
 }
 
 /**
@@ -144,22 +144,26 @@ const PLATFORMS = [
   ['newsletter', 'ניוזלטר'],
 ];
 
-/** בלוק החיבור לפלטפורמה — מופיע בתוך פרטי הערוץ */
+/**
+ * בלוק "חיבור ופרסום" בפרטי הערוץ: פלטפורמה, ולפייסבוק/אינסטגרם גם
+ * מזהה, טוקן ופרסום אוטומטי לערוץ — שלושתם נשמרים יחד ב"שמור חיבור"
+ * (לא בכל שינוי, כמו הקיבולת), כדי שיהיה מודל שמירה אחד לבלוק.
+ */
 function connectionBlock(c, conn, ro, hubReady) {
   const platform = c.platform ?? 'manual';
 
   const select = `
     <div class="prow">
-      <label>פלטפורמה — קובעת איך מפרסמים לערוץ</label>
-      <select data-ch-platform="${c.id}" ${ro ? 'disabled' : ''}>
+      <label for="chpf-${c.id}">פלטפורמה — קובעת איך מפרסמים לערוץ</label>
+      <select id="chpf-${c.id}" data-ch-platform="${c.id}" ${ro ? 'disabled' : ''}>
         ${PLATFORMS.map(([v, l]) =>
           `<option value="${v}" ${platform === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>`;
 
   if (platform === 'whatsapp') {
-    return `${select}<div class="fhint">לקבוצת וואטסאפ אין API רשמי — השליחה חצי-אוטומטית:
-      כשמגיע מועד הפרסום נוצרת משימה דחופה עם הטקסט המוכן להעתקה, ומסמנים "פורסם" אחרי השליחה.</div>`;
+    return `${select}<div class="fhint">לקבוצת וואטסאפ אין API רשמי — הפרסום חצי-אוטומטי:
+      כשמגיע מועד הפוסט נוצרת משימה דחופה עם הטקסט מוכן להעתקה, ומסמנים "פורסם" אחרי השליחה.</div>`;
   }
   if (platform === 'newsletter') {
     const chip = hubReady
@@ -168,93 +172,106 @@ function connectionBlock(c, conn, ro, hubReady) {
     return `${select}
       <div class="prow"><label>מערכת הדיוור (HUB)</label>${chip}</div>
       <div class="fhint">${hubReady
-        ? 'הניוזלטר נשלח דרך ה-HUB: נושא, גוף ורשימות יעד נקבעים בעריכת הגרסה של ערוץ המייל בתוכן. שליחה רק אחרי אישור פר-פוסט.'
-        : 'חסרים HUB_API_URL / HUB_API_KEY בשרת (Railway). עד אז הערוץ מושבת לשליחה אוטומטית — אפשר לשבץ ולסמן "פורסם" ידנית.'}</div>`;
+        ? 'הניוזלטר נשלח דרך ה-HUB: נושא, גוף ורשימות יעד נקבעים בעריכת הגרסה של ערוץ המייל בתוכן. פרסום רק אחרי אישור של כל פוסט.'
+        : 'חסרים HUB_API_URL / HUB_API_KEY בשרת (Railway). עד אז אין פרסום אוטומטי לערוץ — אפשר לשבץ ולסמן "פורסם" ידנית.'}</div>`;
   }
-  if (platform === 'manual') return select;
+  if (platform === 'manual') {
+    return `${select}<div class="fhint">ידני = מפרסמים בעצמכם ומסמנים "פורסם" בפוסט.</div>`;
+  }
 
   const isFb = platform === 'facebook';
   const status = !conn?.has_token
     ? '<span class="chip bad">לא מחובר</span>'
     : conn.last_check_ok === false
-      ? `<span class="chip bad">בעיה בחיבור</span>`
-      : `<span class="chip on">מחובר${conn.auto_enabled ? ' · אוטו׳ פעיל' : ''}</span>`;
+      ? '<span class="chip bad">בעיה בחיבור</span>'
+      : conn.last_check_ok
+        ? `<span class="chip on">מחובר${conn.auto_enabled ? ' · פרסום אוטומטי פעיל' : ''}</span>`
+        : '<span class="chip">נשמר, עוד לא נבדק</span>';
 
   return `${select}
-    <div class="subsec">
-      <h4>חיבור ל-Meta ${status}</h4>
-      ${conn?.last_check_note ? `<div class="fhint">בדיקה אחרונה: ${esc(conn.last_check_note)}</div>` : ''}
-      <div class="prow">
-        <label>${isFb ? 'מזהה העמוד (Page ID)' : 'מזהה חשבון אינסטגרם (IG User ID)'}</label>
-        <input type="text" dir="ltr" value="${esc((isFb ? conn?.page_id : conn?.ig_user_id) ?? '')}"
-               data-conn-id-field="${c.id}" ${ro ? 'disabled' : ''}>
-      </div>
-      <div class="prow">
-        <label>Access Token (${isFb ? 'של העמוד' : 'עם הרשאות instagram_content_publish'})</label>
-        <input type="password" dir="ltr" data-conn-token="${c.id}"
-               placeholder="${conn?.has_token ? 'שמור ✓ — מזינים רק כדי להחליף' : 'מדביקים כאן'}"
-               ${ro ? 'disabled' : ''}>
-      </div>
-      <div class="prow">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" data-conn-auto="${c.id}"
-                 ${conn?.auto_enabled ? 'checked' : ''} ${ro || !conn?.has_token ? 'disabled' : ''}>
-          שליחה אוטומטית לערוץ הזה
-        </label>
-      </div>
-      ${ro ? '' : `<div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn small primary" data-conn-save="${c.id}">שמור חיבור</button>
-        ${conn?.has_token ? `<button class="btn small" data-conn-verify="${c.id}">בדוק חיבור</button>
-        <button class="btn small" style="color:var(--st-crit)" data-conn-del="${c.id}">נתק</button>` : ''}
-      </div>`}
-    </div>`;
+    <div class="prow"><label>חיבור ל-Meta</label>${status}</div>
+    ${conn?.last_check_note ? `<div class="fhint">בדיקה אחרונה: ${esc(conn.last_check_note)}</div>` : ''}
+    <div class="prow">
+      <label for="chid-${c.id}">${isFb ? 'מזהה העמוד (Page ID)' : 'מזהה חשבון אינסטגרם (IG User ID)'}</label>
+      <input id="chid-${c.id}" type="text" dir="ltr" value="${esc((isFb ? conn?.page_id : conn?.ig_user_id) ?? '')}"
+             data-conn-id-field="${c.id}" ${ro ? 'disabled' : ''}>
+    </div>
+    <div class="prow">
+      <label for="chtok-${c.id}">Access Token (${isFb ? 'של העמוד' : 'עם הרשאות instagram_content_publish'})</label>
+      <input id="chtok-${c.id}" type="password" dir="ltr" data-conn-token="${c.id}"
+             placeholder="${conn?.has_token ? 'שמור ✓ — מזינים רק כדי להחליף' : 'מדביקים כאן'}"
+             ${ro ? 'disabled' : ''}>
+    </div>
+    <div class="prow">
+      <label class="cbline">
+        <input type="checkbox" data-conn-auto="${c.id}"
+               ${conn?.auto_enabled ? 'checked' : ''} ${ro ? 'disabled' : ''}>
+        פרסום אוטומטי לערוץ הזה
+      </label>
+    </div>
+    ${ro ? '' : `<div class="btnrow">
+      <button class="btn small primary" data-conn-save="${c.id}">שמור חיבור</button>
+      ${conn?.has_token ? `<button class="btn small" data-conn-verify="${c.id}">בדוק חיבור</button>
+      <button class="btn small danger" data-conn-del="${c.id}">נתק</button>` : ''}
+    </div>`}`;
 }
 
+/**
+ * פרטי ערוץ בשלושה בלוקים, כל אחד עם מודל שמירה אחד:
+ * קיבולת וימים חסומים — נשמרים בכל שינוי; חיבור ופרסום — בכפתור.
+ */
 function channelItem(c, ro, conn, hubReady) {
-  const num = (label, field, value, note = '', max = '') => `
+  const num = (label, field, value, kind = '', max = '') => `
     <div class="prow">
-      <label>${note}${label}</label>
-      <input type="number" min="0" ${max ? `max="${max}"` : ''} value="${value ?? ''}" placeholder="ללא"
+      <label for="chf-${field}-${c.id}">${kind ? `<span class="kindsw k-${kind}"></span>` : ''}${label}</label>
+      <input id="chf-${field}-${c.id}" type="number" min="0" ${max ? `max="${max}"` : ''}
+             value="${value ?? ''}" placeholder="ללא"
              data-ch-field="${field}" data-id="${c.id}" ${ro ? 'disabled' : ''}>
     </div>`;
-  const sw = (kind) =>
-    `<span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:3px;` +
-    `background:${KIND_VAR[kind]};margin-inline-end:6px;vertical-align:-1px"></span>`;
 
   return `<details class="item" data-open-id="ch-${c.id}">
     <summary>
       <b>${esc(c.name)}</b>
-      <span class="info">קצב ${c.target_per_week ?? c.max_per_week} · תקרה ${c.max_per_week} בשבוע</span>
+      <span class="info">${Number(c.target_per_week ?? c.max_per_week)} פוסטים בשבוע · תקרה ${c.max_per_week}</span>
       <span class="chip ${c.active ? 'on' : 'bad'}">${c.active ? 'פעיל' : 'מושבת'}</span>
     </summary>
     <div class="ibody">
-      ${num('קצב רצוי בשבוע — ממנו נגזר כמה מגיע לכל קמפיין', 'target_per_week', c.target_per_week)}
-      ${num('תקרה — מקסימום פוסטים בשבוע', 'max_per_week', c.max_per_week)}
-      ${num('מזה — מכירתיים מקסימום', 'max_promo_per_week', c.max_promo_per_week, sw('promo'))}
-      ${num('מזה — משולבים מקסימום', 'max_hybrid_per_week', c.max_hybrid_per_week, sw('hybrid'))}
-      ${num('מזה — ערך מקסימום', 'max_value_per_week', c.max_value_per_week, sw('value'))}
-      ${num('שטח ששמור לדברים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
-      ${num('יעילות פרסום במדיה הזו (1–10) — אופציונלי', 'efficiency', c.efficiency, '', 10)}
-      <div class="fhint" style="margin-top:-8px">
-        ריק = ניטרלי. כשמוגדר, המנוע מנסה למלא קודם משבצות במדיות עם יעילות גבוהה יותר,
-        כדי שתוכן חשוב יגיע לבמה הכי טובה קודם.
-      </div>
+      <section class="chblock">
+        <h4>קיבולת <span class="savenote">נשמר ביציאה מהשדה</span></h4>
+        ${num('פוסטים בשבוע — ממנו נגזר כמה מגיע לכל קמפיין', 'target_per_week', c.target_per_week)}
+        ${num('תקרה — מקסימום פוסטים בשבוע', 'max_per_week', c.max_per_week)}
+        ${num('מתוכם מכירתיים — לכל היותר', 'max_promo_per_week', c.max_promo_per_week, 'promo')}
+        ${num('מתוכם משולבים — לכל היותר', 'max_hybrid_per_week', c.max_hybrid_per_week, 'hybrid')}
+        ${num('מתוכם ערך — לכל היותר', 'max_value_per_week', c.max_value_per_week, 'value')}
+        ${num('שטח ששמור לפוסטים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
+        ${num('עדיפות ערוץ (1–10) — אופציונלי', 'efficiency', c.efficiency, '', 10)}
+        <div class="fhint">
+          ריק = ניטרלי. כשמוגדרת, המנוע ממלא קודם ערוצים בעדיפות גבוהה יותר, כדי שתוכן חשוב
+          יגיע קודם לערוץ הכי טוב. כשהביצועים הנמדדים משפיעים על השיבוץ (כללי המנוע), המדידה
+          מחליפה אותה.
+        </div>
+      </section>
 
-      ${connectionBlock(c, conn, ro, hubReady)}
+      <section class="chblock">
+        <h4>חיבור ופרסום</h4>
+        ${connectionBlock(c, conn, ro, hubReady)}
+      </section>
 
-      <div class="prow" style="align-items:flex-start">
-        <label>ימים שבהם המדיה לא מקבלת תוכן</label>
-        <div class="checks" style="justify-content:flex-end">
+      <section class="chblock">
+        <h4>ימים חסומים <span class="savenote">נשמר בכל סימון</span></h4>
+        <div class="fhint">ימים שבהם הערוץ לא מקבל פוסטים. פוסט שכבר שובץ ביום שנחסם מוזז ליום פנוי.</div>
+        <div class="checks blockdays">
           ${HE_DAYS.map((d, i) => `<label>
             <input type="checkbox" data-blocked="${c.id}" value="${i}"
                    ${(c.blocked_days ?? []).includes(i) ? 'checked' : ''} ${ro ? 'disabled' : ''}>
             ${d}</label>`).join('')}
         </div>
-      </div>
-      ${ro ? '' : `<div style="display:flex;gap:8px;margin-top:12px">
+      </section>
+
+      ${ro ? '' : `<div class="btnrow chactions">
         <button class="btn small" data-toggle-channel="${c.id}" data-active="${c.active}">
           ${c.active ? 'השבת ערוץ' : 'הפעל ערוץ'}</button>
-        <button class="btn small" style="color:var(--st-crit)" data-del-channel="${c.id}">מחק ערוץ</button>
+        <button class="btn small danger" data-del-channel="${c.id}">מחק ערוץ</button>
       </div>`}
     </div>
   </details>`;
@@ -393,7 +410,7 @@ async function deleteOrDisable(message, offerDisable, disableNote, deleteLabel) 
   ]);
 }
 
-function wireManage(ro) {
+function wireManage(ro, connections) {
   const reload = run(async () => { await renderManage(); await refreshBoard(); });
 
   // חסימת יום מפנה את מי שכבר יושב עליו. מי שלא נמצא לו יום חוקי נשאר על
@@ -486,20 +503,21 @@ function wireManage(ro) {
     return b;
   };
 
+  // מזהה, טוקן ופרסום אוטומטי לערוץ — נשמרים יחד, רק בכפתור. אחרי השמירה
+  // הפוקוס עובר ל"בדוק חיבור", הצעד הבא.
   $$('#manage [data-conn-save]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
       const id = btn.dataset.connSave;
-      await api(`/channels/${id}/connection`, { method: 'PUT', body: connBody(id) });
-      toast('החיבור נשמר. כדאי ללחוץ "בדוק חיבור" לוודא שהוא חי.');
+      const body = connBody(id);
+      const saved = connections.some((c) => c.channel_id === Number(id) && c.has_token);
+      if (body.auto_enabled && !body.access_token && !saved) {
+        $(`#manage [data-conn-token="${id}"]`)?.focus();
+        throw new Error('כדי להדליק פרסום אוטומטי צריך קודם להדביק טוקן.');
+      }
+      await api(`/channels/${id}/connection`, { method: 'PUT', body });
+      toast('החיבור נשמר. כדאי ללחוץ "בדוק חיבור" כדי לוודא שהוא עובד.');
       await reload();
-    })));
-
-  $$('#manage [data-conn-auto]').forEach((cb) =>
-    cb.addEventListener('change', run(async () => {
-      const id = cb.dataset.connAuto;
-      await api(`/channels/${id}/connection`,
-        { method: 'PUT', body: { auto_enabled: cb.checked } });
-      toast(cb.checked ? 'השליחה האוטומטית הודלקה לערוץ.' : 'השליחה האוטומטית כובתה לערוץ.');
+      $(`#manage [data-conn-verify="${id}"]`)?.focus();
     })));
 
   $$('#manage [data-conn-verify]').forEach((btn) =>

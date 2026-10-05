@@ -1020,3 +1020,19 @@ button.btn.bell .badge {
 .autopub { margin-bottom: 10px; }
 .autopub .fhint { margin-top: 2px; }
 .cbline { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+/* פרטי ערוץ: שלושה בלוקים — קיבולת / חיבור ופרסום / ימים חסומים */
+.chblock { padding: 14px 0 6px; border-bottom: 1px solid var(--border); }
+.chblock:first-child { padding-top: 6px; }
+.chblock > h4 { font-size: 12.5px; font-weight: 650; color: var(--ink-1); margin-bottom: 4px; display: flex; align-items: baseline; gap: 10px; }
+.savenote { font-size: 11px; font-weight: 400; color: var(--muted); }
+.chblock .fhint { margin-bottom: 6px; }
+.blockdays { padding: 6px 0 8px; }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.chactions { margin-top: 14px; }
+button.btn.danger { color: var(--st-crit); }
+.kindsw { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-inline-end: 6px; vertical-align: -1px; }
+.kindsw.k-promo { background: var(--leg-promo); }
+.kindsw.k-hybrid { background: var(--leg-hybrid); }
+.kindsw.k-value { background: var(--leg-value); }
+.prow input[type=password] { width: 240px; text-align: start; }
