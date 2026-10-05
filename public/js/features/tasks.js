@@ -26,6 +26,19 @@ function setMine(on) {
   try { localStorage.setItem(MINE_KEY, on ? '1' : '0'); } catch { /* דפדפן בלי אחסון — רק לרינדור הזה */ }
 }
 
+/** רינדור מתוך הטאב עצמו, אחרי פעולה של המשתמש */
+const rerender = () => renderTasks({ force: true });
+
+/** המשתמש באמצע פעולה בטאב: תפריט ⋯ פתוח, או פקד בתוך הטאב בפוקוס */
+function tasksBusy() {
+  const root = $('#tasks');
+  if (!root) return false;
+  if (root.querySelector('details.tmore[open]')) return true;
+  const a = document.activeElement;
+  return !!a && a !== document.body && root.contains(a) &&
+    a.matches('input, select, textarea, button, summary');
+}
+
 /** "דחה עד מחר" = מחר ב-08:00 בשעון המקומי */
 function tomorrowMorning() {
   const d = new Date();
@@ -48,7 +61,17 @@ export function paintTaskBadge(openCount) {
  * מצייר את הטאב, וגם מעדכן בדרך את הפעמון ואת תגית המשימות מאותם נתונים —
  * מי שקורא ל-renderTasks לא צריך למשוך אותם שוב.
  */
-export async function renderTasks() {
+export async function renderTasks({ force = false } = {}) {
+  // רענון מבחוץ (הרענון התקופתי, focus, שינוי בפוסט) בזמן שהמשתמש באמצע
+  // פעולה בטאב — תפריט פתוח או שדה בפוקוס — לא מצייר מחדש מתחת לידיים
+  // שלו: רק התגית והפעמון מתעדכנים. רינדור מתוך הטאב עצמו (force) — תמיד.
+  if (!force && tasksBusy()) {
+    await Promise.all([
+      api('/tasks/count').then((c) => paintTaskBadge(c.open_count)),
+      refreshAlerts(),
+    ]);
+    return;
+  }
   const [t, alertData, users] = await Promise.all([
     api('/tasks'), refreshAlerts(),
     state.users.length ? state.users : api('/users').then((r) => r.users),
@@ -62,7 +85,8 @@ export async function renderTasks() {
   const mineOnly = (list) => (view.mine
     ? list.filter((x) => x.assignee_id === state.me?.id || (x.kind === 'approve' && can('approve')))
     : list);
-  const visibleIds = new Set([...t.today, ...t.attention].map((x) => x.id));
+  // הבחירה המרובה — רק ממה שמוצג עכשיו (אחרי "שלי"); מה שהוסתר יוצא ממנה
+  const visibleIds = new Set([...mineOnly(t.today), ...mineOnly(t.attention)].map((x) => x.id));
   for (const id of view.selected) if (!visibleIds.has(id)) view.selected.delete(id);
 
   const group = (title, items, emptyText) => `
@@ -120,7 +144,7 @@ export async function renderTasks() {
   $$('#tasks [data-task-done]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
       await api(`/tasks/${cb.dataset.taskDone}`, { method: 'PATCH', body: { done: cb.checked } });
-      await renderTasks();
+      await rerender();
     })));
 
   $$('#tasks [data-copy]').forEach((b) =>
@@ -133,14 +157,14 @@ export async function renderTasks() {
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.approve}/approve`, { method: 'POST' });
       toast('אושר. השיבוץ נכנס ללוח.');
-      await Promise.all([renderTasks(), refreshBoard()]);
+      await Promise.all([rerender(), refreshBoard()]);
     })));
 
   $$('#tasks [data-publish]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.publish}/publish`, { method: 'POST' });
       toast('סומן כפורסם.');
-      await Promise.all([renderTasks(), refreshBoard()]);
+      await Promise.all([rerender(), refreshBoard()]);
     })));
 
   // הצעת החלפת תוכן: מעדכן את השיבוץ עם התוכן המוצע וסוגר את המשימה
@@ -159,7 +183,7 @@ export async function renderTasks() {
       });
       await api(`/tasks/${b.dataset.swapTask}`, { method: 'PATCH', body: { done: true } });
       toast('הוחלף. השיבוץ מציג עכשיו את התוכן המוצע.');
-      await Promise.all([renderTasks(), refreshBoard()]);
+      await Promise.all([rerender(), refreshBoard()]);
     })));
 }
 
@@ -311,23 +335,23 @@ async function bulk(action) {
   view.selecting = false;
   const verb = action === 'delete' ? 'נמחקו' : 'סומנו כבוצעו';
   toast(`${r.affected} ${verb}` + (r.skipped ? ` · ${r.skipped} משימות אישור דולגו — רק מי שמורשה לאשר` : '.'));
-  await renderTasks();
+  await rerender();
 }
 
 function wireToolbar() {
   $$('#tasks [data-task-view]').forEach((b) => b.addEventListener('click', run(async () => {
     setMine(b.dataset.taskView === 'mine');
-    await renderTasks();
+    await rerender();
   })));
   $('#taskSelect')?.addEventListener('click', run(async () => {
     view.selecting = !view.selecting;
     view.selected.clear();
-    await renderTasks();
+    await rerender();
   }));
   $('#taskAdd')?.addEventListener('click', openNewTask);
   $('#taskSnoozedToggle')?.addEventListener('click', run(async () => {
     view.showSnoozed = !view.showSnoozed;
-    await renderTasks();
+    await rerender();
   }));
   $('#taskBulkDone')?.addEventListener('click', run(() => bulk('done')));
   $('#taskBulkDel')?.addEventListener('click', run(async () => {
@@ -348,24 +372,24 @@ function wireRowMenus() {
   $$('#tasks [data-task-snooze]').forEach((b) => b.addEventListener('click', run(async () => {
     await api(`/tasks/${b.dataset.taskSnooze}`, { method: 'PATCH', body: { snoozed_until: tomorrowMorning() } });
     toast('נדחתה עד מחר בבוקר.');
-    await renderTasks();
+    await rerender();
   })));
   $$('#tasks [data-task-unsnooze]').forEach((b) => b.addEventListener('click', run(async () => {
     await api(`/tasks/${b.dataset.taskUnsnooze}`, { method: 'PATCH', body: { snoozed_until: null } });
-    await renderTasks();
+    await rerender();
   })));
   $$('#tasks [data-task-assign]').forEach((sel) => sel.addEventListener('change', run(async () => {
     await api(`/tasks/${sel.dataset.taskAssign}`, {
       method: 'PATCH', body: { assignee_id: sel.value ? Number(sel.value) : null },
     });
     toast(sel.value ? 'שויכה.' : 'השיוך הוסר.');
-    await renderTasks();
+    await rerender();
   })));
   $$('#tasks [data-task-del]').forEach((b) => b.addEventListener('click', run(async () => {
     if (!await confirmDialog('למחוק את המשימה? אי אפשר לבטל.', { okLabel: 'מחק', danger: true })) return;
     await api(`/tasks/${b.dataset.taskDel}`, { method: 'DELETE' });
     toast('נמחקה.');
-    await renderTasks();
+    await rerender();
   })));
 }
 
@@ -384,7 +408,7 @@ function openNewTask() {
     onSave: async (v) => {
       if (!v.title) throw new Error('צריך לכתוב מה המשימה');
       await api('/tasks', { method: 'POST', body: v });
-      await renderTasks();
+      await rerender();
     },
   });
 }
