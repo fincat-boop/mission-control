@@ -50,10 +50,19 @@ export async function withRetry(fn, { delays = RETRY_DELAYS_MS, sleep = realSlee
   }
 }
 
+export const HUB_TIMEOUT_MS = 15000;
+
+const isAbort = (e) => e?.name === 'TimeoutError' || e?.name === 'AbortError';
+const unreachable = (e) => Object.assign(
+  new HubMailError(isAbort(e) ? `ה-HUB לא זמין: לא ענה תוך ${HUB_TIMEOUT_MS / 1000} שניות`
+                              : `ה-HUB לא זמין: ${e.message}`, 502),
+  { retryable: true });
+
 async function call(method, path, body, fetchImpl = fetch) {
   if (!hubMailReady()) throw new HubMailError('חיבור ה-HUB לא מוגדר (HUB_API_URL / HUB_API_KEY)', 503);
   let res;
   try {
+    // בלי תקרת זמן, HUB תקוע היה מחזיק את טיק הפרסום (והטרנזקציה שלו) לנצח
     res = await fetchImpl(`${base()}${path}`, {
       method,
       headers: {
@@ -61,12 +70,19 @@ async function call(method, path, body, fetchImpl = fetch) {
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(HUB_TIMEOUT_MS),
     });
   } catch (e) {
-    throw Object.assign(new HubMailError(`ה-HUB לא זמין: ${e.message}`, 502), { retryable: true });
+    throw unreachable(e);
   }
   let data = null;
-  try { data = await res.json(); } catch { /* גוף לא-JSON — נטופל לפי הסטטוס */ }
+  try {
+    data = await res.json();
+  } catch (e) {
+    // הגוף נקטע בזמן הקריאה — תקלה זמנית, לא "תשובה ריקה"
+    if (isAbort(e)) throw unreachable(e);
+    /* גוף לא-JSON — נטופל לפי הסטטוס */
+  }
   if (!res.ok || data?.ok === false) {
     throw Object.assign(new HubMailError(data?.error || `שגיאת HUB (${res.status})`, res.status),
       { retryable: res.status >= 500 });

@@ -75,6 +75,25 @@ test('רשת נפלה — HubMailError 502, אחרי שני ניסיונות ח�
   assert.equal(calls, 3);
 });
 
+test('call — נשלח עם signal (תקרת זמן), ו-timeout נחשב תקלה זמנית שחוזרת', async () => {
+  const signals = [];
+  let n = 0;
+  const f = async (_url, init) => {
+    signals.push(init.signal);
+    n += 1;
+    if (n === 1) throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    return { ok: true, status: 200, json: async () => ({ ok: true, campaign_id: 'c1', status: 'sent' }) };
+  };
+  const s = await newsletterStatus('post-1', f, { delays: [0, 0] });
+  assert.equal(s.status, 'sent');
+  assert.equal(n, 2);
+  assert.ok(signals[0] instanceof AbortSignal);
+
+  const always = async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }); };
+  await assert.rejects(() => newsletterStatus('post-1', always, { delays: [0, 0] }),
+    (e) => e instanceof HubMailError && e.status === 502 && /לא ענה תוך 15 שניות/.test(e.message));
+});
+
 test('withRetry — 5xx חוזר עד שמצליח; 4xx והגדרה חסרה לא חוזרים', async () => {
   const seq = (...statuses) => {
     const calls = [];
