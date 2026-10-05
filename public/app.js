@@ -40,9 +40,10 @@ boot();
 
 async function boot() {
   try {
-    const { user } = await api('/me');
+    const { user, media } = await api('/me');
     if (!user) return void (location.href = '/login.html');
     state.me = user;
+    state.media = media ?? null;
   } catch {
     return void (location.href = '/login.html');
   }

@@ -12,9 +12,17 @@ import { backupNow, cleanupStaleUrgent, forEachOrg, suggestContentSwaps } from '
 import { publishTickForOrg, refreshNewsletterMetrics } from './publish/runner.js';
 import api from './routes/api.js';
 import { MAX_FILE_MB } from './routes/_shared.js';
+import { mediaReady } from './media.js';
+import { r2Host } from './r2.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(here, '..', 'public');
+
+// המקור (origin) של הכתובת הציבורית של המדיה, ל-CSP
+const mediaOrigin = (() => {
+  try { return process.env.R2_PUBLIC_BASE_URL ? new URL(process.env.R2_PUBLIC_BASE_URL).origin : null; }
+  catch { return null; }
+})();
 
 const app = express();
 app.set('trust proxy', 1); // Railway מגיש דרך פרוקסי — נחוץ ל-secure cookies
@@ -30,7 +38,10 @@ app.use(helmet({
       // https: — תצוגות המייל (ממלא התבניות והתצוגה החיה) מציגות תבניות
       // עם תמונות מדומיינים חיצוניים; iframe שנכתב מהדף יורש את ה-CSP הזה.
       imgSrc: ["'self'", 'https:', 'data:'],
-      connectSrc: ["'self'"],
+      // העלאה ישירה מהדפדפן ל-R2 (presigned PUT) — רק כשאחסון המדיה מוגדר
+      connectSrc: ["'self'", ...(mediaReady() && r2Host() ? [`https://${r2Host()}`] : [])],
+      // וידאו מוגש מהכתובת הציבורית של ה-bucket (GET /api/assets/:id מפנה לשם)
+      mediaSrc: ["'self'", ...(mediaOrigin ? [mediaOrigin] : [])],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],

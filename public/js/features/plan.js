@@ -7,6 +7,7 @@ import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
+import { progressList, uploadBulk, uploadFiles } from '../core/upload.js';
 
 /* ========================= ניוזלטר: תבנית המילוי ========================= */
 
@@ -518,7 +519,8 @@ function campaignGrid(c) {
       <button class="btn primary" id="bulkPick">בחר קבצים</button>
       <input type="file" id="bulkInput" multiple hidden>
       <button class="btn" id="importSheet">ייבוא מטבלה</button>
-    </div>` : ''}
+    </div>
+    <div class="upload-progress" id="bulkProgress" hidden></div>` : ''}
 
     <div class="board panel">
       <table class="grid cgrid">
@@ -561,16 +563,15 @@ function wireCampaignGrid(selected, reload) {
   $('#bulkPick')?.addEventListener('click', () => input.click());
   input?.addEventListener('change', run(async () => {
     if (!input.files?.length) return;
-    const fd = new FormData();
-    for (const f of input.files) fd.append('files', f);
-    fd.append('kind', $('#bulkKind').value);
-
-    toast(`מעלה ${input.files.length} קבצים…`);
-    const res = await fetch(`/api/campaigns/${selected.id}/bulk`, { method: 'POST', body: fd });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'ההעלאה נכשלה');
-    toast(`נוצרו ${data.created.length} זוויות.`);
+    const files = [...input.files];
     input.value = '';
+
+    toast(`מעלה ${files.length} קבצים…`);
+    const data = await uploadBulk(selected.id, files, {
+      kind: $('#bulkKind').value,
+      onProgress: progressList($('#bulkProgress'), files),
+    });
+    toast(`נוצרו ${data.created.length} זוויות.`);
     await reload();
   }));
 }
@@ -640,13 +641,9 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
 
       const picked = $('#gen___files')?.files;
       if (picked?.length) {
-        const fd = new FormData();
-        for (const f of picked) fd.append('files', f);
-        const res = await fetch(`/api/content/${saved.id}/assets`, { method: 'POST', body: fd });
-        if (!res.ok) {
-          const e = await res.json().catch(() => ({}));
-          throw new Error(e.error || 'הקבצים לא נשמרו');
-        }
+        await uploadFiles(saved.id, picked, {
+          onProgress: progressList($('#gen___files_progress'), picked),
+        });
       }
       await reload();
     },
@@ -781,14 +778,10 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
 
       const picked = $('#gen___files')?.files;
       if (picked?.length) {
-        const fd = new FormData();
-        for (const f of picked) fd.append('files', f);
-        const res = await fetch(`/api/content/${item.id}/variants/${channelId}/assets`,
-          { method: 'POST', body: fd });
-        if (!res.ok) {
-          const e = await res.json().catch(() => ({}));
-          throw new Error(e.error || 'הקבצים לא נשמרו');
-        }
+        await uploadFiles(item.id, picked, {
+          channelId,
+          onProgress: progressList($('#gen___files_progress'), picked),
+        });
       }
       await reload();
     },

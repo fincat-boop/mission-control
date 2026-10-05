@@ -4,6 +4,7 @@ import { one } from '../db.js';
 import { clearSession, issueSession } from '../auth.js';
 import { authUrl, exchangeCode, googleReady, signState, verifyState } from '../google-auth.js';
 import { hubSsoReady, verifyHubSsoToken } from '../hub-sso.js';
+import { mediaConfig } from '../media.js';
 
 const r = Router();
 
@@ -23,7 +24,8 @@ r.post('/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-r.get('/me', (req, res) => res.json({ user: req.user }));
+// media: האם ההעלאה ישירה ל-R2 זמינה ומה המגבלה — הלקוח בוחר לפיה מסלול
+r.get('/me', (req, res) => res.json({ user: req.user, media: req.user ? mediaConfig() : null }));
 
 /** לממשק — אילו שיטות התחברות זמינות (כדי להציג/להסתיר כפתור Google) */
 r.get('/auth/config', (_req, res) => res.json({ google: googleReady() }));

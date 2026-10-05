@@ -7,6 +7,7 @@ export const TABS = ['board', 'strategy', 'plan', 'tasks', 'data', 'manage'];
 
 export const state = {
   me: null,
+  media: null,         // { ready, max_mb } — אחסון המדיה ב-R2, מגיע עם /api/me
   week: null,          // תאריך עוגן לשבוע המוצג
   channels: [],
   endpoints: [],

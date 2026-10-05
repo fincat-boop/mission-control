@@ -803,6 +803,18 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .fileline a:hover { text-decoration: underline; }
 .fileline .d { color: var(--muted); font-size: 11.5px; }
 
+/* התקדמות העלאה — שורה לכל קובץ */
+.upload-progress { display: grid; gap: 6px; margin-top: 8px; }
+.upload-progress .upl {
+  display: grid; grid-template-columns: minmax(0, 1fr) 120px 38px; align-items: center;
+  gap: 10px; font-size: 12px;
+}
+.upload-progress .upl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-progress .upl-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.upload-progress .upl-bar i { display: block; height: 100%; background: var(--accent); transition: width .15s; }
+.upload-progress .upl-pct { color: var(--muted); font-variant-numeric: tabular-nums; text-align: end; }
+#bulkProgress { margin: -6px 0 14px; }
+
 /* פעמון ההתראות */
 button.btn.bell { position: relative; padding: 5px 9px; font-size: 14px; line-height: 1; color: var(--muted, #8a8f98); }
 button.btn.bell svg { display: block; }
