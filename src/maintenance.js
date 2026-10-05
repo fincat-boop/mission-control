@@ -3,7 +3,9 @@ import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
 import { weekMeta } from './board.js';
-import { TRASH_DAYS, mediaReady, mediaStore, orgMediaPrefix, pickOrphans } from './media.js';
+import {
+  TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, orgMediaPrefix, pickOrphans,
+} from './media.js';
 
 /**
  * מריץ fn פעם אחת לכל ארגון, בתוך הקשר הטננט שלו. עבודות רקע לא נובעות
@@ -218,9 +220,52 @@ export async function sweepMediaOrphans(orgId, store = mediaStore, now = new Dat
   return { orphans: orphans.length };
 }
 
+const LEGACY_BATCH = 10;                 // כמה קבצים ישנים לארגון בהרצה
+
+/**
+ * העברת קבצים ישנים (bytea במסד) ל-R2, במנות קטנות. המפתח דטרמיניסטי
+ * (media/<org>/legacy-<id>/<שם>) ולכן הרצה חוזרת אחרי כשל באמצע פשוט
+ * דורסת את אותו אובייקט. אחרי ההעלאה — HEAD לאימות הגודל, ורק אז, בפקודה
+ * אחת, storage_key נקבע ו-data מתאפס. כשל בקובץ אחד לא עוצר את השאר.
+ */
+export async function migrateLegacyAssets(orgId, store = mediaStore) {
+  const batch = await rows(
+    `select id, filename, mime from content_assets
+      where data is not null and storage_key is null
+      order by id limit $1`,
+    [LEGACY_BATCH]
+  );
+  let moved = 0;
+  let failed = 0;
+  for (const a of batch) {
+    const key = legacyMediaKey(orgId, a.id, a.filename);
+    try {
+      // קובץ אחד בזיכרון בכל רגע — לא את כל המנה
+      const { data } = await one('select data from content_assets where id = $1', [a.id]);
+      await store.put(key, data, legacyUploadMime(a.mime));
+      const head = await store.head(key);
+      if (!head || head.size !== data.length) {
+        throw new Error(`אימות נכשל — ב-R2 ${head?.size ?? 'אין'} בייטים, במסד ${data.length}`);
+      }
+      await query(
+        `update content_assets set storage_key = $2, data = null
+          where id = $1 and storage_key is null`,
+        [a.id, key]
+      );
+      // אם סריקת יתומים הספיקה לשים את המפתח בסל (ניסיון קודם שנכשל) — הוא בשימוש עכשיו
+      await query('delete from media_trash where storage_key = $1', [key]);
+      moved += 1;
+    } catch (e) {
+      failed += 1;
+      console.error(`העברת קובץ #${a.id} ("${a.filename}") ל-R2 נכשלה (ננסה שוב):`, e.message);
+    }
+  }
+  return { moved, failed };
+}
+
 /**
  * תחזוקת המדיה, שעתית, לכל ארגון: מחיקה סופית ממה שבסל, העברת קבצים ישנים
- * מהמסד ל-R2, ופעם ביום סריקת יתומים. רץ רק כשאחסון המדיה מוגדר. כשל
+ * מהמסד ל-R2 (LEGACY_BATCH בכל הרצה), ופעם ביום סריקת יתומים. רץ רק כשאחסון המדיה מוגדר. כשל
  * בארגון אחד לא עוצר את האחרים (forEachOrg).
  */
 export async function mediaMaintenance({ store = mediaStore, now = new Date() } = {}) {
@@ -230,6 +275,14 @@ export async function mediaMaintenance({ store = mediaStore, now = new Date() } 
     if (trash.purged || trash.kept) {
       console.log(`מדיה (ארגון ${orgId}): ${trash.purged} נמחקו סופית מהסל` +
         (trash.kept ? `, ${trash.kept} חזרו לשימוש ויצאו מהסל` : ''));
+    }
+
+    const legacy = await migrateLegacyAssets(orgId, store);
+    if (legacy.moved || legacy.failed) {
+      const left = await one(
+        'select count(*)::int as n from content_assets where data is not null and storage_key is null');
+      console.log(`מדיה (ארגון ${orgId}): ${legacy.moved} קבצים ישנים הועברו מהמסד ל-R2` +
+        (legacy.failed ? `, ${legacy.failed} נכשלו` : '') + ` · נשארו ${left.n}`);
     }
 
     if (now.getTime() - (lastSweep.get(orgId) ?? 0) >= SWEEP_EVERY_MS) {
