@@ -95,9 +95,12 @@ export function periodLabel(period) {
 }
 
 /**
- * התאריך של פריט מספר i (מאופס מ-0) מתוך total, פרוסים אחיד על
- * [start, end] כולל שני הקצוות: הראשון ביום הראשון, האחרון ביום האחרון.
- * total ≤ 1 או בלי סוף → יום ההתחלה. null בלי התחלה.
+ * התאריך של פריט מספר i (מאופס מ-0) מתוך total, פרוסים אחיד על התקופה
+ * [start, end]: התקופה מחולקת ל-total מקטעים שווים, וכל פריט בתחילת המקטע
+ * שלו — start + floor(i × ימים / total). הראשון ביום ההתחלה ("תאריך היעד
+ * לפוסט הראשון"), והאחרון מקטע אחד לפני הסוף — כך שאם המשבצת שלו
+ * מתפספסת, נשאר לו מקום לצאת לפני ends_on. total ≤ 1 או בלי סוף → יום
+ * ההתחלה. null בלי התחלה.
  *
  * מקור אחד לשני הצרכנים: הרשת במסך התוכן (src/campaigns.js) והמנוע
  * (src/engine.js, "קמפיין מוכן") — כדי שהתאריך שרואים הוא התאריך שהמנוע
@@ -108,7 +111,7 @@ export function spreadDate(start, end, i, total) {
   if (total <= 1 || !end) return String(start).slice(0, 10);
   const [ay, am, ad] = parts(start);
   const [by, bm, bd] = parts(end);
-  const span = Math.max(0, Math.round(
-    (Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000));
-  return addDays(start, Math.round((span * i) / (total - 1)));
+  const days = Math.max(1, Math.round(
+    (Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000) + 1);
+  return addDays(start, Math.floor((i * days) / total));
 }

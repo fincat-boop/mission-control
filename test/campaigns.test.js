@@ -71,10 +71,10 @@ test('generalGridFor — משבצות לכל מדיה לפי הצורך שלה, 
   assert.equal(g.total_cells, 8);
   assert.equal(g.missing, 8);
   assert.equal(g.ready, 0);
-  // פרוס על חלון הקמפיין, משבצת ראשונה ביום הראשון ואחרונה ביום האחרון
+  // פרוס על חלון הקמפיין: הראשונה ביום הראשון, האחרונה מקטע אחד לפני הסוף
   assert.equal(g.channels[0].slots[0].date, '2026-11-01');
-  assert.equal(g.channels[0].slots[5].date, '2026-11-14');
-  assert.equal(g.channels[1].slots[1].date, '2026-11-14');
+  assert.equal(g.channels[0].slots[5].date, '2026-11-12');   // floor(5 × 14 / 6) = 11
+  assert.equal(g.channels[1].slots[1].date, '2026-11-08');   // floor(1 × 14 / 2) = 7
 });
 
 test('generalGridFor — נדרש = סכום הצרכים, מוכן = גרסה מוכנה, חסר = נדרש − מוכן', () => {
@@ -262,15 +262,15 @@ test('generalGridFor מוכן — רק המשבצות שמולאו, בלי רי�
   // index נשאר sort_order (הלחיצה בממשק), התאריך לפי המקום ברשימה
   assert.deepEqual(g.channels[0].slots.map((s) => s.index), [1, 4, 9]);
   assert.deepEqual(g.channels[0].slots.map((s) => s.date),
-    ['2026-11-01', '2026-11-16', '2026-11-30']);
+    ['2026-11-01', '2026-11-11', '2026-11-21']);
   assert.equal(g.channels[1].slots[0].date, '2026-11-01'); // פריט יחיד — יום ההתחלה
 });
 
-test('generalGridFor מוכן — 6 פוסטים בחודש נפרסים בערך כל 5–6 ימים', () => {
+test('generalGridFor מוכן — 6 פוסטים בחודש: כל 5 ימים, האחרון לא ביום האחרון', () => {
   const content = [1, 2, 3, 4, 5, 6].map((i) => slotItem(i, 1, i, 'ready'));
   const g = generalGridFor(done, content, [chA], '2026-10-01', [done]);
   assert.deepEqual(g.channels[0].slots.map((s) => s.date), [
-    '2026-11-01', '2026-11-07', '2026-11-13', '2026-11-18', '2026-11-24', '2026-11-30']);
+    '2026-11-01', '2026-11-06', '2026-11-11', '2026-11-16', '2026-11-21', '2026-11-26']);
 });
 
 test('gridFor מוכן — זוויות שנכתבו בלבד; מדיה בלי גרסה לא מקבלת את הזווית', () => {
@@ -286,7 +286,7 @@ test('gridFor מוכן — זוויות שנכתבו בלבד; מדיה בלי �
   assert.equal(g.complete, true);
   assert.equal(g.angles.length, 3);
   assert.deepEqual(g.angles.map((r) => r.index), [2, 5, 7]);
-  assert.deepEqual(g.angles.map((r) => r.date), ['2026-11-01', '2026-11-16', '2026-11-30']);
+  assert.deepEqual(g.angles.map((r) => r.date), ['2026-11-01', '2026-11-11', '2026-11-21']);
   assert.deepEqual(g.needs, { 1: 3, 2: 1 });
   assert.equal(g.angles[1].cells[1].state, 'not_needed');
   assert.equal(g.angles[2].cells[1].state, 'not_relevant');
@@ -316,7 +316,7 @@ test('תוכן שנוסף אחרי הסימון מגדיל את הספירה', (
   const b = generalGridFor(done, [...content, slotItem(3, 1, 3, 'draft')], [chA], '2026-10-01');
   assert.equal(a.total_cells, 2);
   assert.equal(b.total_cells, 3);
-  assert.equal(b.channels[0].slots[2].date, '2026-11-30');
+  assert.equal(b.channels[0].slots[2].date, '2026-11-21');
 });
 
 test('statusOf — קמפיין מוכן עם טיוטות לא "חסר": "מוכן · X טיוטות לסיום"', () => {

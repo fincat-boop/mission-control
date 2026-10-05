@@ -190,8 +190,8 @@ import { generalGridFor } from '../src/campaigns.js';
  * עם היסטוריה מצטברת — תוכן חד-פעמי שכבר שובץ לא חוזר. מחזיר מתי כל פריט
  * שובץ.
  */
-function runWeeks(content, anchors) {
-  const ch = channel({ max_per_week: 3 });
+function runWeeks(content, anchors, chOver = {}) {
+  const ch = channel({ max_per_week: 3, ...chOver });
   const settings = { ...SETTINGS, min_gap_days: 0 };
   const placedAt = new Map();
   for (const anchor of anchors) {
@@ -237,8 +237,8 @@ test('plannedDate — אותו תאריך שהרשת מציגה (spreadDate), ו
     [{ id: 1, name: 'ערוץ' }], '2026-10-01');
   assert.deepEqual(items.map(plannedDate), grid.channels[0].slots.map((s) => s.date));
   assert.equal(plannedDate(sixItems(false)[0]), null);
-  assert.equal(outsideCampaignWindow(items[1], '2026-11-06'), true);   // לפני 7.11
-  assert.equal(outsideCampaignWindow(items[1], '2026-11-07'), false);
+  assert.equal(outsideCampaignWindow(items[1], '2026-11-05'), true);   // לפני 6.11
+  assert.equal(outsideCampaignWindow(items[1], '2026-11-06'), false);
   assert.equal(outsideCampaignWindow(items[1], '2026-11-20'), false);  // התפספס — מותר אחר כך
   assert.equal(outsideCampaignWindow(items[1], '2026-12-01'), true);   // אחרי סוף הקמפיין
 });
@@ -257,7 +257,7 @@ test('קמפיין מוכן: 6 פוסטים בחודש נפרסים על כל ה
     assert.ok(at.get(it.id) >= plannedDate(it), `${it.id}: ${at.get(it.id)} < ${plannedDate(it)}`);
   }
   const dates = [...at.values()].sort();
-  assert.ok(dates[5] >= '2026-11-24', dates.join(','));   // האחרון בשבוע האחרון
+  assert.ok(dates[5] >= '2026-11-21', dates.join(','));   // האחרון בסוף התקופה
   // לא יותר משניים באותו שבוע — לא נדחס לשבועות הראשונים
   const perWeek = new Map();
   for (const d of dates) {
@@ -265,4 +265,14 @@ test('קמפיין מוכן: 6 פוסטים בחודש נפרסים על כל ה
     perWeek.set(w, (perWeek.get(w) ?? 0) + 1);
   }
   assert.ok(Math.max(...perWeek.values()) <= 2, [...perWeek].join(' '));
+});
+
+test('קמפיין מוכן: המשבצת של האחרון התפספסה — הוא עדיין יוצא לפני ends_on', () => {
+  const items = sixItems(true);
+  const last = items[5];
+  assert.equal(plannedDate(last), '2026-11-26');           // חמישי — לפני הסוף, לא עליו
+  // חמישי חסום בערוץ: המשבצת המתוכננת של האחרון לא קיימת
+  const at = runWeeks(items, NOV, { blocked_days: [4] });
+  assert.equal(at.size, 6, [...at].join(' '));
+  assert.ok(at.get(last.id) > '2026-11-26' && at.get(last.id) <= '2026-11-30', at.get(last.id));
 });
