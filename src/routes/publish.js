@@ -283,7 +283,8 @@ r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) =>
        join channels c on c.id = p.channel_id
       where p.scheduled_at >= $1 and p.scheduled_at <= $2
         and p.status in ('scheduled', 'failed')
-        and c.platform in ('facebook', 'instagram', 'newsletter')
+        -- ניוזלטר לא כאן בכלל: הוא עובר ל-HUB בכפתור משלו ומאושר שם
+        and c.platform in ('facebook', 'instagram')
         and c.active
         and not exists (select 1 from content_items ci
                           join campaigns ca on ca.id = ci.campaign_id

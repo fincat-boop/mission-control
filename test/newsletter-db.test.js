@@ -468,6 +468,15 @@ test('שחרר פרסום תקוע — ניוזלטר שהועבר מראש: ל�
   assert.equal(ok.json.post.status, 'failed');
 });
 
+test('אשר את כל השבוע — ניוזלטרים לא נבחרים בכלל (גם לא ב"דולגו")', { skip }, async () => {
+  const { post: id } = await newsletter({ at: inHours(30) });
+  const week = new Date(Date.now() + 30 * 3600000).toISOString().slice(0, 10);
+  const r = await call('POST', '/publish/approve-week', { week });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.skipped.some((x) => x.id === id), false);
+  assert.equal((await post(id)).status, 'scheduled');
+});
+
 /* ---------- SSO ---------- */
 
 test('SSO: jti נוצל פעם אחת בלבד; שורות שפגו נמחקות', { skip }, async () => {
