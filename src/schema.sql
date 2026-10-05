@@ -477,6 +477,20 @@ create index if not exists endpoints_org_idx         on endpoints (org_id);
 create index if not exists channels_org_idx          on channels (org_id);
 create index if not exists tasks_org_idx             on tasks (org_id);
 
+-- auto_hole: פוסט חסר תוכן שהמנוע עצמו יצר (חלון "מלא את השבוע"). רק אליו
+-- המילוי האוטומטי השקט רשאי לשייך תוכן — פוסט שהמשתמש יצר, או שהתוכן שלו
+-- נמחק, מתמלא רק כשהמשתמש רואה ובוחר. ההשלמה לאחור רצה פעם אחת בלבד, ביחד
+-- עם יצירת העמודה, כדי שהרצה חוזרת לא תסמן פוסטים שנוצרו ידנית אחר כך.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = current_schema()
+                    and table_name = 'posts' and column_name = 'auto_hole') then
+    alter table posts add column auto_hole boolean not null default false;
+    update posts set auto_hole = true
+     where content_id is null and title in ('ממתין לתוכן','חסר תוכן') and status <> 'published';
+  end if;
+end $$;
+
 -- ========================= ויתורים של המנוע =========================
 -- תוכן שהמשתמש הוריד מערוץ בשבוע מסוים (מחיקת פוסט, "בטל" על מילוי
 -- אוטומטי). המילוי האוטומטי רץ אחרי כל שינוי, ובלי הרשומה הזו הוא היה

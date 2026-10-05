@@ -128,9 +128,10 @@ async function showAttachPicker(post) {
       const r = await api(`/posts/${post.id}/attach-content`, {
         method: 'POST', body: { content_id: Number(b.dataset.contentId) },
       });
-      toast(r.draft
+      toast((r.draft
         ? 'התוכן שויך — הניסוח לערוץ הזה עוד בטיוטה; מסמנים "מוכן" לפני פרסום.'
-        : 'התוכן שויך לפוסט.');
+        : 'התוכן שויך לפוסט.') +
+        (r.approval_reset ? ' האישור לפרסום אוטומטי בוטל — צריך לאשר שוב עם התוכן החדש.' : ''));
       await refreshAfterPostChange();
       $('#postDlg').close();
       await openPostPreview(post.id);

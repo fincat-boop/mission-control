@@ -79,7 +79,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     // שכבר קרתה, בדיוק כמו ב-board.js.
     rows(
       `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status,
-              p.title, p.published_at
+              p.title, p.published_at, p.auto_hole
          from posts p
          left join content_items ci on ci.id = p.content_id
          left join campaigns ca     on ca.id = ci.campaign_id
@@ -121,7 +121,9 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   // קודם ממלאים את מה שכבר על הלוח וחסר לו תוכן, ורק אחר כך פותחים פוסטים
   // חדשים — אחרת תוכן שנכתב בדיוק בשביל פוסט ריק נוחת במשבצת אחרת והריק נשאר.
   const attachments = chooseHoleFills({
-    holes: openHoles(existing, channels, endpoints, new Date()),
+    // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
+    // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
+    holes: openHoles(existing, channels, endpoints, new Date(), { autoOnly: !withHoles }),
     content, usedContent, history, settings,
   }).map((a) => ({
     ...a,
@@ -261,8 +263,8 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
   // השם והסוג הקודמים חוזרים ללקוח, כדי ש"בטל" יחזיר את הפוסט בדיוק כמו שהיה
   const attached = [];
   for (const a of plan.attachments) {
-    const post = await attachToPost(a.post_id, a);
-    if (!post) continue; // מישהו שייך תוכן לפוסט הזה בינתיים
+    const done = await attachToPost(a.post_id, a);
+    if (!done) continue; // מישהו שייך תוכן לפוסט הזה בינתיים, או שהמועד עבר
     attached.push({ post_id: a.post_id, content_id: a.content_id,
                     prev_title: a.prev_title, prev_kind: a.prev_kind });
     summary.push(brief(a, true));
@@ -274,8 +276,8 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
     // שיבוץ אחר (תופסת קיבולת אמיתית, נספרת בסיכום) — רק שאין לה תוכן
     // עדיין. content_id נשאר null, ולכן הלוח מסמן אותה "חסר תוכן".
     const post = await one(
-      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note)
-       values ($1,$2,'חסר תוכן',$3,$4,'scheduled',$5) returning id`,
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note, auto_hole)
+       values ($1,$2,'חסר תוכן',$3,$4,'scheduled',$5,true) returning id`,
       [h.channel_id, h.endpoint_id, h.kind, h.scheduled_at, h.reason]
     );
     createdIds.push(post.id);
@@ -303,24 +305,37 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
 /**
  * משייך תוכן לפוסט קיים שאין לו תוכן: הכותרת והסוג מהתוכן, נקודת הקצה
  * רק אם לא הייתה. משימות "לכתוב" ו"החלפה" של הפוסט נסגרות — התנאי שלהן
- * נפתר. מחזיר null אם בינתיים כבר יש לפוסט תוכן, או שהוא יצא לאוויר.
- * משמש גם את המנוע וגם את "שייך תוכן" בחלון הפוסט.
+ * נפתר. פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן": האישור ניתן לפוסט בלי
+ * התוכן הזה. מחזיר null אם בינתיים כבר יש לפוסט תוכן, הוא יצא לאוויר,
+ * או שהמועד שלו עבר. משמש גם את המנוע וגם את "שייך תוכן" בחלון הפוסט.
+ * @returns {Promise<{post:object, closed_task_ids:number[], approval_reset:boolean}|null>}
  */
 export async function attachToPost(postId, c) {
   const post = await one(
-    `update posts set content_id = $2, title = $3, kind = $4,
-                      endpoint_id = coalesce(endpoint_id, $5)
-      where id = $1 and content_id is null and status not in ('published','publishing')
-      returning *`,
+    `update posts p set content_id = $2, title = $3, kind = $4,
+                        endpoint_id = coalesce(p.endpoint_id, $5),
+                        status = case when p.status = 'approved' then 'scheduled' else p.status end,
+                        approved_by = case when p.status = 'approved' then null else p.approved_by end,
+                        approved_at = case when p.status = 'approved' then null else p.approved_at end
+       from (select status as old_status from posts where id = $1) o
+      where p.id = $1 and p.content_id is null
+        and p.status not in ('published','publishing') and p.scheduled_at > now()
+      returning p.*, o.old_status`,
     [postId, c.content_id, c.title, c.kind, c.endpoint_id]
   );
   if (!post) return null;
-  await query(
+  const closed = await rows(
     `update tasks set done = true, done_at = now()
-      where post_id = $1 and kind in ('write','swap') and done = false`,
+      where post_id = $1 and kind in ('write','swap') and done = false
+      returning id`,
     [postId]
   );
-  return post;
+  const { old_status: oldStatus, ...row } = post;
+  return {
+    post: row,
+    closed_task_ids: closed.map((t) => t.id),
+    approval_reset: oldStatus === 'approved',
+  };
 }
 
 /**
@@ -421,13 +436,15 @@ export function blockedContent(existing, dismissals = []) {
 /**
  * פוסטים על הלוח שאין להם תוכן ושעוד אפשר למלא: עתידיים, מתוכננים,
  * בערוץ פעיל ועם נקודת קצה פעילה (בלי נקודה אין לפי מה לבחור תוכן).
+ * autoOnly — רק פוסטים שהמנוע יצר כחסרי תוכן (auto_hole), למילוי השקט.
  */
-export function openHoles(existing, channels, endpoints, now = new Date()) {
+export function openHoles(existing, channels, endpoints, now = new Date(), { autoOnly = false } = {}) {
   const active = new Set(channels.map((ch) => ch.id));
   const activeEp = new Set(endpoints.map((e) => e.id));
   return existing
     .filter((p) => !p.content_id && p.status === 'scheduled' && !p.published_at &&
                    activeEp.has(p.endpoint_id) && active.has(p.channel_id) &&
+                   (!autoOnly || p.auto_hole) &&
                    new Date(p.scheduled_at) > now)
     .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
 }

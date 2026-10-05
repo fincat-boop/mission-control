@@ -276,6 +276,9 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     return bad(res, 'הפוסט כבר יצא לאוויר — אי אפשר לשנות לו תוכן', 409);
   }
   if (post.content_id) return bad(res, 'לפוסט הזה כבר יש תוכן', 409);
+  if (new Date(post.scheduled_at) <= new Date()) {
+    return bad(res, 'אי אפשר לשייך תוכן לפוסט שהמועד שלו עבר');
+  }
   if (!post.channel_active) return bad(res, `הערוץ ${post.channel_name} מושבת`, 409);
 
   const c = await one(
@@ -328,11 +331,13 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     }
   }
 
-  const updated = await attachToPost(post.id, {
+  // פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן" — האישור לא היה על התוכן הזה
+  const done = await attachToPost(post.id, {
     content_id: c.id, title: c.title, kind: c.kind, endpoint_id: c.endpoint_id,
   });
-  if (!updated) return bad(res, 'הפוסט השתנה בינתיים — רעננו ונסו שוב', 409);
-  res.json({ post: updated, draft: c.variant_status !== 'ready' });
+  if (!done) return bad(res, 'הפוסט השתנה בינתיים — רעננו ונסו שוב', 409);
+  res.json({ post: done.post, draft: c.variant_status !== 'ready',
+             approval_reset: done.approval_reset });
 }));
 
 /** סימון "פורסם" — מעדכן גם את המשימה הצמודה */

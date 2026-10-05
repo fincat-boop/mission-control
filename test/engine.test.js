@@ -332,3 +332,11 @@ test('buildUsage.retag — שיוך תוכן מכירתי לפוסט שסומן 
   assert.equal(r.counts.value, 0);
   assert.equal(usage.remaining(1), 2);
 });
+
+test('openHoles autoOnly — המילוי השקט רואה רק פוסטים שהמנוע יצר כחסרי תוכן', () => {
+  const existing = [hole({ id: 1, auto_hole: true }), hole({ id: 2, auto_hole: false }), hole({ id: 3 })];
+  const all = openHoles(existing, [{ id: 1 }], [{ id: 7 }], NOW).map((h) => h.id);
+  const auto = openHoles(existing, [{ id: 1 }], [{ id: 7 }], NOW, { autoOnly: true }).map((h) => h.id);
+  assert.deepEqual(all, [1, 2, 3]);
+  assert.deepEqual(auto, [1]);
+});
