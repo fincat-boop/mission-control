@@ -135,6 +135,18 @@ exception when duplicate_object then null; end $$;
 alter table campaigns
   add column if not exists content_complete_at timestamptz;
 
+-- קמפיין מחזורי: תבנית שנשמרת לשימוש חוזר. "שבץ מחדש" (מלוח האסטרטגיה)
+-- יוצר ממנה קמפיין חדש — עותק עם אותו תוכן ותאריכים חדשים — והתבנית
+-- עצמה לא משתנה. template_id = מאיזו תבנית נוצר העותק (לשורת "הרצה
+-- אחרונה"); עותק אינו מחזורי בעצמו. deferrable initially immediate כמו
+-- linked_to_id: השחזור מגיבוי מריץ set constraints all deferred.
+alter table campaigns
+  add column if not exists recurring boolean not null default false,
+  add column if not exists template_id int
+    references campaigns(id) on delete set null deferrable initially immediate;
+create index if not exists campaigns_template_idx on campaigns (template_id)
+  where template_id is not null;
+
 -- על אילו מדיות הקמפיין יושב
 create table if not exists campaign_channels (
   campaign_id int not null references campaigns(id) on delete cascade,
