@@ -380,17 +380,38 @@ async function saveEdit() {
   }
 }
 
-/** סגירה — עם שינויים שלא נשמרו בעריכה שואלים קודם (עיקרון 4) */
+/**
+ * שינויים שלא נשמרו בעריכה — שואלים לפני שמאבדים אותם (עיקרון 4). מי שמוותר
+ * מקבל טופס שחזר למה שנטען, כדי שלא יישאר מצב "מלוכלך" נסתר מאחורי התצוגה.
+ * @returns {Promise<boolean>} true — אפשר להמשיך
+ */
+async function discardEditsOk(question, okLabel) {
+  if (!editDirty()) return true;
+  if (!(await confirmDialog(question, { okLabel, danger: true }))) return false;
+  if (previewPost && editable(previewPost)) fillEditForm(previewPost);
+  return true;
+}
+
+/** סגירה — עם שינויים שלא נשמרו בעריכה שואלים קודם */
 async function closePostDlg() {
-  if (editDirty() && !(await confirmDialog('יש שינויים שלא נשמרו בעריכת הפוסט. לסגור בלי לשמור?',
-    { okLabel: 'סגור בלי לשמור', danger: true }))) return;
+  if (!(await discardEditsOk('יש שינויים שלא נשמרו בעריכת הפוסט. לסגור בלי לשמור?',
+    'סגור בלי לשמור'))) return;
   editSnapshot = null;
   $('#postDlg').close();
+}
+
+/** מעבר ל"תצוגה" עם שינויים שלא נשמרו — שואלים, ובוויתור הטופס חוזר למה שנטען */
+async function switchTab(tab) {
+  if (tab === 'view' && !(await discardEditsOk(
+    'יש שינויים שלא נשמרו בעריכת הפוסט. לחזור לתצוגה ולבטל אותם?', 'בטל את השינויים'))) return;
+  setTab(tab);
 }
 
 async function runAction(key) {
   if (!previewPost) return;
   $('#pMenu').hidden = true;
+  if (!(await discardEditsOk('יש שינויים שלא נשמרו בעריכת הפוסט. להמשיך ולבטל אותם?',
+    'בטל את השינויים והמשך'))) return;
   const done = await ACT[key].run(previewPost);
   if (done === false) return;
   $('#postDlg').close();
@@ -405,7 +426,7 @@ export function wirePostDialog() {
     e.preventDefault();
     run(closePostDlg)();
   });
-  $$('#pTabs [data-ptab]').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.ptab)));
+  $$('#pTabs [data-ptab]').forEach((b) => b.addEventListener('click', run(() => switchTab(b.dataset.ptab))));
   $('#peSave').addEventListener('click', run(saveEdit));
 
   $('#pMoreBtn').addEventListener('click', (e) => {
