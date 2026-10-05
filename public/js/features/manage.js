@@ -50,7 +50,7 @@ export async function renderManage() {
       ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
     </div>
 
-    ${can('users') ? systemGroup(users, settings, backupsRes?.backups ?? null) : ''}`;
+    ${systemGroup(users, settings, backupsRes?.backups ?? null, ro)}`;
 
   wireManage(ro);
 }
@@ -240,7 +240,12 @@ function channelItem(c, ro, conn, hubReady) {
 // routes/board.js, routes/engine.js)
 const APPROVE_HINT = 'אישור פוסטים לפרסום אוטומטי ופרסום מיידי לרשתות, וגם מבצע דחוף בלי המתנה לאישור';
 
-function systemGroup(users, settings, backups) {
+/**
+ * קבוצת "מערכת" — כל חלק לפי ההרשאה שהשרת דורש בפועל:
+ * משתמשים ← users; כללי המנוע גלויים לכולם וניתנים לעריכה רק עם settings
+ * (PATCH /settings), כמו ערוצים ונקודות קצה; גיבויים ← settings (GET /backups).
+ */
+function systemGroup(users, settings, backups, ro) {
   const rows = users.map((u) => {
     const cell = (perm) => u.is_owner
       ? '✓'
@@ -255,17 +260,17 @@ function systemGroup(users, settings, backups) {
   }).join('');
 
   const s = settings;
+  const dis = ro ? 'disabled' : '';
   const eng = (label, field, value, step = '1') => `
     <div class="prow"><label>${label}</label>
-      <input type="number" step="${step}" value="${value}" data-engine="${field}"></div>`;
+      <input type="number" step="${step}" value="${value}" data-engine="${field}" ${dis}></div>`;
 
-  return `<div class="setgroup" id="ownerOnly">
+  return `<div class="setgroup">
     <h2>מערכת</h2>
     <div class="panel">
-      <details class="item">
+      ${can('users') ? `<details class="item">
         <summary><b>משתמשים והרשאות</b>
-          <span class="info">${users.length} משתמשים</span>
-          <span class="owner-tag">בעלים בלבד</span></summary>
+          <span class="info">${users.length} משתמשים</span></summary>
         <div class="ibody">
           <table class="utable">
             <thead><tr><th>משתמש</th><th>תוכן ושיבוץ</th><th>הגדרות</th>
@@ -274,7 +279,7 @@ function systemGroup(users, settings, backups) {
           </table>
           <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
         </div>
-      </details>
+      </details>` : ''}
       <details class="item">
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
@@ -282,18 +287,18 @@ function systemGroup(users, settings, backups) {
           ${eng('מקסימום מכירתיים ביום, בכל הערוצים', 'max_promo_per_day', s.max_promo_per_day)}
           <div class="prow">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-              <input type="checkbox" id="engRatioOn" ${s.min_value_per_promo > 0 ? 'checked' : ''}>
+              <input type="checkbox" id="engRatioOn" ${s.min_value_per_promo > 0 ? 'checked' : ''} ${dis}>
               לאכוף יחס ערך מול מכירתי
             </label>
             <input type="number" step="0.5" min="0.5" id="engRatioVal"
                    value="${s.min_value_per_promo > 0 ? s.min_value_per_promo : 3}"
-                   data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 ? '' : 'disabled'}>
+                   data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 && !ro ? '' : 'disabled'}>
           </div>
           ${eng('"משולב" נספר כמכירתי', 'hybrid_weight', s.hybrid_weight, '0.1')}
           ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
           <div class="prow">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-              <input type="checkbox" id="engUsePerf" ${s.use_performance ? 'checked' : ''}>
+              <input type="checkbox" id="engUsePerf" ${s.use_performance ? 'checked' : ''} ${dis}>
               לתת ליעילות הנמדדת להשפיע על השיבוץ
             </label>
           </div>
@@ -527,20 +532,6 @@ function wireManage(ro) {
     b.addEventListener('click', run(async () => {
       await api(`/channels/${b.dataset.toggleChannel}`,
         { method: 'PATCH', body: { active: b.dataset.active !== 'true', week: state.week } });
-      await reload();
-    })));
-
-  $$('#manage [data-del-campaign]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/campaigns/${b.dataset.delCampaign}`,
-        { method: 'DELETE', body: { week: state.week } });
-      await reload();
-    })));
-
-  $$('#manage [data-del-content]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/content/${b.dataset.delContent}`,
-        { method: 'DELETE', body: { week: state.week } });
       await reload();
     })));
 
