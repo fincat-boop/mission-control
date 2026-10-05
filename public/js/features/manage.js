@@ -24,31 +24,31 @@ export async function renderManage() {
   const connOf = (id) => pub.connections.find((c) => c.channel_id === id) ?? null;
 
   $('#manage').innerHTML = `
-    <div class="setgroup">
+    <div class="setgroup" data-section="endpoints">
       <h2>נקודות קצה</h2>
       <p class="sub">ההגדרות של כל נקודה — חשיבות ותדירות. הקמפיינים והתוכן שלה בטאב "קמפיינים ותוכן".</p>
       <div class="panel">${endpoints.map((e) => endpointItem(e, channels, ro)).join('')
         || '<div class="empty">אין עדיין נקודות קצה.</div>'}</div>
-      ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addEndpoint">＋ הוסף נקודת קצה</button></div>'}
+      ${ro ? '' : '<div class="setadd"><button class="btn" id="addEndpoint">＋ הוסף נקודת קצה</button></div>'}
     </div>
 
-    <div class="setgroup">
+    <div class="setgroup" data-section="channels">
       <h2>ערוצי פרסום</h2>
       <p class="sub">כמה שטח יש בכל ערוץ ומה הכללים שלו.</p>
-      <div class="prow" style="margin-bottom:10px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <div class="autopub" data-section="autopublish">
+        <label class="cbline">
           <input type="checkbox" id="autopubGlobal" ${pub.autopublish_enabled ? 'checked' : ''}
                  ${ro ? 'disabled' : ''}>
-          <b>שליחה אוטומטית פעילה</b>
+          <b>פרסום אוטומטי פעיל</b>
         </label>
-      </div>
-      <div class="fhint" style="margin-top:-6px;margin-bottom:8px">
-        מתג-העל של כל הפרסום האוטומטי. גם כשהוא דולק — שום פוסט לא נשלח בלי
-        אישור פרטני שלו ("אשר לשליחה אוטומטית" בדיאלוג הפוסט).
+        <div class="fhint">
+          המתג הראשי של כל הפרסום האוטומטי. גם כשהוא דולק — שום פוסט לא מתפרסם בלי
+          אישור של הפוסט עצמו ("אשר לשליחה אוטומטית" בחלון הפוסט).
+        </div>
       </div>
       <div class="panel">${channels.map((c) => channelItem(c, ro, connOf(c.id), pub.hub_mail_ready)).join('')
         || '<div class="empty">אין עדיין ערוצים.</div>'}</div>
-      ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
+      ${ro ? '' : '<div class="setadd"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
     </div>
 
     ${systemGroup(users, settings, backupsRes?.backups ?? null, ro)}`;
@@ -60,7 +60,7 @@ function endpointItem(e, channels, ro) {
   // הקמפיינים והתוכן עברו לטאב "קמפיינים ותוכן". כאן נשארו רק ההגדרות של הנקודה עצמה.
   const hasContent = e.content.length > 0;
 
-  return `<details class="item">
+  return `<details class="item" data-open-id="ep-${e.id}">
     <summary>
       <b>${esc(e.name)}</b>
       <span class="info">חשיבות ${e.importance} · ${e.campaigns.length} קמפיינים</span>
@@ -200,7 +200,7 @@ function channelItem(c, ro, conn, hubReady) {
     `<span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:3px;` +
     `background:${KIND_VAR[kind]};margin-inline-end:6px;vertical-align:-1px"></span>`;
 
-  return `<details class="item">
+  return `<details class="item" data-open-id="ch-${c.id}">
     <summary>
       <b>${esc(c.name)}</b>
       <span class="info">קצב ${c.target_per_week ?? c.max_per_week} · תקרה ${c.max_per_week} בשבוע</span>
@@ -437,8 +437,8 @@ function wireManage(ro) {
   $('#autopubGlobal')?.addEventListener('change', run(async (e) => {
     await api('/settings', { method: 'PATCH', body: { autopublish_enabled: e.target.checked } });
     toast(e.target.checked
-      ? 'השליחה האוטומטית פעילה — יישלחו רק פוסטים שאושרו פרטנית.'
-      : 'השליחה האוטומטית כבויה — שום דבר לא יישלח.');
+      ? 'הפרסום האוטומטי פעיל — יתפרסמו רק פוסטים שאושרו אחד-אחד.'
+      : 'הפרסום האוטומטי כבוי — שום פוסט לא יתפרסם לבד.');
   }));
 
   $$('#manage [data-ch-platform]').forEach((sel) =>

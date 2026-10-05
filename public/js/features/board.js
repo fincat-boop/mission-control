@@ -7,11 +7,16 @@ import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
 import { confirmDialog } from '../core/confirm.js';
+import { renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
 
 /* ========================= הלוח ========================= */
 
 export async function renderBoard() {
-  const b = await api(`/board${state.week ? `?week=${state.week}` : ''}`);
+  // רשימת ההקמה — רכה: אם היא נכשלת, הלוח עצמו עדיין מוצג
+  const [b, setup] = await Promise.all([
+    api(`/board${state.week ? `?week=${state.week}` : ''}`),
+    api('/setup-status').catch(() => null),
+  ]);
   const editable = can('content');
 
   // רשימה אחת שמשמשת גם כמקרא הצבעים וגם כמצב האוויר של כל נקודה.
@@ -68,7 +73,14 @@ export async function renderBoard() {
           s.value_per_promo >= s.min_value_per_promo ? '✓' : '⚠'}`
       : `על כל מכירתי יש <b>${s.value_per_promo} פוסטי ערך</b>`;
 
+  // בלי ערוצים פעילים אין שורות בלוח — כפתור למקום שבו מוסיפים/מפעילים, לא טקסט
+  const chStep = setup?.steps.find((x) => x.id === 'channel');
+  const emptyRow = `<tr><td class="empty" colspan="8">אין ערוצים פעילים — כל ערוץ הוא שורה בלוח.
+    ${setupGoButton(chStep?.target ?? { tab: 'manage', section: 'channels' },
+                    chStep?.action ?? 'לערוצים', true)}</td></tr>`;
+
   $('#board').innerHTML = `
+    <div id="setupCard"></div>
     <div class="oxy"><span class="t">מי מקבל במה:</span>${oxy || '<span class="d">אין נקודות קצה פעילות</span>'}</div>
 
     <div class="toolbar">
@@ -89,13 +101,16 @@ export async function renderBoard() {
     <div class="board panel">
       <table class="grid">
         <thead><tr><th></th>${head}</tr></thead>
-        <tbody>${body || `<tr><td class="empty" colspan="8">אין ערוצים פעילים — מוסיפים אותם במסך "ניהול"</td></tr>`}</tbody>
+        <tbody>${body || emptyRow}</tbody>
       </table>
     </div>
     <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
       — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}`;
+
+  renderSetupCard($('#setupCard'), setup);
+  wireSetupGo($('#board .grid'));
 
   $$('#board [data-week]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
