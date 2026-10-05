@@ -12,6 +12,16 @@ import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '.
 
 /* ========================= הלוח ========================= */
 
+/*
+ * בטלפון (עד 600px) הלוח הוא רשימה לפי ימים במקום טבלה ברוחב 1000px — אותם
+ * נתונים, רנדרר אחר. מעבר בין המצבים (סיבוב, שינוי חלון) מצייר מחדש.
+ * בטלפון אין גרירה: הזזת פוסט היא דרך לשונית "עריכה" בחלון הפוסט.
+ */
+const PHONE = matchMedia('(max-width: 600px)');
+PHONE.addEventListener('change', () => {
+  if (state.tab === 'board') run(refreshBoard)();
+});
+
 let boardReq = 0; // רק התשובה לבקשה האחרונה מצוירת — לחיצות מהירות על ‹ › לא מתערבבות
 
 export async function renderBoard() {
@@ -111,19 +121,24 @@ export async function renderBoard() {
       </div>
     </div>
 
-    <div class="board panel">
+    ${PHONE.matches
+      ? `<div class="board mboard">${b.channels.length ? phoneDays(b, editable)
+          : `<div class="empty">אין ערוצים פעילים — כל ערוץ הוא שורה בלוח.
+             ${setupGoButton(chStep?.target ?? { tab: 'manage', section: 'channels' },
+                             chStep?.action ?? 'לערוצים', true)}</div>`}</div>`
+      : `<div class="board panel">
       <table class="grid">
         <thead><tr><th></th>${head}</tr></thead>
         <tbody>${body || emptyRow}</tbody>
       </table>
-    </div>
+    </div>`}
     <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
       — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}`;
 
   renderSetupCard($('#setupCard'), setup);
-  wireSetupGo($('#board .grid'));
+  wireSetupGo($('#board .board'));
 
   // השבוע המוצג נשמר בכתובת (;w=) — רענון נשאר על אותו שבוע
   $$('#board [data-week]').forEach((btn) =>
@@ -180,8 +195,60 @@ export async function renderBoard() {
       e.stopPropagation();
       openAddPost(Number(btn.dataset.channel), btn.dataset.date, btn.dataset.channelName);
     }));
+  // בטלפון — פוסט ליום, והערוץ נבחר בחלון ההוספה
+  $$('#board [data-add-day]').forEach((btn) =>
+    btn.addEventListener('click', () => openAddPost(null, btn.dataset.addDay, null)));
 
-  if (editable) wireBoardDrag();
+  if (editable && !PHONE.matches) wireBoardDrag();
+}
+
+/* ========================= הלוח בטלפון ========================= */
+
+/** תג המצב של פוסט ברשימת הטלפון — אותה שפה כמו התגיות הפינתיות בטבלה */
+function statusTag(p) {
+  if (p.status === 'hole') return { cls: 'red', label: 'חסר תוכן' };
+  if (p.status === 'pending_approval') return { cls: 'yellow', label: 'ממתין לאישור' };
+  if (p.status === 'published') {
+    return p.has_results ? { cls: 'auto', label: '✓ פורסם' } : { cls: 'yellow', label: '✓ פורסם · לא נמדד' };
+  }
+  if (isMissed(p)) return { cls: 'yellow', label: 'עבר המועד' };
+  if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
+  if (!p.content_id) return { cls: 'red', label: 'חסר תוכן' };
+  return p.variant_status === 'ready' ? { cls: 'blue', label: 'יש תוכן' } : { cls: 'yellow', label: 'יש טיוטה' };
+}
+
+/** שורת פוסט בטלפון: שעה, צבע הנקודה, כותרת, ערוץ ונקודה, ותג מצב */
+function phoneRow(p) {
+  const tag = statusTag(p);
+  const title = p.status === 'hole' ? 'חסר תוכן' : p.title;
+  return `<button type="button" class="mpost${p.status === 'published' ? ' done' : ''}" data-post-id="${p.id}">
+    <span class="mtime">${esc(p.time)}</span>
+    <i class="sw" style="background:${epColor(p.endpoint_id)}"></i>
+    <span class="mbody">
+      <b>${p.urgent ? '⚡ ' : ''}${esc(title)}</b>
+      <span class="d">${esc(p.channel_name)}${p.endpoint_name ? ` · ${esc(p.endpoint_name)}` : ''}${
+        p.assignee_name ? ` · ${esc(p.assignee_name)}` : ''}</span>
+    </span>
+    <span class="mtag ${tag.cls}">${tag.label}</span>
+  </button>`;
+}
+
+/** השבוע כרשימת ימים: כותרת יום ← הפוסטים לפי שעה; יום ריק — "+" */
+function phoneDays(b, editable) {
+  const today = ymd(new Date());
+  return b.week.days.map((d) => {
+    const posts = b.channels
+      .flatMap((ch) => (ch.days.find((x) => x.date === d.date)?.posts ?? [])
+        .map((p) => ({ ...p, channel_name: ch.name })))
+      .sort((x, y) => new Date(x.scheduled_at) - new Date(y.scheduled_at));
+    const add = editable
+      ? `<button type="button" class="btn small mday-add" data-add-day="${d.date}"
+           aria-label="הוסף פוסט ליום ${esc(d.label)}">+ פוסט</button>` : '';
+    return `<section class="mday${d.date === today ? ' today' : ''}">
+      <h4 class="mday-head"><span>${esc(d.label)}${d.date === today ? ' · היום' : ''}</span>${add}</h4>
+      ${posts.length ? posts.map(phoneRow).join('') : '<div class="mday-empty">אין פוסטים ביום הזה</div>'}
+    </section>`;
+  }).join('');
 }
 
 const APPROVE_WEEK_LABEL = '⚡ אשר מוכנים לפרסום אוטומטי';

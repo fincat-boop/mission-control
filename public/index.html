@@ -167,6 +167,11 @@
 <dialog id="addPostDlg">
   <h3>פוסט חדש</h3>
   <p class="sub" id="apContext"></p>
+  <!-- בטלפון הפוסט נוסף ליום, לא למשבצת — אז בוחרים כאן ערוץ -->
+  <div class="frow" id="apChannelRow" hidden>
+    <label for="apChannel">ערוץ</label>
+    <select id="apChannel"></select>
+  </div>
   <div class="frow">
     <label for="apTitle">כותרת</label>
     <input id="apTitle" type="text" placeholder="למשל: תזכורת להרשמה לוובינר">
