@@ -143,6 +143,42 @@ export async function uploadFiles(contentId, files, { channelId = null, onProgre
 }
 
 /**
+ * כמו uploadFiles, קובץ אחרי קובץ ובלי לעצור בכישלון: מחזיר מה עלה ומה לא,
+ * כדי ש"שמור" שוב ינסה רק את מה שנכשל — בלי קבצים כפולים ממה שכבר עלה.
+ * @returns {Promise<{saved:object[], failed:{file:File, error:string}[]}>}
+ */
+export async function uploadEach(contentId, files, { channelId = null, onProgress } = {}) {
+  const saved = [];
+  const failed = [];
+  for (const [i, f] of [...files].entries()) {
+    try {
+      saved.push(...await uploadFiles(contentId, [f], {
+        channelId, onProgress: (_j, loaded, total) => onProgress?.(i, loaded, total),
+      }));
+    } catch (e) {
+      failed.push({ file: f, error: e.message });
+    }
+  }
+  return { saved, failed };
+}
+
+/** ההודעה כשחלק מהקבצים לא עלו — מה נכשל, ושהשמירה הבאה תנסה רק אותם */
+export function uploadFailedMessage(failed) {
+  const list = failed.slice(0, 3).map((f) => `"${f.file.name}" (${f.error})`).join(', ');
+  const more = failed.length > 3 ? ` ועוד ${failed.length - 3}` : '';
+  return `${failed.length === 1 ? 'קובץ אחד לא עלה' : `${failed.length} קבצים לא עלו`}: ` +
+    `${list}${more}. השאר נשמר — "שמור" שוב ינסה רק את מה שנכשל.`;
+}
+
+/** מחזיר לבורר הקבצים רשימה מסוימת (למשל רק הקבצים שנכשלו) */
+export function setPickedFiles(input, files) {
+  if (!input) return;
+  const dt = new DataTransfer();
+  for (const f of files) dt.items.add(f);
+  input.files = dt.files;
+}
+
+/**
  * העלאה מרוכזת לקמפיין: כל קובץ הופך לזווית. כל הקבצים עולים קודם,
  * ורק אז נוצרות הזוויות — במנה אחת, כמו במסלול הישן.
  * בקמפיין כללי — channelId: כל קובץ ממלא משבצת של המדיה הזו בלבד.

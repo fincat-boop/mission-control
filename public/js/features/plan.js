@@ -4,10 +4,12 @@ import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from 
 import { openTemplateFiller } from '../ui/templateFiller.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
-import { markGenericClean, openGeneric } from '../ui/dialog.js';
+import { closeGeneric, markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
-import { acceptAttr, progressList, uploadBulk, uploadFiles } from '../core/upload.js';
+import {
+  progressList, setPickedFiles, uploadBulk, uploadEach, uploadFailedMessage, uploadFiles,
+} from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
 import { engineToast } from '../ui/engineDialog.js';
 
@@ -164,7 +166,7 @@ function backgroundGrid(endpoint, content) {
       const v = item.variants.find((x) => x.channel_id === ch.id) ?? null;
       const state_ = v ? v.status : 'empty';
       const st = CELL[state_];
-      return `<td class="cell ${st.cls}" ${can('content')
+      return `<td class="cell ${st.cls}" data-item="${item.id}" data-state="${state_}" ${can('content')
         ? `data-bg-cell="${item.id}" data-ch="${ch.id}"` : ''}
         data-tt="${esc(ch.name)} · ${esc(st.label)}"><span>${st.label || '—'}</span></td>`;
     }).join('');
@@ -646,9 +648,7 @@ function campaignGrid(c) {
     const item = row.content;
     const angle = item
       ? `<div class="aname">${esc(item.title)}</div>
-         <div class="ameta">${esc(KIND_HE[item.kind])}${
-           item.evergreen ? ' · ♻' : ''}${
-           item.assets.length ? ` · 📎${item.assets.length}` : ''}</div>`
+         <div class="ameta">${angleMeta(item)}</div>`
       : `<div class="aname muted">${row.past ? 'זווית שלא נכתבה' : 'זווית חדשה'}</div>`;
 
     const cells = c.channels.map((ch) => {
@@ -656,14 +656,16 @@ function campaignGrid(c) {
       const st = CELL[cell.state];
       // בקמפיין מוכן תא בלי גרסה לא נדרש, אבל אפשר לפתוח אותו ולהוסיף גרסה
       const clickable = can('content') && (cell.state !== 'not_needed' || c.complete);
-      return `<td class="cell ${st.cls}${cell.warn ? ' warn' : ''}"
+      return `<td class="cell ${st.cls}${cell.warn ? ' warn' : ''}" data-state="${cell.state}"
+        ${item ? `data-item="${item.id}"` : ''}
         ${clickable ? `data-cell="${row.index}" data-ch="${ch.id}"` : ''}
         ${clickable || cell.warn ? `data-tt="${esc(ch.name)} · ${esc(cellTip(cell))}"` : ''}>
         <span>${esc(cellLabel(cell))}</span></td>`;
     }).join('');
 
     return `<tr class="${row.past ? 'past' : ''}">
-      <td class="angle" ${can('content') ? `data-angle="${row.index}"` : ''}>
+      <td class="angle" ${item ? `data-item="${item.id}"` : ''}
+        ${can('content') ? `data-angle="${row.index}"` : ''}>
         <div class="anum">${row.index}<span>${fmtDate(row.date)}</span></div>
         ${angle}
       </td>${cells}</tr>`;
@@ -684,6 +686,10 @@ function campaignGrid(c) {
     </div>`;
 }
 
+
+/** שורת הפרטים של זווית ברשת: סוג, חוזר, מספר הקבצים המשותפים */
+const angleMeta = (item) => `${esc(KIND_HE[item.kind])}${item.evergreen ? ' · ♻' : ''}${
+  item.assets?.length ? ` · 📎${item.assets.length}` : ''}`;
 
 /**
  * הטקסט של תא/משבצת: "מוכן ⚠" כשהגרסה סומנה מוכנה אבל התוכן לא יעבור את
@@ -1137,20 +1143,23 @@ function wireCampaignGrid(selected, reload) {
   if (selected.structure === 'general') return wireGeneralBoard(selected, reload);
 
   // לחיצה על הזווית עצמה — עריכת המסר, הסוג והקבצים
+  // הפריט לפי המזהה שלו (data-item), לא לפי המקום — שתי זוויות באותו מקום
+  // לא מסתירות זו את זו
+  const itemOf = (el) => (el.dataset.item
+    ? selected.content.find((x) => x.id === Number(el.dataset.item)) ?? null : null);
+
   $$('#plan [data-angle]').forEach((b) =>
     b.addEventListener('click', () => {
       const idx = Number(b.dataset.angle);
-      const item = selected.content.find((x) => x.sort_order === idx) ?? null;
-      openAngleForm({ item, campaign: selected, slot: idx }, reload);
+      openAngleForm({ item: itemOf(b), campaign: selected, slot: idx }, reload);
     }));
 
   // לחיצה על תא — הניסוח של הזווית הזו למדיה הזו
   $$('#plan [data-cell]').forEach((b) =>
     b.addEventListener('click', (e) => {
       e.stopPropagation();
-      const idx = Number(b.dataset.cell);
       const channelId = Number(b.dataset.ch);
-      const item = selected.content.find((x) => x.sort_order === idx) ?? null;
+      const item = itemOf(b);
       if (!item) {
         toast('צריך קודם לכתוב את הזווית — לוחצים על העמודה הראשונה.', true);
         return;
@@ -1330,19 +1339,355 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
   });
 }
 
-/** הגרסה: הניסוח של זווית מסוימת למדיה מסוימת */
-async function openVariantForm({ item, channelId, campaign }, reload) {
+/**
+ * הגרסה: הניסוח של זווית לערוץ. ניוזלטר נכתב בעורך המייל (תבנית / נושא +
+ * HTML); כל ערוץ אחר — בעורך הגרסאות, עם לשונית לכל ערוץ של הזווית.
+ */
+function openVariantForm({ item, channelId, campaign }, reload) {
+  const channel = state.channels.find((c) => c.id === channelId);
+  if (channel?.platform === 'newsletter') return openMailVariant({ item, channelId }, reload);
+  return openVersionEditor({ item, channelId, campaign }, reload);
+}
+
+/* ---------- עורך הגרסאות: לשונית לכל ערוץ של הזווית ---------- */
+
+/** הערוצים שהזווית נכתבת אליהם: של הקמפיין; בתוכן שוטף — הערוצים הפעילים */
+const angleChannels = (campaign) =>
+  (campaign ? campaign.channels : state.channels.filter((c) => c.active));
+
+/** הקבצים של הזווית לערוץ אחד: של הגרסה (אפשר להסיר) ולצידם המשותפים */
+function versionFiles(item, variantId) {
+  const mine = (item.variant_assets ?? []).filter((a) => variantId && a.variant_id === variantId);
+  return [...mine.map((a) => assetLine(a, true)),
+          ...(item.assets ?? []).map((a) => assetLine(a, false))].join('');
+}
+
+/** כמה מילויים של המנוע (שמירה של כמה ערוצים) כאחד — להודעה אחת עם "בטל" אחד */
+function mergeFills(list) {
+  const fills = list.map((r) => r?.engine).filter(Boolean);
+  if (!fills.length) return {};
+  const sum = (k) => fills.reduce((s, f) => s + (f[k] ?? 0), 0);
+  const cat = (k) => fills.flatMap((f) => f[k] ?? []);
+  return { engine: {
+    placed: sum('placed'), attached: sum('attached'), holes: sum('holes'),
+    created_items: cat('created_items'), attached_items: cat('attached_items'),
+    summary: cat('summary'),
+  } };
+}
+
+/**
+ * עורך אחד לכל הערוצים של זווית. כל ערוץ — לשונית עם המצב שלו; מעבר בין
+ * לשוניות שומר את מה שנכתב (לא נשמר עדיין — מסומן בנקודה); "העתק מ־"
+ * ממלא את הלשונית מטקסט של ערוץ אחר; "הבא ›" שומר את הלשונית ועובר לבאה;
+ * "שמור" שומר את כל הלשוניות ששונו. אחרי שמירה מתעדכן רק התא ברשת.
+ * ניוזלטר: לשונית עם המצב ומעבר לעורך המייל.
+ */
+function openVersionEditor({ item, channelId, campaign }, reload) {
+  const chans = angleChannels(campaign);
+  // תא של ערוץ שכבר לא בקמפיין (נשאר מגרסה ישנה) — עדיין נפתח
+  if (!chans.some((ch) => ch.id === channelId)) {
+    const extra = state.channels.find((ch) => ch.id === channelId);
+    if (extra) chans.push(extra);
+  }
+  const tabs = chans.map((ch) => {
+    const v = item.variants.find((x) => x.channel_id === ch.id) ?? null;
+    return { ch, mail: ch.platform === 'newsletter', v, body: v?.body ?? '',
+             status: v?.status ?? 'draft', files: [], base: v?.updated_at ?? null };
+  });
+  let cur = tabs.find((t) => t.ch.id === channelId) ?? tabs[0];
+  const dirty = (t) => !t.mail && (t.body !== (t.v?.body ?? '') ||
+    t.status !== (t.v?.status ?? 'draft') || t.files.length > 0);
+  const statusOptions = [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
+                  ['not_relevant', 'לא רלוונטי לערוץ הזה']];
+
+  /** מה שבטופס → הלשונית הנוכחית */
+  const sync = () => {
+    if (cur.mail) return;
+    cur.body = $('#gen_body').value;
+    cur.status = $('#gen_status').value;
+    cur.files = [...($('#gen___files')?.files ?? [])];
+  };
+
+  const tabsHtml = () => tabs.map((t) => {
+    const st = t.v || t.status !== 'draft' ? CELL[t.status] : CELL.empty;
+    return `<button type="button" class="vtab${t === cur ? ' on' : ''}" role="tab"
+      aria-selected="${t === cur}" data-vtab="${t.ch.id}">
+      <span>${esc(t.ch.name)}</span>
+      <span class="gst ${st.cls}"><i></i>${esc(st.label)}</span>
+      ${dirty(t) ? '<b class="vdirty" title="שינוי שלא נשמר">•</b>' : ''}
+    </button>`;
+  }).join('');
+  const paintTabs = () => { $('#vtabs').innerHTML = tabsHtml(); };
+
+  /** הלשונית t → הטופס */
+  const load = (t) => {
+    cur = t;
+    $('#genTitle').textContent = `${item.title} — ${t.ch.name}`;
+    $('#genBody .stalebox')?.remove();
+    for (const f of ['body', 'status', '__files', '__copy']) {
+      $(`#genBody [data-field="${f}"]`).hidden = t.mail;
+    }
+    $('#genBody [data-field="__mail"]').hidden = !t.mail;
+    if (t.mail) {
+      $('#vmailState').textContent = t.v ? CELL[t.status].label : 'עוד לא נכתב';
+    } else {
+      $('#genBody label[for="gen_body"]').textContent = `הטקסט כפי שהוא ייצא ב${t.ch.name}`;
+      $('#gen_body').value = t.body;
+      $('#gen_status').value = t.status;
+      $('#genBody label[for="gen___files"]').textContent = `תמונות וסרטונים ל${t.ch.name}`;
+      $('#vfiles').innerHTML = versionFiles(item, t.v?.id);
+      wireFiles();
+      setPickedFiles($('#gen___files'), t.files);
+      $('#gen___files_progress').hidden = true;
+      const sources = tabs.filter((x) => x !== t && !x.mail && x.body.trim());
+      $('#vcopyFrom').innerHTML = sources.length
+        ? sources.map((x) => `<option value="${x.ch.id}">${esc(x.ch.name)}</option>`).join('')
+        : '<option value="">אין עדיין טקסט בערוץ אחר</option>';
+      $('#vcopyBtn').disabled = !sources.length;
+    }
+    const i = tabs.indexOf(t);
+    $('#vnext').disabled = i === tabs.length - 1;
+    $('#markReady').hidden = t.mail || t.status === 'ready';
+    paintTabs();
+  };
+
+  /** שמירת לשונית אחת: קבצים קודם ("מוכן" נבדק מול המדיה שכבר עלתה), ואז הגרסה */
+  const saveTab = async (t) => {
+    if (t.files.length) {
+      const { saved, failed } = await uploadEach(item.id, t.files, {
+        channelId: t.ch.id,
+        onProgress: t === cur ? progressList($('#gen___files_progress'), t.files) : undefined,
+      });
+      // הגרסה (אם לא הייתה) נוצרה עם הקובץ — הקובץ נתלה עליה
+      for (const a of saved) {
+        if (a.variant_id) item.variant_assets = [...(item.variant_assets ?? []), a];
+      }
+      t.files = failed.map((f) => f.file);
+      if (failed.length) {
+        if (t === cur) setPickedFiles($('#gen___files'), t.files);
+        throw new Error(`${t.ch.name}: ${uploadFailedMessage(failed)}`);
+      }
+    }
+    let res;
+    try {
+      res = await api(`/content/${item.id}/variants/${t.ch.id}`, { method: 'PUT', body: {
+        body: t.body, status: t.status, base_updated_at: t.base, week: state.week } });
+    } catch (e) {
+      if (e.status !== 409 || !e.payload?.stale) throw new Error(`${t.ch.name}: ${e.message}`);
+      // מישהו אחר שמר את הגרסה הזו — מציעים לטעון אותה; הטקסט שלך נשאר להעתקה
+      if (t !== cur) load(t);
+      const mine = t.body;
+      const ok = await confirmDialog(`${t.ch.name}: ${e.message}.\nהטקסט שלך יישאר מוצג בחלון, להעתקה.`,
+        { okLabel: 'טען את הגרסה השמורה' });
+      if (!ok) throw new Error(`${t.ch.name}: לא נשמר — הגרסה השתנתה מאז שנפתחה.`);
+      const cur0 = e.payload.current;
+      Object.assign(t, { v: cur0, body: cur0?.body ?? '', status: cur0?.status ?? 'draft',
+                         base: cur0?.updated_at ?? null });
+      load(t);
+      showMine(mine);
+      throw new Error(`${t.ch.name}: הגרסה השמורה נטענה — הטקסט שלך מוצג למעלה להעתקה.`);
+    }
+    const v = res.variant;
+    Object.assign(t, { v, body: v.body, status: v.status, base: v.updated_at });
+    item.variants = [...item.variants.filter((x) => x.channel_id !== t.ch.id), v];
+    paintCellInPlace(campaign, item, t.ch.id, v.status);
+    return res;
+  };
+
+  /** שמירת כל הלשוניות ששונו; נעצרת בראשונה שנכשלה ועוברת אליה */
+  const saveAll = async () => {
+    sync();
+    const results = [];
+    for (const t of tabs.filter(dirty)) {
+      try {
+        results.push(await saveTab(t));
+      } catch (e) {
+        if (t !== cur) load(t);
+        else paintTabs();
+        if (results.length) engineToast(mergeFills(results));
+        refreshAround();
+        throw e;
+      }
+    }
+    return results;
+  };
+
+  /** הלוח וההתראות — המילוי האוטומטי יכול היה לשבץ משהו */
+  const refreshAround = () => { refreshBoard(); refreshAlerts(); };
+
+  let filesChanged = false;
+  const wireFiles = () => {
+    wireCopyLinks($('#vfiles'));
+    $$('#vfiles [data-del-asset]').forEach((b) =>
+      b.addEventListener('click', run(async () => {
+        const id = Number(b.dataset.delAsset);
+        if (!(await deleteAssetAsk(b))) return;
+        item.variant_assets = (item.variant_assets ?? []).filter((a) => a.id !== id);
+        filesChanged = true;
+      })));
+  };
+
+  openGeneric({
+    title: `${item.title} — ${cur.ch.name}`,
+    // שינוי שלא נשמר בכל אחת מהלשוניות — לא רק בזו שמוצגת
+    guardDirty: () => { sync(); return tabs.some(dirty); },
+    fields: [
+      { name: '__tabs', type: 'html',
+        html: `<div class="vtabs" id="vtabs" role="tablist" aria-label="ערוצים">${tabsHtml()}</div>` },
+      { name: '__copy', type: 'html', html: `<div class="vcopy">
+          <label for="vcopyFrom">העתק מ־</label>
+          <select id="vcopyFrom"></select>
+          <button type="button" class="btn small" id="vcopyBtn">העתק לכאן</button>
+        </div>` },
+      { name: 'body', label: '', type: 'textarea', value: '' },
+      { name: 'status', label: 'מצב', type: 'select', value: 'draft', options: statusOptions },
+      { name: '__files', label: '', type: 'files', existing: '<div id="vfiles"></div>' },
+      { name: '__mail', type: 'html', html: `<div class="vmail">
+          <p>הניוזלטר נכתב בעורך המייל — נושא, תבנית ותוכן. מצב: <b id="vmailState"></b></p>
+          <button type="button" class="btn" id="vmailOpen">שמור ועבור לעורך המייל</button>
+        </div>` },
+    ],
+    saveLabel: 'שמור',
+    extraActions: `<span class="vacts">
+        <button type="button" class="btn small" id="markReady">⚡ מוכן לשליחה</button>
+        <button type="button" class="btn" id="vnext" title="שומר את הערוץ הזה ועובר לבא">הבא ›</button>
+      </span>`,
+    onSave: async () => {
+      const results = await saveAll();
+      if (results.length) {
+        engineToast(mergeFills(results),
+          results.length === 1 ? 'נשמר.' : `נשמרו ${results.length} ערוצים.`);
+        refreshAround();
+      }
+      return false;
+    },
+    onClose: () => {
+      // קובץ שהוסר — המספר 📎 ברשת מתעדכן
+      if (filesChanged) paintAngleInPlace(item);
+    },
+    onOpen: () => {
+      $('#vtabs').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-vtab]');
+        if (!b) return;
+        sync();
+        load(tabs.find((t) => t.ch.id === Number(b.dataset.vtab)));
+      });
+      // נקודת "לא נשמר" על הלשונית מתעדכנת תוך כדי
+      ['#gen_body', '#gen_status', '#gen___files'].forEach((sel) =>
+        $(sel).addEventListener(sel === '#gen_body' ? 'input' : 'change', () => { sync(); paintTabs(); }));
+      $('#vcopyBtn').addEventListener('click', run(async () => {
+        sync();
+        const src = tabs.find((t) => t.ch.id === Number($('#vcopyFrom').value));
+        if (!src) return;
+        if (cur.body.trim() && cur.body !== src.body && !(await confirmDialog(
+          `להחליף את הטקסט של ${cur.ch.name} בטקסט של ${src.ch.name}?`, { okLabel: 'החלף' }))) return;
+        $('#gen_body').value = src.body;
+        sync();
+        paintTabs();
+      }));
+      $('#vnext').addEventListener('click', run(async () => {
+        sync();
+        if (dirty(cur)) {
+          const res = await saveTab(cur);
+          engineToast(res, `${cur.ch.name} נשמר.`);
+          refreshAround();
+        }
+        const next = tabs[tabs.indexOf(cur) + 1];
+        if (next) load(next);
+      }));
+      $('#markReady').addEventListener('click', run(async () => {
+        const prev = $('#gen_status').value;
+        $('#gen_status').value = 'ready';
+        sync();
+        let res;
+        try {
+          res = await saveTab(cur);
+        } catch (e) {
+          // נדחה (למשל אינסטגרם בלי מדיה) — המצב חוזר למה שהיה, הטקסט נשאר
+          if (cur.status === 'ready' && !cur.mail) {
+            $('#gen_status').value = prev;
+            sync();
+            paintTabs();
+          }
+          throw e;
+        }
+        engineToast(res, `${cur.ch.name} סומן מוכן לשליחה.`);
+        refreshAround();
+        load(cur);
+      }));
+      $('#vmailOpen').addEventListener('click', run(async () => {
+        const results = await saveAll();
+        if (results.length) engineToast(mergeFills(results));
+        const mailTab = cur;
+        await closeGeneric({ force: true });
+        openMailVariant({ item, channelId: mailTab.ch.id }, reload);
+      }));
+      load(cur);
+    },
+  });
+}
+
+/** מחיקת קובץ מהטופס — אחרי אישור עם שם הקובץ. מחזיר האם נמחק. */
+async function deleteAssetAsk(btn) {
+  const line = btn.closest('.fileline');
+  const name = line?.querySelector('a')?.textContent ?? 'הקובץ';
+  if (!(await confirmDialog(`להסיר את "${name}"?`, { okLabel: 'הסר קובץ', danger: true }))) {
+    return false;
+  }
+  await api(`/assets/${btn.dataset.delAsset}`, { method: 'DELETE' });
+  line?.remove();
+  toast(`"${name}" הוסר.`);
+  return true;
+}
+
+/* ---------- עדכון במקום: תא אחד ברשת, בלי לצייר את כל המסך מחדש ---------- */
+
+const counted = (st) => st !== 'not_relevant' && st !== 'not_needed';
+
+/**
+ * התא של item בערוץ channelId מקבל את המצב החדש, ושורת המילוי בכותרת
+ * מתעדכנת לפי ההפרש (אותן הגדרות כמו בשרת: "לא רלוונטי" ו"לא נדרש" לא
+ * נספרים, טיוטה היא עוד לא מוכנה).
+ */
+function paintCellInPlace(campaign, item, channelId, status) {
+  const td = $(`#plan td.cell[data-item="${item.id}"][data-ch="${channelId}"]`);
+  if (!td) return;
+  const old = td.dataset.state;
+  const st = CELL[status];
+  td.className = `cell ${st.cls}`;
+  td.dataset.state = status;
+  td.dataset.tt = `${channelName(channelId)} · ${st.label}`;
+  td.querySelector('span').textContent = st.label || '—';
+
+  const c = campaign && state.campaigns.find((x) => x.id === campaign.id);
+  if (!c || old === status) return;
+  const step = (s, d) => {
+    if (!counted(s)) return;
+    c.required += d;
+    if (s === 'ready') c.ready += d; else c.missing_content += d;
+    if (s === 'draft') c.drafts = (c.drafts ?? 0) + d;
+  };
+  step(old, -1);
+  step(status, 1);
+  const fill = $('#plan .cbhead .fill');
+  if (fill && c.required) fill.outerHTML = fillLine(c);
+}
+
+/** שורת הזווית ברשת (מספר הקבצים 📎) אחרי שינוי בקבצים */
+function paintAngleInPlace(item) {
+  const meta = $(`#plan td.angle[data-item="${item.id}"] .ameta`);
+  if (meta) meta.innerHTML = angleMeta(item);
+}
+
+/** ניוזלטר: ממלא התבניות של ה-HUB, או נושא + גוף HTML עם תצוגה חיה */
+async function openMailVariant({ item, channelId }, reload) {
   const channel = state.channels.find((c) => c.id === channelId);
   const v = item.variants.find((x) => x.channel_id === channelId) ?? null;
-
-  // ערוץ מייל (HUB): נושא + גוף HTML + רשימות יעד. הרשימות מגיעות מה-HUB —
-  // אם הוא לא זמין, הטופס נפתח בלי הבורר עם הסבר, והבחירה הקיימת נשמרת.
-  const isMail = channel?.platform === 'newsletter';
   const vMeta = v?.meta ?? {};
 
   // תבנית המילוי של ה-HUB: אם יש, מוסיפים טופס שדות. אין תבנית (null) —
   // הממשק הבסיסי בלבד. שדות שהמילוי האוטומטי מכסה מסוננים החוצה.
-  const template = isMail ? await newsletterTemplate() : null;
+  const template = await newsletterTemplate();
   const tplFields = template ? (template.fields ?? []).filter((f) => !isAutoFilled(f)) : [];
 
   // הערכים חיים אצלנו; המילוי עצמו נעשה בממלא של ה-HUB (טאב + postMessage).
@@ -1358,7 +1703,7 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
 
   // ניוזלטר עם תבנית: ממלא התבניות הוא המסך — נפתח ישר, בלי דיאלוג
   // ביניים. הרשימה תמיד רשימת העל (ברירת המחדל של ה-HUB) — אין בורר.
-  if (isMail && template?.html) {
+  if (template?.html) {
     openTemplateFiller({
       html: template.html,
       fields: template.fields ?? [],
@@ -1398,73 +1743,57 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
     return;
   }
 
-  // הקבצים של המדיה הזו בלבד, ולצידם מה שמשותף לכל המדיות של הזווית
-  const mine = (item.variant_assets ?? []).filter((a) => a.variant_id === v?.id);
-  const shared = item.assets ?? [];
-
-  const files = [
-    ...mine.map((a) => assetLine(a, true)),
-    ...shared.map((a) => assetLine(a, false)),
-  ].join('') || '';
+  // הקבצים של הערוץ הזה בלבד, ולצידם מה שמשותף לכל הערוצים של הזווית
+  const files = versionFiles(item, v?.id);
+  let base = v?.updated_at ?? null;
 
   openGeneric({
     guardDirty: true,
     title: `${item.title} — ${channel?.name ?? ''}`,
     fields: [
-      ...(isMail ? [{ name: 'subject', label: 'נושא המייל', type: 'text',
-                      value: vMeta.subject,
-                      hint: 'הניוזלטר נשלח לרשימה הכללית (רשימת העל) ב-HUB' }] : []),
-      // עם תבנית — כל התוכן ממולא בממלא של ה-HUB (הכפתור למטה); בלי
-      // תבנית — כותבים גוף חופשי כאן.
-      ...(template ? [] : [{
-        name: 'body',
-        label: isMail ? 'גוף המייל (HTML)' : 'הטקסט כפי שהוא ייצא במדיה הזו',
-        type: 'textarea', value: v?.body,
-      }]),
+      { name: 'subject', label: 'נושא המייל', type: 'text', value: vMeta.subject,
+        hint: 'הניוזלטר נשלח לרשימה הכללית (רשימת העל) ב-HUB' },
+      { name: 'body', label: 'גוף המייל (HTML)', type: 'textarea', value: v?.body },
       { name: 'status', label: 'מצב', type: 'select', value: v?.status ?? 'draft',
         options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
-                  ['not_relevant', 'לא רלוונטי למדיה הזו']] },
-      { name: '__files', label: `תמונות וסרטונים ל${channel?.name ?? 'מדיה הזו'}`,
+                  ['not_relevant', 'לא רלוונטי לערוץ הזה']] },
+      { name: '__files', label: `תמונות וסרטונים ל${channel?.name ?? 'ערוץ הזה'}`,
         type: 'files', existing: files },
     ],
-    // כפתורי קיצור משמאל: "מוכן לשליחה" (כל מדיה) ו"תצוגה מקדימה" (מייל)
-    extraActions: (() => {
-      const btns = [];
-      if (v?.status !== 'ready') {
-        btns.push('<button type="button" class="btn small" id="markReady" style="color:var(--st-good)">⚡ מוכן לשליחה</button>');
-      }
-      return btns.length
-        ? `<span style="margin-inline-end:auto;display:flex;gap:8px">${btns.join('')}</span>`
-        : '';
-    })(),
+    extraActions: v?.status !== 'ready'
+      ? '<span class="vacts"><button type="button" class="btn small" id="markReady">⚡ מוכן לשליחה</button></span>'
+      : '',
     onSave: async (val) => {
-      const body = { ...val };
-      delete body.__files;
-      if (isMail) {
-        // meta נשלח רק כשיש מה לעדכן — כך כשל טעינת רשימות לא מוחק בחירה קיימת
-        body.meta = { ...vMeta, subject: val.subject ?? null };
-        delete body.subject;
+      const picked = [...($('#gen___files')?.files ?? [])];
+      // קבצים קודם — "מוכן" נבדק מול מה שכבר עלה
+      if (picked.length) {
+        const { failed } = await uploadEach(item.id, picked, {
+          channelId, onProgress: progressList($('#gen___files_progress'), picked) });
+        setPickedFiles($('#gen___files'), failed.map((f) => f.file));
+        if (failed.length) throw new Error(uploadFailedMessage(failed));
       }
-      body.week = state.week;
-      await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
-
-      const picked = $('#gen___files')?.files;
-      if (picked?.length) {
-        await uploadFiles(item.id, picked, {
-          channelId,
-          onProgress: progressList($('#gen___files_progress'), picked),
+      // meta נשלח רק כשיש מה לעדכן — כך כשל טעינת רשימות לא מוחק בחירה קיימת
+      const body = { body: val.body, status: val.status, base_updated_at: base,
+                     meta: { ...vMeta, subject: val.subject ?? null }, week: state.week };
+      let res;
+      try {
+        res = await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
+      } catch (e) {
+        return staleReload(e, val.body, (cur) => {
+          $('#gen_body').value = cur?.body ?? '';
+          $('#gen_subject').value = cur?.meta?.subject ?? '';
+          $('#gen_status').value = cur?.status ?? 'draft';
+          base = cur?.updated_at ?? null;
         });
       }
+      engineToast(res, 'נשמר.');
       await reload();
+      return false;
     },
     onOpen: () => {
       wireCopyLinks($('#genBody'));
       $$('#genBody [data-del-asset]').forEach((b) =>
-        b.addEventListener('click', run(async () => {
-          await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
-          b.closest('.fileline').remove();
-          toast('הקובץ הוסר.');
-        })));
+        b.addEventListener('click', run(() => deleteAssetAsk(b))));
       // "מוכן לשליחה" — מעביר את שדה המצב ל"מוכן" ומפעיל את השמירה הרגילה,
       // כך שכל הלוגיקה (קבצים, meta של מייל) רצה כמו בשמירה ידנית.
       $('#markReady')?.addEventListener('click', () => {
@@ -1473,15 +1802,10 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       });
       // תצוגה חיה — עמודה צמודה משמאל שמתעדכנת תוך כדי הקלדה. הרינדור
       // כולו ב-HUB (newsletter-preview); כאן רק debounce ותצוגת התוצאה.
-      const preview = isMail
-        ? mountLivePreview({ tplFields, title: item.title, values: () => externalValues })
-        : null;
-
-
+      mountLivePreview({ tplFields, title: item.title, values: () => externalValues });
     },
   });
 }
-
 
 /**
  * שורת קובץ בטופס. ownOnly מבדיל בין קובץ של המדיה לקובץ משותף לזווית
