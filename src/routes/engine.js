@@ -27,9 +27,12 @@ r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
 
   const result = await withEngineLock(() => applyWeek(req.body?.week, { selected }));
   if (result.placed === 0 && result.attached === 0 && result.holes === 0) {
-    return bad(res, result.skipped
-      ? 'הלוח השתנה מאז שההצעה הוצגה, ואף פריט מסומן כבר לא רלוונטי — פתחו שוב את מילוי השבוע'
-      : 'אין מה לשבץ — הלוח מלא או שאין תוכן מוכן', result.skipped ? 409 : 400);
+    const why = result.dropped.length
+      ? `לא שובץ כלום: ${result.dropped[0].reason}`
+      : result.skipped
+        ? 'הלוח השתנה מאז שההצעה הוצגה, ואף פריט מסומן כבר לא רלוונטי — פתחו שוב את מילוי השבוע'
+        : 'אין מה לשבץ — הלוח מלא או שאין תוכן מוכן';
+    return bad(res, why, result.skipped ? 409 : 400);
   }
   res.status(201).json(result);
 }));

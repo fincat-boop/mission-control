@@ -66,9 +66,13 @@ export function wireEngineDialog() {
       method: 'POST', body: { week: state.week, selected: checked() },
     });
     $('#engineDlg').close();
-    const stale = res.skipped
-      ? ` ${res.skipped} פריטים לא שובצו כי הלוח השתנה מאז שההצעה הוצגה.` : '';
-    toastAction(fillSummary(res) + stale, 'בטל', () => undoFill(res));
+    const dropped = res.dropped ?? [];
+    const staleN = res.skipped - dropped.length;
+    const stale = staleN > 0
+      ? ` ${staleN} פריטים לא שובצו כי הלוח השתנה מאז שההצעה הוצגה.` : '';
+    const ratio = dropped.length
+      ? ` ${dropped.length} מכירתיים לא שובצו: ${dropped[0].reason}.` : '';
+    toastAction(fillSummary(res) + stale + ratio, 'בטל', () => undoFill(res));
     await refreshAfterPostChange();
   }));
 }

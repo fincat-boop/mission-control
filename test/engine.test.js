@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   blockedContent, buildSlots, buildUsage, chooseForSlot, chooseHoleFills, holeReason, nextSlot,
-  openHoles, outsideCampaignWindow, planItemKey, selectPlanItems,
+  openHoles, outsideCampaignWindow, planItemKey, recheckSelection, selectPlanItems,
 } from '../src/engine.js';
 import { weekMeta } from '../src/board.js';
 
@@ -387,4 +387,21 @@ test('chooseHoleFills — משבצת-מדיה של ערוץ אחר לא ממלא
   });
   assert.equal(fills.length, 1);
   assert.equal(fills[0].content_id, 2);
+});
+
+test('recheckSelection — מכירתי שנשען על ערך שהורד מהסימון יורד, עם סיבה', () => {
+  const ch = channel({ max_per_week: 10 });
+  const ctx = { channels: [ch], existing: [], settings: SETTINGS };
+  const pl = (id, kind, date) => ({ key: `k${id}`, title: `t${id}`, channel_id: 1, kind, date });
+  const full = [pl(1, 'value', '2026-10-04'), pl(2, 'value', '2026-10-05'),
+                pl(3, 'value', '2026-10-06'), pl(4, 'promo', '2026-10-07')];
+
+  const all = recheckSelection({ placements: full, attachments: [], holes: [] }, ctx);
+  assert.equal(all.placements.length, 4);
+  assert.deepEqual(all.dropped, []);
+
+  const onlyPromo = recheckSelection({ placements: [full[0], full[3]], attachments: [], holes: [] }, ctx);
+  assert.deepEqual(onlyPromo.placements.map((p) => p.key), ['k1']);
+  assert.equal(onlyPromo.dropped[0].key, 'k4');
+  assert.match(onlyPromo.dropped[0].reason, /ערך/);
 });

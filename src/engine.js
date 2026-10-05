@@ -208,7 +208,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     );
   }
 
-  return {
+  const result = {
     week: { start: week.start, end: week.end, label: week.label },
     placements,
     attachments,
@@ -216,6 +216,10 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     ratio,
     notes,
   };
+  // מצב הלוח שהתכנון נשען עליו — לבדיקה חוזרת של בחירה חלקית ב-applyWeek.
+  // לא נספר (enumerable:false), ולכן לא נשלח ללקוח ב-/engine/plan.
+  Object.defineProperty(result, 'ctx', { value: { channels, existing, settings }, enumerable: false });
+  return result;
 }
 
 // שרשרת שממתינה שהריצה הקודמת תיגמר, כדי שתי הרצות חופפות (למשל שינוי
@@ -243,7 +247,14 @@ export function withEngineLock(fn) {
  */
 export async function applyWeek(anchorDate, { holes: withHoles = true, selected = null } = {}) {
   const fresh = await planWeek(anchorDate, { holes: withHoles });
-  const { plan, skipped } = selectPlanItems(fresh, selected);
+  const { plan, skipped: stale } = selectPlanItems(fresh, selected);
+  // בחירה חלקית: מכירתי שעבר את שער היחס בזכות פריטי ערך שהמשתמש הוריד
+  // מהסימון כבר לא מאוזן — יורד, ונאמר למה
+  let dropped = [];
+  if (Array.isArray(selected)) {
+    ({ placements: plan.placements, dropped } = recheckSelection(plan, fresh.ctx));
+  }
+  const skipped = stale + dropped.length;
 
   const createdIds = [];
   const created = []; // { post_id, content_id } — "בטל" מוחק רק מה שלא השתנה מאז
@@ -303,6 +314,7 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
     attached: attached.length,
     holes: holeCount,
     skipped,
+    dropped: dropped.map(({ title, reason }) => ({ title, reason })),
     created_ids: createdIds,
     created_items: created,
     attached_items: attached,
@@ -419,6 +431,35 @@ export function selectPlanItems(plan, selected) {
   };
   const found = out.placements.length + out.attachments.length + out.holes.length;
   return { plan: out, skipped: want.size - found };
+}
+
+/**
+ * בדיקה חוזרת של שער היחס על מה שנבחר בפועל. התכנון אישר כל מכירתי מול
+ * כל ההצעה; אם המשתמש הוריד פריטי ערך, מכירתי שנשען עליהם כבר לא מאוזן.
+ * קודם נכנס כל מה שאינו מכירתי (ערך, משולב, פוסטים חסרי תוכן, שיוכים),
+ * ורק אז כל מכירתי נבדק מחדש מול usage.allows — אותו שער כמו בתכנון.
+ * @returns {{placements:object[], dropped:object[]}}
+ */
+export function recheckSelection(plan, { channels, existing, settings }) {
+  const usage = buildUsage(channels, existing, settings);
+  for (const a of plan.attachments ?? []) usage.retag(a.channel_id, a.date, a.prev_kind, a.kind);
+  for (const h of plan.holes ?? []) usage.take(h.channel_id, h.date, h.kind, -1);
+  for (const p of plan.placements.filter((x) => x.kind !== 'promo')) {
+    usage.take(p.channel_id, p.date, p.kind, -1);
+  }
+  const dropped = [];
+  for (const p of plan.placements.filter((x) => x.kind === 'promo')) {
+    if (usage.allows(p.channel_id, p.date, 'promo')) {
+      usage.take(p.channel_id, p.date, 'promo', -1);
+    } else {
+      dropped.push({
+        key: p.key, title: p.title,
+        reason: 'בלי פריטי הערך שהורדו מהסימון אין מספיק ערך לאזן את הפוסט המכירתי',
+      });
+    }
+  }
+  const gone = new Set(dropped.map((d) => d.key));
+  return { placements: plan.placements.filter((p) => !gone.has(p.key)), dropped };
 }
 
 /* ========================= פוסטים חסרי תוכן ========================= */

@@ -46,7 +46,7 @@ export async function autoFill(week) {
 
 /** תשובת מילוי ריקה — אותה צורה כמו applyWeek, כדי שהלקוח לא יצטרך לבדוק */
 export const EMPTY_FILL = Object.freeze({
-  placed: 0, attached: 0, holes: 0, skipped: 0,
+  placed: 0, attached: 0, holes: 0, skipped: 0, dropped: [],
   created_ids: [], created_items: [], attached_items: [], summary: [],
 });
 
