@@ -88,7 +88,11 @@ async function snapshot() {
     one(`select
            (select count(*)::int from content_items) as content,
            (select count(*)::int from posts where status in ('scheduled','approved','publishing','failed','pending_approval')) as scheduled,
-           (select count(*)::int from posts where status = 'hole') as holes,
+           -- "חסר תוכן": פוסטים עתידיים בלי תוכן משויך. המנוע כבר לא יוצר
+           -- status='hole' — משבצת בלי תוכן היא scheduled עם content_id ריק
+           (select count(*)::int from posts
+             where content_id is null and scheduled_at >= now()
+               and status in ('scheduled','approved','pending_approval')) as missing_content,
            (select count(*)::int from tasks where done = false) as open_tasks`),
   ]);
   return { today: ymd(new Date()), endpoints, channels, campaigns, settings, counts };
@@ -146,7 +150,8 @@ ${user.name}${user.is_owner ? ' (בעלים — כל ההרשאות)' : ''}
 (blocked_days: 0=ראשון ... 6=שבת — ימים שהערוץ לא מקבל בהם תוכן)
 קמפיינים: ${JSON.stringify(snap.campaigns)}
 כללי המנוע (לקריאה בלבד): ${JSON.stringify(snap.settings)}
-מונים: ${JSON.stringify(snap.counts)}`;
+מונים: ${JSON.stringify(snap.counts)}
+(missing_content = פוסטים עתידיים על הלוח שחסר להם תוכן — "חסר תוכן")`;
 }
 
 /* ========================= כלי קריאה ========================= */

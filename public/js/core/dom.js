@@ -40,7 +40,7 @@ export const copyLinkButton = (url) => (url
  * — textarea זמני + execCommand. ה-textarea נשתל ליד הכפתור, כי מחוץ
  * ל-<dialog> מודאלי אי אפשר לבחור בו טקסט.
  */
-async function copyText(text, near) {
+export async function copyText(text, near) {
   try {
     await navigator.clipboard.writeText(text);
     return;

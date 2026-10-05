@@ -1,14 +1,26 @@
 import { api } from '../core/api.js';
-import { goToTab, refreshAlerts, refreshBoard, refreshTaskBadge } from '../ui/refresh.js';
-import { $, $$, esc, run, toast } from '../core/dom.js';
+import { goToTab, refreshAlerts, refreshBoard } from '../ui/refresh.js';
+import { $, $$, copyText, esc, run, toast } from '../core/dom.js';
 import { can, state } from '../core/state.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { hhmm } from '../core/format.js';
 
 /* ========================= משימות ========================= */
 
+/** התגית שעל טאב המשימות: מספר המשימות הפתוחות */
+export function paintTaskBadge(openCount) {
+  const badge = $('#taskBadge');
+  badge.hidden = !openCount;
+  badge.textContent = openCount;
+}
+
+/**
+ * מצייר את הטאב, וגם מעדכן בדרך את הפעמון ואת תגית המשימות מאותם נתונים —
+ * מי שקורא ל-renderTasks לא צריך למשוך אותם שוב.
+ */
 export async function renderTasks() {
   const [t, alertData] = await Promise.all([api('/tasks'), refreshAlerts()]);
+  paintTaskBadge(t.open_count);
 
   const group = (title, items, emptyText) => `
     <div class="tgroup">
@@ -41,15 +53,19 @@ export async function renderTasks() {
       if (b.dataset.post) await openPostPreview(b.dataset.post);
     })));
 
+  // "פתח" על משימה של פוסט — אותו חלון פוסט שההתראות פותחות, בלי לעזוב את הטאב
+  $$('#tasks [data-open-post]').forEach((b) =>
+    b.addEventListener('click', run(() => openPostPreview(b.dataset.openPost))));
+
   $$('#tasks [data-task-done]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
       await api(`/tasks/${cb.dataset.taskDone}`, { method: 'PATCH', body: { done: cb.checked } });
-      await Promise.all([renderTasks(), refreshTaskBadge()]);
+      await renderTasks();
     })));
 
   $$('#tasks [data-copy]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      await navigator.clipboard.writeText(b.dataset.copy);
+      await copyText(b.dataset.copy, b.parentElement);
       toast('הטקסט הועתק.');
     })));
 
@@ -57,14 +73,14 @@ export async function renderTasks() {
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.approve}/approve`, { method: 'POST' });
       toast('אושר. השיבוץ נכנס ללוח.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
+      await Promise.all([renderTasks(), refreshBoard()]);
     })));
 
   $$('#tasks [data-publish]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       await api(`/posts/${b.dataset.publish}/publish`, { method: 'POST' });
       toast('סומן כפורסם.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
+      await Promise.all([renderTasks(), refreshBoard()]);
     })));
 
   // הצעת החלפת תוכן: מעדכן את השיבוץ עם התוכן המוצע וסוגר את המשימה
@@ -83,7 +99,7 @@ export async function renderTasks() {
       });
       await api(`/tasks/${b.dataset.swapTask}`, { method: 'PATCH', body: { done: true } });
       toast('הוחלף. השיבוץ מציג עכשיו את התוכן המוצע.');
-      await Promise.all([renderTasks(), refreshTaskBadge(), refreshBoard()]);
+      await Promise.all([renderTasks(), refreshBoard()]);
     })));
 }
 
@@ -127,6 +143,13 @@ function alertsPanel({ alerts, counts }) {
   </div>`;
 }
 
+/** משימת אישור נסגרת רק בידי מי שמורשה לאשר (השרת אוכף; כאן רק לא מציעים) */
+function checkbox(t) {
+  const locked = t.kind === 'approve' && !can('approve');
+  return `<input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}${
+    locked ? ' disabled data-tt="רק מי שמורשה לאשר יכול לסגור משימת אישור"' : ''}>`;
+}
+
 function taskRow(t) {
   const sub = [t.subtitle, t.channel_name, t.scheduled_at ? hhmm(t.scheduled_at) : null]
     .filter(Boolean).join(' · ');
@@ -136,8 +159,7 @@ function taskRow(t) {
   else if (t.kind === 'approve' && t.post_id && can('approve')) {
     action = `<button class="btn small act" data-approve="${t.post_id}">אשר</button>`;
   } else if (t.kind === 'publish' && t.post_id) {
-    const text = t.content_body || t.post_title || t.title;
-    action = `<button class="btn small act" data-copy="${esc(text)}">העתק טקסט</button>
+    action = `<button class="btn small act" data-copy="${esc(t.copy_text)}">העתק טקסט</button>
               <button class="btn small act" data-publish="${t.post_id}">סמן כפורסם</button>`;
   } else if (t.kind === 'swap' && t.post_id && can('content')) {
     // ההצעה נשמרת ב-meta של המשימה עצמה — לא צריך לחשב אותה שוב בלחיצה
@@ -146,8 +168,11 @@ function taskRow(t) {
       החלף בתוכן המוצע</button>`;
   }
 
+  const open = t.post_id
+    ? `<button class="btn small act" data-open-post="${t.post_id}">פתח</button>` : '';
+
   return `<div class="task${t.urgent && !t.done ? ' urgent' : ''}"${t.done ? ' style="opacity:.5"' : ''}>
-    <input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}>
+    ${checkbox(t)}
     <div class="tx"><b>${esc(t.title)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</div>
-    ${action}</div>`;
+    ${action}${open}</div>`;
 }

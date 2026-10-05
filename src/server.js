@@ -116,6 +116,7 @@ const server = app.listen(port, () => {
 // כמה דקות אחרי העלייה כדי לא להאט את ה-boot, ואז על פי לוח קבוע.
 // אין תלות בגורם חיצוני (cron וכו') — מספיק כל עוד יש instance אחד.
 const HOUR = 3600000;
+let tickRunning = false;
 const timers = [
   setTimeout(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 2 * 60000),
   setInterval(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 24 * HOUR),
@@ -128,9 +129,14 @@ const timers = [
   setInterval(() => { mediaMaintenance().catch((e) => console.error('תחזוקת מדיה נכשלה:', e)); }, HOUR),
   // פרסום אוטומטי: כל דקה, לכל ארגון. הטיק עצמו בודק את מתג-העל של הארגון
   // ויוצא מיד כשהוא כבוי — הריצה הריקה זולה.
+  // טיק לא מתחיל כשהקודם עוד רץ: פרסום לאינסטגרם יכול לחכות דקות, ובזמן
+  // הזה הטרנזקציה שלו פתוחה — טיק מקביל לא רואה את מה שכתב (משימות כפולות).
   setInterval(() => {
+    if (tickRunning) return;
+    tickRunning = true;
     forEachOrg(() => publishTickForOrg())
-      .catch((e) => console.error('טיק הפרסום האוטומטי נכשל:', e));
+      .catch((e) => console.error('טיק הפרסום האוטומטי נכשל:', e))
+      .finally(() => { tickRunning = false; });
   }, 60000),
   // מדדי ניוזלטר (פתיחות/קליקים) ממשיכים להצטבר אחרי השליחה — רענון שעתי
   setInterval(() => {

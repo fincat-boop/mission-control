@@ -45,7 +45,37 @@ r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
   res.json({ endpoint: e, engine });
 }));
 
+/**
+ * מה נמחק עם הנקודה: הקמפיינים והתוכן שלה (cascade). הפוסטים שלה נשארים
+ * על הלוח, אבל בלי נקודת קצה ובלי תוכן (set null).
+ */
+async function endpointImpact(id) {
+  return one(
+    `select e.id, e.name, e.active,
+            (select count(*)::int from campaigns c     where c.endpoint_id = e.id)  as campaigns,
+            (select count(*)::int from content_items ci where ci.endpoint_id = e.id) as content,
+            (select count(*)::int from posts p          where p.endpoint_id = e.id)  as posts
+       from endpoints e where e.id = $1`,
+    [id]
+  );
+}
+
+r.get('/endpoints/:id/delete-impact', requirePerm('settings'), wrap(async (req, res) => {
+  const impact = await endpointImpact(req.params.id);
+  if (!impact) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
+  res.json({ impact });
+}));
+
 r.delete('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const impact = await endpointImpact(req.params.id);
+  if (!impact) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
+  // תוכן שנכתב לא נמחק בלי בקשה מפורשת (?force=1)
+  if ((impact.content > 0 || impact.campaigns > 0) && req.query.force !== '1') {
+    return res.status(409).json({
+      error: `לנקודת הקצה יש ${impact.content} פריטי תוכן ו־${impact.campaigns} קמפיינים — מחיקה תמחק אותם. אפשר להשבית את הנקודה במקום.`,
+      impact, needs_force: true,
+    });
+  }
   await query('delete from endpoints where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });

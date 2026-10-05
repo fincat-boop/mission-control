@@ -46,8 +46,36 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   res.status(201).json({ post });
 }));
 
+/** האם הבקשה מזיזה את הפוסט בפועל (מועד או ערוץ אחר) — לא רק שולחת את הקיים */
+export function isMove(current, b) {
+  const timeChanged = b.scheduled_at != null &&
+    new Date(b.scheduled_at).getTime() !== new Date(current.scheduled_at).getTime();
+  const channelChanged = b.channel_id != null && Number(b.channel_id) !== current.channel_id;
+  return timeChanged || channelChanged;
+}
+
+/**
+ * למה אסור להזיז את הפוסט, או null. פוסט שכבר יצא (או בשליחה ברגע זה)
+ * הוא עובדה, לא תכנון; ומועד שעבר לא יתפרסם לעולם — הרַנֶר מפרסם רק
+ * מה שהגיע זמנו מעכשיו והלאה.
+ */
+export function moveBlocker(current, when, now = new Date()) {
+  if (current.status === 'published') {
+    return { status: 409, error: 'אי אפשר להזיז פוסט שכבר פורסם' };
+  }
+  if (current.status === 'publishing') {
+    return { status: 409, error: 'הפוסט נשלח ברגע זה — אי אפשר להזיז אותו' };
+  }
+  if (new Date(when).getTime() < now.getTime()) {
+    return { status: 400, error: 'אי אפשר להזיז פוסט לזמן שעבר' };
+  }
+  return null;
+}
+
+// status לא כאן בכוונה: מעבר סטטוס עובר רק בנתיבים הייעודיים (אישור, פרסום,
+// "סמן כפורסם") שבודקים הרשאת approve. אחרת content יכול לקבוע approved.
 const POST_FIELDS = ['channel_id', 'endpoint_id', 'content_id', 'title', 'kind',
-                     'scheduled_at', 'status', 'assignee_id', 'urgent', 'note'];
+                     'scheduled_at', 'assignee_id', 'urgent', 'note'];
 
 r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
@@ -60,6 +88,10 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     const when = b.scheduled_at ?? current.scheduled_at;
     const channel = b.channel_id ?? current.channel_id;
     const endpoint = b.endpoint_id ?? current.endpoint_id;
+
+    const moving = isMove(current, b);
+    const blocked = moving && moveBlocker(current, when);
+    if (blocked) return bad(res, blocked.error, blocked.status);
 
     if (endpoint) {
       const clash = await one(

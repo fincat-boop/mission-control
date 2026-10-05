@@ -78,22 +78,47 @@ r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async 
 
 /**
  * השהיה והפעלה מחדש.
- * לא נמחק כלום: השיבוצים נשארים במסד ופשוט מסוננים מהלוח וממנוע השיבוץ,
- * כך שהפעלה מחדש מחזירה את התמונה בדיוק כפי שהייתה.
+ * השהיה לא מוחקת כלום: הפוסטים נשארים במסד ופשוט מסוננים מהלוח וממנוע
+ * השיבוץ. בהחזרה לפעילות מנקים את מה שעוד לא אושר (ראו resume).
  */
+
+// פוסטים עתידיים של הקמפיין שעוד לא יצאו — מה שיורד מהלוח בהשהיה
+const FUTURE_OPEN = `
+  from posts p join content_items ci on ci.id = p.content_id
+ where ci.campaign_id = $1 and p.scheduled_at >= now()
+   and p.status in ('scheduled','approved','failed','pending_approval','hole')`;
+
+/** מה השהיה / החזרה לפעילות יעשו לפוסטים — לחלון האישור לפני הפעולה */
+async function pauseImpact(campaignId) {
+  return one(
+    `select count(*)::int as open,
+            count(*) filter (where p.status = 'approved')::int as approved
+       ${FUTURE_OPEN}`,
+    [campaignId]
+  );
+}
+
+r.get('/campaigns/:id/pause-impact', wrap(async (req, res) => {
+  const c = await one('select id, name, paused_at from campaigns where id = $1', [req.params.id]);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  const n = await pauseImpact(c.id);
+  res.json({
+    paused: !!c.paused_at,
+    // השהיה: כל הפתוחים יורדים מהלוח (approved ביניהם)
+    pause: { hidden: n.open, approved: n.approved },
+    // החזרה: מה שלא אושר נמחק ומשובץ מחדש; מה שאושר לפרסום אוטומטי נשאר
+    resume: { cleared: n.open - n.approved, kept_approved: n.approved },
+  });
+}));
+
 r.post('/campaigns/:id/pause', requirePerm('settings'), wrap(async (req, res) => {
   const c = await one(
     'update campaigns set paused_at = now() where id = $1 returning *', [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
 
-  const held = await one(
-    `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
-      where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
-        and p.scheduled_at >= now()`,
-    [c.id]
-  );
+  const held = await pauseImpact(c.id);
   const engine = await autoFill(req.body?.week);
-  res.json({ campaign: c, held: held.n, engine });
+  res.json({ campaign: c, held: held.open, engine });
 }));
 
 r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) => {
@@ -104,17 +129,35 @@ r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) =
   // המשבצות הישנות קפאו בזמן ההשהיה — בינתיים המנוע כבר יכול היה למלא
   // את אותו יום/ערוץ עם משהו אחר. במקום להחזיר אוטומטית לאותו מקום
   // (וליצור התנגשות), מנקים את מה שעוד לא יצא לאוויר והמנוע ממקם מחדש.
+  // פוסט שאושר לפרסום אוטומטי נשאר: מישהו בדק ואישר אותו במועד הזה,
+  // ומחיקה שקטה שלו הייתה מבטלת החלטה של אדם.
   const cleared = await rows(
     `delete from posts p using content_items ci
       where ci.id = p.content_id and ci.campaign_id = $1
-        and p.status in ('scheduled','approved','failed','pending_approval','hole')
+        and p.status in ('scheduled','failed','pending_approval','hole')
         and p.scheduled_at >= now()
+      returning p.id`,
+    [c.id]
+  );
+  // מאושר שבזמן ההשהיה המנוע מילא את אותה נקודה+ערוץ+יום — היו יוצאים שניים,
+  // בניגוד לכלל של הלוח. האישור ניתן לפני שהיום התמלא, אז הוא מתפנה כמו השאר.
+  const clashed = await rows(
+    `delete from posts p using content_items ci
+      where ci.id = p.content_id and ci.campaign_id = $1
+        and p.status = 'approved' and p.scheduled_at >= now()
+        and exists (select 1 from posts o
+                     where o.id <> p.id and o.endpoint_id = p.endpoint_id
+                       and o.channel_id = p.channel_id
+                       and (o.scheduled_at at time zone 'Asia/Jerusalem')::date
+                         = (p.scheduled_at at time zone 'Asia/Jerusalem')::date
+                       and (o.content_id is null or o.content_id not in
+                            (select id from content_items where campaign_id = $1)))
       returning p.id`,
     [c.id]
   );
 
   const engine = await autoFill(req.body?.week);
-  res.json({ campaign: c, cleared: cleared.length, engine });
+  res.json({ campaign: c, cleared: cleared.length + clashed.length, engine });
 }));
 
 /** סידור מחדש של התוכן בתוך קמפיין */

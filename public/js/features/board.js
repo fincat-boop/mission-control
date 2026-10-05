@@ -79,7 +79,7 @@ export async function renderBoard() {
       </div>
       <button class="btn small" id="thisWeek">השבוע</button>
       ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
-      ${can('approve') ? '<button class="btn small" id="approveWeek">⚡ שלח מוכנים אוטומטית</button>' : ''}
+      ${can('approve') ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
       <div class="spacer"></div>
       <div class="legend">
         <span>הסוג מסומן בתג בכל פוסט · ⚡ דחוף · ✓ פורסם</span>
@@ -108,25 +108,30 @@ export async function renderBoard() {
   }));
   $('#runEngine')?.addEventListener('click', run(openEngine));
 
-  // אישור מרוכז — כל המוכנים לשליחה אוטומטית של השבוע עוברים ל-approved,
-  // וכל אחד נשלח במועד שנקבע לו. לא שולח מיד.
+  // אישור מרוכז — כל המוכנים לפרסום אוטומטי של השבוע שמועדם עוד לא עבר
+  // עוברים ל-approved, וכל אחד מתפרסם במועד שנקבע לו. לא שולח מיד.
   $('#approveWeek')?.addEventListener('click', run(async () => {
-    if (!(await confirmDialog('לאשר לשליחה אוטומטית את כל הפוסטים המוכנים של השבוע? כל אחד יישלח במועד שנקבע לו.'))) return;
+    if (!(await confirmDialog('לאשר לפרסום אוטומטי את כל הפוסטים המוכנים של השבוע שמועדם עוד לא עבר? כל אחד יתפרסם במועד שנקבע לו.',
+      { okLabel: 'אשר לפרסום' }))) return;
     const btn = $('#approveWeek');
     btn.disabled = true;
     btn.textContent = 'מאשר…';
     try {
       const res = await api('/publish/approve-week', { method: 'POST', body: { week: state.week } });
-      if (!res.approved) {
-        toast(res.skipped ? 'אין פוסטים מוכנים לאישור — כולם חסרים תוכן, חיבור או שליחה אוטומטית.' : 'אין פוסטים לאשר השבוע.', true);
+      const offNote = res.autopublish_enabled ? ''
+        : 'שימו לב: מתג הפרסום האוטומטי כבוי — לא ייצא כלום עד שמדליקים אותו בניהול.';
+      if (res.skipped.length) {
+        // מה לא אושר ולמה — רשימה ולא רק מספר, כדי שאפשר יהיה לתקן
+        await confirmDialog(skippedReport(res, offNote), { okLabel: 'הבנתי' });
+      } else if (!res.approved) {
+        toast('אין פוסטים לאשר השבוע.', true);
       } else {
-        toast(`אושרו ${res.approved} פוסטים לשליחה אוטומטית ⚡${res.skipped ? ` · ${res.skipped} דולגו (לא מוכנים)` : ''}` +
-          (res.autopublish_enabled ? '' : ' — שימו לב: מתג השליחה האוטומטית כבוי, לא ייצא כלום עד שמדליקים אותו בניהול.'));
+        toast(`אושרו ${res.approved} פוסטים לפרסום אוטומטי ⚡${offNote ? ` — ${offNote}` : ''}`);
       }
       await Promise.all([refreshBoard(), refreshAlerts()]);
     } finally {
       btn.disabled = false;
-      btn.textContent = '⚡ שלח מוכנים אוטומטית';
+      btn.textContent = APPROVE_WEEK_LABEL;
     }
   }));
 
@@ -144,15 +149,34 @@ export async function renderBoard() {
   if (editable) wireBoardDrag();
 }
 
+const APPROVE_WEEK_LABEL = '⚡ אשר מוכנים לפרסום אוטומטי';
+
+/** סיכום האישור המרוכז כשחלק מהפוסטים לא אושרו — עד 10 עם הסיבה */
+function skippedReport({ approved, skipped }, offNote) {
+  const shown = skipped.slice(0, 10).map((x) => `• ${x.title} — ${x.reason}`);
+  const more = skipped.length > 10 ? [`ועוד ${skipped.length - 10}…`] : [];
+  return [
+    approved ? `אושרו ${approved} פוסטים לפרסום אוטומטי.` : 'לא אושר אף פוסט.',
+    `${skipped.length} לא אושרו:`,
+    ...shown, ...more,
+    ...(approved && offNote ? ['', offNote] : []),
+  ].join('\n');
+}
+
+const DRAGGABLE = new Set(['scheduled', 'approved', 'failed', 'pending_approval']);
+
 /**
  * גרירת כרטיס ליום אחר על הלוח.
- * שינוי מדיה מותר רק אם לתוכן יש גרסה מוכנה למדיה היעד — אחרת היינו
- * מפרסמים שם ניסוח שנכתב למדיה אחרת.
+ * שינוי ערוץ מותר רק אם לתוכן יש גרסה מוכנה לערוץ היעד — אחרת היינו
+ * מפרסמים שם ניסוח שנכתב לערוץ אחר.
  */
 function wireBoardDrag() {
   let dragged = null;
 
+  // רק מה שעוד לא יצא אפשר להזיז; פורסם / בשליחה — לא.
+  // השרת אוכף את אותו כלל (moveBlocker ב-routes/board.js).
   $$('#board [data-post-id]').forEach((el) => {
+    if (!DRAGGABLE.has(JSON.parse(el.dataset.post).status)) return;
     el.setAttribute('draggable', 'true');
     el.addEventListener('dragstart', (e) => {
       dragged = JSON.parse(el.dataset.post);

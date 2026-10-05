@@ -25,7 +25,7 @@ export async function renderManage() {
   $('#manage').innerHTML = `
     <div class="setgroup">
       <h2>נקודות קצה</h2>
-      <p class="sub">כל נקודה מרכזת אצלה הכול: הגדרות, קמפיינים, ותוכן.</p>
+      <p class="sub">ההגדרות של כל נקודה — חשיבות ותדירות. הקמפיינים והתוכן שלה בטאב "קמפיינים ותוכן".</p>
       <div class="panel">${endpoints.map((e) => endpointItem(e, channels, ro)).join('')
         || '<div class="empty">אין עדיין נקודות קצה.</div>'}</div>
       ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addEndpoint">＋ הוסף נקודת קצה</button></div>'}
@@ -50,20 +50,21 @@ export async function renderManage() {
       ${ro ? '' : '<div style="margin-top:10px"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
     </div>
 
-    ${can('users') ? systemGroup(users, settings, backupsRes?.backups ?? null) : ''}`;
+    ${systemGroup(users, settings, backupsRes?.backups ?? null, ro)}`;
 
   wireManage(ro);
 }
 
 function endpointItem(e, channels, ro) {
-  // הקמפיינים והתוכן עברו לטאבים משלהם. כאן נשארו רק ההגדרות של הנקודה עצמה.
+  // הקמפיינים והתוכן עברו לטאב "קמפיינים ותוכן". כאן נשארו רק ההגדרות של הנקודה עצמה.
   const hasContent = e.content.length > 0;
 
   return `<details class="item">
     <summary>
       <b>${esc(e.name)}</b>
       <span class="info">חשיבות ${e.importance} · ${e.campaigns.length} קמפיינים</span>
-      <span class="chip ${hasContent ? 'on' : 'bad'}">${hasContent ? 'פעילה' : 'חסר תוכן'}</span>
+      ${!e.active ? '<span class="chip bad">מושבתת</span>'
+        : `<span class="chip ${hasContent ? 'on' : 'bad'}">${hasContent ? 'פעילה' : 'חסר תוכן'}</span>`}
     </summary>
     <div class="ibody">
       <div class="prow">
@@ -93,10 +94,12 @@ function endpointItem(e, channels, ro) {
       <div class="subsec">
         <h4>סיכום</h4>
         <div class="contentline">${e.campaigns.length} קמפיינים · ${e.content.length} פריטי תוכן
-          <span style="color:var(--muted)">— לניהול שלהם: הטאבים "קמפיינים" ו"תוכן"</span></div>
+          <span style="color:var(--muted)">— לניהול שלהם: הטאב "קמפיינים ותוכן"</span></div>
       </div>
 
       ${ro ? '' : `<div style="margin-top:14px">
+        <button class="btn small" data-toggle-endpoint="${e.id}" data-active="${e.active}">
+          ${e.active ? 'השבת נקודת קצה' : 'הפעל נקודת קצה'}</button>
         <button class="btn small" style="color:var(--st-crit)" data-del-endpoint="${e.id}">מחק נקודת קצה</button>
       </div>`}
     </div>
@@ -235,7 +238,17 @@ function channelItem(c, ro, conn, hubReady) {
   </details>`;
 }
 
-function systemGroup(users, settings, backups) {
+// מה הרשאת approve פותחת בפועל: אישור לפרסום אוטומטי (גם מרוכז לשבוע),
+// פרסום מיידי, ומבצע דחוף שנכנס ללוח בלי להמתין לאישור (routes/publish.js,
+// routes/board.js, routes/engine.js)
+const APPROVE_HINT = 'אישור פוסטים לפרסום אוטומטי ופרסום מיידי לרשתות, וגם מבצע דחוף בלי המתנה לאישור';
+
+/**
+ * קבוצת "מערכת" — כל חלק לפי ההרשאה שהשרת דורש בפועל:
+ * משתמשים ← users; כללי המנוע גלויים לכולם וניתנים לעריכה רק עם settings
+ * (PATCH /settings), כמו ערוצים ונקודות קצה; גיבויים ← settings (GET /backups).
+ */
+function systemGroup(users, settings, backups, ro) {
   const rows = users.map((u) => {
     const cell = (perm) => u.is_owner
       ? '✓'
@@ -250,26 +263,26 @@ function systemGroup(users, settings, backups) {
   }).join('');
 
   const s = settings;
+  const dis = ro ? 'disabled' : '';
   const eng = (label, field, value, step = '1') => `
     <div class="prow"><label>${label}</label>
-      <input type="number" step="${step}" value="${value}" data-engine="${field}"></div>`;
+      <input type="number" step="${step}" value="${value}" data-engine="${field}" ${dis}></div>`;
 
-  return `<div class="setgroup" id="ownerOnly">
+  return `<div class="setgroup">
     <h2>מערכת</h2>
     <div class="panel">
-      <details class="item">
+      ${can('users') ? `<details class="item">
         <summary><b>משתמשים והרשאות</b>
-          <span class="info">${users.length} משתמשים</span>
-          <span class="owner-tag">בעלים בלבד</span></summary>
+          <span class="info">${users.length} משתמשים</span></summary>
         <div class="ibody">
           <table class="utable">
             <thead><tr><th>משתמש</th><th>תוכן ושיבוץ</th><th>הגדרות</th>
-              <th>אישור דחוף־דורס</th><th>ניהול משתמשים</th><th></th></tr></thead>
+              <th title="${esc(APPROVE_HINT)}">אישור פרסום</th><th>ניהול משתמשים</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
           <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
         </div>
-      </details>
+      </details>` : ''}
       <details class="item">
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
@@ -277,18 +290,18 @@ function systemGroup(users, settings, backups) {
           ${eng('מקסימום מכירתיים ביום, בכל הערוצים', 'max_promo_per_day', s.max_promo_per_day)}
           <div class="prow">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-              <input type="checkbox" id="engRatioOn" ${s.min_value_per_promo > 0 ? 'checked' : ''}>
+              <input type="checkbox" id="engRatioOn" ${s.min_value_per_promo > 0 ? 'checked' : ''} ${dis}>
               לאכוף יחס ערך מול מכירתי
             </label>
             <input type="number" step="0.5" min="0.5" id="engRatioVal"
                    value="${s.min_value_per_promo > 0 ? s.min_value_per_promo : 3}"
-                   data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 ? '' : 'disabled'}>
+                   data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 && !ro ? '' : 'disabled'}>
           </div>
           ${eng('"משולב" נספר כמכירתי', 'hybrid_weight', s.hybrid_weight, '0.1')}
           ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
           <div class="prow">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-              <input type="checkbox" id="engUsePerf" ${s.use_performance ? 'checked' : ''}>
+              <input type="checkbox" id="engUsePerf" ${s.use_performance ? 'checked' : ''} ${dis}>
               לתת ליעילות הנמדדת להשפיע על השיבוץ
             </label>
           </div>
@@ -315,6 +328,47 @@ function systemGroup(users, settings, backups) {
       </details>` : ''}
     </div>
   </div>`;
+}
+
+/**
+ * חלון בחירה עם כמה כפתורים — confirmDialog יודע רק כן/לא, וכאן צריך
+ * שלוש: ביטול, מחיקה, והשבתה כברירה הבטוחה. נבנה ונהרס בכל פתיחה.
+ * מחזיר את value של הכפתור שנלחץ, או null (ביטול / Esc).
+ */
+function choiceDialog(message, choices) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'choice-dlg';
+    dlg.innerHTML = `<p class="choice-msg"></p><div class="dactions">${choices.map((c, i) =>
+      `<button class="btn ${c.cls ?? ''}" data-choice="${i}">${esc(c.label)}</button>`).join('')}</div>`;
+    dlg.querySelector('.choice-msg').textContent = message;
+    let result = null;
+    dlg.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-choice]');
+      if (!btn) return;
+      result = choices[Number(btn.dataset.choice)].value;
+      dlg.close();
+    });
+    dlg.addEventListener('close', () => { dlg.remove(); resolve(result); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
+/**
+ * מחיקה של ערוץ / נקודת קצה. כשיש מה לאבד והישות פעילה — השבתה היא
+ * הכפתור הראשי, ומחיקה היא בחירה שנייה ומפורשת. אחרת — אישור מחיקה רגיל.
+ * מחזיר 'disable' / 'delete' / null.
+ */
+async function deleteOrDisable(message, offerDisable, disableNote, deleteLabel) {
+  if (!offerDisable) {
+    return (await confirmDialog(message, { danger: true, okLabel: deleteLabel })) ? 'delete' : null;
+  }
+  return choiceDialog(`${message}\n\n${disableNote}`, [
+    { label: 'ביטול', value: null },
+    { label: 'מחק לצמיתות', value: 'delete', cls: 'crit' },
+    { label: 'השבת במקום למחוק', value: 'disable', cls: 'primary' },
+  ]);
 }
 
 function wireManage(ro) {
@@ -502,19 +556,54 @@ function wireManage(ro) {
       await reload();
     })));
 
+  // מחיקה מציגה קודם מה בדיוק נמחק, ומציעה השבתה כברירה הבטוחה
   $$('#manage [data-del-endpoint]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!(await confirmDialog('למחוק את נקודת הקצה? כל הקמפיינים והתוכן שלה יימחקו איתה.', { danger: true }))) return;
-      await api(`/endpoints/${b.dataset.delEndpoint}`,
-        { method: 'DELETE', body: { week: state.week } });
+      const id = b.dataset.delEndpoint;
+      const { impact: x } = await api(`/endpoints/${id}/delete-impact`);
+      const lost = x.campaigns || x.content;
+      const msg = `למחוק את נקודת הקצה "${x.name}"?\n` +
+        (lost ? `${x.campaigns} קמפיינים ו־${x.content} פריטי תוכן יימחקו איתה לצמיתות.`
+              : 'אין לה קמפיינים או תוכן.') +
+        (x.posts ? `\n${x.posts} פוסטים שלה על הלוח יישארו בלי נקודת קצה ובלי תוכן.` : '');
+      const choice = await deleteOrDisable(msg, x.active && (lost || x.posts),
+        'השבתה משאירה הכול במקום ורק מוציאה את הנקודה מהשיבוץ.', 'מחק נקודת קצה');
+      if (choice === 'disable') {
+        await api(`/endpoints/${id}`, { method: 'PATCH', body: { active: false, week: state.week } });
+        toast('נקודת הקצה הושבתה — שום דבר לא נמחק.');
+      } else if (choice === 'delete') {
+        await api(`/endpoints/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
+        toast('נקודת הקצה נמחקה.');
+      } else return;
       await reload();
     })));
 
   $$('#manage [data-del-channel]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!(await confirmDialog('למחוק את הערוץ? כל השיבוצים בו יימחקו.', { danger: true }))) return;
-      await api(`/channels/${b.dataset.delChannel}`,
-        { method: 'DELETE', body: { week: state.week } });
+      const id = b.dataset.delChannel;
+      const { impact: x } = await api(`/channels/${id}/delete-impact`);
+      const msg = `למחוק את הערוץ "${x.name}"?\n` +
+        (x.published
+          ? `${x.published} פוסטים שכבר פורסמו בו${x.results ? ` ו־${x.results} רשומות תוצאות` : ''} יימחקו לצמיתות — כולל ההיסטוריה בטאב "נתונים".`
+          : 'אין בו פוסטים שפורסמו.') +
+        (x.other ? `\n${x.other} פוסטים מתוכננים בו יימחקו מהלוח.` : '') +
+        (x.variants ? `\n${x.variants} ניסוחים שנכתבו לערוץ הזה יימחקו.` : '');
+      const choice = await deleteOrDisable(msg, x.active && (x.published || x.other || x.variants),
+        'השבתה משאירה את ההיסטוריה ורק מוציאה את הערוץ מהשיבוץ.', 'מחק ערוץ');
+      if (choice === 'disable') {
+        await api(`/channels/${id}`, { method: 'PATCH', body: { active: false, week: state.week } });
+        toast('הערוץ הושבת — שום דבר לא נמחק.');
+      } else if (choice === 'delete') {
+        await api(`/channels/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
+        toast('הערוץ נמחק.');
+      } else return;
+      await reload();
+    })));
+
+  $$('#manage [data-toggle-endpoint]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      await api(`/endpoints/${b.dataset.toggleEndpoint}`,
+        { method: 'PATCH', body: { active: b.dataset.active !== 'true', week: state.week } });
       await reload();
     })));
 
@@ -522,20 +611,6 @@ function wireManage(ro) {
     b.addEventListener('click', run(async () => {
       await api(`/channels/${b.dataset.toggleChannel}`,
         { method: 'PATCH', body: { active: b.dataset.active !== 'true', week: state.week } });
-      await reload();
-    })));
-
-  $$('#manage [data-del-campaign]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/campaigns/${b.dataset.delCampaign}`,
-        { method: 'DELETE', body: { week: state.week } });
-      await reload();
-    })));
-
-  $$('#manage [data-del-content]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await api(`/content/${b.dataset.delContent}`,
-        { method: 'DELETE', body: { week: state.week } });
       await reload();
     })));
 
@@ -578,7 +653,7 @@ function wireManage(ro) {
       { name: 'email', label: 'אימייל (חשבון Google — איתו הוא נכנס)', type: 'email' },
       { name: 'perm_content', label: 'תוכן ושיבוץ', type: 'checkbox', value: true },
       { name: 'perm_settings', label: 'הגדרות', type: 'checkbox' },
-      { name: 'perm_approve', label: 'אישור דחוף־דורס', type: 'checkbox' },
+      { name: 'perm_approve', label: `אישור פרסום — ${APPROVE_HINT}`, type: 'checkbox' },
       { name: 'perm_users', label: 'ניהול משתמשים', type: 'checkbox' },
     ],
     onSave: async (v) => { await api('/users', { method: 'POST', body: v }); await reload(); },
