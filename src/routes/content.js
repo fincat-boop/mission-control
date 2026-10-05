@@ -344,7 +344,9 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
 
   // מעבר לקמפיין אחר גורר איתו את נקודת הקצה שלו
   if (b.campaign_id && b.campaign_id !== current.campaign_id) {
-    const owner = await one('select endpoint_id, structure from campaigns where id = $1',
+    // נעילה כמו בהעלאה המרוכזת ובסימון "מוכן" — הסדר נקבע מול מצב יציב
+    const owner = await one(
+      'select endpoint_id, structure, content_complete_at from campaigns where id = $1 for update',
       [b.campaign_id]);
     if (owner) b.endpoint_id = owner.endpoint_id;
     // זווית לא נכנסת לקמפיין כללי ומשבצת-מדיה לא נכנסת לקמפיין זוויות:
@@ -354,12 +356,25 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
         ? 'אי אפשר להעביר זווית לקמפיין כללי'
         : 'אי אפשר להעביר תוכן של משבצת לקמפיין לפי זוויות');
     }
+    // קמפיין מוכן: מה שנכנס אליו מצטרף בסוף (בכללי — בסוף המדיה שלו), ולא
+    // נדחף לפני הפוסטים שכבר נפרסו על התקופה
+    // (Number: מזהה שהגיע כמחרוזת מהעוזר הוא אותו קמפיין, לא מעבר)
+    if (owner?.content_complete_at && b.sort_order == null &&
+        Number(b.campaign_id) !== current.campaign_id) {
+      b.sort_order = (await one(
+        `select coalesce(max(sort_order), 0) + 1 as n from content_items
+          where campaign_id = $1 and slot_channel_id is not distinct from $2`,
+        [b.campaign_id, current.slot_channel_id]))?.n ?? 1;
+    }
   }
   const c = await uniqueOrNull(() => updateById('content_items', CONTENT_FIELDS, req.params.id, b));
   if (!c) return bad(res, 'המשבצת תפוסה', 409);
   if (leavingSlot) {
     await query('update content_items set slot_channel_id = null where id = $1', [c.id]);
     c.slot_channel_id = null;
+  }
+  if (current.campaign_id && c.campaign_id !== current.campaign_id) {
+    await reopenIfEmpty(current.campaign_id);
   }
 
   // משבצת בקמפיין כללי: הטקסט והמצב נשמרים גם על הגרסה היחידה שלה,
@@ -388,8 +403,22 @@ async function resolveEndpoint(b) {
   return b.endpoint_id ?? null;
 }
 
+/**
+ * קמפיין מוכן שנשאר בלי תוכן (הפריט האחרון נמחק או יצא ממנו) חוזר להקצאה
+ * הרגילה — באותה טרנזקציה של הבקשה — כדי שהתפריט, הרשת והסטטוס יסכימו.
+ */
+async function reopenIfEmpty(campaignId) {
+  await query(
+    `update campaigns set content_complete_at = null
+      where id = $1 and content_complete_at is not null
+        and not exists (select 1 from content_items where campaign_id = $1)`,
+    [campaignId]);
+}
+
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
-  await query('delete from content_items where id = $1', [req.params.id]);
+  const gone = await one('delete from content_items where id = $1 returning campaign_id',
+    [req.params.id]);
+  if (gone?.campaign_id) await reopenIfEmpty(gone.campaign_id);
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });
 }));
