@@ -1143,3 +1143,12 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
   display: inline-block; margin-top: 4px; font-style: normal; font-size: 9.5px; font-weight: 700;
   padding: 1px 6px; border-radius: 4px; background: var(--st-warn); color: #1a1a1a;
 }
+/* היסטוריית ניסיונות הפרסום — מקופלת */
+.pvlog { margin-top: 14px; font-size: 12px; }
+.pvlog summary { cursor: pointer; color: var(--ink-2); }
+.pvlog ul { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.pvlog li { display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: baseline; line-height: 1.5; }
+.pvlog .when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pvlog li.ok .st { color: var(--st-good); white-space: nowrap; }
+.pvlog li.bad .st { color: var(--st-crit); white-space: nowrap; }
+.pvlog .msg { color: var(--ink-2); }

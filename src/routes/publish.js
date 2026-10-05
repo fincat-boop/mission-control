@@ -9,6 +9,7 @@ import { loadPayload, publishBlocker, publishOne, resetPublishing } from '../pub
 import { HubMailError, audienceLists, hubMailReady,
          newsletterTemplate, newsletterPreview } from '../hub-mail.js';
 import { weekMeta } from '../board.js';
+import { friendlyPublishError } from '../publish/errors.js';
 
 const r = Router();
 
@@ -347,13 +348,20 @@ r.post('/posts/:id/reset-publishing', requirePerm('approve'), wrap(async (req, r
   res.json({ post });
 }));
 
-/** היסטוריית הניסיונות של פוסט — מוצג בדיאלוג הפוסט */
+/**
+ * היסטוריית הניסיונות של פוסט — מוצג בחלון הפוסט. message: מה שבן אדם מבין
+ * (friendlyPublishError); error הגולמי נשאר בשביל המפתח (title בחלון).
+ */
 r.get('/posts/:id/publish-log', wrap(async (req, res) => {
+  const log = await rows(
+    `select id, platform, ok, external_id, error, created_at
+       from publish_log where post_id = $1 order by created_at desc limit 20`,
+    [req.params.id]);
   res.json({
-    log: await rows(
-      `select id, platform, ok, external_id, error, created_at
-         from publish_log where post_id = $1 order by created_at desc limit 20`,
-      [req.params.id]),
+    log: log.map((x) => ({
+      ...x,
+      message: x.ok ? null : friendlyPublishError(x.error ?? '', { platform: x.platform }).message,
+    })),
   });
 }));
 

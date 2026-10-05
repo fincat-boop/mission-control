@@ -450,6 +450,24 @@ export function wirePostDialog() {
   }));
 }
 
+/**
+ * "היסטוריית ניסיונות (N)" — מקופל. שורה לכל ניסיון פרסום אוטומטי: מתי,
+ * הצליח/נכשל, וההודעה הידידותית; השגיאה הגולמית רק ב-title (למפתח).
+ */
+function attemptsHtml(log) {
+  if (!log?.length) return '';
+  const rowsHtml = log.map((x) => {
+    const when = new Date(x.created_at).toLocaleString('he-IL',
+      { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return `<li class="${x.ok ? 'ok' : 'bad'}"${x.ok || !x.error ? '' : ` title="${esc(x.error)}"`}>
+      <span class="when">${esc(when)}</span>
+      <span class="st">${x.ok ? '✓ הצליח' : '✗ נכשל'}</span>
+      <span class="msg">${x.ok ? (x.external_id ? 'פורסם בערוץ' : '') : esc(x.message ?? '')}</span></li>`;
+  }).join('');
+  return `<details class="pvlog"><summary>היסטוריית ניסיונות (${log.length})</summary>
+    <ul>${rowsHtml}</ul></details>`;
+}
+
 /** צ'יפ הסטטוס בכותרת */
 const STATUS_CHIP = {
   scheduled: ['מתוכנן', ''],
@@ -538,7 +556,11 @@ export async function openPostPreview(postId) {
   setTab('view');
   if (!$('#postDlg').open) $('#postDlg').showModal();
 
-  const { post, variant, assets, results } = await api(`/posts/${postId}/preview`);
+  const [{ post, variant, assets, results }, attempts] = await Promise.all([
+    api(`/posts/${postId}/preview`),
+    // היסטוריית הניסיונות רכה — אם היא נכשלת, החלון עצמו עדיין מוצג
+    api(`/posts/${postId}/publish-log`).then((r) => r.log).catch(() => []),
+  ]);
   previewPost = post;
   previewFacts = postFacts(post, variant);
   renderActions(post, previewFacts);
@@ -635,6 +657,7 @@ export async function openPostPreview(postId) {
           ? 'קובעים מועד חדש — או, אם פורסם ביד, מסמנים "פורסם".'
           : 'אם פורסם ביד — מסמנים "פורסם"; אם לא — קובעים מועד חדש.'}</div>` : ''}
     <div id="pReschedBox" class="pvbox" hidden></div>
+    ${attemptsHtml(attempts)}
     ${post.status === 'published' && post.external_url
       ? `<div class="pvauto">✓ פורסם אוטומטית —
          <a href="${esc(post.external_url)}" target="_blank" rel="noopener">לצפייה בפוסט</a></div>` : ''}`;
