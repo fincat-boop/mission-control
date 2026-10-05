@@ -5,6 +5,7 @@ import { HE_DAYS, KIND_VAR, fmtDate, ymd } from '../core/format.js';
 import { refreshBoard } from '../ui/refresh.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openGeneric } from '../ui/dialog.js';
+import { engineToast } from '../ui/engineDialog.js';
 
 /* ========================= ניהול ========================= */
 
@@ -374,9 +375,6 @@ async function deleteOrDisable(message, offerDisable, disableNote, deleteLabel) 
 function wireManage(ro) {
   const reload = run(async () => { await renderManage(); await refreshBoard(); });
 
-  const engineToast = (base, res) =>
-    base + (res.engine?.placed ? ` המנוע מילא ${res.engine.placed} משבצות פנויות.` : '');
-
   // חסימת יום מפנה את מי שכבר יושב עליו. מי שלא נמצא לו יום חוקי נשאר על
   // היום החסום — וזה חייב להיאמר כאן ולא רק בהתראות.
   const blockedToast = (base, res) => {
@@ -394,7 +392,7 @@ function wireManage(ro) {
     inp.addEventListener('change', run(async () => {
       const res = await api(`/endpoints/${inp.dataset.id}`,
         { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value), week: state.week } });
-      toast(engineToast('נשמר.', res));
+      engineToast(res, 'נשמר.');
       await refreshBoard();
     })));
 
@@ -407,7 +405,7 @@ function wireManage(ro) {
         input.disabled = true;
         const res = await api(`/endpoints/${id}`,
           { method: 'PATCH', body: { min_days_between: null, week: state.week } });
-        toast(engineToast('נשמר — הקצב יחושב אוטומטית לפי החשיבות.', res));
+        engineToast(res, 'נשמר — הקצב יחושב אוטומטית לפי החשיבות.');
         await refreshBoard();
       } else {
         input.disabled = false;
@@ -420,7 +418,7 @@ function wireManage(ro) {
       const val = inp.value.trim() === '' ? null : Number(inp.value);
       const res = await api(`/endpoints/${inp.dataset.id}`,
         { method: 'PATCH', body: { min_days_between: val, week: state.week } });
-      toast(engineToast('נשמר.', res));
+      engineToast(res, 'נשמר.');
       await refreshBoard();
     })));
 
@@ -430,7 +428,7 @@ function wireManage(ro) {
       const res = await api(`/channels/${inp.dataset.id}`,
         { method: 'PATCH',
           body: { [inp.dataset.chField]: raw === '' ? null : Number(raw), week: state.week } });
-      toast(engineToast('נשמר.', res));
+      engineToast(res, 'נשמר.');
       await refreshBoard();
     })));
 
@@ -506,9 +504,8 @@ function wireManage(ro) {
       const days = $$(`[data-blocked="${id}"]:checked`).map((i) => Number(i.value));
       const res = await api(`/channels/${id}`,
         { method: 'PATCH', body: { blocked_days: days, week: state.week } });
-      toast(blockedToast(
-        engineToast(days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.`
-                    : 'כל הימים פתוחים.', res),
+      engineToast(res, blockedToast(
+        days.length ? `נחסמו ימי ${days.map((d) => HE_DAYS[d]).join(', ')}.` : 'כל הימים פתוחים.',
         res));
       await refreshBoard();
     })));
@@ -517,7 +514,7 @@ function wireManage(ro) {
     inp.addEventListener('change', run(async () => {
       const res = await api('/settings',
         { method: 'PATCH', body: { [inp.dataset.engine]: Number(inp.value), week: state.week } });
-      toast(engineToast('נשמר.', res));
+      engineToast(res, 'נשמר.');
       await refreshBoard();
     })));
 
@@ -525,8 +522,8 @@ function wireManage(ro) {
     const on = e.target.checked;
     const res = await api('/settings',
       { method: 'PATCH', body: { use_performance: on, week: state.week } });
-    toast(engineToast(on ? 'נשמר — היעילות הנמדדת משפיעה עכשיו על השיבוץ.'
-                         : 'נשמר — היעילות רק נמדדת, בלי להשפיע על הלוח.', res));
+    engineToast(res, on ? 'נשמר — היעילות הנמדדת משפיעה עכשיו על השיבוץ.'
+                        : 'נשמר — היעילות רק נמדדת, בלי להשפיע על הלוח.');
     await refreshBoard();
   }));
 
@@ -538,7 +535,7 @@ function wireManage(ro) {
     const value = enforcing ? (Number(numInput.value) || 3) : 0;
     const res = await api('/settings',
       { method: 'PATCH', body: { min_value_per_promo: value, week: state.week } });
-    toast(engineToast(enforcing ? 'נשמר — היחס נאכף שוב.' : 'נשמר — היחס לא נאכף יותר.', res));
+    engineToast(res, enforcing ? 'נשמר — היחס נאכף שוב.' : 'נשמר — היחס לא נאכף יותר.');
     await refreshBoard();
   }));
 
