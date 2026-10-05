@@ -279,9 +279,13 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
   if (!post.channel_active) return bad(res, `הערוץ ${post.channel_name} מושבת`, 409);
 
   const c = await one(
-    `select ci.id, ci.title, ci.kind, ci.endpoint_id, ci.campaign_id,
+    `select ci.id, ci.title, ci.kind, ci.endpoint_id, ci.campaign_id, ci.slot_channel_id,
             ca.name as campaign_name, ca.paused_at, ca.starts_on, ca.ends_on,
-            v.status as variant_status
+            v.status as variant_status,
+            ci.slot_channel_id is null or exists (
+              select 1 from campaign_channels cc
+               where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id
+            ) as slot_channel_ok
        from content_items ci
        left join campaigns ca       on ca.id = ci.campaign_id
        left join content_variants v on v.content_id = ci.id and v.channel_id = $2
@@ -291,6 +295,13 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
   if (!c) return bad(res, 'לא נמצא תוכן כזה', 404);
   if (!c.variant_status || c.variant_status === 'not_relevant') {
     return bad(res, `אין לתוכן הזה ניסוח ל${post.channel_name} — כותבים אותו קודם בתוכן`);
+  }
+  // משבצת-מדיה של קמפיין כללי שייכת למדיה אחת — וכשהמדיה הוסרה מהקמפיין
+  // היא נשמרת אבל לא משובצת (כמו במנוע, ראו planWeek)
+  if (c.slot_channel_id && (c.slot_channel_id !== post.channel_id || !c.slot_channel_ok)) {
+    return bad(res, c.slot_channel_id !== post.channel_id
+      ? 'התוכן הזה הוא משבצת של ערוץ אחר בקמפיין'
+      : `הערוץ ${post.channel_name} הוסר מהקמפיין "${c.campaign_name}" — התוכן שלו לא משובץ`);
   }
   if (post.endpoint_id && c.endpoint_id !== post.endpoint_id) {
     return bad(res, 'התוכן שייך לנקודת קצה אחרת מזו של הפוסט');

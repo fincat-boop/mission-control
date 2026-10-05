@@ -361,6 +361,10 @@ export function contentCandidates({ endpointId = null, channelId, date = null })
        join endpoints e        on e.id = ci.endpoint_id
        left join campaigns ca  on ca.id = ci.campaign_id
       where ($1::int is null or ci.endpoint_id = $1)
+        -- משבצת-מדיה של קמפיין כללי: רק במדיה שלה, ורק כל עוד המדיה עדיין בקמפיין
+        and (ci.slot_channel_id is null or (ci.slot_channel_id = $2 and exists (
+              select 1 from campaign_channels cc
+               where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id)))
         and (ca.id is null or (ca.paused_at is null and (
               $3::date is null or ((ca.starts_on is null or ca.starts_on <= $3::date)
                                and (ca.ends_on is null or ca.ends_on >= $3::date)))))
