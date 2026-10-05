@@ -827,3 +827,8 @@ button.btn.bell .badge {
 }
 /* נקודת החומרה בשורת התראה — אותו דפוס כמו בשבבי החמצן שבלוח */
 .task > .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* חלון בחירה עם כמה פעולות (manage.js choiceDialog) — למשל "השבת במקום למחוק" */
+.choice-dlg { width: min(440px, 92vw); }
+.choice-dlg .choice-msg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 16px; }
+.choice-dlg .btn.crit { color: var(--st-crit); }

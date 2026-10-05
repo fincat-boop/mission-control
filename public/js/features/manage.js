@@ -63,7 +63,8 @@ function endpointItem(e, channels, ro) {
     <summary>
       <b>${esc(e.name)}</b>
       <span class="info">חשיבות ${e.importance} · ${e.campaigns.length} קמפיינים</span>
-      <span class="chip ${hasContent ? 'on' : 'bad'}">${hasContent ? 'פעילה' : 'חסר תוכן'}</span>
+      ${!e.active ? '<span class="chip bad">מושבתת</span>'
+        : `<span class="chip ${hasContent ? 'on' : 'bad'}">${hasContent ? 'פעילה' : 'חסר תוכן'}</span>`}
     </summary>
     <div class="ibody">
       <div class="prow">
@@ -97,6 +98,8 @@ function endpointItem(e, channels, ro) {
       </div>
 
       ${ro ? '' : `<div style="margin-top:14px">
+        <button class="btn small" data-toggle-endpoint="${e.id}" data-active="${e.active}">
+          ${e.active ? 'השבת נקודת קצה' : 'הפעל נקודת קצה'}</button>
         <button class="btn small" style="color:var(--st-crit)" data-del-endpoint="${e.id}">מחק נקודת קצה</button>
       </div>`}
     </div>
@@ -327,6 +330,47 @@ function systemGroup(users, settings, backups, ro) {
   </div>`;
 }
 
+/**
+ * חלון בחירה עם כמה כפתורים — confirmDialog יודע רק כן/לא, וכאן צריך
+ * שלוש: ביטול, מחיקה, והשבתה כברירה הבטוחה. נבנה ונהרס בכל פתיחה.
+ * מחזיר את value של הכפתור שנלחץ, או null (ביטול / Esc).
+ */
+function choiceDialog(message, choices) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'choice-dlg';
+    dlg.innerHTML = `<p class="choice-msg"></p><div class="dactions">${choices.map((c, i) =>
+      `<button class="btn ${c.cls ?? ''}" data-choice="${i}">${esc(c.label)}</button>`).join('')}</div>`;
+    dlg.querySelector('.choice-msg').textContent = message;
+    let result = null;
+    dlg.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-choice]');
+      if (!btn) return;
+      result = choices[Number(btn.dataset.choice)].value;
+      dlg.close();
+    });
+    dlg.addEventListener('close', () => { dlg.remove(); resolve(result); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
+/**
+ * מחיקה של ערוץ / נקודת קצה. כשיש מה לאבד והישות פעילה — השבתה היא
+ * הכפתור הראשי, ומחיקה היא בחירה שנייה ומפורשת. אחרת — אישור מחיקה רגיל.
+ * מחזיר 'disable' / 'delete' / null.
+ */
+async function deleteOrDisable(message, offerDisable, disableNote, deleteLabel) {
+  if (!offerDisable) {
+    return (await confirmDialog(message, { danger: true, okLabel: deleteLabel })) ? 'delete' : null;
+  }
+  return choiceDialog(`${message}\n\n${disableNote}`, [
+    { label: 'ביטול', value: null },
+    { label: 'מחק לצמיתות', value: 'delete', cls: 'crit' },
+    { label: 'השבת במקום למחוק', value: 'disable', cls: 'primary' },
+  ]);
+}
+
 function wireManage(ro) {
   const reload = run(async () => { await renderManage(); await refreshBoard(); });
 
@@ -512,19 +556,53 @@ function wireManage(ro) {
       await reload();
     })));
 
+  // מחיקה מציגה קודם מה בדיוק נמחק, ומציעה השבתה כברירה הבטוחה
   $$('#manage [data-del-endpoint]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!(await confirmDialog('למחוק את נקודת הקצה? כל הקמפיינים והתוכן שלה יימחקו איתה.', { danger: true }))) return;
-      await api(`/endpoints/${b.dataset.delEndpoint}`,
-        { method: 'DELETE', body: { week: state.week } });
+      const id = b.dataset.delEndpoint;
+      const { impact: x } = await api(`/endpoints/${id}/delete-impact`);
+      const lost = x.campaigns || x.content;
+      const msg = `למחוק את נקודת הקצה "${x.name}"?\n` +
+        (lost ? `${x.campaigns} קמפיינים ו־${x.content} פריטי תוכן יימחקו איתה לצמיתות.`
+              : 'אין לה קמפיינים או תוכן.') +
+        (x.posts ? `\n${x.posts} פוסטים שלה על הלוח יישארו בלי נקודת קצה ובלי תוכן.` : '');
+      const choice = await deleteOrDisable(msg, x.active && (lost || x.posts),
+        'השבתה משאירה הכול במקום ורק מוציאה את הנקודה מהשיבוץ.', 'מחק נקודת קצה');
+      if (choice === 'disable') {
+        await api(`/endpoints/${id}`, { method: 'PATCH', body: { active: false, week: state.week } });
+        toast('נקודת הקצה הושבתה — שום דבר לא נמחק.');
+      } else if (choice === 'delete') {
+        await api(`/endpoints/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
+        toast('נקודת הקצה נמחקה.');
+      } else return;
       await reload();
     })));
 
   $$('#manage [data-del-channel]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      if (!(await confirmDialog('למחוק את הערוץ? כל השיבוצים בו יימחקו.', { danger: true }))) return;
-      await api(`/channels/${b.dataset.delChannel}`,
-        { method: 'DELETE', body: { week: state.week } });
+      const id = b.dataset.delChannel;
+      const { impact: x } = await api(`/channels/${id}/delete-impact`);
+      const msg = `למחוק את הערוץ "${x.name}"?\n` +
+        (x.published
+          ? `${x.published} פוסטים שכבר פורסמו בו${x.results ? ` ו־${x.results} רשומות תוצאות` : ''} יימחקו לצמיתות — כולל ההיסטוריה בטאב "נתונים".`
+          : 'אין בו פוסטים שפורסמו.') +
+        (x.other ? `\n${x.other} פוסטים מתוכננים בו יימחקו מהלוח.` : '');
+      const choice = await deleteOrDisable(msg, x.active && (x.published || x.other),
+        'השבתה משאירה את ההיסטוריה ורק מוציאה את הערוץ מהשיבוץ.', 'מחק ערוץ');
+      if (choice === 'disable') {
+        await api(`/channels/${id}`, { method: 'PATCH', body: { active: false, week: state.week } });
+        toast('הערוץ הושבת — שום דבר לא נמחק.');
+      } else if (choice === 'delete') {
+        await api(`/channels/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
+        toast('הערוץ נמחק.');
+      } else return;
+      await reload();
+    })));
+
+  $$('#manage [data-toggle-endpoint]').forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      await api(`/endpoints/${b.dataset.toggleEndpoint}`,
+        { method: 'PATCH', body: { active: b.dataset.active !== 'true', week: state.week } });
       await reload();
     })));
 
