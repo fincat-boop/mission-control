@@ -586,7 +586,8 @@ function activityPanel(a) {
     <td>${esc(e.summary)}</td>
   </tr>`).join('');
 
-  const filters = [['', 'הכול'], ['ui', 'ידני'], ['assistant', 'העוזר']].map(([v, l]) =>
+  // "מערכת" = מה שקרה בלי שאדם לחץ: תחזוקה ופרסום אוטומטי (via='system', בלי משתמש)
+  const filters = [['', 'הכול'], ['ui', 'ידני'], ['assistant', 'העוזר'], ['system', 'מערכת']].map(([v, l]) =>
     `<button data-via="${v}"${state.dataVia === v ? ' class="on"' : ''}>${esc(l)}</button>`
   ).join('');
 

@@ -934,3 +934,4 @@ button.btn.bell .badge {
 .engstate i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-inline-end: 6px; vertical-align: 0; background: var(--muted); }
 .engstate.on i { background: var(--st-good); }
 .enghint { color: var(--muted); }
+.viatag.system { border-style: dashed; color: var(--muted); }
