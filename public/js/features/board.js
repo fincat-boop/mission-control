@@ -37,12 +37,17 @@ export async function renderBoard() {
     const tip = `${o.name} · ${when}` +
                 (o.scheduled_this_week ? ` · משובץ ${o.scheduled_this_week} פעמים השבוע`
                                        : ' · לא משובץ השבוע');
-    return `<span class="oxychip${onAir ? '' : ' off'}" data-tt="${esc(tip)}">
+    // כפתור ולא span: במגע אין ריחוף, ולחיצה מציגה את אותו הסבר (data-oxy)
+    return `<button type="button" class="oxychip${onAir ? '' : ' off'}" data-tt="${esc(tip)}"
+      data-oxy="${esc(tip)}" aria-label="${esc(tip)}">
       <i class="sw" style="background:${epColor(o.endpoint_id)}"></i>${esc(o.name)}
-    </span>`;
+    </button>`;
   }).join('');
 
-  const head = b.week.days.map((d) => `<th>${esc(d.label)}</th>`).join('');
+  const today = ymd(new Date());
+  const head = b.week.days.map((d) => (d.date === today
+    ? `<th class="today" aria-current="date">${esc(d.label)} · היום</th>`
+    : `<th>${esc(d.label)}</th>`)).join('');
 
   const body = b.channels.map((ch) => {
     const full = ch.used >= ch.max_per_week;
@@ -58,9 +63,11 @@ export async function renderBoard() {
         ? `<button type="button" class="addslot" data-add-slot
              data-channel="${ch.id}" data-date="${day.date}"
              data-channel-name="${esc(ch.name)}" title="הוסף פוסט">+</button>` : '';
-      return `<td class="day${blocked ? ' blocked' : ''}" ${drop}
-        ${blocked ? `data-tt="${esc(ch.name)} לא מקבל תוכן בימי ${HE_DAYS[dow]}"` : ''}
-        >${cards}${add}</td>`;
+      // הסיבה גם כטקסט גלוי — במגע אין tooltip של ריחוף
+      const why = `${ch.name} לא מקבל תוכן בימי ${HE_DAYS[dow]}`;
+      return `<td class="day${blocked ? ' blocked' : ''}${day.date === today ? ' today' : ''}" ${drop}
+        ${blocked ? `data-tt="${esc(why)}"` : ''}
+        >${blocked ? `<span class="daynote" title="${esc(why)}">יום חסום</span>` : ''}${cards}${add}</td>`;
     }).join('');
     return `<tr>
       <td class="chan">
@@ -162,6 +169,10 @@ export async function renderBoard() {
   // לחיצה מציגה את הפוסט כפי שהוא ייצא. גם למי שאין לו הרשאת עריכה.
   $$('#board [data-post-id]').forEach((el) =>
     el.addEventListener('click', run(() => openPostPreview(el.dataset.postId))));
+
+  // מצב האוויר של נקודה — גם בלחיצה (במגע אין ריחוף)
+  $$('#board [data-oxy]').forEach((chip) =>
+    chip.addEventListener('click', () => toast(chip.dataset.oxy)));
 
   // + במשבצת ריקה — הוספת פוסט ידנית
   $$('#board [data-add-slot]').forEach((btn) =>

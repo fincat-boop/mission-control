@@ -3,7 +3,7 @@ import { confirmDialog } from '../core/confirm.js';
 import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
 import { goToTab, refreshAfterPostChange } from '../ui/refresh.js';
-import { hhmm, isImage, isVideo, ymd } from '../core/format.js';
+import { KIND_HE, hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
 import { AUTO_PLATFORMS, choosePrimary, isMissed, nextFreeSlot, postFacts,
          rescheduleApproves } from '../core/postActions.js';
@@ -643,10 +643,12 @@ export async function openPostPreview(postId) {
       ${esc(post.endpoint_name ?? 'ללא נקודת קצה')} · ${esc(post.channel_name ?? '')}
       ${post.campaign_name ? ` · ${esc(post.campaign_name)}` : ''}
       ${post.evergreen ? ' · ♻' : ''}
+      ${KIND_HE[post.kind] ? ` · ${esc(KIND_HE[post.kind])}` : ''}${post.urgent ? ' · ⚡ דחוף' : ''}
     </div>
     <div class="pvwhen">${esc(when)}${
       post.assignee_name ? ` · אחראי: ${esc(post.assignee_name)}` : ''}</div>
 
+    ${post.note ? `<div class="pvnote">${post.status === 'hole' ? 'למה חסר תוכן: ' : 'הערה: '}${esc(post.note)}</div>` : ''}
     ${subjectLine}
     ${media ? `<div class="pvmedia">${media}</div>` : ''}
 
