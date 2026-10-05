@@ -164,7 +164,10 @@ r.put('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res)
        page_id          = coalesce($2, channel_connections.page_id),
        ig_user_id       = coalesce($3, channel_connections.ig_user_id),
        access_token_enc = coalesce($4, channel_connections.access_token_enc),
-       auto_enabled     = coalesce($5, channel_connections.auto_enabled),
+       -- טוקן חדש מכבה פרסום אוטומטי עד שייבדק — אחרת היה ממשיך לפרסם
+       -- על טוקן שאף אחד לא בדק
+       auto_enabled     = case when $4 is not null then false
+                               else coalesce($5, channel_connections.auto_enabled) end,
        -- טוקן חדש עוד לא נבדק: הבדיקה הקודמת הייתה על הטוקן הישן
        last_check_ok    = case when $4 is null then channel_connections.last_check_ok end,
        last_check_at    = case when $4 is null then channel_connections.last_check_at end,

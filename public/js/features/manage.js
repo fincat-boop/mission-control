@@ -609,8 +609,10 @@ function wireManage(ro, connections) {
         throw new Error('בודקים חיבור לפני שמדליקים פרסום אוטומטי — שומרים בלי הסימון, ' +
           'לוחצים "בדוק חיבור", ואז מסמנים ושומרים.');
       }
-      await api(`/channels/${id}/connection`, { method: 'PUT', body });
-      toast('החיבור נשמר. כדאי ללחוץ "בדוק חיבור" כדי לוודא שהוא עובד.');
+      const { connection } = await api(`/channels/${id}/connection`, { method: 'PUT', body });
+      toast(body.access_token && saved?.auto_enabled && !connection.auto_enabled
+        ? 'החיבור נשמר, והפרסום האוטומטי כובה עד שהטוקן החדש ייבדק — לוחצים "בדוק חיבור" ומדליקים מחדש.'
+        : 'החיבור נשמר. כדאי ללחוץ "בדוק חיבור" כדי לוודא שהוא עובד.');
       await reload();
       $(`#manage [data-conn-verify="${id}"]`)?.focus();
     })));
