@@ -292,6 +292,8 @@ table.utable { width: 100%; border-collapse: collapse; }
 .task .tx b { font-size: 13.5px; display: block; }
 .task .tx span { font-size: 12px; color: var(--muted); }
 .task .act { margin-inline-start: auto; white-space: nowrap; }
+/* כמה כפתורים בשורה — רק הראשון דוחף לקצה, והשאר צמודים אליו */
+.task .act ~ .act { margin-inline-start: 0; }
 .task.urgent .tx b { color: var(--st-crit); }
 
 /* יום שהמדיה לא מקבלת בו תוכן */

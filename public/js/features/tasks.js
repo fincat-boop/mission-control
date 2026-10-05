@@ -41,6 +41,10 @@ export async function renderTasks() {
       if (b.dataset.post) await openPostPreview(b.dataset.post);
     })));
 
+  // "פתח" על משימה של פוסט — אותו חלון פוסט שההתראות פותחות, בלי לעזוב את הטאב
+  $$('#tasks [data-open-post]').forEach((b) =>
+    b.addEventListener('click', run(() => openPostPreview(b.dataset.openPost))));
+
   $$('#tasks [data-task-done]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
       await api(`/tasks/${cb.dataset.taskDone}`, { method: 'PATCH', body: { done: cb.checked } });
@@ -145,8 +149,11 @@ function taskRow(t) {
       החלף בתוכן המוצע</button>`;
   }
 
+  const open = t.post_id
+    ? `<button class="btn small act" data-open-post="${t.post_id}">פתח</button>` : '';
+
   return `<div class="task${t.urgent && !t.done ? ' urgent' : ''}"${t.done ? ' style="opacity:.5"' : ''}>
     <input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}>
     <div class="tx"><b>${esc(t.title)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</div>
-    ${action}</div>`;
+    ${action}${open}</div>`;
 }

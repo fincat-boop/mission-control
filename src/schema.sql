@@ -274,8 +274,14 @@ create table if not exists tasks (
 -- מוצעים) כדי שהפעולה בממשק לא תצטרך לחשב אותם מחדש.
 alter table tasks drop constraint if exists tasks_kind_check;
 alter table tasks add constraint tasks_kind_check
-  check (kind in ('publish','write','approve','general','swap'));
+  check (kind in ('publish','write','approve','general','swap','failed'));
 alter table tasks add column if not exists meta jsonb;
+
+-- 'failed' — פרסום אוטומטי (או שליחת ניוזלטר) שנכשל. לכל היותר משימה
+-- פתוחה אחת לפוסט: כשל נוסף מעדכן אותה (on conflict ב-runner.js) במקום
+-- לערום משימה חדשה על כל ניסיון.
+create unique index if not exists tasks_open_failed_post_idx
+  on tasks (post_id) where kind = 'failed' and done = false;
 
 create table if not exists engine_settings (
   id                  int primary key default 1 check (id = 1),

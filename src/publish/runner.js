@@ -50,6 +50,21 @@ async function logPublish(post, ok, { externalId = null, error = null } = {}) {
   ).catch((e) => console.error('כתיבה ל-publish_log נכשלה:', e.message));
 }
 
+/**
+ * משימת כשל לפוסט: אחת פתוחה לכל היותר. כשל חוזר מעדכן את הכותרת ואת
+ * השגיאה במשימה הקיימת (אינדקס ייחודי חלקי ב-schema.sql), לא מוסיף עוד.
+ */
+async function recordFailedTask(post, title, error) {
+  await query(
+    `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
+     values ($1,$2,'failed',$3,$4,true,(now() at time zone 'Asia/Jerusalem')::date)
+     on conflict (post_id) where kind = 'failed' and done = false
+     do update set title = excluded.title, subtitle = excluded.subtitle,
+                   urgent = true, due_on = excluded.due_on`,
+    [title, `"${post.title}": ${error}`, post.id, post.endpoint_id]
+  ).catch((e) => console.error('יצירת משימת כשל נכשלה:', e.message));
+}
+
 async function logActivity(action, post, summary) {
   await query(
     `insert into activity_log (user_id, user_name, via, action, entity, entity_id, summary)
@@ -190,12 +205,7 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
       await logPublish(post, false, { error });
       await logActivity('publish_failed', post, `פרסום אוטומטי נכשל — "${post.title}" ל${post.channel_name}: ${error}`);
       await emitPostEvent('post_publish_failed', post, { error });
-      await query(
-        `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
-         values ($1,$2,'general',$3,$4,true,current_date)`,
-        [`פרסום אוטומטי נכשל — ${post.channel_name}`,
-         `"${post.title}": ${error}`, post.id, post.endpoint_id]
-      ).catch((e) => console.error('יצירת משימת כשל נכשלה:', e.message));
+      await recordFailedTask(post, `פרסום אוטומטי נכשל — ${post.channel_name}`, error);
     }
     return { ok: false, error };
   };
@@ -406,12 +416,7 @@ async function failFromHub(post, error) {
   await logActivity('publish_failed', post,
     `שליחת ניוזלטר נכשלה — "${post.title}": ${error}`);
   await emitPostEvent('post_publish_failed', post, { error });
-  await query(
-    `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
-     values ($1,$2,'general',$3,$4,true,current_date)`,
-    [`שליחת ניוזלטר נכשלה — ${post.channel_name}`,
-     `"${post.title}": ${error}`, post.id, post.endpoint_id]
-  ).catch((e) => console.error('יצירת משימת כשל נכשלה:', e.message));
+  await recordFailedTask(post, `שליחת ניוזלטר נכשלה — ${post.channel_name}`, error);
 }
 
 /**
