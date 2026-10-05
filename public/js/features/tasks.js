@@ -315,7 +315,7 @@ function tasksToolbar() {
   ${view.selecting ? `<div class="tbulk" id="taskBulk">
     <span id="taskBulkCount"></span>
     <button class="btn small" id="taskBulkDone">סמן בוצע</button>
-    <button class="btn small tdanger" id="taskBulkDel">מחק</button>
+    <button class="btn small danger" id="taskBulkDel">מחק</button>
   </div>` : ''}`;
 }
 

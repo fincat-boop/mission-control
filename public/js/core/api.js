@@ -29,6 +29,9 @@ export async function api(path, options = {}) {
   return data;
 }
 
+/** כפתור האישור אומר מה קורה — לא "אישור" (docs/ux-overhaul.md, כפתורים) */
+const GAP_VERBS = { 'לשבץ בכל זאת?': 'שבץ בכל זאת', 'לשמור בכל זאת?': 'שמור בכל זאת' };
+
 /**
  * שיבוץ שהשרת מזהיר עליו כצמוד מדי. האזהרה אינה חסימה: מציגים מה
  * שהשרת יודע ושואלים, ומי שמאשר שולח שוב עם confirm_gap.
@@ -39,7 +42,8 @@ export async function postWithGapCheck(path, body, method = 'PATCH', question = 
   } catch (e) {
     if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
     const w = e.payload.warning;
-    if (!(await confirmDialog(`${w.message}\n\n${question}`))) return null;
+    const okLabel = GAP_VERBS[question] ?? 'המשך בכל זאת';
+    if (!(await confirmDialog(`${w.message}\n\n${question}`, { okLabel }))) return null;
     return api(path, { method, body: { ...body, confirm_gap: true } });
   }
 }
