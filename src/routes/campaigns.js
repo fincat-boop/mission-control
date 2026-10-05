@@ -37,6 +37,11 @@ function applyPeriod(b, before) {
   const start = b.starts_on !== undefined ? b.starts_on : before?.starts_on;
   const end = b.ends_on !== undefined ? b.ends_on : before?.ends_on;
   if (start && end && start > end) return 'תאריך הסיום מוקדם מתאריך ההתחלה';
+  // בקמפיין כללי המשבצות נפרסות על החלון — בלי תאריכים אין משבצות
+  const structure = b.structure ?? before?.structure ?? 'angles';
+  if (structure === 'general' && (!start || !end)) {
+    return 'בקמפיין כללי צריך תאריך יעד לפוסט הראשון ותקופה';
+  }
   return null;
 }
 

@@ -510,6 +510,9 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         return 'מוסיפים זוויות בכפתור "＋ זווית שוטפת".';
       }
       delete v.ctype;
+      if ((v.structure ?? structure) === 'general' && !v.starts_on) {
+        throw new Error('בקמפיין כללי צריך תאריך יעד לפוסט הראשון — ממנו נפרסים הפוסטים');
+      }
       // בלי תאריך לפוסט הראשון אין ממה לחשב סיום — הקמפיין נשמר בלי תאריכים
       if (!v.starts_on && v.period !== 'custom') delete v.period;
       if (v.period !== 'custom') delete v.ends_on;
