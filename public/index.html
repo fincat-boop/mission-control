@@ -236,6 +236,17 @@
   </div>
 </dialog>
 
+<!-- החיבור פג באמצע עבודה — נשאר פתוח עד ש-/api/me מצליח (core/session.js) -->
+<dialog id="authDlg" class="confirm-dlg" aria-labelledby="authTitle">
+  <h3 id="authTitle">החיבור פג</h3>
+  <p>מתחברים מחדש בלשונית חדשה ואז חוזרים לכאן. מה שפתוח במסך הזה נשאר כמו שהוא.</p>
+  <p class="fhint" id="authMsg" aria-live="polite"></p>
+  <div class="dactions">
+    <button class="btn" id="authRetry">נסה שוב</button>
+    <button class="btn primary" id="authLogin">התחברות בלשונית חדשה</button>
+  </div>
+</dialog>
+
 <div id="tt"></div>
 <div id="toast" role="status" aria-live="polite"></div>
 

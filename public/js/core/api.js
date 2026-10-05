@@ -1,4 +1,8 @@
 import { confirmDialog } from './confirm.js';
+import { sessionExpired } from './session.js';
+
+/** ההודעה של פעולה שנכשלה כי החיבור פג — החלון של session.js מסביר את השאר */
+export const SESSION_ERROR = 'החיבור פג — מתחברים מחדש וחוזרים על הפעולה';
 
 /** כל הנתונים מגיעים מ-/api. שכבה 0. */
 export async function api(path, options = {}) {
@@ -8,8 +12,11 @@ export async function api(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   if (res.status === 401) {
-    location.href = '/login.html';
-    throw new Error('נדרשת התחברות');
+    // לא עוזבים את הדף: טופס פתוח נשאר כמו שהוא עד שמתחברים מחדש
+    sessionExpired();
+    const err = new Error(SESSION_ERROR);
+    err.status = 401;
+    throw err;
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {

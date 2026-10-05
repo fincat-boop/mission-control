@@ -1,5 +1,6 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { api, SESSION_ERROR } from '../core/api.js';
+import { sessionExpired } from '../core/session.js';
 import { KIND_HE } from '../core/format.js';
 
 /* ========================= ייבוא תוכן מטבלה ========================= */
@@ -89,6 +90,7 @@ async function analyzeFile(file) {
     fd.append('file', file);
     const res = await fetch(`/api/campaigns/${impCampaign.campaign.id}/import/analyze`,
       { method: 'POST', body: fd });
+    if (res.status === 401) { sessionExpired(); throw new Error(SESSION_ERROR); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'הניתוח נכשל');
 

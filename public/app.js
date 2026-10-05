@@ -2,6 +2,7 @@
 
 import { $, $$, esc, run } from './js/core/dom.js';
 import { api } from './js/core/api.js';
+import { loginUrl } from './js/core/session.js';
 
 import { TABS, state, rebuildEpColors, persistView, restoreView } from './js/core/state.js';
 import { registerRefreshers, refreshAfterPostChange, goToTab } from './js/ui/refresh.js';
@@ -45,7 +46,8 @@ boot();
 async function boot() {
   try {
     const { user, media } = await api('/me');
-    if (!user) return void (location.href = '/login.html');
+    // לא מחוברים — לכניסה, ומשם חזרה לאותה תצוגה (קישור שהודבק לא הולך לאיבוד)
+    if (!user) return void (location.href = loginUrl());
     state.me = user;
     state.media = media ?? null;
   } catch {
