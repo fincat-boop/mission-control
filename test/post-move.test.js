@@ -42,11 +42,17 @@ test('moveBlocker — מתוכנן / מאושר / נכשל לעתיד — מות
   assert.equal(moveBlocker(post({ scheduled_at: '2026-10-01T09:00:00+03:00' }), when, NOW), null);
 });
 
-test('approvalResetOnMove — מעבר ערוץ מבטל אישור, שינוי מועד לא', async () => {
-  const { approvalResetOnMove } = await import('../src/routes/board.js');
-  const p = post({ status: 'approved' });
-  assert.equal(approvalResetOnMove(p, { scheduled_at: '2026-10-09T09:00:00+03:00' }), false);
-  assert.equal(approvalResetOnMove(p, { channel_id: 6 }), false);
-  assert.equal(approvalResetOnMove(p, { channel_id: '7' }), true);
-  assert.equal(approvalResetOnMove(p, { title: 'x' }), false);
+test('approvalResetOnChange — ערוץ, תוכן או נקודה אחרים מבטלים אישור; מועד/כותרת לא', async () => {
+  const { approvalResetOnChange } = await import('../src/routes/board.js');
+  const p = post({ status: 'approved', content_id: 5, endpoint_id: 4 });
+  assert.equal(approvalResetOnChange(p, { scheduled_at: '2026-10-09T09:00:00+03:00' }), false);
+  assert.equal(approvalResetOnChange(p, { channel_id: 6 }), false);
+  assert.equal(approvalResetOnChange(p, { channel_id: '7' }), true);
+  assert.equal(approvalResetOnChange(p, { title: 'x', assignee_id: 2 }), false);
+  // החלפת תוכן (משימת swap) או נקודת קצה
+  assert.equal(approvalResetOnChange(p, { content_id: 5 }), false);
+  assert.equal(approvalResetOnChange(p, { content_id: 9 }), true);
+  assert.equal(approvalResetOnChange(p, { content_id: null }), true);
+  assert.equal(approvalResetOnChange(p, { endpoint_id: '4' }), false);
+  assert.equal(approvalResetOnChange(p, { endpoint_id: 6 }), true);
 });

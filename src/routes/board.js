@@ -148,9 +148,9 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   }
 
   let post = await updateById('posts', POST_FIELDS, req.params.id, b);
-  // האישור לפרסום אוטומטי ניתן לערוץ מסוים (החיבור שלו, הניסוח שלו) — מעבר
-  // לערוץ אחר מחזיר למתוכנן. שינוי מועד בלבד משאיר את האישור.
-  const approvalReset = current.status === 'approved' && approvalResetOnMove(current, b);
+  // האישור לפרסום אוטומטי ניתן על מה שיוצא בפועל: הערוץ (החיבור, הניסוח),
+  // התוכן ונקודת הקצה — שינוי של אחד מהם מחזיר למתוכנן. מועד בלבד משאיר.
+  const approvalReset = current.status === 'approved' && approvalResetOnChange(current, b);
   if (approvalReset) {
     post = await one(
       `update posts set status = 'scheduled', approved_by = null, approved_at = null
@@ -160,9 +160,16 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   res.json({ post, approval_reset: approvalReset });
 }));
 
-/** האם שינוי מבטל אישור לפרסום אוטומטי: רק מעבר לערוץ אחר, לא שינוי מועד */
-export function approvalResetOnMove(current, b) {
-  return b.channel_id != null && Number(b.channel_id) !== current.channel_id;
+/** ערך מזהה מהבקשה מול הקיים: null/'' = ריק, אחרת מספר */
+const idOrNull = (v) => (v == null || v === '' ? null : Number(v));
+
+/**
+ * האם שינוי מבטל אישור לפרסום אוטומטי: ערוץ אחר, תוכן אחר (גם "החלף תוכן"
+ * ממשימת swap, שעובר ב-PATCH) או נקודת קצה אחרת. מועד, כותרת, אחראי — לא.
+ */
+export function approvalResetOnChange(current, b) {
+  const changed = (key) => key in b && idOrNull(b[key]) !== (current[key] ?? null);
+  return (b.channel_id != null && changed('channel_id')) || changed('content_id') || changed('endpoint_id');
 }
 
 /**
