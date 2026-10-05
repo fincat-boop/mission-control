@@ -7,15 +7,16 @@ import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
 import { confirmDialog } from '../core/confirm.js';
-import { renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
+import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
 
 /* ========================= הלוח ========================= */
 
 export async function renderBoard() {
-  // רשימת ההקמה — רכה: אם היא נכשלת, הלוח עצמו עדיין מוצג
+  // רשימת ההקמה — רכה: אם היא נכשלת, הלוח עצמו עדיין מוצג. אחרי שהושלמה
+  // לא נשאלת שוב באותו דף (fetchSetupStatus)
   const [b, setup] = await Promise.all([
     api(`/board${state.week ? `?week=${state.week}` : ''}`),
-    api('/setup-status').catch(() => null),
+    fetchSetupStatus(),
   ]);
   const editable = can('content');
 

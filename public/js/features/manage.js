@@ -6,6 +6,7 @@ import { refreshBoard } from '../ui/refresh.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openGeneric } from '../ui/dialog.js';
 import { engineToast } from '../ui/engineDialog.js';
+import { resetSetupStatus } from '../ui/setup.js';
 
 /* ========================= ניהול ========================= */
 
@@ -678,6 +679,7 @@ function wireManage(ro, connections) {
         await api(`/endpoints/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
         toast('נקודת הקצה נמחקה.');
       } else return;
+      resetSetupStatus();   // צעד חובה בהקמה יכול לסגת — הלוח שואל שוב
       await reload();
     })));
 
@@ -700,6 +702,7 @@ function wireManage(ro, connections) {
         await api(`/channels/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
         toast('הערוץ נמחק.');
       } else return;
+      resetSetupStatus();   // צעד חובה בהקמה יכול לסגת — הלוח שואל שוב
       await reload();
     })));
 
@@ -707,6 +710,7 @@ function wireManage(ro, connections) {
     b.addEventListener('click', run(async () => {
       await api(`/endpoints/${b.dataset.toggleEndpoint}`,
         { method: 'PATCH', body: { active: b.dataset.active !== 'true', week: state.week } });
+      if (b.dataset.active === 'true') resetSetupStatus();   // הושבת — ההקמה יכולה לסגת
       await reload();
     })));
 
@@ -714,6 +718,7 @@ function wireManage(ro, connections) {
     b.addEventListener('click', run(async () => {
       await api(`/channels/${b.dataset.toggleChannel}`,
         { method: 'PATCH', body: { active: b.dataset.active !== 'true', week: state.week } });
+      if (b.dataset.active === 'true') resetSetupStatus();   // הושבת — ההקמה יכולה לסגת
       await reload();
     })));
 

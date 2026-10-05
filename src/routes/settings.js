@@ -36,15 +36,17 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
  * משתמש מחובר: הוא רק סופר, והלוח מוצג לכולם. ההחלטות עצמן ב-setup.js.
  */
 r.get('/setup-status', wrap(async (_req, res) => {
-  const [channels, connections, endpoints, counts, settings] = await Promise.all([
-    rows('select id, name, active, platform from channels order by sort_order, id'),
-    rows(`select channel_id, access_token_enc is not null as has_token, last_check_ok
-            from channel_connections`),
-    rows('select id, active from endpoints'),
-    one(`select (select count(*)::int from campaigns)     as campaigns,
-                (select count(*)::int from content_items) as content`),
-    one('select autopublish_enabled from engine_settings limit 1'),
-  ]);
+  // בזו אחר זו ולא Promise.all: כל הבקשה רצה על client אחד בטרנזקציה (withOrg),
+  // ושאילתות מקבילות על אותו client נערמות בתור ממילא (ו-pg מזהיר על כך).
+  const channels = await rows('select id, name, active, platform from channels order by sort_order, id');
+  const connections = await rows(
+    `select channel_id, access_token_enc is not null as has_token, last_check_ok
+       from channel_connections`);
+  const endpoints = await rows('select id, active from endpoints');
+  const counts = await one(
+    `select (select count(*)::int from campaigns)     as campaigns,
+            (select count(*)::int from content_items) as content`);
+  const settings = await one('select autopublish_enabled from engine_settings limit 1');
   res.json(setupSteps({
     channels, connections, endpoints,
     campaigns: counts.campaigns, content: counts.content,

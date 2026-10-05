@@ -1,4 +1,5 @@
 import { $, $$, esc, run } from '../core/dom.js';
+import { api } from '../core/api.js';
 import { state } from '../core/state.js';
 import { goToTab } from './refresh.js';
 
@@ -44,6 +45,30 @@ function isCollapsed(status) {
     return false;
   }
   return true;
+}
+
+/* ---------- שליפה, עם זיכרון ל"הושלם" ---------- */
+
+// ארגון שסיים את ההקמה לא צריך לשאול שוב בכל ציור של הלוח. נשמר רק בזיכרון
+// של הדף (לא בדפדפן), ומתאפס כשערוץ או נקודת קצה נמחקים/מושבתים בניהול —
+// רק אז צעד חובה יכול לסגת.
+let completeThisSession = false;
+
+/** מצב ההקמה, או null כשכבר ידוע שהושלמה (או כשהשליפה נכשלה — הלוח לא נופל) */
+export async function fetchSetupStatus() {
+  if (completeThisSession) return null;
+  try {
+    const status = await api('/setup-status');
+    completeThisSession = !!status?.complete;
+    return status;
+  } catch {
+    return null;
+  }
+}
+
+/** ערוץ או נקודת קצה נמחקו/הושבתו — הבדיקה הבאה של הלוח שואלת שוב */
+export function resetSetupStatus() {
+  completeThisSession = false;
 }
 
 /* ---------- ציור ---------- */
