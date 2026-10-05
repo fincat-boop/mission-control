@@ -1,5 +1,6 @@
 import { currentOrg, one, query, rows } from './db.js';
 import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from './media.js';
+import { contentBlocker } from './publish/readiness.js';
 
 /**
  * משבצות מקושרות בקמפיין כללי.
@@ -87,9 +88,17 @@ export async function lockLinkScope(contentId) {
  * מעתיק את התוכן של $1 לכל שאר הפריטים בקבוצה שלו: כותרת, סוג, גוף, וגרסה
  * למדיה של כל אחד (טקסט, מצב, meta). עריכה של עוקבת עוברת כך גם למקור
  * ומשם לשאר העוקבות. פריט לא מקושר — לא נוגע בכלום.
- * @returns {Promise<number>} כמה פריטים עודכנו
+ * המצב (טיוטה/מוכן) עובר לשאר הקבוצה רק כשהבקשה שינתה אותו (statusChanged);
+ * עריכה שמשאירה את המצב מסנכרנת טקסט, meta, כותרת וסוג בלבד. כך עוקבת
+ * שנשארה טיוטה (למשל אינסטגרם בלי מדיה) לא מורידה את המקור לטיוטה כשעורכים
+ * בה טקסט. כשהמצב כן עובר ל"מוכן" — כל משבצת נבדקת לערוץ שלה, ומשבצת שהתוכן
+ * לא מספיק לה נשארת טיוטה (readiness.js).
+ * @param {{statusChanged?:boolean}} opts statusChanged — הבקשה שינתה את המצב של
+ *        הפריט שנערך (או קישור חדש — הקבוצה מקבלת את מצב המקור)
+ * @returns {Promise<{synced:number, downgraded:object[]}>} כמה פריטים עודכנו,
+ *          ואילו עוקבות נשארו טיוטה ({id, channel_id, channel_name, reason})
  */
-export async function syncFrom(contentId) {
+export async function syncFrom(contentId, { statusChanged = false } = {}) {
   const others = await rows(
     `with f as (select id, coalesce(linked_to_id, id) as root, title, kind, body
                   from content_items where id = $1)
@@ -99,7 +108,7 @@ export async function syncFrom(contentId) {
       where (ci.id = f.root or ci.linked_to_id = f.root) and ci.id <> f.id
       returning ci.id`,
     [contentId]);
-  if (!others.length) return 0;
+  if (!others.length) return { synced: 0, downgraded: [] };
 
   // לפריט שנערך אין גרסה (נמחקה) — גם לשאר אין: הקבוצה תמיד זהה
   const hasVariant = await one(
@@ -112,11 +121,12 @@ export async function syncFrom(contentId) {
         where ci.id = v.content_id and v.channel_id = ci.slot_channel_id
           and ci.id = any($1::int[])`,
       [others.map((x) => x.id)]);
-    return others.length;
+    return { synced: others.length, downgraded: [] };
   }
 
-  // הגרסה של המקור-לרגע (הפריט שנערך) למדיה שלו → הגרסה של כל אחד למדיה שלו
-  await query(
+  // הגרסה של המקור-לרגע (הפריט שנערך) למדיה שלו → הגרסה של כל אחד למדיה שלו.
+  // המצב — רק כשהבקשה שינתה אותו ($2), או למשבצת שעוד אין לה גרסה.
+  const written = await rows(
     `with f as (select id, coalesce(linked_to_id, id) as root, slot_channel_id
                   from content_items where id = $1),
           fv as (select v.body, v.status, v.meta
@@ -128,9 +138,35 @@ export async function syncFrom(contentId) {
       where (ci.id = f.root or ci.linked_to_id = f.root) and ci.id <> f.id
         and ci.slot_channel_id is not null
      on conflict (content_id, channel_id)
-       do update set body = excluded.body, status = excluded.status, meta = excluded.meta`,
-    [contentId]);
-  return others.length;
+       do update set body = excluded.body, meta = excluded.meta,
+                     status = case when $2 then excluded.status else content_variants.status end
+     returning content_id, (xmax = 0) as inserted`,
+    [contentId, statusChanged]);
+  // מצב שעבר עכשיו (שינוי, או גרסה חדשה) — נבדק לכל ערוץ בנפרד
+  const statusMoved = statusChanged ? written : written.filter((w) => w.inserted);
+  return { synced: others.length,
+           downgraded: await keepDraftWhereNotReady(statusMoved.map((w) => w.content_id)) };
+}
+
+/** עוקבות שקיבלו "מוכן" והתוכן לא מספיק לערוץ שלהן — חוזרות לטיוטה */
+async function keepDraftWhereNotReady(ids) {
+  const ready = await rows(
+    `select ci.id, ci.slot_channel_id as channel_id, ch.name as channel_name, ch.platform,
+            v.body, v.meta
+       from content_items ci
+       join content_variants v on v.content_id = ci.id and v.channel_id = ci.slot_channel_id
+       join channels ch on ch.id = ci.slot_channel_id
+      where ci.id = any($1::int[]) and v.status = 'ready'`, [ids]);
+  const out = [];
+  for (const r of ready) {
+    const assets = await rows(itemAssetsSql('a.mime'), [r.id, r.channel_id]);
+    const reason = contentBlocker({ platform: r.platform, variant: r, assets });
+    if (!reason) continue;
+    await query(`update content_variants set status = 'draft'
+                  where content_id = $1 and channel_id = $2`, [r.id, r.channel_id]);
+    out.push({ id: r.id, channel_id: r.channel_id, channel_name: r.channel_name, reason });
+  }
+  return out;
 }
 
 /**
@@ -486,9 +522,10 @@ export async function linkSlots(clickedId, body = {}) {
     'המשבצת תפוסה, או שכבר יש לתוכן הזה משבצת מקושרת בערוץ הזה');
     followerId = created.id;
   }
-  await syncFrom(root.id);
+  // קישור: הקבוצה מקבלת את מצב המקור (כל משבצת נבדקת לערוץ שלה)
+  const { downgraded } = await syncFrom(root.id, { statusChanged: true });
 
   const source = await one('select * from content_items where id = $1', [root.id]);
   const follower = await one('select * from content_items where id = $1', [followerId]);
-  return { source, follower };
+  return { source, follower, downgraded };
 }

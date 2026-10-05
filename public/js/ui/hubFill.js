@@ -206,6 +206,34 @@ export function newsletterPostNotes(post) {
   return '';
 }
 
+/* ========================= שורת המצב בעורך הגרסאות ========================= */
+
+/**
+ * שורת המצב של לשונית הניוזלטר בעורך הגרסאות (plan.js, #vmailState):
+ * מצב הגרסה + נושא מיד, ומצב ההעברה ל-HUB של הפוסט הקרוב כשהוא נטען.
+ * @param {HTMLElement} el
+ * @param {{item:object, channelId:number, variant:object|null, statusLabel:string|null}} o
+ */
+export function describeMailVariant(el, { item, channelId, variant, statusLabel }) {
+  if (!el) return;
+  const subject = variant?.meta?.subject?.trim();
+  const base = [statusLabel ?? 'עוד לא נכתב', subject ? `נושא: "${subject}"` : 'אין עדיין נושא'];
+  el.textContent = base.join(' · ');
+  const token = String(Math.random());
+  el.dataset.hfState = token;
+  api(`/publish/newsletter-posts?content_id=${item.id}&channel_id=${channelId}`)
+    .then(({ posts }) => {
+      if (el.dataset.hfState !== token) return; // בינתיים עברו ללשונית אחרת
+      const hub = posts.map(newsletterHubTag).find(Boolean);
+      const sent = posts.some((p) => p.status === 'published');
+      const pending = posts.some((p) => ['scheduled', 'approved'].includes(p.status) &&
+        new Date(p.scheduled_at) > new Date());
+      const tail = hub ? hub.label : sent ? 'נשלח מה-HUB' : pending ? 'עוד לא הועבר ל-HUB' : null;
+      if (tail) el.textContent = [...base, tail].join(' · ');
+    })
+    .catch(() => { /* השורה הבסיסית מספיקה */ });
+}
+
 /* ========================= עורך הניוזלטר ========================= */
 
 /** בלי כתובת הדשבורד אין עורך — לא פותחים חלון שלא יוכל לדבר איתנו */
@@ -415,6 +443,8 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
   if (firstPosts) notePostAt(firstPosts);
 
   openGeneric({
+    // ביטול/Esc עם נושא/מצב/גוף שלא נשמרו — שואלים קודם (התוכן מה-HUB נשמר מיד)
+    guardDirty: () => dirty(),
     title: `${item.title} — ${channel?.name ?? 'ניוזלטר'}`,
     fields: [
       { name: 'subject', label: 'נושא המייל', type: 'text', value: saved.meta.subject,

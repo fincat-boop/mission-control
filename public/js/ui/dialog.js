@@ -1,4 +1,5 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
+import { confirmDialog } from '../core/confirm.js';
 import { acceptAttr, fileLimitLabel } from '../core/upload.js';
 import { PERIOD_PRESETS, parsePeriod, periodEnd, periodLabel } from '../core/period.js';
 
@@ -21,6 +22,69 @@ import { PERIOD_PRESETS, parsePeriod, periodEnd, periodLabel } from '../core/per
  */
 
 let genSpec = null;
+let genSnapshot = null; // הערכים בפתיחה — להשוואה לפני סגירה (guardDirty)
+let genClosing = false; // שאלת "לסגור?" כבר פתוחה — Esc נוסף לא פותח שנייה
+
+/** תמונת מצב של הטופס: הערכים + שמות הקבצים שנבחרו. שגיאת קריאה = לא משווים. */
+function snapshot(fields) {
+  try {
+    const files = fields.filter((f) => f.type === 'files')
+      .map((f) => [...($(`#gen_${f.name}`)?.files ?? [])].map((x) => x.name));
+    return JSON.stringify([collectValues(fields), files]);
+  } catch {
+    return null;
+  }
+}
+
+/** האם יש בטופס שינוי שלא נשמר — רק לטפסים שביקשו (guardDirty) */
+function isDirty() {
+  const g = genSpec?.guardDirty;
+  if (!g) return false;
+  if (typeof g === 'function') return g();
+  const now = snapshot(genSpec.fields);
+  return now !== null && genSnapshot !== null && now !== genSnapshot;
+}
+
+/**
+ * סגירה בביטול/Esc. טופס עם guardDirty ששונה — שואלים קודם (עיקרון 4: לא
+ * מאבדים עבודה). force — סוגרים בלי לשאול (אחרי שמירה, או מחיקה).
+ * @returns {Promise<boolean>} האם הדיאלוג נסגר
+ */
+export async function closeGeneric({ force = false } = {}) {
+  const dlg = $('#genDlg');
+  if (!dlg.open) return true;
+  if (!force && isDirty()) {
+    if (genClosing) return false;
+    genClosing = true;
+    try {
+      const ok = await confirmDialog('יש שינויים שלא נשמרו — לסגור?',
+        { okLabel: 'סגור בלי לשמור', danger: true });
+      if (!ok) return false;
+    } finally {
+      genClosing = false;
+    }
+  }
+  dlg.close();
+  finishClose();
+  return true;
+}
+
+/**
+ * onClose של הטופס הנוכחי — פעם אחת לכל פתיחה. נקרא ישירות מכל מסלול סגירה
+ * שלנו (ולא רק מאירוע close, שהדפדפן מעכב בלשונית מוסתרת).
+ */
+function finishClose() {
+  const spec = genSpec;
+  if (spec && !spec.closed) {
+    spec.closed = true;
+    spec.onClose?.();
+  }
+}
+
+/** אחרי שמירה חלקית (למשל קבצים שנכשלו): מה שכבר נשמר הוא נקודת ההשוואה החדשה */
+export function markGenericClean() {
+  if (genSpec) genSnapshot = snapshot(genSpec.fields);
+}
 
 /** קורא את הערכים מהטופס לפי סוג כל שדה ומחזיר אובייקט אחד */
 function collectValues(fields) {
@@ -130,16 +194,32 @@ function periodHtml(f, id) {
 }
 
 export function wireGenericDialog() {
-  $('#genCancel').addEventListener('click', () => $('#genDlg').close());
+  $('#genCancel').addEventListener('click', () => closeGeneric());
+  // Esc: הדפדפן סוגר מיד — בטופס עם שינויים עוצרים ושואלים
+  $('#genDlg').addEventListener('cancel', (e) => {
+    e.preventDefault();
+    closeGeneric();
+  });
+  // גיבוי ל-onClose: סגירה ישירה (dlg.close()) מקוד שלא עובר ב-closeGeneric.
+  // אירוע שהגיע אחרי שכבר נפתח טופס חדש — שייך לקודם, שכבר טופל בפתיחה.
+  $('#genDlg').addEventListener('close', () => {
+    if (!$('#genDlg').open) finishClose();
+  });
   $('#genSave').addEventListener('click', run(async () => {
     const values = collectValues(genSpec.fields);
     const btn = $('#genSave');
     btn.disabled = true;
     try {
       // onSave יכול להחזיר הודעה משלו במקום "נשמר.", או false — בלי טוסט
-      // (כשהוא מציג משהו אחר במקומו, למשל הוראות כניסה למשתמש חדש)
+      // (כשהוא מציג משהו אחר במקומו, למשל הוראות כניסה למשתמש חדש), או
+      // {keepOpen, message} — הטופס נשאר פתוח (למשל גרסה שנטענה מחדש)
       const msg = await genSpec.onSave(values);
+      if (msg && typeof msg === 'object' && msg.keepOpen) {
+        if (msg.message) toast(msg.message);
+        return;
+      }
       $('#genDlg').close();
+      finishClose();
       if (msg !== false) toast(typeof msg === 'string' ? msg : 'נשמר.');
     } finally {
       btn.disabled = false;
@@ -218,9 +298,15 @@ function fieldHtml(f) {
 
 /**
  * @param {{title:string, fields:object[], onSave:(v:object)=>Promise<void>,
- *          extraActions?:string, onOpen?:()=>void, saveLabel?:string}} spec
+ *          extraActions?:string, onOpen?:()=>void, saveLabel?:string,
+ *          guardDirty?:boolean|(()=>boolean), onClose?:()=>void}} spec
+ * guardDirty — ביטול/Esc שואלים "לסגור?" כשהטופס השתנה מאז הפתיחה (true =
+ * השוואת ערכים; פונקציה = הקורא מחליט). onClose — אחרי כל סגירה.
  */
 export function openGeneric(spec) {
+  // שרשור טפסים (פתיחה מתוך טופס, או לפני שאירוע הסגירה של הקודם הגיע) —
+  // ה-onClose של הקודם רץ עכשיו, פעם אחת
+  finishClose();
   genSpec = spec;
   // הדיאלוג משותף לכל הישויות — קישוטי התצוגה החיה של גרסת המייל
   // (עמודה + class) מוסרים לפני כל פתיחה, שלא ידבקו לטופס הבא.
@@ -251,6 +337,7 @@ export function openGeneric(spec) {
   // כפתורים נוספים (למשל "מחק תוכן") נשתלים משמאל לביטול/שמירה
   $('#genExtra').innerHTML = spec.extraActions ?? '';
   spec.onOpen?.();
+  genSnapshot = spec.guardDirty === true ? snapshot(spec.fields) : null;
 
-  $('#genDlg').showModal();
+  if (!$('#genDlg').open) $('#genDlg').showModal();
 }

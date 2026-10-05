@@ -2,6 +2,7 @@ import { rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
+import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 
 /**
@@ -85,6 +86,21 @@ export function isCompleteMode(campaign, content) {
             content.length);
 }
 
+/**
+ * תא "מוכן" שהתוכן שלו לא יעבור את בדיקת הפרסום (אותם כללים — readiness.js),
+ * למשל גרסה שסומנה לפני שהבדיקה נוספה, או שהקובץ שלה נמחק אחר כך. מחזיר את
+ * הסיבה, אחרת null. הקבצים: המשותפים + של הגרסה; במשבצת (גרסה אחת) ובמשבצת
+ * מקושרת (הקבצים של המקור) — כולם.
+ */
+export function readyWarn(item, v, ch) {
+  if (!item || v?.status !== 'ready') return null;
+  const all = item.variant_assets ?? [];
+  const own = item.linked_to_id || item.slot_channel_id
+    ? all : all.filter((a) => a.variant_id === v.id);
+  return contentBlocker({ platform: ch.platform, variant: v,
+                          assets: [...(item.assets ?? []), ...own] });
+}
+
 /** לפי sort_order ואז id — הסדר שבו הפריטים נפרסים על התקופה */
 const byOrder = (a, b) => (a.sort_order - b.sort_order) || (a.id - b.id);
 
@@ -103,10 +119,17 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
   // תלוי אם יצא תוכן או לא
   if (!angles) {
     return { angles: [], needs: Object.fromEntries(needs), total_cells: 0, missing: 0, ready: 0,
-             drafts: 0 };
+             drafts: 0, extra: extraAngles(content, new Set(), campaignChannels) };
   }
 
-  const atOrder = new Map(content.map((c) => [c.sort_order, c]));
+  // כל מקום ברשת מקבל זווית אחת — הראשונה לפי הסדר. זווית מעבר למספר
+  // שתוכנן, או שנייה באותו מקום, לא נעלמת: היא חוזרת ב-extra.
+  const atOrder = new Map();
+  for (const c of [...content].sort(byOrder)) {
+    if (c.sort_order >= 1 && c.sort_order <= angles && !atOrder.has(c.sort_order)) {
+      atOrder.set(c.sort_order, c);
+    }
+  }
   let missing = 0;
   let ready = 0;
   let drafts = 0;
@@ -134,6 +157,7 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
         variant_id: v?.id ?? null,
         state,
         has_text: !!v?.body,
+        warn: readyWarn(item, v, ch),
       };
     });
 
@@ -147,7 +171,28 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
   });
 
   return { angles: list, needs: Object.fromEntries(needs), total_cells: total, missing, ready,
-           drafts };
+           drafts, extra: extraAngles(content, new Set(atOrder.values()), campaignChannels) };
+}
+
+/**
+ * הזוויות שאין להן מקום ברשת: מעבר למספר הזוויות שתוכנן, או כפולות במקום
+ * תפוס. מוצגות בקבוצה "מעבר לתכנון" מתחת לרשת ולא נספרות בנדרש — כמו
+ * משבצת מעבר לצורך בקמפיין כללי. תא בלי גרסה = not_needed.
+ */
+function extraAngles(content, placed, campaignChannels) {
+  return [...content].sort(byOrder).filter((c) => !placed.has(c)).map((item) => ({
+    index: item.sort_order,
+    date: null,
+    past: false,
+    extra: true,
+    content: item,
+    cells: campaignChannels.map((ch) => {
+      const v = item.variants?.find((x) => x.channel_id === ch.id) ?? null;
+      return { channel_id: ch.id, channel_name: ch.name, variant_id: v?.id ?? null,
+               state: v ? v.status : 'not_needed', has_text: !!v?.body,
+               warn: readyWarn(item, v, ch) };
+    }),
+  }));
 }
 
 /**
@@ -182,6 +227,7 @@ function completeAnglesGrid(campaign, content, campaignChannels, today) {
         variant_id: v?.id ?? null,
         state,
         has_text: !!v?.body,
+        warn: readyWarn(item, v, ch),
       };
     });
     // index = sort_order של הזווית: הלחיצה בממשק מוצאת לפיו את הפריט
@@ -189,7 +235,8 @@ function completeAnglesGrid(campaign, content, campaignChannels, today) {
   });
 
   for (const ch of campaignChannels) needs[ch.id] ??= 0;
-  return { angles: list, needs, total_cells: total, missing, ready, drafts, complete: true };
+  return { angles: list, needs, total_cells: total, missing, ready, drafts, complete: true,
+           extra: [] };
 }
 
 /**
@@ -247,6 +294,7 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
         content: item,
         variant_id: v?.id ?? null,
         has_text: !!v?.body,
+        warn: readyWarn(item, v, ch),
       };
     });
 
@@ -286,7 +334,8 @@ function completeGeneralGrid(campaign, content, campaignChannels, today) {
       const date = angleDate(campaign, i, mine.length);
       // index = sort_order: הלחיצה בממשק מוצאת לפיו את הפריט
       return { index: item.sort_order, date, past: date < today, extra: false, state,
-               content: item, variant_id: v?.id ?? null, has_text: !!v?.body };
+               content: item, variant_id: v?.id ?? null, has_text: !!v?.body,
+               warn: readyWarn(item, v, ch) };
     });
 
     needs[ch.id] = colRequired;
@@ -308,6 +357,28 @@ export function nextSlots(need, takenOrders, count) {
   for (let i = 1; need != null && i <= need; i += 1) if (!taken.has(i)) free.push(i);
   let overflowFrom = Math.max(0, ...takenOrders, need ?? 0);
   return Array.from({ length: count }, () => free.shift() ?? (overflowFrom += 1));
+}
+
+/**
+ * המקומות הפנויים הבאים בקמפיין לפי זוויות — לזווית שעוברת אליו, ליצירה
+ * בלי מקום מפורש, לייבוא ולהעלאה מרוכזת. אותו חשבון בדיוק כמו המסך
+ * (campaignsWithHealth: כולל הנתח שנגזר מהקמפיינים החופפים), כך שהתוכן
+ * ממלא את השורות הריקות שהמשתמש רואה. קמפיין מוכן — בסוף התור.
+ * @returns {Promise<{slots:number[], need:number|null}>} count מקומות לפי הסדר,
+ *          ומספר הזוויות שתוכנן (null — קמפיין מוכן / בלי תאריכים)
+ */
+export async function freeAngleSlots(campaignId, count) {
+  const campaign = (await rows('select * from campaigns where id = $1', [campaignId]))[0];
+  if (!campaign) return { slots: [], need: null };
+  const channels = await rows(
+    `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
+      where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [campaignId]);
+  const concurrent = await rows('select * from campaigns');
+  const existing = await rows(
+    'select sort_order from content_items where campaign_id = $1', [campaignId]);
+  const need = campaign.content_complete_at
+    ? null : angleCount(campaign, channelNeeds(campaign, channels, concurrent));
+  return { slots: nextSlots(need, existing.map((x) => x.sort_order), count), need };
 }
 
 /**
@@ -396,6 +467,34 @@ export function completionSummary(c, today = ymd(new Date())) {
   };
 }
 
+/** YYYY-MM-DD + n ימים, בלי להיתקל במעבר שעון */
+function addDaysYmd(d, n) {
+  const [y, m, day] = d.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, day + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * כמה חסר מהיום והלאה (ובתוך days ימים, אם נשלח) — מה שעוד אפשר להשלים.
+ * שורה שהתאריך שלה עבר, או משבצת מעבר לצורך (בלי תאריך), לא נספרות: קודם
+ * "חסרים N" כלל גם שורות שעברו, ולא היה ממה לפעול עליו.
+ * @param rows [{date, cells:[{state}]}] — שורות הזוויות, או משבצת לכל שורה בכללי
+ * @returns {{missing:number, total:number}} total = תאים נדרשים בטווח
+ */
+export function missingAhead(rows, today, days = null) {
+  const end = days ? addDaysYmd(today, days) : null;
+  let missing = 0;
+  let total = 0;
+  for (const r of rows) {
+    if (!r.date || r.date < today || (end && r.date >= end)) continue;
+    for (const cell of r.cells) {
+      if (cell.state === 'not_relevant' || cell.state === 'not_needed') continue;
+      total += 1;
+      if (cell.state !== 'ready') missing += 1;
+    }
+  }
+  return { missing, total };
+}
+
 /** כל הקמפיינים עם מצב מלא */
 export async function campaignsWithHealth() {
   const list = await rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance
@@ -463,6 +562,16 @@ export async function campaignsWithHealth() {
     const autoAngles = angleCount({ ...c, target_posts: null },
       channelNeeds(c, myChannels, list));
 
+    // מה עוד חסר מהיום והלאה — רק בקמפיין שרץ או מתוכנן (מושהה/הסתיים: 0)
+    const phase = phaseOf(c, today);
+    const live = phase === 'running' || phase === 'upcoming';
+    const rowsOf = general
+      ? grid.channels.flatMap((ch) => ch.slots.filter((x) => !x.extra)
+        .map((x) => ({ date: x.date, cells: [x] })))
+      : grid.angles;
+    const ahead = live ? missingAhead(rowsOf, today) : { missing: 0, total: 0 };
+    const week = live ? missingAhead(rowsOf, today, 7) : { missing: 0, total: 0 };
+
     return {
       ...c,
       channels: myChannels,
@@ -481,11 +590,17 @@ export async function campaignsWithHealth() {
       placed: scheduled + published,
       // "קמפיין מוכן" חל בפועל (סומן, יש תאריכים ותוכן) — הרשת בגודל התוכן
       complete: grid.complete === true,
-      phase: phaseOf(c, today),
-      status: statusOf({ c, today, grid, myChannels }),
+      // החסר מהיום והלאה, ובשבעת הימים הקרובים — מה שעוד אפשר להשלים
+      missing_ahead: ahead.missing,
+      total_ahead: ahead.total,
+      missing_week: week.missing,
+      phase,
+      status: statusOf({ c, today, grid, myChannels, ahead }),
       pace: paceOf(c, today, published, grid),
       content: shaped,
       grid: grid.angles,
+      // זוויות שאין להן מקום ברשת (מעבר לתכנון / כפולות) — מוצגות מתחת לה
+      grid_extra: grid.extra ?? [],
       // קמפיין כללי: רשימת משבצות לכל מדיה (ריק בקמפיין לפי זוויות)
       slots: general ? grid.channels : [],
       // פוסטים במשבצות של מדיות שהוסרו מהקמפיין — נשמרים ולא משובצים
@@ -505,7 +620,7 @@ function phaseOf(c, today) {
   return 'running';
 }
 
-export function statusOf({ c, today, grid, myChannels }) {
+export function statusOf({ c, today, grid, myChannels, ahead = null }) {
   const phase = phaseOf(c, today);
   if (phase === 'paused') return { key: 'paused', label: 'מושהה', tone: 'warn' };
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
@@ -527,12 +642,14 @@ export function statusOf({ c, today, grid, myChannels }) {
     }
     return { key: 'complete', label: `מוכן — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
   }
+  // החסר נספר מהיום והלאה — שורה שעברה כבר לא תושלם (ahead חסר: הכול, כמו קודם)
+  const missing = ahead ? ahead.missing : grid.missing;
+  const total = ahead ? ahead.total : grid.total_cells;
+  if (missing > 0) {
+    return { key: 'missing_content', label: `חסרים ${missing} מתוך ${total}`, tone: 'bad' };
+  }
   if (grid.missing > 0) {
-    return {
-      key: 'missing_content',
-      label: `חסרים ${grid.missing} מתוך ${grid.total_cells}`,
-      tone: 'bad',
-    };
+    return { key: 'full_ahead', label: 'מלא מהיום והלאה', tone: 'good' };
   }
   return { key: 'full', label: `מלא — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
 }
@@ -610,17 +727,24 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
 }
 
 /**
- * חלוקת השטח בפועל מול הנתח שהוגדר, לקמפיינים שרצים עכשיו.
+ * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין.
+ *
+ * הנתח (target_pct): מה שנקבע ידנית בקמפיין, ובלעדיו החלק היחסי לפי חשיבות
+ * מול הקמפיינים החופפים (effectiveShare — אותו חשבון כמו המנוע והטופס).
+ * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
+ * הקמפיין מתוך הפרסומים של כל הקמפיינים בטבלה — אותו בסיס כמו הנתח, שמתחלק
+ * בין קמפיינים (תוכן שוטף ופוסטים בלי תוכן לא נספרים בשום צד).
  */
 export async function currentAllocation() {
   const today = ymd(new Date());
+  const all = await rows('select * from campaigns');
   const running = await rows(
     `select c.*, e.name as endpoint_name
        from campaigns c join endpoints e on e.id = c.endpoint_id
-      where c.active = true and c.paused_at is null and c.share_pct is not null
+      where c.active = true and c.paused_at is null
         and (c.starts_on is null or c.starts_on <= $1)
         and (c.ends_on is null or c.ends_on >= $1)
-      order by c.share_pct desc`,
+      order by c.id`,
     [today]
   );
   if (running.length === 0) return { window: null, rows: [] };
@@ -628,31 +752,33 @@ export async function currentAllocation() {
   const from = running.map((c) => c.starts_on).filter(Boolean).sort()[0] ?? today;
 
   const counts = await rows(
-    `select endpoint_id, count(*)::int as n
-       from posts
-      where status = 'published' and endpoint_id is not null
-        and published_at >= $1::date and published_at < ($2::date + 1)
-      group by endpoint_id`,
-    [from, today]
+    `select ci.campaign_id, count(*)::int as n
+       from posts p join content_items ci on ci.id = p.content_id
+      where p.status = 'published' and ci.campaign_id = any($3::int[])
+        and p.published_at >= $1::date and p.published_at < ($2::date + 1)
+      group by ci.campaign_id`,
+    [from, today, running.map((c) => c.id)]
   );
   const total = counts.reduce((s, c) => s + c.n, 0);
-  const countMap = new Map(counts.map((c) => [c.endpoint_id, c.n]));
+  const countMap = new Map(counts.map((c) => [c.campaign_id, c.n]));
 
   return {
     window: { from, to: today, total_published: total },
     rows: running.map((c) => {
-      const n = countMap.get(c.endpoint_id) ?? 0;
+      const n = countMap.get(c.id) ?? 0;
       const actual = total > 0 ? Math.round((n / total) * 100) : 0;
+      const target = Math.round(effectiveShare(c, all) * 100);
       return {
         campaign_id: c.id,
         campaign_name: c.name,
         endpoint_id: c.endpoint_id,
         endpoint_name: c.endpoint_name,
-        target_pct: c.share_pct,
+        target_pct: target,
+        auto: c.share_pct == null,
         actual_pct: actual,
         published: n,
-        lagging: c.share_pct - actual > 8,
+        lagging: target - actual > 8,
       };
-    }),
+    }).sort((a, b) => b.target_pct - a.target_pct),
   };
 }

@@ -73,6 +73,8 @@ function describe(req, payload, deletedName) {
     'campaigns/order':    ['update',  `סידר מחדש את התוכן בקמפיין ${label}`],
     'campaigns/complete': ['update',  `סימן את הקמפיין ${label} כמוכן — המשבצות הריקות ירדו`],
     'campaigns/reopen':   ['update',  `פתח מחדש את הקמפיין ${label} להשלמת תוכן`],
+    // label = שם ההרצה החדשה (מהתשובה)
+    'campaigns/replace':  ['create',  `שיבץ מחדש קמפיין מחזורי — נוצר ${label}`],
     'campaigns/bulk':     ['create',  `העלה קבצים לקמפיין ${label}`],
     'campaigns/assets':   ['create',  `העלה קבצים לקמפיין ${label}`],
     'content/assets':     ['create',  `הוסיף קבצים לתוכן ${label}`],
@@ -98,6 +100,13 @@ function describe(req, payload, deletedName) {
     const n = (payload?.saved ?? 0) + (payload?.cleared ?? 0);
     return { action: 'update', entity, entity_id: null,
       summary: n === 1 ? 'הזין תוצאות לפוסט אחד' : `הזין תוצאות ל-${n} פוסטים` };
+  }
+  // סימון/הסרה של קמפיין מחזורי — PATCH שכל תוכנו הדגל
+  if (entity === 'campaigns' && id && !sub && req.method === 'PATCH' &&
+      Object.keys(req.body ?? {}).filter((k) => k !== 'week').join() === 'recurring') {
+    return { action: 'update', entity, entity_id: id,
+      summary: req.body.recurring ? `שמר את הקמפיין ${label} כקמפיין מחזורי`
+                                  : `הסיר את הקמפיין ${label} מהקמפיינים המחזוריים` };
   }
   // מחיקת גרסה למדיה מגיעה כ-DELETE על content/:id/variants/:channelId
   if (entity === 'content' && sub === 'variants' && req.method === 'DELETE') {

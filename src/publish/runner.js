@@ -13,6 +13,7 @@ import {
   cleanFieldValues, hubWaitState, newsletterBlocker, newsletterClockStart, newsletterDigest,
   nextHubRef, reusableHubStatus, transferBlocker,
 } from './newsletter.js';
+import { contentBlocker } from './readiness.js';
 
 /**
  * מסלול הפרסום האוטומטי.
@@ -203,7 +204,8 @@ export async function loadPayload(postId) {
 
 /** מה חוסם את הפוסט מפרסום אוטומטי? null = כלום, אפשר לפרסם. */
 export function publishBlocker({ post, variant, assets }) {
-  // ניוזלטר: השליחה בפועל דרך ה-HUB — נדרשים חיבור, תוכן ונושא (newsletter.js)
+  // ניוזלטר: השליחה בפועל דרך ה-HUB — נדרשים חיבור, תוכן ונושא. כלל התוכן
+  // אחד עם סימון "מוכן" (readiness.js → newsletterContentBlocker)
   if (post.platform === 'newsletter') return newsletterBlocker({ post, variant }, hubMailReady());
 
   if (!['facebook', 'instagram'].includes(post.platform)) {
@@ -215,13 +217,13 @@ export function publishBlocker({ post, variant, assets }) {
   if (!post.content_id) return 'אין תוכן משויך לפוסט';
   if (!variant || variant.status !== 'ready') return 'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"';
 
+  // מה שחסר בתוכן עצמו (מדיה לאינסטגרם, טקסט או מדיה לפייסבוק) — אותו כלל
+  // כמו בסימון "מוכן" (readiness.js)
+  const missing = contentBlocker({ platform: post.platform, variant, assets });
+  if (missing) return missing;
   const media = assets.filter((a) => isImage(a.mime) || isVideo(a.mime));
-  if (post.platform === 'instagram') {
-    if (!media.length) return 'אינסטגרם דורש תמונה או וידאו — אין מדיה לפוסט';
-    if (!publicAssetsReady()) return 'הגשת מדיה ציבורית לא מוגדרת (R2_PUBLIC_*) — נדרשת לאינסטגרם';
-  }
-  if (post.platform === 'facebook' && !media.length && !variant.body?.trim()) {
-    return 'אין טקסט ואין מדיה — אין מה לפרסם';
+  if (post.platform === 'instagram' && !publicAssetsReady()) {
+    return 'הגשת מדיה ציבורית לא מוגדרת (R2_PUBLIC_*) — נדרשת לאינסטגרם';
   }
   if (media.some((a) => a.storage_key && !mediaUrl(a.storage_key))) {
     return 'הכתובת הציבורית של המדיה לא מוגדרת (R2_PUBLIC_BASE_URL) — אי אפשר לשלוח את הקבצים';
