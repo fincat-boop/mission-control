@@ -531,7 +531,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         const res = await api(`/campaigns/${source.id}/duplicate`, { method: 'POST', body: v });
         state.planCampaign = res.campaign.id;
         await reload();
-        return `הקמפיין שוכפל עם ${res.copied.items} זוויות.`;
+        return `הקמפיין שוכפל עם ${res.copied.items} ${structure === 'general' ? 'פוסטים' : 'זוויות'}.`;
       }
       if (campaign) await patchCampaign(campaign.id, v);
       else await api('/campaigns', { method: 'POST', body: v });
@@ -662,7 +662,8 @@ function campaignGrid(c) {
  */
 function generalBoard(c) {
   const cols = c.slots.map((col) => {
-    const rows = col.slots.map((s) => {
+    // משבצת מעבר לצורך מוצגת רק כשיש בה פוסט — ריקה כזו לא חסרה לאף אחד
+    const rows = col.slots.filter((s) => !s.extra || s.content).map((s) => {
       const st = CELL[s.state];
       const item = s.content;
       return `<li class="gslot${s.past ? ' past' : ''}${s.extra ? ' extra' : ''}${
@@ -693,7 +694,7 @@ function generalBoard(c) {
     ${campaignHead(c)}
     <div class="gboard">${cols}</div>
     ${c.orphaned ? `<div class="sumline">
-      <span class="off">${c.orphaned} פוסטים במדיות שהוסרו מהקמפיין</span> —
+      <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} במדיות שהוסרו מהקמפיין</span> —
       נשמרים ולא משובצים. החזרת המדיה לקמפיין מחזירה אותם.</div>` : ''}
     <div class="sumline">
       כל עמודה היא מדיה, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.

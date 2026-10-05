@@ -198,13 +198,16 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
       `select ch.name, count(*)::int as n
          from content_items ci join channels ch on ch.id = ci.slot_channel_id
         where ci.campaign_id = $1 and not (ci.slot_channel_id = any($2::int[]))
+          -- רק מדיות שיורדות עכשיו; מה שכבר הוסר קודם לא חוזר באזהרה
+          and ci.slot_channel_id in (select channel_id from campaign_channels where campaign_id = $1)
         group by ch.name order by ch.name`,
       [before.id, keep]);
     if (orphans.length) {
       const total = orphans.reduce((sum, o) => sum + o.n, 0);
       const message =
-        `ב${orphans.map((o) => `${o.name} (${o.n})`).join(', ')} יש ${total} פוסטים של הקמפיין. ` +
-        'אחרי ההסרה הם נשמרים אבל לא ישובצו יותר; מה שכבר בלוח נשאר. ' +
+        `למדיות שיורדות מהקמפיין יש ${total === 1 ? 'פוסט אחד' : `${total} פוסטים`}: ` +
+        `${orphans.map((o) => `${o.name} (${o.n})`).join(', ')}. ` +
+        'אחרי ההסרה הפוסטים נשמרים אבל לא ישובצו יותר; מה שכבר בלוח נשאר. ' +
         'החזרת המדיה לקמפיין מחזירה אותם.';
       return res.status(409).json({
         error: message, needs_confirm: true, warning: { message, orphans },
