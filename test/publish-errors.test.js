@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { friendlyPublishError } from '../src/publish/errors.js';
 import { HubMailError } from '../src/hub-mail.js';
 import {
-  STUCK_NEWSLETTER_ERROR, STUCK_SOCIAL_ERROR, stuckPublishingError,
+  STUCK_NEWSLETTER_CAP_ERROR, STUCK_NEWSLETTER_ERROR, STUCK_SOCIAL_ERROR, stuckPublishingError,
 } from '../src/publish/runner.js';
 
 const graphErr = (message, code, subcode) => Object.assign(new Error(message), { code, subcode });
@@ -104,4 +104,15 @@ test('stuckPublishingError — רשתות אחרי 30 דקות, ניוזלטר �
   assert.equal(stuckPublishingError({ platform: 'newsletter', started: ago(40) }, now), null);
   assert.equal(stuckPublishingError({ platform: 'newsletter', started: ago(25 * 60) }, now), STUCK_NEWSLETTER_ERROR);
   assert.equal(stuckPublishingError({ platform: 'facebook', started: null }, now), null);
+});
+
+test('stuckPublishingError — ניוזלטר שה-HUB עוד שולח נשאר עד 72 שעות; לא ענה — כשל אחרי יממה', () => {
+  const now = new Date('2026-10-05T12:00:00Z');
+  const hoursAgo = (h) => new Date(now.getTime() - h * 3600000).toISOString();
+  const nl = (h, hub) => stuckPublishingError({ platform: 'newsletter', started: hoursAgo(h), hub }, now);
+  assert.equal(nl(30, 'active'), null);
+  assert.equal(nl(30, 'unreachable'), STUCK_NEWSLETTER_ERROR);
+  assert.equal(nl(30, null), STUCK_NEWSLETTER_ERROR); // לא נבדק (אין external_id / HUB לא מוגדר)
+  assert.equal(nl(73, 'active'), STUCK_NEWSLETTER_CAP_ERROR);
+  assert.equal(nl(10, 'unreachable'), null);
 });
