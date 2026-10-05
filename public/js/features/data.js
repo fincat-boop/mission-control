@@ -1,7 +1,9 @@
-import { epColor, state } from '../core/state.js';
-import { KIND_HE, KIND_VAR, hhmm, ymd } from '../core/format.js';
-import { $, $$, esc, run } from '../core/dom.js';
+import { can, epColor, state } from '../core/state.js';
+import { KIND_HE, KIND_VAR, fmtDate, hhmm, ymd } from '../core/format.js';
+import { $, $$, esc, run, toast } from '../core/dom.js';
 import { api } from '../core/api.js';
+import { confirmDialog } from '../core/confirm.js';
+import { goToTab } from '../ui/refresh.js';
 import { openPostPreview } from '../ui/postDialog.js';
 
 /* ========================= נתונים וסטטיסטיקה ========================= */
@@ -32,16 +34,262 @@ export async function renderData() {
   }
 
   const qs = `?from=${from}&to=${to}`;
-  const [stats, activity, perf] = await Promise.all([
+  const [stats, activity, perf, entry] = await Promise.all([
     api(`/stats${qs}`),
     api(`/activity${qs}${state.dataVia ? `&via=${state.dataVia}` : ''}&limit=200`),
     api(`/performance${qs}`),
+    api(`/results${qs}${resultsAll ? '&all=1' : ''}`),
   ]);
 
   $('#data').innerHTML =
-    dataToolbar(stats.period) + statCards(stats) + statTables(stats)
-    + performancePanel(perf) + activityPanel(activity);
+    dataToolbar(stats.period) + resultsPanel(entry) + statCards(stats) + statTables(stats)
+    + `<div id="perfSec">${performancePanel(perf)}</div>` + activityPanel(activity);
   wireData();
+  restoreDirty();
+}
+
+/* ---------- תוצאות לעדכון: הזנה מרוכזת ---------- */
+
+/** השדות בכל שורה, לפי סדר העמודות (וסדר המעבר ב-Enter) */
+const RES_FIELDS = ['reach', 'engagement', 'clicks', 'leads', 'note'];
+
+/**
+ * שורות ששונו ועוד לא נשמרו: post_id -> הערכים כמו שהוקלדו (מחרוזות).
+ * חי מחוץ ל-DOM, כדי שרינדור מחדש של הטאב (סגירת חלון פוסט, רענון)
+ * לא ימחק מה שהוקלד — הערכים נשתלים בחזרה בשורות שעדיין מוצגות.
+ */
+const dirty = new Map();
+
+/** "כולל פוסטים שכבר נמדדו" — ברירת מחדל: רק מה שעוד מחכה */
+let resultsAll = false;
+
+const isMeasuredRow = (r) => ['reach', 'engagement', 'clicks', 'leads'].some((m) => r[m] != null);
+
+function resultRow(p, editable) {
+  const dis = editable ? '' : ' disabled';
+  const num = (f) => `<td class="resnum"><input type="number" min="0" step="1" inputmode="numeric"
+      data-f="${f}" data-orig="${p[f] ?? ''}" value="${p[f] ?? ''}"${dis}></td>`;
+  const cls = p.has_results && isMeasuredRow(p) ? ' class="measured"' : '';
+  return `<tr data-res-row="${p.id}" data-had="${p.has_results ? 1 : 0}"${cls}>
+    <td class="when">${esc(fmtDate(ymd(new Date(p.published_at))))}</td>
+    <td>${esc(p.channel_name ?? '—')}</td>
+    <td>${esc(p.endpoint_name ?? '—')}</td>
+    <td class="restitle"><button type="button" class="linkbtn" data-open-post="${p.id}">${esc(p.title)}</button>
+      <div class="reserr" hidden></div></td>
+    ${num('reach')}${num('engagement')}${num('clicks')}${num('leads')}
+    <td class="resnote"><input type="text" data-f="note" data-orig="${esc(p.note ?? '')}"
+      value="${esc(p.note ?? '')}" placeholder="הערה"${dis}></td>
+  </tr>`;
+}
+
+function resultsPanel(entry) {
+  const editable = can('content');
+  const list = entry.posts;
+  const head = `<h2>תוצאות לעדכון (<span id="resPending">${entry.pending}</span>)
+      <label class="restoggle"><input type="checkbox" id="resAll"${resultsAll ? ' checked' : ''}>
+        כולל פוסטים שכבר נמדדו</label></h2>`;
+
+  if (!list.length) {
+    const none = entry.published === 0;
+    const msg = none
+      ? 'אין פוסטים שפורסמו בתקופה הזו. פוסט מגיע לכאן אחרי שמסמנים אותו "פורסם" בלוח.'
+      : 'כל הפוסטים שפורסמו בתקופה הזו כבר נמדדו.';
+    const btn = none
+      ? '<button class="btn small" data-goto="board">ללוח</button>'
+      : '<button class="btn small" data-res-all="1">הצג גם את מה שנמדד</button>';
+    return `<div class="subsec" id="resultsSec">${head}
+      <div class="panel"><div class="empty">${msg} ${btn}</div></div></div>`;
+  }
+
+  return `<div class="subsec" id="resultsSec">${head}
+    <p class="sechint">שדה ריק = לא נמדד (לא נספר בחישוב). 0 = נמדד ויצא אפס.
+      Enter עובר לאותו שדה בשורה הבאה.</p>
+    <div class="panel restable-wrap"><table class="stattable restable">
+      <thead><tr><th>פורסם</th><th>ערוץ</th><th>נקודת קצה</th><th>פוסט</th>
+        <th>חשיפות</th><th>מעורבות</th><th>קליקים</th><th>לידים</th><th>הערה</th></tr></thead>
+      <tbody>${list.map((p) => resultRow(p, editable)).join('')}</tbody>
+    </table></div>
+    ${editable
+      ? `<div class="resbar"><button class="btn primary" id="resSave" disabled>שמור הכול (0)</button>
+          <span class="resmsg" id="resMsg"></span></div>`
+      : '<p class="sechint">אין לך הרשאה להזין תוצאות (נדרשת הרשאת "תוכן ושיבוץ").</p>'}
+  </div>`;
+}
+
+/** הערכים הנוכחיים בשורה, ואם משהו בהם שונה ממה שנטען */
+function readRow(tr) {
+  const vals = {};
+  let changed = false;
+  let bad = false;
+  for (const f of RES_FIELDS) {
+    const inp = tr.querySelector(`[data-f="${f}"]`);
+    vals[f] = inp.value;
+    if (inp.value !== inp.dataset.orig) changed = true;
+    if (inp.validity?.badInput) bad = true;          // "abc" בשדה מספר — הערך נקרא כריק
+  }
+  return { vals, changed, bad };
+}
+
+function paintSaveButton() {
+  const btn = $('#resSave');
+  if (!btn) return;
+  btn.disabled = dirty.size === 0;
+  btn.textContent = `שמור הכול (${dirty.size})`;
+}
+
+function markRow(tr) {
+  const id = Number(tr.dataset.resRow);
+  const { vals, changed } = readRow(tr);
+  if (changed) dirty.set(id, vals); else dirty.delete(id);
+  tr.classList.toggle('dirty', changed);
+  tr.classList.remove('err', 'saved');
+  tr.querySelector('.reserr').hidden = true;
+  paintSaveButton();
+}
+
+/** אחרי רינדור מחדש: הערכים שהוקלדו חוזרים לשורות שעדיין מוצגות */
+function restoreDirty() {
+  for (const [id, vals] of [...dirty]) {
+    const tr = $(`#data [data-res-row="${id}"]`);
+    if (!tr) { dirty.delete(id); continue; }
+    for (const f of RES_FIELDS) tr.querySelector(`[data-f="${f}"]`).value = vals[f];
+    markRow(tr);
+  }
+  paintSaveButton();
+}
+
+function showRowError(id, msg) {
+  const tr = $(`#data [data-res-row="${id}"]`);
+  if (!tr) return;
+  tr.classList.add('err');
+  const box = tr.querySelector('.reserr');
+  box.textContent = msg;
+  box.hidden = false;
+}
+
+async function saveResults() {
+  if (!dirty.size) return;
+  // קלט שהדפדפן לא הצליח לקרוא כמספר — עוצרים כאן, אחרת הוא נשלח כריק
+  const unreadable = [...dirty.keys()].filter((id) =>
+    readRow($(`#data [data-res-row="${id}"]`)).bad);
+  if (unreadable.length) {
+    unreadable.forEach((id) => showRowError(id, 'יש כאן ערך שאינו מספר'));
+    toast('יש ערכים שאינם מספרים — שום דבר לא נשמר', true);
+    return;
+  }
+
+  const items = [...dirty].map(([post_id, v]) => ({ post_id, ...v }));
+  const btn = $('#resSave');
+  btn.disabled = true;
+  btn.textContent = 'שומר…';
+  let out;
+  try {
+    out = await api('/results', { method: 'PUT', body: { items } });
+  } catch (e) {
+    // הכול או כלום: השרת מחזיר שגיאה לכל שורה, ושום שורה לא נשמרה
+    for (const er of e.payload?.errors ?? []) {
+      if (er.index >= 0) showRowError(items[er.index].post_id, er.error);
+    }
+    paintSaveButton();
+    throw e;
+  }
+
+  // עדכון במקום — בלי רינדור של הטאב, כדי שהגלילה והמיקום יישארו
+  for (const r of out.results) {
+    const tr = $(`#data [data-res-row="${r.post_id}"]`);
+    if (!tr) continue;
+    for (const f of RES_FIELDS) {
+      const inp = tr.querySelector(`[data-f="${f}"]`);
+      const v = r.cleared ? '' : String(r[f] ?? '');
+      inp.value = v;
+      inp.dataset.orig = v;
+    }
+    tr.dataset.had = r.cleared ? '0' : '1';
+    tr.classList.remove('dirty', 'err');
+    tr.classList.add('saved');
+    tr.classList.toggle('measured', !r.cleared && isMeasuredRow(r));
+    dirty.delete(r.post_id);
+  }
+  $('#resPending').textContent = $$('#data [data-res-row][data-had="0"]').length;
+  paintSaveButton();
+  $('#resMsg').textContent = out.cleared
+    ? `נשמרו ${out.saved} · נוקו ${out.cleared}` : `נשמרו ${out.saved}`;
+  toast(`התוצאות נשמרו (${out.saved + out.cleared})`);
+  await refreshBelow();
+}
+
+/** מה שמחושב מהתוצאות — מתעדכן אחרי שמירה בלי לגעת בטבלת ההזנה */
+async function refreshBelow() {
+  const { from, to } = dataRange();
+  const perf = await api(`/performance?from=${from}&to=${to}`);
+  $('#perfSec').innerHTML = performancePanel(perf);
+}
+
+/** יציאה מהטאב / שינוי תקופה כשיש שורות שלא נשמרו */
+async function confirmDiscard() {
+  if (!dirty.size) return true;
+  const ok = await confirmDialog(
+    `יש ${dirty.size} שורות עם תוצאות שלא נשמרו. להמשיך בלי לשמור?`,
+    { okLabel: 'להמשיך בלי לשמור', danger: true });
+  if (ok) dirty.clear();
+  return ok;
+}
+
+/**
+ * הגנה על עבודה: מעבר לטאב אחר (או לפעמון) בזמן שיש שורות שלא נשמרו
+ * שואל קודם. מאזין capture על המסמך — נתפס לפני הניווט של app.js — ונרשם
+ * פעם אחת בלבד. סגירת הדף/רענון: beforeunload של הדפדפן.
+ */
+let guardWired = false;
+function wireLeaveGuard() {
+  if (guardWired) return;
+  guardWired = true;
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest?.('.tab, #btnAlerts');
+    if (!el || !dirty.size || state.tab !== 'data') return;
+    const target = el.matches('.tab') ? el.dataset.t : 'tasks';
+    if (target === 'data') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    run(async () => { if (await confirmDiscard()) await goToTab(target); })();
+  }, true);
+  window.addEventListener('beforeunload', (e) => {
+    if (!dirty.size) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+}
+
+function wireResults() {
+  wireLeaveGuard();
+  const table = $('#data .restable');
+  table?.addEventListener('input', (e) => {
+    const tr = e.target.closest('[data-res-row]');
+    if (tr && e.target.dataset.f) markRow(tr);
+  });
+  // Enter: לאותו שדה בשורה הבאה (Shift+Enter — בקודמת), כמו בגיליון
+  table?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.dataset?.f) return;
+    e.preventDefault();
+    const tr = e.target.closest('[data-res-row]');
+    const next = e.shiftKey ? tr.previousElementSibling : tr.nextElementSibling;
+    const inp = next?.querySelector(`[data-f="${e.target.dataset.f}"]`);
+    if (inp) { inp.focus(); inp.select?.(); }
+  });
+  $('#resSave')?.addEventListener('click', run(saveResults));
+  $('#resAll')?.addEventListener('change', run(async (e) => {
+    if (!e.target.checked && !(await confirmDiscard())) { e.target.checked = true; return; }
+    resultsAll = e.target.checked;
+    await renderData();
+  }));
+  $$('#data [data-res-all]').forEach((b) => b.addEventListener('click', run(async () => {
+    resultsAll = true;
+    await renderData();
+  })));
+  $$('#data [data-open-post]').forEach((b) =>
+    b.addEventListener('click', run(() => openPostPreview(b.dataset.openPost))));
+  $$('#data [data-goto]').forEach((b) =>
+    b.addEventListener('click', run(() => goToTab(b.dataset.goto))));
 }
 
 /* ---------- יעילות נמדדת ---------- */
@@ -100,20 +348,7 @@ function performancePanel(p) {
         <div class="empty">עוד אין שילוב אחד עם מספיק מדידות (צריך 3 לפחות לאותו מדיה·יום·שעה).</div>
       </div></div>`;
 
-  const pending = p.pending.length
-    ? `<div class="subsec"><h2>ממתינים להזנת תוצאות</h2><div class="panel">
-        <table class="stattable">
-          <thead><tr><th>פוסט</th><th>מדיה</th><th>נקודת קצה</th><th>פורסם</th><th></th></tr></thead>
-          <tbody>${p.pending.map((x) => `<tr>
-            <td>${esc(x.title)}</td>
-            <td>${esc(x.channel_name ?? '—')}</td>
-            <td>${esc(x.endpoint_name ?? '—')}</td>
-            <td>${esc(ymd(new Date(x.published_at)))}</td>
-            <td><button class="btn small" data-fill-post="${x.id}">הזן</button></td>
-          </tr>`).join('')}</tbody>
-        </table></div></div>`
-    : '';
-
+  // רשימת "ממתינים להזנת תוצאות" שהייתה כאן עברה לטבלת ההזנה בראש הטאב
   return `<div class="subsec"><h2>יעילות נמדדת</h2>
       <p class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px">
         1.00 = ממוצע. הציון מנורמל בתוך כל מדיה ומכווץ לפי גודל המדגם,
@@ -123,8 +358,7 @@ function performancePanel(p) {
     ${table('לפי מדיה', p.channels, 'name')}
     ${table('לפי יום בשבוע', p.days, 'label')}
     ${table('לפי שעה ביום', p.buckets, 'label')}
-    ${combos}
-    ${pending}`;
+    ${combos}`;
 }
 
 function dataToolbar(period) {
@@ -240,7 +474,9 @@ function activityPanel(a) {
 }
 
 function wireData() {
+  wireResults();
   $$('#data [data-period]').forEach((b) => b.addEventListener('click', run(async () => {
+    if (!(await confirmDiscard())) return;
     state.dataPeriod = b.dataset.period;
     await renderData();
   })));
@@ -250,15 +486,9 @@ function wireData() {
   })));
   for (const [id, key] of [['#dFrom', 'dataFrom'], ['#dTo', 'dataTo']]) {
     $(id)?.addEventListener('change', run(async (e) => {
+      if (!(await confirmDiscard())) { e.target.value = state[key] ?? ''; return; }
       state[key] = e.target.value || null;
       await renderData();
     }));
   }
-
-  // "הזן" מרשימת הממתינים — פותח את אותו דיאלוג פוסט, ומרענן בסגירה
-  $$('#data [data-fill-post]').forEach((b) =>
-    b.addEventListener('click', run(async () => {
-      await openPostPreview(b.dataset.fillPost);
-      $('#postDlg').addEventListener('close', run(renderData), { once: true });
-    })));
 }
