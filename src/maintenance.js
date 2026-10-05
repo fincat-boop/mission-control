@@ -103,7 +103,9 @@ export async function cleanupStaleUrgent() {
 export async function suggestContentSwaps() {
   await forEachOrg(async () => {
   const candidates = await rows(
-    `select p.id, p.channel_id, p.endpoint_id, p.scheduled_at, e.name as endpoint_name
+    `select p.id, p.channel_id, p.endpoint_id, p.scheduled_at, e.name as endpoint_name,
+            -- היום המקומי של המועד, לא UTC — "היום" במשימות הוא ישראלי
+            (p.scheduled_at at time zone 'Asia/Jerusalem')::date as due_on
        from posts p
        left join endpoints e on e.id = p.endpoint_id
       where p.status = 'scheduled' and p.content_id is null
@@ -143,7 +145,7 @@ export async function suggestContentSwaps() {
         `הצעה: להחליף תוכן בשיבוץ שמתפרסם בקרוב`,
         `${post.endpoint_name ?? 'ללא נקודת קצה'} עדיין בלי תוכן · הצעה: "${suggestion.title}" ` +
         `(${suggestion.endpoint_name}) · מתפרסם ${new Date(post.scheduled_at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}`,
-        post.id, post.endpoint_id, new Date(post.scheduled_at).toISOString().slice(0, 10),
+        post.id, post.endpoint_id, post.due_on,
         JSON.stringify({
           suggested_content_id: suggestion.content_id,
           suggested_title: suggestion.title,

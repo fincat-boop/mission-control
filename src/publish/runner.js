@@ -286,6 +286,9 @@ export async function publishTickForOrg() {
   await pollNewsletterOutcomes().catch((e) =>
     console.error('בדיקת סטטוס ניוזלטרים נכשלה:', e.message));
 
+  // וואטסאפ נשלח ידנית — המשימה שלו לא תלויה במתג הפרסום האוטומטי
+  await whatsappPrep().catch((e) => console.error('הכנת משימות וואטסאפ נכשלה:', e.message));
+
   const settings = await one('select autopublish_enabled from engine_settings limit 1');
   if (!settings?.autopublish_enabled) return;
 
@@ -311,41 +314,72 @@ export async function publishTickForOrg() {
     }
     await publishOne(id).catch((e) => console.error(`פרסום פוסט #${id} נכשל:`, e.message));
   }
+}
 
-  await whatsappPrep().catch((e) => console.error('הכנת משימות וואטסאפ נכשלה:', e.message));
+export const WA_SUB_READY = 'מעתיקים את הטקסט, שולחים לקבוצה ומסמנים פורסם';
+export const WA_SUB_NOT_READY =
+  'הטקסט לוואטסאפ עוד לא מוכן — משלימים אותו בתוכן, ואז שולחים ומסמנים פורסם';
+
+/**
+ * מה לעשות עם משימת הוואטסאפ של פוסט אחד: 'insert' — אין עדיין משימה;
+ * 'update' — יש משימה פתוחה, אבל מצב המוכנות של הטקסט השתנה מאז שנוצרה
+ * (הכותרת המשנית שלה כבר לא נכונה); null — אין מה לעשות. משימה שנסגרה
+ * לא נפתחת מחדש: פעם אחת לכל פוסט.
+ */
+export function waTaskAction({ ready, task_id, task_done, task_ready }) {
+  if (task_id == null) return 'insert';
+  if (task_done) return null;
+  return task_ready === ready ? null : 'update';
 }
 
 /**
  * וואטסאפ חצי-אוטומטי: קצת לפני הזמן נוצרת משימת "לשלוח בוואטסאפ"
- * דחופה עם הטקסט המוכן ב-meta. פעם אחת לכל פוסט.
+ * דחופה. גם כשהטקסט עוד לא מוכן — אחרת הפוסט פשוט עובר בשקט; אז המשימה
+ * אומרת להשלים אותו קודם. הטקסט להעתקה נשלף חי ב-GET /tasks (copy_text),
+ * כך שתיקון בגרסה אחרי יצירת המשימה מגיע גם לכפתור.
+ * due_on — התאריך המקומי של המועד, לא UTC (פוסט ב-01:00 שייך ליום שלו).
  */
 async function whatsappPrep() {
   const due = await rows(
-    `select p.id, p.title, p.endpoint_id, p.scheduled_at, v.body
+    `select p.id, p.title, p.endpoint_id,
+            (p.scheduled_at at time zone 'Asia/Jerusalem')::date as due_on,
+            coalesce(v.status = 'ready', false) as ready, v.body,
+            t.id as task_id, t.done as task_done,
+            (t.meta->>'wa_ready')::boolean as task_ready
        from posts p
        join channels c on c.id = p.channel_id and c.platform = 'whatsapp'
-       join content_variants v on v.content_id = p.content_id
-            and v.channel_id = p.channel_id and v.status = 'ready'
+       left join content_variants v on v.content_id = p.content_id
+            and v.channel_id = p.channel_id
+       left join lateral (
+         select t.id, t.done, t.meta from tasks t
+          where t.post_id = p.id and t.kind = 'publish' and (t.meta->>'wa_send') = 'true'
+          order by t.done, t.id desc limit 1
+       ) t on true
       where p.status = 'scheduled'
         and p.scheduled_at between now() - interval '24 hours'
-                               and now() + ($1 || ' minutes')::interval
-        and not exists (
-          select 1 from tasks t
-           where t.post_id = p.id and t.kind = 'publish' and (t.meta->>'wa_send') = 'true'
-        )`,
+                               and now() + ($1 || ' minutes')::interval`,
     [WA_AHEAD_MINUTES]
   );
 
   for (const p of due) {
-    await query(
-      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta)
-       values ($1,$2,'publish',$3,$4,true,$5,$6)`,
-      [`לשלוח בוואטסאפ: ${p.title}`,
-       `הטקסט מוכן — פותחים את הפוסט בלוח, מעתיקים ושולחים לקבוצה, ואז מסמנים "פורסם"`,
-       p.id, p.endpoint_id, new Date(p.scheduled_at).toISOString().slice(0, 10),
-       JSON.stringify({ wa_send: true, body: p.body })]
-    );
-    console.log(`נוצרה משימת וואטסאפ לפוסט #${p.id} ("${p.title}")`);
+    const action = waTaskAction(p);
+    const subtitle = p.ready ? WA_SUB_READY : WA_SUB_NOT_READY;
+    if (action === 'insert') {
+      await query(
+        `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta)
+         values ($1,$2,'publish',$3,$4,true,$5,$6)`,
+        [`לשלוח בוואטסאפ: ${p.title}`, subtitle, p.id, p.endpoint_id, p.due_on,
+         JSON.stringify({ wa_send: true, wa_ready: p.ready, body: p.ready ? p.body : null })]
+      );
+      console.log(`נוצרה משימת וואטסאפ לפוסט #${p.id} ("${p.title}")${p.ready ? '' : ' — הטקסט עוד לא מוכן'}`);
+    } else if (action === 'update') {
+      await query(
+        `update tasks set subtitle = $2,
+                meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('wa_ready', $3::boolean)
+          where id = $1 and done = false`,
+        [p.task_id, subtitle, p.ready]
+      );
+    }
   }
 }
 
