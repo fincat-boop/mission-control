@@ -44,6 +44,7 @@ async function runCli() {
 
   // קובץ לכל asset, בשם שנגזר מהמזהה כדי שהשחזור ימצא אותו
   let assetBytes = 0;
+  let assetFiles = 0;
   if (dump.tables.content_assets.length) {
     const assetDir = join(outDir, `assets-${stamp}`);
     await mkdir(assetDir, { recursive: true });
@@ -54,6 +55,7 @@ async function runCli() {
       if (!row?.data) continue;                  // נמחק בינתיים
       await writeFile(join(assetDir, String(a.id)), row.data);
       assetBytes += row.data.length;
+      assetFiles += 1;
     }
     dump.assets_dir = `assets-${stamp}`;
   }
@@ -66,10 +68,12 @@ async function runCli() {
     if (r.length) console.log(`  ${t}: ${r.length}`);
   }
   console.log(`\nנשמר: ${file}`);
-  if (assetBytes) {
-    console.log(`קבצים מצורפים: ${dump.tables.content_assets.length} · ` +
+  if (assetFiles) {
+    console.log(`קבצים מצורפים מהמסד: ${assetFiles} · ` +
                 `${(assetBytes / 1024 / 1024).toFixed(1)}MB בתיקייה ${dump.assets_dir}`);
   }
+  const inR2 = dump.tables.content_assets.filter((a) => a.storage_key).length;
+  if (inR2) console.log(`קבצים ב-bucket המדיה (רק השורה בגיבוי): ${inR2}`);
   console.log('הקובץ מכיל hash-ים של סיסמאות. לא לשתף.');
 
   await pool.end();

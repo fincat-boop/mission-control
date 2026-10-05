@@ -39,7 +39,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       // https: — תצוגות המייל (ממלא התבניות והתצוגה החיה) מציגות תבניות
       // עם תמונות מדומיינים חיצוניים; iframe שנכתב מהדף יורש את ה-CSP הזה.
-      imgSrc: ["'self'", 'https:', 'data:'],
+      imgSrc: ["'self'", 'https:', 'data:', ...(mediaOrigin ? [mediaOrigin] : [])],
       // העלאה ישירה מהדפדפן ל-R2 (presigned PUT) — רק כשאחסון המדיה מוגדר
       connectSrc: ["'self'", ...(mediaReady() && r2Host() ? [`https://${r2Host()}`] : [])],
       // וידאו מוגש מהכתובת הציבורית של ה-bucket (GET /api/assets/:id מפנה לשם)
