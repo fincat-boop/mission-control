@@ -65,7 +65,7 @@ r.get('/setup-status', wrap(async (_req, res) => {
 r.get('/backups', requirePerm('settings'), wrap(async (req, res) => {
   // מצב השכבות גלובלי — רק לארגון הפלטפורמה (src/platform.js)
   const list = await rows('select id, created_at, row_count from backups order by created_at desc');
-  const layers = await isPlatformOrg(req.org) ? readBackupLayers() : [];
+  const layers = isPlatformOrg(req.org) ? await readBackupLayers() : [];
   res.json({ backups: list, layers });
 }));
 
