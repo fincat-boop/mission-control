@@ -235,6 +235,11 @@ function channelItem(c, ro, conn, hubReady) {
   </details>`;
 }
 
+// מה הרשאת approve פותחת בפועל: אישור לפרסום אוטומטי (גם מרוכז לשבוע),
+// פרסום מיידי, ומבצע דחוף שנכנס ללוח בלי להמתין לאישור (routes/publish.js,
+// routes/board.js, routes/engine.js)
+const APPROVE_HINT = 'אישור פוסטים לפרסום אוטומטי ופרסום מיידי לרשתות, וגם מבצע דחוף בלי המתנה לאישור';
+
 function systemGroup(users, settings, backups) {
   const rows = users.map((u) => {
     const cell = (perm) => u.is_owner
@@ -264,7 +269,7 @@ function systemGroup(users, settings, backups) {
         <div class="ibody">
           <table class="utable">
             <thead><tr><th>משתמש</th><th>תוכן ושיבוץ</th><th>הגדרות</th>
-              <th>אישור דחוף־דורס</th><th>ניהול משתמשים</th><th></th></tr></thead>
+              <th title="${esc(APPROVE_HINT)}">אישור פרסום</th><th>ניהול משתמשים</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
           <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
@@ -578,7 +583,7 @@ function wireManage(ro) {
       { name: 'email', label: 'אימייל (חשבון Google — איתו הוא נכנס)', type: 'email' },
       { name: 'perm_content', label: 'תוכן ושיבוץ', type: 'checkbox', value: true },
       { name: 'perm_settings', label: 'הגדרות', type: 'checkbox' },
-      { name: 'perm_approve', label: 'אישור דחוף־דורס', type: 'checkbox' },
+      { name: 'perm_approve', label: `אישור פרסום — ${APPROVE_HINT}`, type: 'checkbox' },
       { name: 'perm_users', label: 'ניהול משתמשים', type: 'checkbox' },
     ],
     onSave: async (v) => { await api('/users', { method: 'POST', body: v }); await reload(); },
