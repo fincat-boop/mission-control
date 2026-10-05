@@ -16,6 +16,7 @@ import {
   releaseLinks, syncFrom, unlink,
 } from '../links.js';
 import { contentBlocker, readyRejection } from '../publish/readiness.js';
+import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
 
 const r = Router();
 
@@ -49,6 +50,12 @@ async function readyError(contentId, channelId, variant, { assets } = {}) {
   const reason = contentBlocker({ platform: ch.platform, variant, assets: files });
   return reason ? readyRejection(reason) : null;
 }
+
+/* ---------- נעילה אופטימית של גרסה (src/variant-lock.js) ---------- */
+
+/** 409 עם הגרסה השמורה — הטופס מציג אותה ומשאיר את הטקסט של המשתמש להעתקה */
+const staleReply = (res, current) =>
+  res.status(409).json({ error: STALE_VARIANT, stale: true, current: current ?? null });
 
 /** מקום במשבצת: מספר שלם 1–1000 */
 const validSlot = (n) => Number.isInteger(Number(n)) && Number(n) >= 1 && Number(n) <= 1000;
@@ -85,9 +92,13 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
   const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
 
   const before = await one(
-    `select body, status, meta from content_variants
+    `select id, body, status, meta, updated_at from content_variants
       where content_id = $1 and channel_id = $2 for update`,
     [req.params.id, req.params.channelId]);
+  // נעילה אופטימית — רק כשהטופס שלח מול מה הוא נפתח (העוזר וקריאות ישנות לא)
+  if ('base_updated_at' in b && staleVariant(before, b.base_updated_at)) {
+    return staleReply(res, before);
+  }
   // "מוכן" נבדק מול התוכן שיישמר בפועל (מה שלא נשלח — נשאר מהקיים)
   if (status === 'ready') {
     const err = await readyError(req.params.id, req.params.channelId, {
@@ -426,8 +437,10 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   // תוכן כמו בעריכת גרסה
   if (current.slot_channel_id && !leavingSlot && (b.body !== undefined || b.status !== undefined)) {
     const v = await one(
-      'select body, status, meta from content_variants where content_id = $1 and channel_id = $2',
+      `select id, body, status, meta, updated_at from content_variants
+        where content_id = $1 and channel_id = $2 for update`,
       [current.id, current.slot_channel_id]);
+    if ('base_updated_at' in b && staleVariant(v, b.base_updated_at)) return staleReply(res, v);
     const status = ['ready', 'draft'].includes(b.status) ? b.status : (v?.status ?? 'draft');
     if (status === 'ready') {
       const err = await readyError(current.id, current.slot_channel_id, {

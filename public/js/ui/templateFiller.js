@@ -1,4 +1,5 @@
-import { $, esc, toast } from '../core/dom.js';
+import { esc, toast } from '../core/dom.js';
+import { confirmDialog } from '../core/confirm.js';
 
 /**
  * ממלא התבניות — פורט נאמן של TemplateFieldsEditor מה-HUB לאפליקציה הזו:
@@ -119,9 +120,11 @@ function ensureDialog() {
  * @param {{html:string, fields:Array<{name:string,label?:string,multiline:boolean,max?:number}>,
  *          values:Record<string,string>, title?:string,
  *          subject?:string, readyButton?:boolean,
- *          onSave:(values:Record<string,string>, extra:{subject:string, ready:boolean})=>void}} spec
+ *          onSave:(values:Record<string,string>, extra:{subject:string, ready:boolean})=>Promise<void>|void}} spec
  * subject !== undefined — שדה נושא בראש הרשימה; readyButton — כפתור
  * "שמור וסמן מוכן" לצד השמירה הרגילה.
+ * onSave — החלונית נשארת פתוחה עד שהשמירה מצליחה; שגיאה (throw) מוצגת
+ * כהודעת שגיאה והמילוי נשאר כמו שהוא.
  */
 export function openTemplateFiller({ html, fields, values, title = 'מילוי תוכן', subject, readyButton = false, onSave }) {
   const dlg = ensureDialog();
@@ -231,17 +234,32 @@ export function openTemplateFiller({ html, fields, values, title = 'מילוי �
     values: { ...current },
     subject: dlg.querySelector('#fl__subject')?.value?.trim() ?? '',
   });
-  dlg.querySelector('#fillerCancel').addEventListener('click', () => dlg.close());
-  dlg.querySelector('#fillerSave').addEventListener('click', () => {
-    const { values: v, subject: subj } = collect();
-    onSave(v, { subject: subj, ready: false });
+  // מה שהיה בפתיחה — "ביטול" על מילוי ששונה שואל קודם (לא מאבדים עבודה)
+  const initial = JSON.stringify(collect());
+  const dirty = () => JSON.stringify(collect()) !== initial;
+  const close = async () => {
+    if (dirty() && !(await confirmDialog('יש שינויים שלא נשמרו — לסגור?',
+      { okLabel: 'סגור בלי לשמור', danger: true }))) return;
     dlg.close();
-  });
-  dlg.querySelector('#fillerReady')?.addEventListener('click', () => {
+  };
+  dlg.oncancel = (e) => { e.preventDefault(); close(); };
+  dlg.querySelector('#fillerCancel').addEventListener('click', close);
+
+  const actionBtns = [...dlg.querySelectorAll('.filler-actions .btn')];
+  const save = async (ready) => {
     const { values: v, subject: subj } = collect();
-    onSave(v, { subject: subj, ready: true });
-    dlg.close();
-  });
+    actionBtns.forEach((b) => { b.disabled = true; });
+    try {
+      await onSave(v, { subject: subj, ready });
+      dlg.close();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      actionBtns.forEach((b) => { b.disabled = false; });
+    }
+  };
+  dlg.querySelector('#fillerSave').addEventListener('click', () => save(false));
+  dlg.querySelector('#fillerReady')?.addEventListener('click', () => save(true));
 
   dlg.showModal();
   paint();

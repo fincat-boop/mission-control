@@ -613,3 +613,48 @@ begin
     end;
   end loop;
 end $$;
+
+-- ========================= גל 4: הגנה על עבודה =========================
+-- נעילה אופטימית לגרסה: הטופס שולח את updated_at שהוא נפתח איתו, והשרת דוחה
+-- (409) שמירה על גרסה שמישהו אחר שמר בינתיים. העמודה נוצרת עם now() לכל
+-- השורות הקיימות. הטריגר מקדם אותה רק כשהתוכן עצמו משתנה (טקסט, מצב, meta)
+-- — ensureVariant (תליית קובץ על גרסה) לא הופך גרסה פתוחה בטופס ל"ישנה".
+alter table content_variants
+  add column if not exists updated_at timestamptz not null default now();
+create or replace function touch_content_variant() returns trigger
+language plpgsql as $$
+begin
+  if (new.body, new.status, new.meta) is distinct from (old.body, old.status, old.meta) then
+    new.updated_at := now();
+  end if;
+  return new;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgname = 'content_variants_touch') then
+    create trigger content_variants_touch before update on content_variants
+      for each row execute function touch_content_variant();
+  end if;
+end $$;
+
+-- אותו דבר לפריט התוכן (כותרת, סוג, מיקום) — "בטל ייבוא" מוחק רק פריט
+-- שאיש לא נגע בו מאז שנוצר (updated_at = created_at).
+alter table content_items
+  add column if not exists updated_at timestamptz not null default now();
+create or replace function touch_content_item() returns trigger
+language plpgsql as $$
+begin
+  if (new.title, new.kind, new.body, new.campaign_id, new.sort_order, new.evergreen,
+      new.reuse_after_days, new.slot_channel_id, new.linked_to_id)
+     is distinct from
+     (old.title, old.kind, old.body, old.campaign_id, old.sort_order, old.evergreen,
+      old.reuse_after_days, old.slot_channel_id, old.linked_to_id) then
+    new.updated_at := now();
+  end if;
+  return new;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgname = 'content_items_touch') then
+    create trigger content_items_touch before update on content_items
+      for each row execute function touch_content_item();
+  end if;
+end $$;

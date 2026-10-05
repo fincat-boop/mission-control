@@ -1,14 +1,15 @@
 import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
-import { $, $$, copyLinkButton, esc, run, toast, wireCopyLinks } from '../core/dom.js';
+import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { openTemplateFiller } from '../ui/templateFiller.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
-import { openGeneric } from '../ui/dialog.js';
+import { markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
 import { acceptAttr, progressList, uploadBulk, uploadFiles } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
+import { engineToast } from '../ui/engineDialog.js';
 
 /* ========================= ניוזלטר: תבנית המילוי ========================= */
 
@@ -451,6 +452,7 @@ function openChannelPicker(campaign, reload) {
   if (!can('settings')) return toast('אין לך הרשאה לשנות את המדיות', true);
 
   openGeneric({
+    guardDirty: true,
     title: `מדיות — ${campaign.name}`,
     fields: [
       { name: 'channel_ids', label: 'על אילו מדיות הקמפיין יושב', type: 'multicheck',
@@ -486,6 +488,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       : campaign?.starts_on && structure !== 'general' ? 'open' : '1m');
 
   openGeneric({
+    guardDirty: true,
     title: duplicate ? `שכפול: ${source.name}` : campaign ? 'עריכת קמפיין' : 'קמפיין חדש',
     saveLabel: duplicate ? 'שכפל' : undefined,
     fields: [
@@ -935,8 +938,11 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   // אפשר לקשר כשיש בקמפיין עוד מדיה שאינה ניוזלטר
   const canLink = item && !mail && can('content') && campaign.channels.some((ch) =>
     ch.id !== channelId && ch.platform !== 'newsletter');
+  // הגרסה שהטופס נפתח איתה — השרת דוחה שמירה מעל גרסה שמישהו שמר בינתיים
+  let base = v?.updated_at ?? null;
 
   openGeneric({
+    guardDirty: true,
     title: `${channel?.name ?? ''} · פוסט ${index}${item ? '' : ' — חדש'}`,
     saveLabel: mail ? 'שמור והמשך לעריכת המייל' : undefined,
     fields: [
@@ -964,11 +970,22 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         ? { title: val.title, kind: val.kind, week: state.week }
         : { title: val.title, kind: val.kind, body: val.body ?? '',
             status: val.status, week: state.week };
-      const saved = item
-        ? (await api(`/content/${item.id}`, { method: 'PATCH', body })).content
-        : (await api('/content', { method: 'POST', body: {
-          ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
-        } })).content;
+      if (item && !mail) body.base_updated_at = base;
+      let saved;
+      try {
+        saved = item
+          ? (await api(`/content/${item.id}`, { method: 'PATCH', body })).content
+          : (await api('/content', { method: 'POST', body: {
+            ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
+          } })).content;
+      } catch (e) {
+        return staleReload(e, val.body, (cur) => {
+          $('#gen_body').value = cur?.body ?? '';
+          const st = cur?.status === 'ready' ? 'ready' : 'draft';
+          $(`[name="gen_status"][value="${st}"]`).checked = true;
+          base = cur?.updated_at ?? null;
+        });
+      }
 
       const picked = $('#gen___files')?.files;
       if (picked?.length) {
@@ -1022,6 +1039,40 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   });
 }
 
+/* ---------- גרסה שמישהו אחר שמר בינתיים (409, נעילה אופטימית) ---------- */
+
+/** הטקסט של המשתמש, בתיבה לקריאה בלבד בראש הטופס — להעתקה אחרי טעינה מחדש */
+function showMine(text, root = $('#genBody')) {
+  root.querySelector('.stalebox')?.remove();
+  if (!String(text ?? '').trim()) return;
+  const box = document.createElement('div');
+  box.className = 'stalebox';
+  box.innerHTML = `<div class="sb-head"><b>הטקסט שלך — לא נשמר</b>
+    <button type="button" class="btn small">העתק</button></div><textarea readonly></textarea>`;
+  box.querySelector('textarea').value = text;
+  box.querySelector('button').addEventListener('click', run(async () => {
+    await copyText(text, box);
+    toast('הטקסט הועתק');
+  }));
+  root.prepend(box);
+}
+
+/**
+ * 409 של גרסה ישנה: מישהו אחר שמר אותה מאז שהטופס נפתח. מציעים לטעון את
+ * השמורה (load מקבל אותה), והטקסט של המשתמש נשאר בתיבה להעתקה. שגיאה אחרת
+ * עוברת הלאה. מחזיר {keepOpen} — הטופס לא נסגר.
+ */
+async function staleReload(e, mine, load) {
+  if (e.status !== 409 || !e.payload?.stale) throw e;
+  const ok = await confirmDialog(`${e.message}.\nהטקסט שלך יישאר מוצג בחלון, להעתקה.`,
+    { okLabel: 'טען את הגרסה השמורה' });
+  if (!ok) return { keepOpen: true, message: 'לא נשמר — הגרסה השתנתה מאז שנפתחה.' };
+  load(e.payload.current);
+  showMine(mine);
+  markGenericClean();
+  return { keepOpen: true, message: 'הגרסה השמורה נטענה — הטקסט שלך מוצג למעלה להעתקה.' };
+}
+
 /**
  * ראש טופס המשבצת כשהיא מקושרת: עם מי, מה זה אומר, וניתוק לכל משבצת.
  * ניתוק של עוקבת = היא בלבד; כשהטופס הוא של עוקבת, השורה של המקור מנתקת
@@ -1046,6 +1097,7 @@ function linkInfo(item, partners) {
 /** העלאה מרוכזת לעמודה של מדיה אחת: כל קובץ ממלא את הפוסט הפנוי הבא שלה */
 function openChannelBulk(campaign, channel, reload) {
   openGeneric({
+    guardDirty: true,
     title: `העלאה מרוכזת · ${channel.name}`,
     saveLabel: 'העלה',
     fields: [
@@ -1170,6 +1222,7 @@ async function deleteCampaign(campaign, reload) {
 /** העלאה מרוכזת: כל קובץ הופך לזווית, ונפתחות לה טיוטות לכל מדיה של הקמפיין */
 function openBulkUpload(campaign, reload) {
   openGeneric({
+    guardDirty: true,
     title: `העלאה מרוכזת · ${campaign.name}`,
     saveLabel: 'העלה',
     fields: [
@@ -1206,6 +1259,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
   const existingFiles = (item?.assets ?? []).map((a) => assetLine(a, true, false)).join('');
 
   openGeneric({
+    guardDirty: true,
     title: (item ? `זווית ${item.sort_order}` : `זווית חדשה${slot ? ` — מקום ${slot}` : ''}`)
       + (owner ? ` · ${owner.endpoint_name}` : ''),
     fields: [
@@ -1312,28 +1366,33 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
       subject: vMeta.subject ?? '',
       readyButton: v?.status !== 'ready',
       title: `מילוי תוכן — ${item.title}`,
-      onSave: (vals, { subject, ready }) => {
+      // החלונית נשארת פתוחה עד שהשמירה מצליחה (שגיאה = הודעת שגיאה, המילוי נשאר)
+      onSave: async (vals, { subject, ready }) => {
         const cleaned = {};
         for (const [k, val] of Object.entries(vals)) {
           if (String(val ?? '').trim()) cleaned[k] = val;
         }
-        (async () => {
-          try {
-            await api(`/content/${item.id}/variants/${channelId}`, {
-              method: 'PUT',
-              body: {
-                body: v?.body ?? null,
-                status: ready ? 'ready' : (v?.status ?? 'draft'),
-                meta: { ...vMeta, subject: subject || null, field_values: cleaned },
-                week: state.week,
-              },
-            });
-            toast(ready ? 'נשמר וסומן מוכן לשליחה.' : 'התוכן נשמר.');
-            await reload();
-          } catch (e) {
-            toast(`השמירה נכשלה: ${e.message}`);
+        let res;
+        try {
+          res = await api(`/content/${item.id}/variants/${channelId}`, {
+            method: 'PUT',
+            body: {
+              body: v?.body ?? null,
+              status: ready ? 'ready' : (v?.status ?? 'draft'),
+              meta: { ...vMeta, subject: subject || null, field_values: cleaned },
+              base_updated_at: v?.updated_at ?? null,
+              week: state.week,
+            },
+          });
+        } catch (e) {
+          // גרסה שמישהו אחר שמר — המילוי שלך נשאר פתוח; פותחים מחדש כדי לראות את השמורה
+          if (e.status === 409 && e.payload?.stale) {
+            throw new Error(`${e.message}: סגור ופתח את המייל מחדש — העתק קודם את מה שכתבת.`);
           }
-        })();
+          throw new Error(`השמירה נכשלה: ${e.message}`);
+        }
+        engineToast(res, ready ? 'נשמר וסומן מוכן לשליחה.' : 'התוכן נשמר.');
+        await reload();
       },
     });
     return;
@@ -1349,6 +1408,7 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
   ].join('') || '';
 
   openGeneric({
+    guardDirty: true,
     title: `${item.title} — ${channel?.name ?? ''}`,
     fields: [
       ...(isMail ? [{ name: 'subject', label: 'נושא המייל', type: 'text',
