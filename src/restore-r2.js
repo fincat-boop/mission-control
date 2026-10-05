@@ -43,6 +43,10 @@ if (!confirmed) {
 await migrate();
 
 await tx(async (client) => {
+  // מפתחות זרים שמצביעים על אותה טבלה (משבצת מקושרת → המקור שלה,
+  // content_items.linked_to_id) נבדקים בסוף הטרנזקציה: עוקבת יכולה להופיע
+  // בקובץ לפני המקור שלה
+  await client.query('set constraints all deferred');
   // מחיקה בסדר הפוך, כדי לא לשבור מפתחות זרים
   for (const t of [...TABLES].reverse()) {
     await client.query(`delete from ${t}`);
