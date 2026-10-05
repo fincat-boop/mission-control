@@ -728,6 +728,8 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 
 .cbhead { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
 .cbhead h2 { font-size: 15px; font-weight: 650; }
+.cbhead .ctitle { display: flex; align-items: center; gap: 12px; }
+.cbhead .ctitle .gst { font-size: 12.5px; }
 .cbhead .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
 .cbhead .fill { font-size: 12.5px; color: var(--ink-2); }
 .cbhead .fill b { color: var(--ink-1); }

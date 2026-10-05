@@ -587,7 +587,11 @@ function campaignHead(c) {
   return `
     <div class="cbhead">
       <div>
-        <h2>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</h2>
+        <div class="ctitle">
+          <h2>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</h2>
+          ${c.complete ? `<span class="gst ok" data-tt="סומן מוכן: רק התוכן שנכתב, פרוס על התקופה">
+            <i></i>מוכן</span>` : ''}
+        </div>
         <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
           · נתח ${c.share_pct != null ? c.share_pct + '%' : 'נגזר מהמשקל'}
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
@@ -644,7 +648,8 @@ function campaignGrid(c) {
     const cells = c.channels.map((ch) => {
       const cell = row.cells.find((x) => x.channel_id === ch.id);
       const st = CELL[cell.state];
-      const clickable = can('content') && cell.state !== 'not_needed';
+      // בקמפיין מוכן תא בלי גרסה לא נדרש, אבל אפשר לפתוח אותו ולהוסיף גרסה
+      const clickable = can('content') && (cell.state !== 'not_needed' || c.complete);
       return `<td class="cell ${st.cls}"
         ${clickable ? `data-cell="${row.index}" data-ch="${ch.id}"` : ''}
         ${clickable ? `data-tt="${esc(ch.name)} · ${esc(st.label)}"` : ''}>
@@ -667,11 +672,20 @@ function campaignGrid(c) {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    ${completeLine(c)}
     <div class="sumline">
       כל שורה היא מסר אחד, וכל עמודה היא הניסוח שלו למדיה. לחיצה על תא פותחת את הטקסט לאותה מדיה.
     </div>`;
 }
 
+
+/** שורת הסבר מתחת לרשת של קמפיין שסומן מוכן */
+function completeLine(c) {
+  if (!c.complete) return '';
+  return `<div class="sumline">הקמפיין סומן מוכן: רק מה שנכתב, פרוס על התקופה.
+    תוכן שנוסף עכשיו נכנס בסוף ומגדיל אותו. ${can('settings')
+      ? 'להחזרת המשבצות הריקות — "פתח מחדש להשלמת תוכן" בתפריט.' : ''}</div>`;
+}
 
 /* ---------- קמפיין כללי: רשימת פוסטים לכל מדיה, בלי זוויות ---------- */
 
@@ -712,6 +726,7 @@ function generalBoard(c) {
   return `
     ${campaignHead(c)}
     <div class="gboard">${cols}</div>
+    ${completeLine(c)}
     ${c.orphaned ? `<div class="sumline">
       <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} במדיות שהוסרו מהקמפיין</span> —
       נשמרים ולא משובצים. החזרת המדיה לקמפיין מחזירה אותם.</div>` : ''}
@@ -853,6 +868,8 @@ function wireCampaignGrid(selected, reload) {
     edit: () => openCampaignForm(selected, reload),
     bulk: () => openBulkUpload(selected, reload),
     import: () => openImport(selected, reload),
+    complete: run(() => completeCampaign(selected, reload)),
+    reopen: run(() => reopenCampaign(selected, reload)),
     delete: run(() => deleteCampaign(selected, reload)),
   };
   $$('#plan .cbhead [data-act]').forEach((b) =>
@@ -892,9 +909,47 @@ function campaignMenu(c) {
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
     angles && can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
+    // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
+    can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
+      '<button type="button" data-act="complete">קמפיין מוכן</button>',
+    can('settings') && c.content_complete_at &&
+      '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     can('settings') && '<div class="sep"></div><button type="button" data-act="delete" data-danger>מחק קמפיין</button>',
   ].filter(Boolean);
   return kebab('פעולות על הקמפיין', items);
+}
+
+/**
+ * "קמפיין מוכן": הקמפיין מצטמצם לתוכן שקיים (גם טיוטות) והפוסטים נפרסים
+ * על אותה תקופה. קודם תקציר מהשרת — מה יורד ומה נשאר — ורק אז הסימון.
+ */
+async function completeCampaign(campaign, reload) {
+  const { summary: s } = await api(`/campaigns/${campaign.id}/complete-preview`);
+  const perChannel = campaign.channels
+    .filter((ch) => s.kept_by_channel[ch.id])
+    .map((ch) => `${ch.name} ${s.kept_by_channel[ch.id]}`).join(' · ');
+  const lines = [
+    s.removed_empty === 0 ? 'אין משבצות ריקות להסיר.'
+      : s.removed_empty === 1 ? 'תוסר משבצת ריקה אחת.'
+      : `יוסרו ${s.removed_empty} משבצות ריקות.`,
+    `${s.posts === 1 ? 'פוסט אחד ייפרס' : `${s.posts} פוסטים ייפרסו`} על התקופה ` +
+      `(${fmtDate(s.starts_on)}–${fmtDate(s.ends_on)}): ${perChannel}.`,
+    s.drafts === 1 ? 'אחד מהם טיוטה — הוא ייצא רק אחרי שיסומן מוכן.'
+      : s.drafts > 1 ? `${s.drafts} מהם טיוטות — הם ייצאו רק אחרי שיסומנו מוכנים.` : '',
+  ].filter(Boolean);
+  const ok = await confirmDialog(`לסמן את "${campaign.name}" כמוכן?\n\n${lines.join('\n')}`,
+    { okLabel: 'קמפיין מוכן' });
+  if (!ok) return;
+  await api(`/campaigns/${campaign.id}/complete`, { method: 'POST', body: { week: state.week } });
+  toast('הקמפיין סומן מוכן — הפוסטים נפרסו על התקופה.');
+  await reload();
+}
+
+/** חזרה להקצאה לפי הקצב: המשבצות הריקות חוזרות, התוכן לא משתנה */
+async function reopenCampaign(campaign, reload) {
+  await api(`/campaigns/${campaign.id}/reopen`, { method: 'POST', body: { week: state.week } });
+  toast('הקמפיין נפתח מחדש — המשבצות הריקות חזרו.');
+  await reload();
 }
 
 async function deleteCampaign(campaign, reload) {
