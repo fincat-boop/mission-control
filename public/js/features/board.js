@@ -1,5 +1,5 @@
 import { api, postWithGapCheck } from '../core/api.js';
-import { can, epColor, state } from '../core/state.js';
+import { can, epColor, persistView, state } from '../core/state.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { HE_DAYS, KIND_HE, inkOn, ymd } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
@@ -12,13 +12,17 @@ import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '.
 
 /* ========================= הלוח ========================= */
 
+let boardReq = 0; // רק התשובה לבקשה האחרונה מצוירת — לחיצות מהירות על ‹ › לא מתערבבות
+
 export async function renderBoard() {
+  const req = ++boardReq;
   // רשימת ההקמה — רכה: אם היא נכשלת, הלוח עצמו עדיין מוצג. אחרי שהושלמה
   // לא נשאלת שוב באותו דף (fetchSetupStatus)
   const [b, setup] = await Promise.all([
     api(`/board${state.week ? `?week=${state.week}` : ''}`),
     fetchSetupStatus(),
   ]);
+  if (req !== boardReq) return; // בינתיים התבקש שבוע אחר
   const editable = can('content');
 
   // רשימה אחת שמשמשת גם כמקרא הצבעים וגם כמצב האוויר של כל נקודה.
@@ -114,13 +118,16 @@ export async function renderBoard() {
   renderSetupCard($('#setupCard'), setup);
   wireSetupGo($('#board .grid'));
 
+  // השבוע המוצג נשמר בכתובת (;w=) — רענון נשאר על אותו שבוע
   $$('#board [data-week]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
       state.week = btn.dataset.week;
+      persistView();
       await refreshBoard();
     })));
   $('#thisWeek').addEventListener('click', run(async () => {
     state.week = null;
+    persistView();
     await refreshBoard();
   }));
   $('#runEngine')?.addEventListener('click', run(openEngine));
