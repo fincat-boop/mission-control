@@ -2,6 +2,7 @@ import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, copyLinkButton, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { openTemplateFiller } from '../ui/templateFiller.js';
+import { openNewsletterEditor } from '../ui/hubFill.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openGeneric } from '../ui/dialog.js';
@@ -1270,6 +1271,8 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
 /** הגרסה: הניסוח של זווית מסוימת למדיה מסוימת */
 async function openVariantForm({ item, channelId, campaign }, reload) {
   const channel = state.channels.find((c) => c.id === channelId);
+  // ניוזלטר: עורך משלו מול ה-HUB — עורך המייל של ה-HUB, תצוגה ממנו, "העבר ל-HUB"
+  if (channel?.platform === 'newsletter') return openNewsletterEditor({ item, channelId, reload });
   const v = item.variants.find((x) => x.channel_id === channelId) ?? null;
 
   // ערוץ מייל (HUB): נושא + גוף HTML + רשימות יעד. הרשימות מגיעות מה-HUB —
