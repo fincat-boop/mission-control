@@ -81,12 +81,15 @@ function endpointItem(e, channels, ro) {
   // הקמפיינים והתוכן עברו לטאב "קמפיינים ותוכן". כאן נשארו רק ההגדרות של הנקודה עצמה.
   const hasContent = e.content.length > 0;
 
+  // שני מצבים נפרדים: פעילה/מושבתת לפי active, ויש/אין תוכן (נקודה + טקסט).
+  // קודם תג אחד ערבב אותם — "פעילה" הופיע רק כשהיה תוכן.
+  const contentCls = hasContent ? 'on' : e.active ? 'warn' : 'off';
   return `<details class="item" data-open-id="ep-${e.id}">
     <summary>
       <b>${esc(e.name)}</b>
       <span class="info">חשיבות ${e.importance} · ${e.campaigns.length} קמפיינים</span>
-      ${!e.active ? '<span class="chip bad">מושבתת</span>'
-        : `<span class="chip ${hasContent ? 'on' : 'bad'}">${hasContent ? 'פעילה' : 'חסר תוכן'}</span>`}
+      <span class="sdot-line epcontent ${contentCls}"><i></i>${hasContent ? 'יש תוכן' : 'אין תוכן'}</span>
+      <span class="chip epstate ${e.active ? 'on' : 'bad'}">${e.active ? 'פעילה' : 'מושבתת'}</span>
     </summary>
     <div class="ibody">
       <div class="prow">
@@ -95,7 +98,7 @@ function endpointItem(e, channels, ro) {
                data-ep-field="importance" data-id="${e.id}" ${ro ? 'disabled' : ''}>
       </div>
       <div class="prow">
-        <label>לפרסם לפחות פעם ב־ (ימים)</label>
+        <label>תדירות (פעם ב־X ימים)</label>
         <div class="autofield">
           <label class="opt"><input type="radio" name="cadence-${e.id}" value="auto"
                  data-ep-cadence-mode="${e.id}" ${e.min_days_between == null ? 'checked' : ''}
@@ -109,8 +112,8 @@ function endpointItem(e, channels, ro) {
                  data-ep-cadence-input="${e.id}" data-id="${e.id}"
                  ${e.min_days_between == null ? 'disabled' : ''} ${ro ? 'disabled' : ''}>
         </div>
-        <div class="fhint">אוטומטי מחשב קצב לפי החשיבות — חשיבות גבוהה יותר, קצב תכוף יותר.
-          קבוע נועד למקרה שיש צורך ספציפי בקצב מסוים, בלי קשר לחשיבות.</div>
+        <div class="fhint">אוטומטי מחשב את התדירות לפי החשיבות — חשיבות גבוהה יותר, פוסטים תכופים יותר.
+          קבוע נועד למקרה שיש צורך בתדירות מסוימת, בלי קשר לחשיבות.</div>
       </div>
 
       <div class="subsec">
@@ -460,7 +463,7 @@ function wireManage(ro, connections) {
         input.disabled = true;
         const res = await api(`/endpoints/${id}`,
           { method: 'PATCH', body: { min_days_between: null, week: state.week } });
-        engineToast(res, 'נשמר — הקצב יחושב אוטומטית לפי החשיבות.');
+        engineToast(res, 'נשמר — התדירות תחושב אוטומטית לפי החשיבות.');
         await refreshBoard();
       } else {
         input.disabled = false;
@@ -678,10 +681,10 @@ function wireManage(ro, connections) {
       fields: [
         { name: 'name', label: 'שם', type: 'text' },
         { name: 'importance', label: 'חשיבות (1–10)', type: 'number', value: 5 },
-        { name: 'min_days_between', label: 'לפרסם לפחות פעם ב־ (ימים)', type: 'auto',
+        { name: 'min_days_between', label: 'תדירות (פעם ב־X ימים)', type: 'auto',
           value: null, auto: 'נגזר מהחשיבות',
-          hint: 'אוטומטי מחשב קצב לפי החשיבות. קבוע נועד למקרה שיש צורך ספציפי בקצב מסוים, ' +
-                'בלי קשר לחשיבות.' },
+          hint: 'אוטומטי מחשב את התדירות לפי החשיבות. קבוע נועד למקרה שיש צורך בתדירות ' +
+                'מסוימת, בלי קשר לחשיבות.' },
       ],
       onSave: async (v) => {
         v.week = state.week;

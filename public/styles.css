@@ -1036,3 +1036,7 @@ button.btn.danger { color: var(--st-crit); }
 .kindsw.k-hybrid { background: var(--leg-hybrid); }
 .kindsw.k-value { background: var(--leg-value); }
 .prow input[type=password] { width: 240px; text-align: start; }
+
+/* נקודת קצה בשורת הרשימה: תוכן ומצב בעמודות קבועות, על אותו קו בכל השורות */
+details.item summary .epcontent { width: 64px; }
+details.item summary .epstate { width: 48px; }
