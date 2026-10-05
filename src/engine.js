@@ -45,7 +45,9 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   const [settings, channels, endpoints, content, existing, campaigns, dismissals] = await Promise.all([
     one('select * from engine_settings limit 1'),
     rows('select * from channels where active = true order by sort_order, id'),
-    rows('select * from endpoints where active = true'),
+    // סדר קבוע: בשוויון ציון הנקודה הראשונה זוכה, ותכנון וביצוע חייבים
+    // לבחור אותה נקודה — אחרת המפתחות שהמשתמש סימן לא יימצאו בהצעה הטרייה
+    rows('select * from endpoints where active = true order by id'),
     // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
     // תוכן של קמפיין מושהה לא נכנס לתכנון.
     //
@@ -73,7 +75,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
                    select 1 from campaign_channels cc
                     where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
            group by ci.id, ca.id
-           order by ci.created_at`),
+           order by ci.created_at, ci.id`),
     // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
     // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
     // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
