@@ -362,7 +362,8 @@ const WRITE_TOOLS = {
         goal: { type: 'string' },
         channel_ids: { type: 'array', items: { type: 'integer' }, description: 'הערוצים שהקמפיין יושב עליהם' },
       },
-      required: ['endpoint_id', 'name'],
+      // קמפיין חדש הוא כללי — המשבצות נפרסות על החלון, ולכן התאריכים חובה
+      required: ['endpoint_id', 'name', 'starts_on', 'ends_on'],
     },
     request: (a) => ({ method: 'POST', path: '/campaigns', body: a }),
     check: (a) => checkCampaignWindow(a),

@@ -772,6 +772,8 @@ function exitLinkMode() {
 /** יציאה ממסך התוכן (מעבר טאב) — מצב הקישור לא נשאר תלוי ברקע */
 export function leavePlanView() {
   if (linkMode) exitLinkMode();
+  arrowObserver?.disconnect();
+  arrowObserver = null;
 }
 
 /** מצב הקישור, רק כשעדיין עומדים על הקמפיין שבו התחיל; אחרת הוא מתבטל */
@@ -1286,6 +1288,8 @@ function wireCampaignGrid(selected, reload) {
     $('#plan').classList.toggle('week-only', weekOnly);
     e.currentTarget.classList.toggle('on', weekOnly);
     e.currentTarget.setAttribute('aria-pressed', String(weekOnly));
+    // שורות הוסתרו/חזרו — הלוח לא תמיד משנה גובה, ולכן החיצים מצוירים מחדש כאן
+    if (selected.structure === 'general') drawLinkArrows(selected);
   });
 
   // תפריט הכותרת משותף לשני המבנים — מחווטים לפני הפיצול
@@ -1375,13 +1379,16 @@ async function convertToGeneral(campaign, reload) {
   const ok = await confirmDialog(
     `להמיר את "${campaign.name}" לקמפיין כללי?\n` +
     'כל ניסוח של זווית יהפוך לפוסט נפרד בעמודה של הערוץ שלו (זווית 1 ← פוסט 1 בכל ערוץ), ' +
-    'עם הטקסט, הקבצים, המצב והפוסטים שכבר שובצו. ניסוח שסומן "לא רלוונטי" לא הופך לפוסט.\n' +
+    'עם הטקסט, הקבצים, המצב והפוסטים שכבר שובצו. ניסוח שסומן "לא רלוונטי" לא הופך לפוסט ' +
+    '(הקבצים שלו עוברים לסל המחזור).\n' +
     'אין חזרה למבנה לפי זוויות. אחרי ההמרה אפשר לחבר פוסטים דומים ב"קשר תוכן".',
     { okLabel: 'המר לכללי' });
   if (!ok) return;
   const res = await api(`/campaigns/${campaign.id}/to-general`,
     { method: 'POST', body: { week: state.week } });
-  engineToast(res, `הקמפיין הומר לכללי — ${res.converted.posts} פוסטים מ-${res.converted.angles} זוויות.`);
+  const { posts, angles, detached_posts: detached } = res.converted;
+  engineToast(res, `הקמפיין הומר לכללי — ${posts} פוסטים מ-${angles} זוויות.` +
+    (detached ? ` ${detached} פוסטים משובצים בערוץ בלי ניסוח נותקו מהתוכן ונשארו בלוח עם הכותרת שלהם.` : ''));
   await reload();
 }
 

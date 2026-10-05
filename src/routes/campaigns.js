@@ -4,7 +4,7 @@ import {
   campaignsWithHealth, completionSummary, currentAllocation, resolvePeriod, structureChangeError,
 } from '../campaigns.js';
 import { currentOrg, one, rows, tx } from '../db.js';
-import { mediaReady, mediaStore, newMediaKey } from '../media.js';
+import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
 import { isDate, rerunPeriod, runName } from '../../public/js/core/period.js';
 import { ymd } from '../board.js';
@@ -208,7 +208,9 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
   const src = await one('select * from campaigns where id = $1', [req.params.id]);
   if (!src) return bad(res, 'לא נמצא קמפיין כזה', 404);
 
-  const b = { ...(req.body ?? {}), structure: src.structure };
+  // הנתח הקבוע ומספר הזוויות כבר לא בטופס — עוברים מהמקור, כמו ב"שבץ מחדש"
+  const b = { share_pct: src.share_pct, target_posts: src.target_posts,
+              ...(req.body ?? {}), structure: src.structure };
   const err = newCampaignError(b);
   if (err) return bad(res, err);
 
@@ -352,6 +354,8 @@ r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, re
   const channels = await rows(
     `select ch.id, ch.platform from campaign_channels cc join channels ch on ch.id = cc.channel_id
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [c.id]);
+  // בלי ערוצים אין עמודות — זווית בלי ניסוח לא הייתה מקבלת משבצת ונעלמת
+  if (!channels.length) return bad(res, 'לקמפיין אין ערוצים — בוחרים ערוצים, ואז ממירים');
   const chOrder = new Map(channels.map((ch, i) => [ch.id, i]));
   const items = await rows(
     'select * from content_items where campaign_id = $1 order by sort_order, id', [c.id]);
@@ -382,7 +386,7 @@ r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, re
       .sort((a, b) => (chOrder.get(a.channel_id) ?? 999) - (chOrder.get(b.channel_id) ?? 999)
         || a.channel_id - b.channel_id);
     // זווית בלי אף ניסוח — פוסט אחד (טיוטה) בערוץ הראשון, עם הטקסט של הזווית
-    const targets = vs.length ? vs : fallback ? [{ id: null, channel_id: fallback.id, body: it.body }] : [];
+    const targets = vs.length ? vs : [{ id: null, channel_id: fallback.id, body: it.body }];
     return { it, targets: targets.map((v) => ({ v, slot: take(v.channel_id, it.sort_order) })) };
   });
 
@@ -404,6 +408,14 @@ r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, re
     let posts = 0;
     let keyAt = 0;
     if (dropped.length) {
+      // קבצים של ניסוח "לא רלוונטי" נמחקים איתו (cascade) — הקבצים ב-R2 עוברים
+      // לסל המחזור, כמו בכל מחיקה, ולא נשארים יתומים
+      await client.query(
+        `insert into media_trash (bucket, storage_key, delete_after)
+         select $2, storage_key, now() + make_interval(days => $3)
+           from content_assets where variant_id = any($1::int[]) and storage_key is not null
+         on conflict (bucket, storage_key) do nothing`,
+        [dropped.map((v) => v.id), process.env.R2_PUBLIC_BUCKET ?? '', TRASH_DAYS]);
       await client.query('delete from content_variants where id = any($1::int[])',
         [dropped.map((v) => v.id)]);
     }
@@ -411,16 +423,17 @@ r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, re
       for (const [i, { v, slot }] of targets.entries()) {
         let id = it.id;
         if (i === 0) {
+          // ניסוח ריק (גרסה שנוצרה רק בשביל קובץ) — נשאר הטקסט של הזווית
           await client.query(
             `update content_items set slot_channel_id = $2, sort_order = $3,
-                    body = coalesce($4, body)
+                    body = coalesce(nullif($4, ''), body)
               where id = $1`, [it.id, v.channel_id, slot, v.body]);
         } else {
           ({ rows: [{ id }] } = await client.query(
             `insert into content_items (endpoint_id, campaign_id, kind, title, body, ready_channel_ids,
                                         sort_order, evergreen, reuse_after_days, slot_channel_id)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
-            [it.endpoint_id, c.id, it.kind, it.title, v.body ?? it.body, it.ready_channel_ids,
+            [it.endpoint_id, c.id, it.kind, it.title, v.body || it.body, it.ready_channel_ids,
              slot, it.evergreen, it.reuse_after_days, v.channel_id]));
           await client.query('update content_variants set content_id = $1 where id = $2', [id, v.id]);
           await client.query('update content_assets set content_id = $1 where variant_id = $2', [id, v.id]);
@@ -448,10 +461,21 @@ r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, re
         }
       }
     }
+    // פוסט שעוד לא פורסם ונשאר על הזווית בערוץ שאין לו ניסוח (לא רלוונטי, או
+    // שובץ ידנית) — היה יוצא עם הניסוח של ערוץ אחר. מנותק מהתוכן: נשאר בלוח
+    // עם הכותרת שלו, כמו פוסט בלי תוכן. פוסט שפורסם נשאר — זו היסטוריה.
+    let detached = 0;
+    for (const { it, targets } of plan) {
+      const r = await client.query(
+        `update posts set content_id = null
+          where content_id = $1 and channel_id <> $2 and status <> 'published'`,
+        [it.id, targets[0].v.channel_id]);
+      detached += r.rowCount;
+    }
     await client.query(
       `update campaigns set structure = 'general', target_posts = null where id = $1`, [c.id]);
     return { angles: items.length, posts: plan.reduce((s, p) => s + p.targets.length, 0),
-             moved_posts: posts };
+             moved_posts: posts, detached_posts: detached };
   });
   const engine = await autoFill(req.body?.week);
   res.json({ converted: counts, engine });

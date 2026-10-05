@@ -128,6 +128,9 @@ test('המרה לכללי: ניסוח לכל ערוץ = פוסט משלו, עם 
   await q('update content_items set sort_order = 1 where id = $1', [a2]);
   await variant(a2, ids.fb, 'עוד ניסוח');
   await variant(a2, ids.li, 'לא כאן', { status: 'not_relevant' });
+  // ניסוח ריק (נוצר רק בשביל קובץ) — הפוסט מקבל את הטקסט של הזווית
+  const a4 = await angle(id, 4, 'ניסוח ריק');
+  await variant(a4, ids.fb, '');
   // זווית בלי אף ניסוח
   await angle(id, 3, 'רק כותרת');
 
@@ -138,11 +141,15 @@ test('המרה לכללי: ניסוח לכל ערוץ = פוסט משלו, עם 
            values ($1,$2,'li.png','image/png',3,'\\x414243')`, [a1, liV]);
   await q(`insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at)
            values ($1,$2,$3,'משובץ','value','2027-03-03 10:00+02')`, [ids.li, ids.endpoint, a1]);
+  // פוסט בלינקדאין לזווית שסומנה שם "לא רלוונטי" — לא יוצא עם הניסוח של פייסבוק
+  await q(`insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at)
+           values ($1,$2,$3,'ידני','value','2027-03-05 10:00+02')`, [ids.li, ids.endpoint, a2]);
   copies.length = 0;
 
   const r = await call('POST', `/campaigns/${id}/to-general`, {});
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.equal(r.json.converted.angles, 3);
+  assert.equal(r.json.converted.angles, 4);
+  assert.equal(r.json.converted.detached_posts, 1);
 
   const camp = await q1('select structure, target_posts from campaigns where id = $1', [id]);
   assert.equal(camp.structure, 'general');
@@ -169,6 +176,9 @@ test('המרה לכללי: ניסוח לכל ערוץ = פוסט משלו, עם 
   assert.equal(at(ids.fb, 3).title, 'רק כותרת');
   assert.equal(at(ids.fb, 3).status, 'draft');
   assert.equal(at(ids.fb, 3).vbody, 'גוף רק כותרת');
+  assert.equal(at(ids.fb, 4).body, 'גוף ניסוח ריק');
+  const manual = await q1(`select content_id from posts where title = 'ידני'`);
+  assert.equal(manual.content_id, null);
   // לכל פריט גרסה אחת בדיוק — לערוץ שלו
   const stray = await q(
     `select v.id from content_variants v join content_items ci on ci.id = v.content_id
@@ -203,4 +213,22 @@ test('המרה לכללי: בלי תאריך סיום — נדחה, ושום ד�
   assert.match(r.json.error, /תאריך סיום/);
   const camp = await q1('select structure from campaigns where id = $1', [id]);
   assert.equal(camp.structure, 'angles');
+});
+
+test('המרה לכללי: קמפיין בלי ערוצים — נדחה', { skip }, async () => {
+  const id = await angleCampaign('בלי ערוצים', { channel_ids: [] });
+  await angle(id, 1, 'זווית');
+  const r = await call('POST', `/campaigns/${id}/to-general`, {});
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /ערוצים/);
+});
+
+test('שכפול שומר נתח קבוע — הוא כבר לא בטופס', { skip }, async () => {
+  const id = await angleCampaign('עם נתח', { share_pct: 30 });
+  const r = await call('POST', `/campaigns/${id}/duplicate`, {
+    name: 'עותק', endpoint_id: ids.endpoint, starts_on: '2027-05-01', period: '1m',
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.json));
+  assert.equal(r.json.campaign.share_pct, 30);
+  assert.equal(r.json.campaign.structure, 'angles');
 });
