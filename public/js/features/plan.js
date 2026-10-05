@@ -7,7 +7,7 @@ import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
-import { progressList, uploadBulk, uploadFiles } from '../core/upload.js';
+import { acceptAttr, progressList, uploadBulk, uploadFiles } from '../core/upload.js';
 
 /* ========================= ניוזלטר: תבנית המילוי ========================= */
 
@@ -517,7 +517,7 @@ function campaignGrid(c) {
         <option value="promo">מכירתי</option>
       </select>
       <button class="btn primary" id="bulkPick">בחר קבצים</button>
-      <input type="file" id="bulkInput" multiple hidden>
+      <input type="file" id="bulkInput" multiple hidden${acceptAttr() ? ` accept="${esc(acceptAttr())}"` : ''}>
       <button class="btn" id="importSheet">ייבוא מטבלה</button>
     </div>
     <div class="upload-progress" id="bulkProgress" hidden></div>` : ''}
@@ -612,7 +612,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
         value: item ? item.evergreen : !!background },
       { name: 'reuse_after_days', label: 'מרווח בין חזרות (ימים) — ריק = ברירת המחדל',
         type: 'number', value: item ? item.reuse_after_days : (background ? 30 : null) },
-      { name: '__files', label: 'תמונות ומסמכים (משותפים לכל המדיות)',
+      { name: '__files', label: 'תמונות, סרטונים ומסמכים (משותפים לכל המדיות)',
         type: 'files', existing: existingFiles },
     ],
     extraActions: item && can('content')

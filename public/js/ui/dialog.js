@@ -1,5 +1,5 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
-import { fileLimitLabel } from '../core/upload.js';
+import { acceptAttr, fileLimitLabel } from '../core/upload.js';
 
 /**
  * דיאלוג טופס כללי.
@@ -110,7 +110,7 @@ function fieldHtml(f) {
   if (f.type === 'files') {
     return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
       ${f.existing ?? ''}
-      <input id="${id}" type="file" multiple>
+      <input id="${id}" type="file" multiple${acceptAttr() ? ` accept="${esc(acceptAttr())}"` : ''}>
       <span class="d" style="color:var(--muted);font-size:11.5px">${esc(fileLimitLabel())}</span>
       <div class="upload-progress" id="${id}_progress" hidden></div>
     </div>`;

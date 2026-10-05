@@ -41,10 +41,30 @@ export const mediaStore = {
   list: (prefix) => listObjects(prefix, '', { bucket: process.env.R2_PUBLIC_BUCKET }),
 };
 
-/** סוגי קבצים מותרים: תמונה, וידאו, אודיו, PDF */
-export const isAllowedMime = (m) =>
-  typeof m === 'string' &&
-  (/^(image|video|audio)\/[a-z0-9][a-z0-9.+-]*$/i.test(m) || m.toLowerCase() === 'application/pdf');
+/**
+ * סוגי הקבצים המותרים — רשימה סגורה, לא תבנית. ה-bucket מוגש מתת-דומיין של
+ * backbone.co.il (media.backbone.co.il), ולכן שום דבר שהדפדפן עלול להריץ
+ * לא עולה לשם: SVG, HTML, XML, JS ו-text/* נדחים. קובץ ישן מסוג אחר מועבר
+ * כ-application/octet-stream (הורדה בלבד), ראו legacyUploadMime.
+ */
+export const ALLOWED_MIMES = Object.freeze([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'image/avif',
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v',
+  'audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'audio/wav', 'audio/x-wav', 'audio/ogg', 'audio/aac',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+const ALLOWED_SET = new Set(ALLOWED_MIMES);
+
+/** בדיקה מדויקת (case-insensitive), בלי פרמטרים — "image/png; x=1" נדחה */
+export const isAllowedMime = (m) => typeof m === 'string' && ALLOWED_SET.has(m.toLowerCase());
+
+const TYPE_ERROR = 'סוג קובץ לא נתמך — רק תמונות, סרטונים, אודיו, PDF ומסמכי Office';
 
 /**
  * שם קובץ בטוח למפתח וגם ל-URL: בלי נתיב, בלי תווי בקרה ותווים מיוחדים,
@@ -109,7 +129,7 @@ export function assetView(a) {
 export function validateSignRequest(b, max = MAX_MEDIA_BYTES) {
   if (!b || typeof b !== 'object') return 'בקשה ריקה';
   if (typeof b.filename !== 'string' || !b.filename.trim()) return 'חסר שם קובץ';
-  if (!isAllowedMime(b.mime)) return 'סוג קובץ לא נתמך — רק תמונה, וידאו, אודיו או PDF';
+  if (!isAllowedMime(b.mime)) return TYPE_ERROR;
   const size = Number(b.size);
   if (!Number.isFinite(size) || size <= 0) return 'גודל הקובץ חסר או לא תקין';
   if (size > max) return `הקובץ גדול מדי — עד ${fmtLimit(max)} לקובץ`;
@@ -127,9 +147,7 @@ export function validateUploaded(head, max = MAX_MEDIA_BYTES) {
   }
   if (head.size <= 0) return { error: 'הקובץ שהועלה ריק', status: 400, purge: true };
   const mime = (head.contentType ?? '').split(';')[0].trim();
-  if (!isAllowedMime(mime)) {
-    return { error: 'סוג קובץ לא נתמך — רק תמונה, וידאו, אודיו או PDF', status: 415, purge: true };
-  }
+  if (!isAllowedMime(mime)) return { error: TYPE_ERROR, status: 415, purge: true };
   return null;
 }
 
@@ -138,7 +156,9 @@ export const fmtLimit = (bytes) =>
     ? `${bytes / 1024 ** 3}GB` : `${Math.round(bytes / 1048576)}MB`;
 
 /** מה הלקוח צריך לדעת בעלייה — נשלח עם /api/me */
-export const mediaConfig = () => ({ ready: mediaReady(), max_mb: MAX_MEDIA_MB });
+export const mediaConfig = () => ({
+  ready: mediaReady(), max_mb: MAX_MEDIA_MB, allowed_mimes: ALLOWED_MIMES,
+});
 
 /**
  * בדיקת אובייקט שהדפדפן העלה: HEAD (הגודל והסוג האמיתיים, לא מה שהלקוח

@@ -89,11 +89,16 @@ test('assetView — url במקום storage_key, בלי bytes', () => {
   });
 });
 
-test('isAllowedMime', () => {
-  for (const m of ['image/png', 'video/mp4', 'audio/mpeg', 'application/pdf', 'image/svg+xml']) {
+test('isAllowedMime — רשימה סגורה; כל מה שהדפדפן עלול להריץ נדחה', () => {
+  for (const m of ['image/png', 'IMAGE/JPEG', 'image/heic', 'video/mp4', 'video/quicktime',
+    'audio/mpeg', 'audio/x-m4a', 'application/pdf', 'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.presentationml.presentation']) {
     assert.equal(isAllowedMime(m), true, m);
   }
-  for (const m of ['text/html', 'application/javascript', '', null, 'image/', 'application/zip']) {
+  for (const m of ['image/svg+xml', 'text/html', 'application/xhtml+xml', 'application/xml', 'text/xml',
+    'application/javascript', 'text/javascript', 'text/plain', 'text/csv', 'image/x-icon',
+    'video/x-anything', 'image/png; charset=x', '', null, 'image/', 'application/zip']) {
     assert.equal(isAllowedMime(m), false, String(m));
   }
 });
@@ -119,6 +124,7 @@ test('validateUploaded — חסר / חורג / סוג אסור / תקין', () =
   assert.equal(validateUploaded({ size: 3, contentType: 'text/html' }, 10).status, 415);
   assert.equal(validateUploaded({ size: 0, contentType: 'image/png' }, 10).purge, true);
   assert.equal(validateUploaded({ size: 3, contentType: 'image/png; charset=x' }, 10), null);
+  assert.equal(validateUploaded({ size: 3, contentType: 'image/svg+xml' }, 10).status, 415);
 });
 
 test('verifyUploaded — חורג נמחק, חסר לא נמחק, תקין מחזיר head', async () => {
@@ -161,6 +167,8 @@ test('legacyUploadMime — סוג לא מותר עולה כ-octet-stream', async
   const { legacyUploadMime } = await import('../src/media.js');
   assert.equal(legacyUploadMime('image/png'), 'image/png');
   assert.equal(legacyUploadMime('text/html'), 'application/octet-stream');
+  assert.equal(legacyUploadMime('image/svg+xml'), 'application/octet-stream');
+  assert.equal(legacyUploadMime('text/csv'), 'application/octet-stream');
   assert.equal(legacyUploadMime('application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
-    'application/octet-stream');
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 });

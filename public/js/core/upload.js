@@ -13,7 +13,6 @@ import { state } from './state.js';
  */
 
 const LEGACY_MAX_MB = 50;
-const ALLOWED = /^(image|video|audio)\/|^application\/pdf$/;
 
 const mediaOn = () => !!state.media?.ready;
 const maxMb = () => (mediaOn() ? state.media.max_mb : LEGACY_MAX_MB);
@@ -23,13 +22,18 @@ const fmtMb = (mb) => (mb >= 1024 && mb % 1024 === 0 ? `${mb / 1024}GB` : `${mb}
 /** הטקסט ליד בורר הקבצים: "עד 1GB לקובץ" */
 export const fileLimitLabel = () => `עד ${fmtMb(maxMb())} לקובץ`;
 
+/** accept לבורר הקבצים — רק כשהמדיה ב-R2 (שם יש רשימה סגורה) */
+export const acceptAttr = () =>
+  (mediaOn() && state.media.allowed_mimes?.length ? state.media.allowed_mimes.join(',') : '');
+
 /** בדיקה מקומית לפני העלאה — שגיאה ברורה מיד, לא אחרי דקות של PUT */
 function precheck(files) {
   const max = maxMb() * 1048576;
   for (const f of files) {
     if (f.size > max) throw new Error(`"${f.name}" גדול מדי — ${fileLimitLabel()}`);
-    if (mediaOn() && !ALLOWED.test(f.type)) {
-      throw new Error(`"${f.name}" — סוג קובץ לא נתמך (תמונה, וידאו, אודיו או PDF)`);
+    // הרשימה מגיעה מהשרת (/api/me) — מקור אחד לשני הצדדים
+    if (mediaOn() && !(state.media.allowed_mimes ?? []).includes((f.type || '').toLowerCase())) {
+      throw new Error(`"${f.name}" — סוג קובץ לא נתמך (תמונות, סרטונים, אודיו, PDF ומסמכי Office)`);
     }
   }
 }
