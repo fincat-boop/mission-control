@@ -94,7 +94,9 @@ before(async () => {
     const ch = async (name, platform) => (await db.one(
       'insert into channels (name, platform, max_per_week) values ($1,$2,7) returning id',
       [name, platform])).id;
-    const ig = await ch('אינסטגרם ריל', 'instagram');
+    // 'manual' ולא 'instagram': משבצות כאן נוצרות "מוכן" לפני שיש להן קבצים,
+    // ו"מוכן" באינסטגרם דורש מדיה (readiness.js). הבדיקות כאן על הקישור.
+    const ig = await ch('אינסטגרם ריל', 'manual');
     const yt = await ch('יוטיוב שורטס', 'manual');
     const fb = await ch('פייסבוק', 'facebook');
     const nl = await ch('ניוזלטר', 'newsletter');
@@ -403,9 +405,10 @@ test('פרסום: הפוסט של העוקבת (אינסטגרם) נשלח עם 
   const payload = await db.withOrg(org, () => loadPayload(post.id));
   assert.equal(payload.variant.body, 'כיתוב');
   assert.deepEqual(payload.assets.map((x) => x.id), [file.id]);
-  // החיבור לאינסטגרם מדומה — רק כדי שהחוסם יגיע לבדיקת המדיה
+  // החיבור לאינסטגרם מדומה (וגם הפלטפורמה — הערוץ בבדיקות האלה 'manual') — רק
+  // כדי שהחוסם יגיע לבדיקת המדיה
   const blocker = publishBlocker({
-    ...payload, post: { ...payload.post, access_token_enc: 'x', ig_user_id: '1' } });
+    ...payload, post: { ...payload.post, platform: 'instagram', access_token_enc: 'x', ig_user_id: '1' } });
   assert.equal(blocker, null);
   assert.equal(mediaUrl(payload.assets[0].storage_key),
     `https://media.example.test/${file.storage_key.split('/').map(encodeURIComponent).join('/')}`);
