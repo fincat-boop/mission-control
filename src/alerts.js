@@ -87,16 +87,7 @@ export async function buildAlerts(user = null) {
       const starting = c.phase === 'upcoming' && daysToStart !== null &&
                        daysToStart <= UPCOMING_WINDOW_DAYS;
       if (c.phase === 'running' || starting) {
-        alerts.push({
-          id: `campaign-content-${c.id}`,
-          level: c.phase === 'running' ? 'crit' : 'warn',
-          title: `חסר תוכן: ${c.name}`,
-          detail: c.phase === 'running'
-            ? `הקמפיין רץ וחסרים לו ${c.missing_content} פוסטים מתוך ${c.required}`
-            : `מתחיל בעוד ${daysToStart} ימים וחסרים לו ${c.missing_content} מתוך ${c.required}`,
-          tab: 'plan',
-          campaign_id: c.id,
-        });
+        alerts.push(campaignContentAlert(c, daysToStart));
       }
     }
 
@@ -304,6 +295,37 @@ export function storageAlert({ usedBytes, assetsBytes = 0, backupsBytes = 0, log
       'הפינוי או הגדלת הנפח — אצל המפתח; מעבירים לו את ההודעה הזו',
     ].filter(Boolean).join(' · '),
     tab: null,
+  };
+}
+
+/**
+ * התראת התוכן של קמפיין. בקמפיין שסומן "מוכן" אין משבצות ריקות — מה
+ * שנשאר לא מוכן הוא טיוטות, וזה מה שההתראה אומרת (לא "חסר תוכן").
+ */
+export function campaignContentAlert(c, daysToStart) {
+  const running = c.phase === 'running';
+  const n = c.missing_content;
+  if (c.complete) {
+    const drafts = n === 1 ? 'פוסט אחד עדיין בטיוטה' : `${n} פוסטים עדיין בטיוטה`;
+    return {
+      id: `campaign-content-${c.id}`,
+      level: running ? 'crit' : 'warn',
+      title: `טיוטות לסיום: ${c.name}`,
+      detail: (running ? 'הקמפיין רץ' : `מתחיל בעוד ${daysToStart} ימים`) +
+              ` ו-${drafts} (מתוך ${c.required}) — הם ייצאו רק אחרי שיסומנו מוכנים`,
+      tab: 'plan',
+      campaign_id: c.id,
+    };
+  }
+  return {
+    id: `campaign-content-${c.id}`,
+    level: running ? 'crit' : 'warn',
+    title: `חסר תוכן: ${c.name}`,
+    detail: running
+      ? `הקמפיין רץ וחסרים לו ${n} פוסטים מתוך ${c.required}`
+      : `מתחיל בעוד ${daysToStart} ימים וחסרים לו ${n} מתוך ${c.required}`,
+    tab: 'plan',
+    campaign_id: c.id,
   };
 }
 

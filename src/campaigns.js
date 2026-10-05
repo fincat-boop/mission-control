@@ -1,7 +1,7 @@
 import { rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
-import { inferPeriod, parsePeriod, periodEnd } from '../public/js/core/period.js';
+import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -71,15 +71,21 @@ export function angleCount(campaign, needs) {
 
 /** התאריך של זווית מספר i, פרוס אחיד על אורך הקמפיין */
 function angleDate(campaign, i, total) {
-  if (!campaign.starts_on) return null;
-  const start = new Date(campaign.starts_on + 'T00:00:00');
-  if (total <= 1 || !campaign.ends_on) return ymd(start);
-
-  const span = daysBetween(campaign.starts_on, campaign.ends_on) - 1;
-  const d = new Date(start);
-  d.setDate(start.getDate() + Math.round((span * i) / (total - 1)));
-  return ymd(d);
+  return spreadDate(campaign.starts_on, campaign.ends_on, i, total);
 }
+
+/**
+ * "קמפיין מוכן" חל בפועל: סומן, יש תאריכים לפרוס עליהם, ויש תוכן. בלי
+ * תוכן (נמחק אחרי הסימון) חוזרים להקצאה הרגילה — קמפיין בגודל אפס לא
+ * אומר כלום. אותו תנאי במנוע (outsideCampaignWindow).
+ */
+export function isCompleteMode(campaign, content) {
+  return !!(campaign.content_complete_at && campaign.starts_on && campaign.ends_on &&
+            content.length);
+}
+
+/** לפי sort_order ואז id — הסדר שבו הפריטים נפרסים על התקופה */
+const byOrder = (a, b) => (a.sort_order - b.sort_order) || (a.id - b.id);
 
 /**
  * הרשת המלאה של קמפיין: שורה לכל זווית, עמודה לכל מדיה.
@@ -87,6 +93,9 @@ function angleDate(campaign, i, total) {
  */
 export function gridFor(campaign, content, campaignChannels, today = ymd(new Date()),
                         concurrent = []) {
+  if (isCompleteMode(campaign, content)) {
+    return completeAnglesGrid(campaign, content, campaignChannels, today);
+  }
   const needs = channelNeeds(campaign, campaignChannels, concurrent);
   const angles = angleCount(campaign, needs);
   // Object ולא Map — כמו במסלול היציאה השני, אחרת הצרכן מקבל טיפוס אחר
@@ -96,14 +105,14 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
              drafts: 0 };
   }
 
-  const byOrder = new Map(content.map((c) => [c.sort_order, c]));
+  const atOrder = new Map(content.map((c) => [c.sort_order, c]));
   let missing = 0;
   let ready = 0;
   let drafts = 0;
   let total = 0;
 
   const list = Array.from({ length: angles }, (_, i) => {
-    const item = byOrder.get(i + 1) ?? null;
+    const item = atOrder.get(i + 1) ?? null;
     const date = angleDate(campaign, i, angles);
 
     const cells = campaignChannels.map((ch) => {
@@ -141,6 +150,48 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
 }
 
 /**
+ * רשת של קמפיין לפי זוויות שסומן "מוכן": שורה לכל זווית שנכתבה (בלי שורות
+ * ריקות), פרוסות על אותה תקופה לפי הסדר. מדיה שאין לה גרסה לזווית (או
+ * "לא רלוונטי") פשוט לא מקבלת אותה — התא לא נדרש. הצורך של כל מדיה = כמה
+ * זוויות יש לה גרסה. טיוטה עדיין לא מוכנה, כמו תמיד.
+ */
+function completeAnglesGrid(campaign, content, campaignChannels, today) {
+  const written = [...content].sort(byOrder);
+  const needs = {};
+  let missing = 0;
+  let ready = 0;
+  let drafts = 0;
+  let total = 0;
+
+  const list = written.map((item, i) => {
+    const date = angleDate(campaign, i, written.length);
+    const cells = campaignChannels.map((ch) => {
+      const v = item.variants?.find((x) => x.channel_id === ch.id) ?? null;
+      const state = v ? v.status : 'not_needed';
+      if (state !== 'not_relevant' && state !== 'not_needed') {
+        needs[ch.id] = (needs[ch.id] ?? 0) + 1;
+        total += 1;
+        if (state === 'ready') ready += 1;
+        else missing += 1;
+        if (state === 'draft') drafts += 1;
+      }
+      return {
+        channel_id: ch.id,
+        channel_name: ch.name,
+        variant_id: v?.id ?? null,
+        state,
+        has_text: !!v?.body,
+      };
+    });
+    // index = sort_order של הזווית: הלחיצה בממשק מוצאת לפיו את הפריט
+    return { index: item.sort_order, date, past: date < today, content: item, cells };
+  });
+
+  for (const ch of campaignChannels) needs[ch.id] ??= 0;
+  return { angles: list, needs, total_cells: total, missing, ready, drafts, complete: true };
+}
+
+/**
  * קמפיין "כללי": בלי זוויות. לכל מדיה רשימת משבצות משלה, באורך הצורך שלה
  * (אותו חשבון קצב × שבועות × נתח כמו ברשת הזוויות), וכל משבצת ממולאת
  * בפריט תוכן של אותה מדיה בלבד (slot_channel_id + sort_order).
@@ -154,6 +205,9 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
  */
 export function generalGridFor(campaign, content, campaignChannels, today = ymd(new Date()),
                                concurrent = []) {
+  if (isCompleteMode(campaign, content)) {
+    return completeGeneralGrid(campaign, content, campaignChannels, today);
+  }
   const needs = channelNeeds(campaign, campaignChannels, concurrent);
   let missing = 0;
   let ready = 0;
@@ -168,11 +222,11 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
     let colReady = 0;
     const need = needs.get(ch.id) ?? 0;
     const mine = content.filter((x) => x.slot_channel_id === ch.id);
-    const byOrder = new Map(mine.map((x) => [x.sort_order, x]));
+    const atOrder = new Map(mine.map((x) => [x.sort_order, x]));
     const count = Math.max(need, ...mine.map((x) => x.sort_order));
 
     const slots = Array.from({ length: count }, (_, i) => {
-      const item = byOrder.get(i + 1) ?? null;
+      const item = atOrder.get(i + 1) ?? null;
       const v = item?.variants?.find((x) => x.channel_id === ch.id) ?? null;
       const state = item ? (v?.status ?? 'draft') : 'empty';
       const extra = i + 1 > need;
@@ -200,6 +254,46 @@ export function generalGridFor(campaign, content, campaignChannels, today = ymd(
   });
 
   return { channels, needs: Object.fromEntries(needs), total_cells: total, missing, ready, drafts };
+}
+
+/**
+ * קמפיין כללי שסומן "מוכן": בכל מדיה רק המשבצות שמולאו (כולל טיוטות),
+ * פרוסות על אותה תקופה לפי הסדר. הצורך של המדיה = מה שמולא (בלי "לא
+ * רלוונטי"); חסר = נדרש − מוכן, כלומר הטיוטות.
+ */
+function completeGeneralGrid(campaign, content, campaignChannels, today) {
+  const needs = {};
+  let missing = 0;
+  let ready = 0;
+  let drafts = 0;
+  let total = 0;
+
+  const channels = campaignChannels.map((ch) => {
+    const mine = content.filter((x) => x.slot_channel_id === ch.id).sort(byOrder);
+    let colRequired = 0;
+    let colReady = 0;
+
+    const slots = mine.map((item, i) => {
+      const v = item.variants?.find((x) => x.channel_id === ch.id) ?? null;
+      const state = v?.status ?? 'draft';
+      if (state !== 'not_relevant') {
+        total += 1;
+        colRequired += 1;
+        if (state === 'ready') { ready += 1; colReady += 1; } else missing += 1;
+        if (state === 'draft') drafts += 1;
+      }
+      const date = angleDate(campaign, i, mine.length);
+      // index = sort_order: הלחיצה בממשק מוצאת לפיו את הפריט
+      return { index: item.sort_order, date, past: date < today, extra: false, state,
+               content: item, variant_id: v?.id ?? null, has_text: !!v?.body };
+    });
+
+    needs[ch.id] = colRequired;
+    return { channel_id: ch.id, channel_name: ch.name, need: colRequired, required: colRequired,
+             ready: colReady, slots };
+  });
+
+  return { channels, needs, total_cells: total, missing, ready, drafts, complete: true };
 }
 
 /**
@@ -269,6 +363,36 @@ export function resolvePeriod(b, before = null) {
     return { period: before.period, ends_on: b.starts_on ? periodEnd(b.starts_on, before.period) : null };
   }
   return {};
+}
+
+/**
+ * מה יקרה בלחיצה על "קמפיין מוכן", מתוך הקמפיין כפי שהוא עכשיו (שורה של
+ * campaignsWithHealth). removed_empty = המשבצות/התאים שלא נכתבו ויורדים;
+ * kept_by_channel = כמה פוסטים נשארים לכל מדיה; posts/drafts = סה"כ ומתוכם
+ * טיוטות. error = למה אי אפשר (בלי תאריכים / בלי תוכן).
+ */
+export function completionSummary(c, today = ymd(new Date())) {
+  if (!c.starts_on || !c.ends_on) {
+    return { error: 'לקמפיין אין תאריכים, ולכן אין על מה לפרוס את הפוסטים' };
+  }
+  if (!c.content?.length) return { error: 'אין בקמפיין תוכן — אין מה להשאיר' };
+
+  const after = { ...c, content_complete_at: c.content_complete_at ?? new Date().toISOString() };
+  const grid = c.structure === 'general'
+    ? generalGridFor(after, c.content, c.channels, today)
+    : gridFor(after, c.content, c.channels, today);
+  if (!grid.total_cells) {
+    return { error: 'אין בקמפיין פוסטים למדיות שלו — אין מה לפרוס' };
+  }
+  return {
+    removed_empty: c.complete ? 0 : Math.max(0, c.missing_content - (c.drafts ?? 0)),
+    kept_by_channel: grid.needs,
+    posts: grid.total_cells,
+    ready: grid.ready,
+    drafts: grid.drafts,
+    starts_on: c.starts_on,
+    ends_on: c.ends_on,
+  };
 }
 
 /** כל הקמפיינים עם מצב מלא */
@@ -352,6 +476,8 @@ export async function campaignsWithHealth() {
       scheduled,
       published,
       placed: scheduled + published,
+      // "קמפיין מוכן" חל בפועל (סומן, יש תאריכים ותוכן) — הרשת בגודל התוכן
+      complete: grid.complete === true,
       phase: phaseOf(c, today),
       status: statusOf({ c, today, grid, myChannels }),
       pace: paceOf(c, today, published, grid),
@@ -376,7 +502,7 @@ function phaseOf(c, today) {
   return 'running';
 }
 
-function statusOf({ c, today, grid, myChannels }) {
+export function statusOf({ c, today, grid, myChannels }) {
   const phase = phaseOf(c, today);
   if (phase === 'paused') return { key: 'paused', label: 'מושהה', tone: 'warn' };
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
@@ -386,6 +512,17 @@ function statusOf({ c, today, grid, myChannels }) {
   }
   if (!c.starts_on || !c.ends_on) {
     return { key: 'open', label: 'ללא תאריכים', tone: 'muted' };
+  }
+  if (grid.complete) {
+    // לא "חסר": הקמפיין בגודל מה שנכתב. מה שנשאר הוא לסיים טיוטות.
+    if (grid.missing > 0) {
+      return {
+        key: 'complete_drafts',
+        label: `מוכן · ${grid.missing === 1 ? 'טיוטה אחת' : `${grid.missing} טיוטות`} לסיום`,
+        tone: 'warn',
+      };
+    }
+    return { key: 'complete', label: `מוכן — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
   }
   if (grid.missing > 0) {
     return {

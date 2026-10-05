@@ -2,6 +2,7 @@ import { one, rows, query } from './db.js';
 import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateFilterSql, fitsSlotChannel } from './candidates.js';
+import { spreadDate } from '../public/js/core/period.js';
 
 /**
  * מנוע השיבוץ.
@@ -58,6 +59,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     // starts_on ולא אחרי ends_on (ראו outsideCampaignWindow).
     rows(`select ci.*,
                  ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
+                 ${COMPLETE_SPREAD_COLUMNS},
                  coalesce(
                    array_agg(v.channel_id) filter (where v.status = 'ready'),
                    '{}'
@@ -897,14 +899,59 @@ function compareKeys(a, b) {
 /* ========================= בחירה למשבצת ========================= */
 
 /**
+ * העמודות ש-outsideCampaignWindow צריך כדי לכבד "קמפיין מוכן", לשאילתת
+ * תוכן עם הכינויים ci (content_items) ו-ca (campaigns). המקום של הפריט
+ * בתור של הקמפיין (בכללי — של המדיה שלו) וכמה פריטים בתור, כמו ברשת
+ * (src/campaigns.js). שאילתות משנה ולא פונקציית חלון — כדי שהמספרים לא
+ * ישתנו לפי מה שהשאילתה החיצונית מסננת. רק כשהקמפיין סומן מוכן.
+ */
+export const COMPLETE_SPREAD_COLUMNS = `
+  ca.content_complete_at as campaign_complete_at,
+  case when ca.content_complete_at is not null then (
+    select count(*)::int from content_items x
+     where x.campaign_id = ci.campaign_id
+       and x.slot_channel_id is not distinct from ci.slot_channel_id
+       and (x.sort_order, x.id) <= (ci.sort_order, ci.id)) end as campaign_slot_rank,
+  case when ca.content_complete_at is not null then (
+    select count(*)::int from content_items x
+     where x.campaign_id = ci.campaign_id
+       and x.slot_channel_id is not distinct from ci.slot_channel_id) end as campaign_slot_count`;
+
+/**
+ * התאריך המתוכנן של פריט בקמפיין שסומן מוכן: פרוס אחיד על התקופה לפי
+ * המקום שלו בתור — אותה spreadDate שהרשת מציגה. null = אין תאריך מתוכנן
+ * (קמפיין רגיל, בלי תאריכים, או שהעמודות לא נשלפו).
+ */
+export function plannedDate(c) {
+  if (!c?.campaign_complete_at || !c.campaign_starts_on || !c.campaign_ends_on) return null;
+  if (!c.campaign_slot_rank || !c.campaign_slot_count) return null;
+  return spreadDate(c.campaign_starts_on, c.campaign_ends_on,
+    c.campaign_slot_rank - 1, c.campaign_slot_count);
+}
+
+/** בתוך החלון של הקמפיין, אבל לפני התאריך המתוכנן של הפריט (קמפיין מוכן) */
+function waitingForPlannedDate(c, dateKey) {
+  const planned = plannedDate(c);
+  return !!planned && dateKey < planned &&
+    !(c.campaign_starts_on && dateKey < c.campaign_starts_on) &&
+    !(c.campaign_ends_on && dateKey > c.campaign_ends_on);
+}
+
+/**
  * האם התאריך מחוץ לחלון של הקמפיין שהתוכן שייך אליו. תוכן שוטף (בלי
  * קמפיין) וקמפיין בלי תאריכים — אף פעם לא מחוץ לחלון. התאריכים הם
  * YYYY-MM-DD, ולכן השוואת מחרוזות מדויקת.
+ *
+ * קמפיין מוכן: פריט לא יוצא לפני התאריך המתוכנן שלו (plannedDate) — אחרת
+ * קמפיין קטן היה נגמר בשבועות הראשונים בקצב המלא של המדיה. אחריו מותר,
+ * אם המשבצת שלו התפספסה.
  */
 export function outsideCampaignWindow(c, dateKey) {
   if (!c?.campaign_id) return false;
   if (c.campaign_starts_on && dateKey < c.campaign_starts_on) return true;
   if (c.campaign_ends_on && dateKey > c.campaign_ends_on) return true;
+  const planned = plannedDate(c);
+  if (planned && dateKey < planned) return true;
   return false;
 }
 
@@ -1041,6 +1088,11 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
  */
 export function holeReason(endpointContent, dateKey) {
   if (!endpointContent.length) return 'אין שום תוכן (גם לא טיוטה) לנקודה הזו';
+  // קמפיין מוכן: התוכן בחלון, אבל כל פריט מחכה לתאריך המתוכנן שלו
+  if (endpointContent.every((c) => outsideCampaignWindow(c, dateKey)) &&
+      endpointContent.some((c) => waitingForPlannedDate(c, dateKey))) {
+    return 'התוכן של הקמפיין מתוכנן לתאריכים מאוחרים יותר';
+  }
   if (endpointContent.every((c) => outsideCampaignWindow(c, dateKey))) {
     return 'התוכן של נקודת הקצה שייך לקמפיינים שלא רצים בתאריך הזה, ואין לה תוכן שוטף';
   }

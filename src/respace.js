@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { pool, rows, one, query } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import {
-  buildSlots, buildUsage, nextSlot, outsideCampaignWindow, withEngineLock,
+  buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, nextSlot, outsideCampaignWindow, withEngineLock,
 } from './engine.js';
 
 /**
@@ -58,7 +58,9 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
       `select p.id, p.title, p.kind, p.status, p.scheduled_at,
               p.channel_id, p.endpoint_id,
               c.name as channel_name, e.name as endpoint_name,
-              ci.campaign_id, ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on
+              ci.campaign_id, ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
+              -- קמפיין מוכן: פוסט לא זז לפני התאריך המתוכנן שלו (outsideCampaignWindow)
+              ${COMPLETE_SPREAD_COLUMNS}
          from posts p
          join channels c       on c.id = p.channel_id
          left join endpoints e on e.id = p.endpoint_id
@@ -168,12 +170,19 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
       if (tooClose) return false;
     }
     if (post.kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
-    // לא מוציאים פוסט של קמפיין מהחלון שלו. פוסט שכבר יושב מחוצה לו
-    // (הקמפיין זז אחרי השיבוץ) לא ננעל — מותר להזיז אותו כרגיל.
-    if (outsideCampaignWindow(post, dateKey) &&
-        !outsideCampaignWindow(post, ymd(new Date(post.scheduled_at)))) return false;
-    return true;
+    return windowAllows(post, dateKey);
   }
+}
+
+/**
+ * האם מותר להזיז את הפוסט ליום הזה מבחינת הקמפיין שלו. לא מוציאים פוסט
+ * מהחלון של הקמפיין — ובקמפיין מוכן גם לא לפני התאריך המתוכנן שלו (שניהם
+ * ב-outsideCampaignWindow). פוסט שכבר יושב מחוץ לחלון (הקמפיין זז אחרי
+ * השיבוץ) לא ננעל — מותר להזיז אותו כרגיל.
+ */
+export function windowAllows(post, dateKey) {
+  return !(outsideCampaignWindow(post, dateKey) &&
+           !outsideCampaignWindow(post, ymd(new Date(post.scheduled_at))));
 }
 
 /** כותב את ההזזות. מחזיר כמה פוסטים באמת זזו. */

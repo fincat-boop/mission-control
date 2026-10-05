@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +17,8 @@ import { fileURLToPath } from 'node:url';
  *   5. יבוא של קובץ שלא קיים
  *   6. מעגל יבוא בין מודולים
  *   7. הפרת שכבות: מודול פיצ'ר שמייבא מודול פיצ'ר אחר
+ *   8. שגיאת תחביר — node --check על כל קובץ (מודול ES, package.json
+ *      הוא type=module). בלי זה קובץ שלא נטען בכלל עבר את כל השאר.
  *
  * עובדת גם על קובץ אחד גדול וגם אחרי פירוק לתיקיות — כדי שאפשר יהיה
  * לפרק בשלבים בלי להישאר בלי רשת ביטחון באמצע.
@@ -235,6 +239,20 @@ for (const [file, deps] of graph) {
   }
 }
 
+/* ========================= 8. תחביר ========================= */
+// הבדיקות למעלה הן ביטויים רגולריים — הן לא רואות קובץ שלא מתפרסר. node
+// --check מפרסר בלי להריץ, כמודול ES (לפי type=module ב-package.json).
+const run = promisify(execFile);
+await Promise.all(files.map(async (file) => {
+  try {
+    await run(process.execPath, ['--check', file]);
+  } catch (e) {
+    const where = String(e.stderr ?? '').split('\n').find((l) => l.startsWith(file)) ?? '';
+    const what = String(e.stderr ?? '').split('\n').find((l) => /Error:/.test(l)) ?? e.message;
+    problems.push(`${rel(file)}: שגיאת תחביר${where ? ` (${where.slice(file.length + 1)})` : ''} — ${what.trim()}`);
+  }
+}));
+
 /* ========================= תוצאה ========================= */
 
 if (problems.length) {
@@ -244,5 +262,5 @@ if (problems.length) {
 }
 console.log(
   `קוד הלקוח תקין (${files.length} קבצים): ` +
-  'אין קבועים חסרים, כפילויות, יבוא שבור, מעגלים או הפרות שכבות.'
+  'אין שגיאות תחביר, קבועים חסרים, כפילויות, יבוא שבור, מעגלים או הפרות שכבות.'
 );

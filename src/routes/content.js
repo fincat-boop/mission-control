@@ -32,6 +32,9 @@ const validSlot = (n) => Number.isInteger(Number(n)) && Number(n) >= 1 && Number
  * מריץ fn בתוך savepoint. הבקשה כולה רצה בטרנזקציה אחת (withOrg), וכשל
  * ייחודיות היה מפיל אותה בשקט — כאן חוזרים לנקודה שלפני ומחזירים null.
  */
+/** התנגשות על משבצת שנשארה למרות הנעילה (למשל מילוי ידני באותו רגע) */
+const SLOT_RACE = 'המשבצת תפוסה, נסה שוב';
+
 async function uniqueOrNull(fn) {
   await query('savepoint slot_unique');
   try {
@@ -341,7 +344,9 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
 
   // מעבר לקמפיין אחר גורר איתו את נקודת הקצה שלו
   if (b.campaign_id && b.campaign_id !== current.campaign_id) {
-    const owner = await one('select endpoint_id, structure from campaigns where id = $1',
+    // נעילה כמו בהעלאה המרוכזת ובסימון "מוכן" — הסדר נקבע מול מצב יציב
+    const owner = await one(
+      'select endpoint_id, structure, content_complete_at from campaigns where id = $1 for update',
       [b.campaign_id]);
     if (owner) b.endpoint_id = owner.endpoint_id;
     // זווית לא נכנסת לקמפיין כללי ומשבצת-מדיה לא נכנסת לקמפיין זוויות:
@@ -351,12 +356,25 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
         ? 'אי אפשר להעביר זווית לקמפיין כללי'
         : 'אי אפשר להעביר תוכן של משבצת לקמפיין לפי זוויות');
     }
+    // קמפיין מוכן: מה שנכנס אליו מצטרף בסוף (בכללי — בסוף המדיה שלו), ולא
+    // נדחף לפני הפוסטים שכבר נפרסו על התקופה
+    // (Number: מזהה שהגיע כמחרוזת מהעוזר הוא אותו קמפיין, לא מעבר)
+    if (owner?.content_complete_at && b.sort_order == null &&
+        Number(b.campaign_id) !== current.campaign_id) {
+      b.sort_order = (await one(
+        `select coalesce(max(sort_order), 0) + 1 as n from content_items
+          where campaign_id = $1 and slot_channel_id is not distinct from $2`,
+        [b.campaign_id, current.slot_channel_id]))?.n ?? 1;
+    }
   }
   const c = await uniqueOrNull(() => updateById('content_items', CONTENT_FIELDS, req.params.id, b));
   if (!c) return bad(res, 'המשבצת תפוסה', 409);
   if (leavingSlot) {
     await query('update content_items set slot_channel_id = null where id = $1', [c.id]);
     c.slot_channel_id = null;
+  }
+  if (current.campaign_id && c.campaign_id !== current.campaign_id) {
+    await reopenIfEmpty(current.campaign_id);
   }
 
   // משבצת בקמפיין כללי: הטקסט והמצב נשמרים גם על הגרסה היחידה שלה,
@@ -385,8 +403,22 @@ async function resolveEndpoint(b) {
   return b.endpoint_id ?? null;
 }
 
+/**
+ * קמפיין מוכן שנשאר בלי תוכן (הפריט האחרון נמחק או יצא ממנו) חוזר להקצאה
+ * הרגילה — באותה טרנזקציה של הבקשה — כדי שהתפריט, הרשת והסטטוס יסכימו.
+ */
+async function reopenIfEmpty(campaignId) {
+  await query(
+    `update campaigns set content_complete_at = null
+      where id = $1 and content_complete_at is not null
+        and not exists (select 1 from content_items where campaign_id = $1)`,
+    [campaignId]);
+}
+
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
-  await query('delete from content_items where id = $1', [req.params.id]);
+  const gone = await one('delete from content_items where id = $1 returning campaign_id',
+    [req.params.id]);
+  if (gone?.campaign_id) await reopenIfEmpty(gone.campaign_id);
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });
 }));
@@ -591,7 +623,11 @@ r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
  * @param attach (client, contentId, index) → מוסיף את שורת הקובץ לפריט
  */
 async function bulkAngles(req, res, files, attach) {
-  const campaign = await one('select * from campaigns where id = $1', [req.params.id]);
+  // נעילת שורת הקמפיין עד סוף הבקשה (כל בקשה היא טרנזקציה אחת, withOrg):
+  // המשבצות הפנויות נקראות אחרי הנעילה, ו"קמפיין מוכן" (שדוחס את הסדר)
+  // לוקח אותה נעילה — שתי העלאות במקביל, או העלאה מול סימון, לא יחשבו
+  // את אותה משבצת פנויה
+  const campaign = await one('select * from campaigns where id = $1 for update', [req.params.id]);
   if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
   if (!files?.length) return bad(res, 'לא הגיעו קבצים');
 
@@ -612,8 +648,10 @@ async function bulkAngles(req, res, files, attach) {
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`,
     [campaign.id]
   );
-  // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו
-  const required = angleCount(campaign, channelNeeds(campaign, myChannels));
+  // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו. קמפיין
+  // שסומן מוכן הוא בגודל התוכן שלו: מה שנוסף נכנס בסוף ומגדיל אותו.
+  const required = campaign.content_complete_at
+    ? null : angleCount(campaign, channelNeeds(campaign, myChannels));
 
   // המשבצות הריקות, לפי הסדר. אם נגמרו — ממשיכים אחרי המשבצת האחרונה.
   const freeSlots = [];
@@ -623,7 +661,7 @@ async function bulkAngles(req, res, files, attach) {
   let overflowFrom = Math.max(0, ...existing.map((x) => x.sort_order), required ?? 0);
 
   const created = [];
-  await tx(async (client) => {
+  const ok = await uniqueOrNull(() => tx(async (client) => {
     for (const [i, f] of files.entries()) {
       const slot = freeSlots.shift() ?? (overflowFrom += 1);
       const item = (await client.query(
@@ -646,7 +684,9 @@ async function bulkAngles(req, res, files, attach) {
       await attach(client, item.id, i);
       created.push({ id: item.id, title: item.title, slot });
     }
-  });
+    return true;
+  }));
+  if (!ok) return bad(res, SLOT_RACE, 409);
 
   res.status(201).json({
     created,
@@ -674,7 +714,9 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   // אותו חשבון בדיוק כמו המסך (campaignsWithHealth) — כולל הנתח שנגזר
   // מהקמפיינים החופפים — כדי שהקבצים ימלאו את המשבצות שהמשתמש רואה
   const concurrent = await rows('select * from campaigns');
-  const need = channelNeeds(campaign, myChannels, concurrent).get(channelId) ?? null;
+  // קמפיין שסומן מוכן: אין משבצות ריקות — הקבצים נכנסים בסוף ומגדילים אותו
+  const need = campaign.content_complete_at
+    ? null : channelNeeds(campaign, myChannels, concurrent).get(channelId) ?? null;
 
   const existing = await rows(
     'select sort_order from content_items where campaign_id = $1 and slot_channel_id = $2',
@@ -683,7 +725,7 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   const slots = nextSlots(need, existing.map((x) => x.sort_order), files.length);
 
   const created = [];
-  await tx(async (client) => {
+  const ok = await uniqueOrNull(() => tx(async (client) => {
     for (const [i, f] of files.entries()) {
       const slot = slots[i];
       const item = (await client.query(
@@ -700,7 +742,9 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
       await attach(client, item.id, i);
       created.push({ id: item.id, title: item.title, slot });
     }
-  });
+    return true;
+  }));
+  if (!ok) return bad(res, SLOT_RACE, 409);
 
   res.status(201).json({
     created,
