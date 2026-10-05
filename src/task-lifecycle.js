@@ -21,7 +21,9 @@ const AUTO_ASSIGN_KINDS = ['write', 'swap', 'publish'];
 /**
  * למה המשימה הזו כבר לא נחוצה, או null אם היא עדיין בתוקף.
  * t: שורת משימה פתוחה + פרטי הפוסט שלה (post_status null = הפוסט נמחק).
- *   write / swap   — לפוסט יש תוכן, הוא פורסם, או שהמועד עבר ביותר מיממה
+ *   write / swap   — לפוסט יש תוכן עם גרסה מוכנה לערוץ שלו (post_ready), הוא
+ *                    אושר או פורסם, או שהמועד עבר ביותר מיממה. תוכן בלי
+ *                    גרסה מוכנה לערוץ הזה — עוד יש מה לכתוב
  *   publish (wa)   — הפוסט פורסם, או שהמועד עבר ביותר מיממה (התראת "עבר
  *                    המועד" ממשיכה להציג אותו שבוע)
  *   failed         — הפוסט פורסם, או אושר שוב למועד עתידי
@@ -40,8 +42,9 @@ export function taskCloseReason(t, now = new Date()) {
   switch (t.kind) {
     case 'write':
     case 'swap':
-      if (t.post_content_id != null) return 'has_content';
       if (published) return 'published';
+      if (t.post_status === 'approved') return 'approved';
+      if (t.post_content_id != null && t.post_ready) return 'has_content';
       return expired ? 'expired' : null;
     case 'publish':
       if (!t.meta?.wa_send) return null; // משימת פרסום ידנית ישנה — נשארת לאדם
@@ -97,7 +100,10 @@ export async function closeResolvedTasks(now = new Date()) {
   const open = await rows(
     `select t.id, t.kind, t.meta, t.post_id, t.assignee_id, t.done,
             p.status as post_status, p.content_id as post_content_id,
-            p.scheduled_at as post_scheduled_at, p.assignee_id as post_assignee_id
+            p.scheduled_at as post_scheduled_at, p.assignee_id as post_assignee_id,
+            exists (select 1 from content_variants v
+                     where v.content_id = p.content_id and v.channel_id = p.channel_id
+                       and v.status = 'ready') as post_ready
        from tasks t
        left join posts p on p.id = t.post_id
       where t.done = false and t.post_id is not null

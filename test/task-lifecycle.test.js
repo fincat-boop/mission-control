@@ -15,10 +15,13 @@ const task = (kind, post = {}, extra = {}) => ({
 
 /* ========================= taskCloseReason ========================= */
 
-test('write/swap — נסגרת כשלפוסט יש תוכן, כשפורסם, או יממה אחרי המועד', () => {
+test('write/swap — נסגרת כשלפוסט יש תוכן עם גרסה מוכנה, כשאושר/פורסם, או יממה אחרי המועד', () => {
   for (const kind of ['write', 'swap']) {
     assert.equal(taskCloseReason(task(kind), NOW), null);
-    assert.equal(taskCloseReason(task(kind, { post_content_id: 4 }), NOW), 'has_content');
+    assert.equal(taskCloseReason(task(kind, { post_content_id: 4, post_ready: true }), NOW), 'has_content');
+    // תוכן משויך אבל בלי גרסה מוכנה לערוץ — עוד יש מה לכתוב
+    assert.equal(taskCloseReason(task(kind, { post_content_id: 4, post_ready: false }), NOW), null);
+    assert.equal(taskCloseReason(task(kind, { post_status: 'approved' }), NOW), 'approved');
     assert.equal(taskCloseReason(task(kind, { post_status: 'published' }), NOW), 'published');
     assert.equal(taskCloseReason(task(kind, { post_scheduled_at: at(-23) }), NOW), null);
     assert.equal(taskCloseReason(task(kind, { post_scheduled_at: at(-25) }), NOW), 'expired');
@@ -52,8 +55,8 @@ test('approve — נסגרת ברגע שהפוסט כבר לא ממתין לאי
 
 test('general, משימה בלי פוסט, או משימה סגורה — לעולם לא נסגרות לבד', () => {
   assert.equal(taskCloseReason(task('general', { post_status: 'published' }), NOW), null);
-  assert.equal(taskCloseReason(task('write', { post_content_id: 3 }, { post_id: null }), NOW), null);
-  assert.equal(taskCloseReason(task('write', { post_content_id: 3 }, { done: true }), NOW), null);
+  assert.equal(taskCloseReason(task('write', { post_content_id: 3, post_ready: true }, { post_id: null }), NOW), null);
+  assert.equal(taskCloseReason(task('write', { post_content_id: 3, post_ready: true }, { done: true }), NOW), null);
 });
 
 /* ========================= autoAssignee ========================= */
