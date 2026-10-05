@@ -1,7 +1,7 @@
 import { one, rows, query } from './db.js';
 import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
-import { candidateFilterSql, fitsSlotChannel } from './candidates.js';
+import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
 
 /**
@@ -385,10 +385,10 @@ export async function recordDismissals(list) {
  * endpointId null = מכל נקודות הקצה (פוסט שעוד אין לו נקודה).
  * מוכן קודם; בתוך כל קבוצה — מה שעוד לא שובץ בערוץ הזה, ואז הוותיק.
  */
-export function contentCandidates({ endpointId = null, channelId, date = null }) {
-  return rows(
+export async function contentCandidates({ endpointId = null, channelId, date = null }) {
+  const list = await rows(
     `select ci.id, ci.title, ci.kind, ci.endpoint_id, e.name as endpoint_name,
-            ci.campaign_id, ca.name as campaign_name, v.status as variant_status,
+            ca.name as campaign_name, v.status as variant_status, ${candidateColumnsSql()},
             exists (select 1 from posts p2
                      where p2.content_id = ci.id and p2.channel_id = $2
                        and p2.status <> 'hole') as used_on_channel
@@ -403,6 +403,8 @@ export function contentCandidates({ endpointId = null, channelId, date = null })
       limit 100`,
     [endpointId, channelId, date]
   );
+  // קמפיין מוכן: לא לפני התאריך המתוכנן של הפריט (candidateFits)
+  return list.filter((c) => candidateFits(c, channelId, date));
 }
 
 /* ========================= בחירה מתוך ההצעה ========================= */

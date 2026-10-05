@@ -8,7 +8,8 @@ import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
 import { assetView } from '../media.js';
-import { attachToPost, contentCandidates, recordDismissals } from '../engine.js';
+import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
+import { candidateColumnsSql } from '../candidates.js';
 
 const r = Router();
 
@@ -282,7 +283,7 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
   if (!post.channel_active) return bad(res, `הערוץ ${post.channel_name} מושבת`, 409);
 
   const c = await one(
-    `select ci.id, ci.title, ci.kind, ci.endpoint_id, ci.campaign_id, ci.slot_channel_id,
+    `select ci.id, ci.title, ci.kind, ci.endpoint_id, ${candidateColumnsSql()},
             ca.name as campaign_name, ca.paused_at, ca.starts_on, ca.ends_on,
             v.status as variant_status,
             (select active from endpoints where id = ci.endpoint_id) as endpoint_active,
@@ -317,6 +318,12 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     if ((c.starts_on && c.starts_on > day) || (c.ends_on && c.ends_on < day)) {
       return bad(res, `הפוסט מחוץ לתאריכי הקמפיין "${c.campaign_name}"` +
         ` (${c.starts_on ?? '…'} – ${c.ends_on ?? '…'})`);
+    }
+    // קמפיין מוכן: הפריט יוצא לא לפני התאריך המתוכנן שלו — כמו במנוע
+    const planned = plannedDate(c);
+    if (planned && day < planned) {
+      return bad(res, `"${c.title}" מתוכנן ל-${planned} בקמפיין "${c.campaign_name}"` +
+        ' (קמפיין מוכן) — אי אפשר לשייך אותו לפוסט מוקדם יותר');
     }
   }
   // פוסט בלי נקודת קצה מקבל את של התוכן — ואז חל עליו אותו כלל כמו בהזזה:
