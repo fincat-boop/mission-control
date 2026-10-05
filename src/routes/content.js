@@ -14,11 +14,44 @@ import { analyzeDocument } from '../analyze.js';
 
 const r = Router();
 
+/**
+ * פריט של משבצת בקמפיין כללי שייך למדיה אחת בלבד. גרסה או קובץ למדיה אחרת
+ * היו הופכים אותו למועמד בעוד ערוץ (המנוע בוחר לפי הגרסאות) — ולכן נחסם.
+ * @returns {Promise<string|null>} הודעת שגיאה, או null כשמותר
+ */
+async function slotChannelError(contentId, channelId) {
+  const item = await one('select slot_channel_id from content_items where id = $1', [contentId]);
+  if (!item?.slot_channel_id || Number(channelId) === item.slot_channel_id) return null;
+  return 'הפוסט הזה שייך למדיה אחת בקמפיין כללי — אין לו גרסה למדיה אחרת';
+}
+
+/** מקום במשבצת: מספר שלם 1–1000 */
+const validSlot = (n) => Number.isInteger(Number(n)) && Number(n) >= 1 && Number(n) <= 1000;
+
+/**
+ * מריץ fn בתוך savepoint. הבקשה כולה רצה בטרנזקציה אחת (withOrg), וכשל
+ * ייחודיות היה מפיל אותה בשקט — כאן חוזרים לנקודה שלפני ומחזירים null.
+ */
+async function uniqueOrNull(fn) {
+  await query('savepoint slot_unique');
+  try {
+    const out = await fn();
+    await query('release savepoint slot_unique');
+    return out;
+  } catch (e) {
+    await query('rollback to savepoint slot_unique');
+    if (e.code === '23505') return null;
+    throw e;
+  }
+}
+
 /* ========================= גרסאות לפי מדיה ========================= */
 
 /** יצירה או עדכון של הגרסה של זווית מסוימת במדיה מסוימת */
 r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
+  const slotErr = await slotChannelError(req.params.id, req.params.channelId);
+  if (slotErr) return bad(res, slotErr);
   const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
 
   // meta — נושא ורשימות יעד של ערוץ המייל. לא נשלח = לא נוגעים בקיים.
@@ -88,6 +121,10 @@ r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) =
 r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) => {
   const ids = req.body?.content_ids;
   if (!Array.isArray(ids)) return bad(res, 'צריך רשימת מזהי תוכן');
+  const c = await one('select structure from campaigns where id = $1', [req.params.id]);
+  if (c?.structure === 'general') {
+    return bad(res, 'בקמפיין כללי אין סדר זוויות — כל פוסט יושב במשבצת של המדיה שלו');
+  }
   await tx(async (client) => {
     for (const [i, contentId] of ids.entries()) {
       await client.query(
@@ -171,6 +208,9 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   // משבצת מפורשת מנצחת (מילוי משבצת מהציר). בלעדיה — סוף התור.
   // בזוויות המשבצת היא שורה ברשת; בכללי — מקום ברשימה של מדיה אחת.
   let nextOrder = 0;
+  if (slotChannel && b.sort_order != null && !validSlot(b.sort_order)) {
+    return bad(res, 'מספר המשבצת חייב להיות מספר שלם בין 1 ל-1000');
+  }
   if (b.campaign_id) {
     if (b.sort_order != null) {
       const taken = await one(
@@ -192,7 +232,9 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
 
   // ready_channel_ids חייב המרת טיפוס מפורשת: בלעדיה Postgres מפרש
   // את ברירת המחדל '{}' כטקסט ונופל על אי-התאמה ל-integer[]
-  const c = await one(
+  // שני משתמשים שממלאים את אותה משבצת באותו רגע: האינדקס הייחודי תופס,
+  // והשני מקבל 409 במקום שגיאת שרת
+  const c = await uniqueOrNull(() => one(
     `insert into content_items (endpoint_id, campaign_id, kind, title, body,
                                 ready_channel_ids, sort_order, evergreen, reuse_after_days,
                                 slot_channel_id)
@@ -201,7 +243,8 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     [b.endpoint_id, b.campaign_id ?? null, b.kind, b.title, b.body ?? null,
      slotChannel ? [slotChannel] : (b.ready_channel_ids ?? null), nextOrder,
      b.evergreen ?? null, b.reuse_after_days ?? null, slotChannel]
-  );
+  ));
+  if (!c) return bad(res, 'המשבצת תפוסה', 409);
 
   if (slotChannel) {
     // הגרסה היחידה של הפריט — לאותה מדיה. הטקסט שלה הוא הטקסט של הפריט.
@@ -237,6 +280,22 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
     [req.params.id]);
   if (!current) return bad(res, 'לא נמצא תוכן כזה', 404);
 
+  // פוסט של משבצת יוצא מהקמפיין רק לתוכן שוטף: המשבצת שלו יורדת איתו
+  // (גרסה אחת למדיה אחת נשארת). לקמפיין אחר הוא לא עובר — שם אין לו משבצת.
+  const leavingSlot = current.slot_channel_id && 'campaign_id' in b &&
+    b.campaign_id !== current.campaign_id;
+  if (leavingSlot && b.campaign_id != null) {
+    return bad(res, 'פוסט של קמפיין כללי יכול לצאת רק לתוכן שוטף, לא לקמפיין אחר');
+  }
+  if (current.slot_channel_id && b.sort_order != null && !leavingSlot) {
+    if (!validSlot(b.sort_order)) return bad(res, 'מספר המשבצת חייב להיות מספר שלם בין 1 ל-1000');
+    const taken = await one(
+      `select 1 from content_items where campaign_id = $1 and slot_channel_id = $2
+          and sort_order = $3 and id <> $4`,
+      [current.campaign_id, current.slot_channel_id, b.sort_order, current.id]);
+    if (taken) return bad(res, 'המשבצת תפוסה', 409);
+  }
+
   // מעבר לקמפיין אחר גורר איתו את נקודת הקצה שלו
   if (b.campaign_id && b.campaign_id !== current.campaign_id) {
     const owner = await one('select endpoint_id, structure from campaigns where id = $1',
@@ -250,7 +309,12 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
         : 'אי אפשר להעביר תוכן של משבצת לקמפיין לפי זוויות');
     }
   }
-  const c = await updateById('content_items', CONTENT_FIELDS, req.params.id, b);
+  const c = await uniqueOrNull(() => updateById('content_items', CONTENT_FIELDS, req.params.id, b));
+  if (!c) return bad(res, 'המשבצת תפוסה', 409);
+  if (leavingSlot) {
+    await query('update content_items set slot_channel_id = null where id = $1', [c.id]);
+    c.slot_channel_id = null;
+  }
 
   // משבצת בקמפיין כללי: הטקסט והמצב נשמרים גם על הגרסה היחידה שלה,
   // כדי שהטופס הפשוט יישמר בבקשה אחת
@@ -317,6 +381,8 @@ r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
 /** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
 r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),
   upload.array('files'), wrap(async (req, res) => {
+    const slotErr = await slotChannelError(req.params.id, req.params.channelId);
+    if (slotErr) return bad(res, slotErr);
     const v = await ensureVariant(req.params.id, req.params.channelId);
     res.status(201).json({ assets: await saveAssets(req.files, v.content_id, v.id) });
   }));
@@ -390,6 +456,10 @@ r.post('/content/:id/uploads/sign', requirePerm('content'), wrap(async (req, res
   if (b.channel_id != null && !(await channelExists(b.channel_id))) {
     return bad(res, 'לא נמצא ערוץ כזה', 404);
   }
+  if (b.channel_id != null) {
+    const slotErr = await slotChannelError(item.id, b.channel_id);
+    if (slotErr) return bad(res, slotErr);
+  }
 
   const key = newMediaKey(currentOrg(), b.filename);
   // הדפדפן חייב לשלוח בדיוק את הכותרות החתומות (סוג וגודל) — אחרת R2 דוחה
@@ -411,6 +481,10 @@ r.post('/content/:id/uploads/complete', requirePerm('content'), wrap(async (req,
 
   if (channelId != null && !(await channelExists(channelId))) {
     return bad(res, 'לא נמצא ערוץ כזה', 404);
+  }
+  if (channelId != null) {
+    const slotErr = await slotChannelError(item.id, channelId);
+    if (slotErr) return bad(res, slotErr);
   }
 
   const checked = await checkUploadedKey(key);

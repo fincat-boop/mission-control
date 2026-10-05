@@ -487,6 +487,12 @@ const WRITE_TOOLS = {
       method: 'PUT', path: `/content/${content_id}/variants/${channel_id}`, body: rest,
     }),
     check: async (a) => {
+      // פוסט של קמפיין כללי שייך למדיה אחת — השרת ידחה גרסה למדיה אחרת
+      const item = await one('select slot_channel_id from content_items where id = $1',
+        [a.content_id]);
+      if (item?.slot_channel_id && item.slot_channel_id !== Number(a.channel_id)) {
+        return { error: 'הפוסט הזה שייך למדיה אחת בקמפיין כללי — אין לו גרסה למדיה אחרת' };
+      }
       const v = await one(
         'select status, body from content_variants where content_id = $1 and channel_id = $2',
         [a.content_id, a.channel_id]);
