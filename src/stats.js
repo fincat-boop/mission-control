@@ -113,8 +113,8 @@ export async function buildStats(from, to) {
   const channels = byChannel.map((c) => ({
     ...c,
     per_week_actual: +(c.placed / period.weeks).toFixed(1),
-    // מול הקצב הרצוי, לא מול התקרה
-    target_per_week: c.target_per_week ?? c.max_per_week,
+    // מול מספר הפוסטים בשבוע שהוגדר לערוץ
+    target_per_week: c.max_per_week,
   }));
 
   const kinds = { promo: 0, value: 0, hybrid: 0 };

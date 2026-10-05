@@ -149,8 +149,8 @@ function gantt(data) {
 
   return `<div class="gantt2">${header}${rows}
     <div class="gnote">קפסולה נגררת בקפיצות של חצי חודש. כמה פוסטים מגיעים לקמפיין
-      בכל ערוץ נגזר ממספר הפוסטים בשבוע שהוגדר לערוץ, מאורך הקמפיין ומהנתח שלו — נתח שנקבע ידנית,
-      או חלק יחסי לפי חשיבות הקמפיין מול כל הקמפיינים שרצים באותו זמן. מי תופס כל
+      בכל ערוץ נגזר ממספר הפוסטים בשבוע שהוגדר לערוץ, מאורך הקמפיין ומהנתח שלו — חלק יחסי לפי
+      חשיבות נקודת הקצה מול הקמפיינים שרצים באותו זמן, או נתח קבוע שנקבע לקמפיין. מי תופס כל
       משבצת פנויה נקבע לפי חשיבות נקודת הקצה והזמן שעבר מהפוסט האחרון שלה.</div>
   </div>`;
 }
@@ -158,14 +158,14 @@ function gantt(data) {
 function capsule(c, endpoint) {
   const pct = (n) => (n / HALVES) * 100;
   const tip = `${c.name} · ${endpoint.name} · ${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` +
-              (c.share_pct != null ? ` · נתח ${c.share_pct}%` : ' · נתח נגזר מהחשיבות');
+              (c.share_pct != null ? ` · נתח קבוע ${c.share_pct}%` : '');
 
-  return `<button class="caps${c.urgent ? ' urgent' : ''}${c.paused_at ? ' paused' : ''}"
+  return `<button class="caps${c.paused_at ? ' paused' : ''}"
     style="inset-inline-start:${pct(c.from)}%;width:${pct(c.to - c.from)}%;
            background:${epColor(endpoint.id)}"
     data-campaign="${c.id}" data-from="${c.starts_on}" data-to="${c.ends_on}"
     data-tt="${esc(tip)}">
-    <span>${c.paused_at ? '⏸ ' : ''}${c.urgent ? '⚡ ' : ''}${esc(c.name)}</span>
+    <span>${c.paused_at ? '⏸ ' : ''}${esc(c.name)}</span>
   </button>`;
 }
 
@@ -349,7 +349,7 @@ function allocPanel(alloc) {
   if (!alloc?.window || !alloc.rows.length) {
     return '<div class="alloc"><div class="empty">אין קמפיינים שרצים עכשיו.</div></div>';
   }
-  // שורה לכל קמפיין: הנתח (קבוע או אוטומטי לפי חשיבות) מול מה שפורסם בפועל
+  // שורה לכל קמפיין: הנתח (קבוע, או אוטומטי לפי חשיבות נקודת הקצה) מול מה שפורסם בפועל
   const rows = alloc.rows.map((r) => `
     <div class="arow">
       <span class="an">${esc(r.campaign_name)}<small>${esc(r.endpoint_name)}</small></span>
@@ -364,9 +364,10 @@ function allocPanel(alloc) {
   return `<div class="alloc">
     <h4>יעד מול ביצוע — ${fmtDate(alloc.window.from)} עד היום</h4>
     ${rows}
-    <p class="sumline alloc-how">איך נקבע הנתח: נתח שנקבע ידנית בקמפיין גובר. בלעדיו הנתח
-      אוטומטי — החלק של חשיבות הקמפיין מתוך החשיבות של כל הקמפיינים הפעילים שהתאריכים
-      שלהם חופפים לשלו, גם מושהים (למשל חשיבות 6 מול 4 = 60% ו-40%).</p>
+    <p class="sumline alloc-how">איך נקבע הנתח: אוטומטי לפי החשיבות של נקודת הקצה — קמפיין
+      מקבל את החלק של החשיבות של הנקודה שלו מתוך החשיבות של כל הקמפיינים הפעילים שהתאריכים שלהם
+      חופפים לשלו, גם מושהים (למשל נקודה בחשיבות 6 מול 4 = 60% ו-40%; שני קמפיינים של אותה
+      נקודה מתחלקים שווה). נתח קבוע שנקבע לקמפיין (בתפריט ⋮ שלו) גובר.</p>
     <p class="sumline">בפועל: מתוך ${alloc.window.total_published} פרסומים של תוכן הקמפיינים
       האלה מאז ${fmtDate(alloc.window.from)} (תוכן שוטף לא נספר).</p>
   </div>`;

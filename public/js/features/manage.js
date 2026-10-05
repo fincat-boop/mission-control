@@ -95,10 +95,12 @@ function endpointItem(e, channels, ro) {
     </summary>
     <div class="ibody">
       <div class="prow">
-        <label>חשיבות (1–10) — כמה שטח מגיע לה</label>
+        <label>חשיבות (1–10) — כמה שטח מגיע לה ולקמפיינים שלה</label>
         <input type="number" min="1" max="10" value="${e.importance}"
                data-ep-field="importance" data-id="${e.id}" ${ro ? 'disabled' : ''}>
       </div>
+      <details class="adv">
+      <summary>מתקדם${e.min_days_between != null ? ` · תדירות קבועה: פעם ב־${e.min_days_between} ימים` : ''}</summary>
       <div class="prow">
         <label>תדירות (פעם ב־X ימים)</label>
         <div class="autofield">
@@ -117,6 +119,7 @@ function endpointItem(e, channels, ro) {
         <div class="fhint">אוטומטי מחשב את התדירות לפי החשיבות — חשיבות גבוהה יותר, פוסטים תכופים יותר.
           קבוע נועד למקרה שיש צורך בתדירות מסוימת, בלי קשר לחשיבות.</div>
       </div>
+      </details>
 
       <div class="subsec">
         <h4>סיכום</h4>
@@ -225,6 +228,19 @@ function connectionBlock(c, conn, ro, hubReady) {
  * פרטי ערוץ בשלושה בלוקים, כל אחד עם מודל שמירה אחד:
  * קיבולת וימים חסומים — נשמרים בכל שינוי; חיבור ופרסום — בכפתור.
  */
+/** שורת הסיכום של "מתקדם" בערוץ: רק מה שהוגדר בו, כדי שלא יהיה מוסתר בשקט */
+function advSummary(c) {
+  const bits = [
+    c.max_promo_per_week != null && `עד ${c.max_promo_per_week} מכירתיים`,
+    c.max_hybrid_per_week != null && `עד ${c.max_hybrid_per_week} משולבים`,
+    c.max_value_per_week != null && `עד ${c.max_value_per_week} ערך`,
+    // 20% היא ברירת המחדל — מוצגת רק כשמישהו שינה אותה
+    c.urgent_reserve_pct != null && Number(c.urgent_reserve_pct) !== 20 && `${c.urgent_reserve_pct}% לדחופים`,
+    c.efficiency != null && `עדיפות ${c.efficiency}`,
+  ].filter(Boolean);
+  return bits.length ? ` · ${bits.join(' · ')}` : '';
+}
+
 function channelItem(c, ro, conn, hubReady) {
   const num = (label, field, value, kind = '', max = '') => `
     <div class="prow">
@@ -237,24 +253,26 @@ function channelItem(c, ro, conn, hubReady) {
   return `<details class="item" data-open-id="ch-${c.id}">
     <summary>
       <b>${esc(c.name)}</b>
-      <span class="info">${Number(c.target_per_week ?? c.max_per_week)} פוסטים בשבוע · תקרה ${c.max_per_week}</span>
+      <span class="info">${c.max_per_week} פוסטים בשבוע</span>
       <span class="chip ${c.active ? 'on' : 'bad'}">${c.active ? 'פעיל' : 'מושבת'}</span>
     </summary>
     <div class="ibody">
       <section class="chblock">
         <h4>קיבולת <span class="savenote">נשמר ביציאה מהשדה</span></h4>
-        ${num('פוסטים בשבוע — ממנו נגזר כמה מגיע לכל קמפיין', 'target_per_week', c.target_per_week)}
-        ${num('תקרה — מקסימום פוסטים בשבוע', 'max_per_week', c.max_per_week)}
-        ${num('מתוכם מכירתיים — לכל היותר', 'max_promo_per_week', c.max_promo_per_week, 'promo')}
-        ${num('מתוכם משולבים — לכל היותר', 'max_hybrid_per_week', c.max_hybrid_per_week, 'hybrid')}
-        ${num('מתוכם ערך — לכל היותר', 'max_value_per_week', c.max_value_per_week, 'value')}
-        ${num('שטח ששמור לפוסטים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
-        ${num('עדיפות ערוץ (1–10) — אופציונלי', 'efficiency', c.efficiency, '', 10)}
-        <div class="fhint">
-          ריק = ניטרלי. כשמוגדרת, המנוע ממלא קודם ערוצים בעדיפות גבוהה יותר, כדי שתוכן חשוב
-          יגיע קודם לערוץ הכי טוב. כשהביצועים הנמדדים משפיעים על השיבוץ (כללי המנוע), המדידה
-          מחליפה אותה.
-        </div>
+        ${num('פוסטים בשבוע', 'max_per_week', c.max_per_week)}
+        <div class="fhint">כמה פוסטים הערוץ מפרסם בשבוע. מזה נגזר גם כמה תוכן כל קמפיין צריך בערוץ.</div>
+        <details class="adv">
+          <summary>מתקדם${advSummary(c)}</summary>
+          ${num('מתוכם מכירתיים — לכל היותר', 'max_promo_per_week', c.max_promo_per_week, 'promo')}
+          ${num('מתוכם משולבים — לכל היותר', 'max_hybrid_per_week', c.max_hybrid_per_week, 'hybrid')}
+          ${num('מתוכם ערך — לכל היותר', 'max_value_per_week', c.max_value_per_week, 'value')}
+          ${num('שטח ששמור לפוסטים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
+          ${num('עדיפות ערוץ (1–10)', 'efficiency', c.efficiency, '', 10)}
+          <div class="fhint">
+            עדיפות ריקה = ניטרלי. היא מכריעה רק בין שני מועדים שקולים בשבוע — לא קובעת כמה
+            מתפרסם. כשהביצועים הנמדדים משפיעים על השיבוץ (כללי המנוע), המדידה מחליפה אותה.
+          </div>
+        </details>
       </section>
 
       <section class="chblock">
@@ -761,11 +779,8 @@ function wireManage(ro, connections) {
       title: 'נקודת קצה חדשה',
       fields: [
         { name: 'name', label: 'שם', type: 'text' },
-        { name: 'importance', label: 'חשיבות (1–10)', type: 'number', value: 5 },
-        { name: 'min_days_between', label: 'תדירות (פעם ב־X ימים)', type: 'auto',
-          value: null, auto: 'נגזר מהחשיבות',
-          hint: 'אוטומטי מחשב את התדירות לפי החשיבות. קבוע נועד למקרה שיש צורך בתדירות ' +
-                'מסוימת, בלי קשר לחשיבות.' },
+        { name: 'importance', label: 'חשיבות (1–10) — כמה שטח מגיע לה ולקמפיינים שלה',
+          type: 'number', value: 5 },
       ],
       onSave: async (v) => {
         v.week = state.week;
@@ -778,7 +793,7 @@ function wireManage(ro, connections) {
       title: 'ערוץ חדש',
       fields: [
         { name: 'name', label: 'שם הערוץ', type: 'text' },
-        { name: 'max_per_week', label: 'מקסימום פרסומים בשבוע', type: 'number', value: 5 },
+        { name: 'max_per_week', label: 'פוסטים בשבוע', type: 'number', value: 5 },
       ],
       onSave: async (v) => {
         v.week = state.week;

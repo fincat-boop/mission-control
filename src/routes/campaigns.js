@@ -38,7 +38,7 @@ function applyPeriod(b, before) {
   const end = b.ends_on !== undefined ? b.ends_on : before?.ends_on;
   if (start && end && start > end) return 'תאריך הסיום מוקדם מתאריך ההתחלה';
   // בקמפיין כללי המשבצות נפרסות על החלון — בלי תאריכים אין משבצות
-  const structure = b.structure ?? before?.structure ?? 'angles';
+  const structure = b.structure ?? before?.structure ?? 'general';
   if (structure === 'general' && (!start || !end)) {
     return 'בקמפיין כללי צריך תאריך יעד לפוסט הראשון ותקופה';
   }
@@ -71,9 +71,9 @@ function newCampaignError(b) {
   if (dateErr) return dateErr;
   const periodErr = applyPeriod(b, null);
   if (periodErr) return periodErr;
-  // בלי מבנה מפורש (העוזר, קריאות API ישנות) — לפי זוויות, כמו עד היום.
-  // הטופס שולח 'general' כברירת מחדל לקמפיין חדש.
-  return structureChangeError('angles', b.structure ?? 'angles', 0);
+  // קמפיין חדש הוא כללי. "לפי זוויות" נשאר רק לקמפיינים ישנים (ולשכפול שלהם);
+  // קישור פוסטים בין ערוצים מחליף אותו.
+  return structureChangeError('general', b.structure ?? 'general', 0);
 }
 
 async function insertCampaign(b) {
@@ -82,7 +82,7 @@ async function insertCampaign(b) {
                             importance, target_posts, goal, urgent, period, structure)
      values ($1,$2,$3,$4,$5,
              coalesce($6,(select importance from endpoints where id = $1)),
-             $7,$8,coalesce($9,false),$10,coalesce($11,'angles'))
+             $7,$8,coalesce($9,false),$10,coalesce($11,'general'))
      returning *`,
     [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null, b.share_pct ?? null,
      b.importance ?? null, b.target_posts ?? null, b.goal ?? null, b.urgent ?? false,

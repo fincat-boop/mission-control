@@ -185,7 +185,7 @@ function campaignItem(c) {
 
   return `<div class="crow2${c.paused_at ? ' paused' : ''}" data-open-campaign="${c.id}">
     <div class="cinfo">
-      <b>${c.paused_at ? '⏸ ' : c.urgent ? '⚡ ' : ''}${esc(c.name)}</b>
+      <b>${c.paused_at ? '⏸ ' : ''}${esc(c.name)}</b>
       <span class="d">${esc(range)} · ${c.structure === 'general' ? 'כללי' : 'לפי זוויות'}</span>
     </div>
     <button class="chanpick" data-pick-channels="${c.id}"
@@ -405,6 +405,33 @@ function openChannelPicker(campaign, reload) {
 }
 
 /**
+ * נתח קבוע — למקרה החריג שהובטח לקמפיין נתח מסוים. ברירת המחדל (אוטומטי)
+ * מחלקת לפי החשיבות של נקודת הקצה, ולכן זה לא שדה בטופס הקמפיין.
+ */
+function openShareForm(campaign, reload) {
+  openGeneric({
+    guardDirty: true,
+    title: `נתח קבוע — ${campaign.name}`,
+    fields: [
+      { name: 'share_pct', label: 'נתח מהשטח', type: 'auto', value: campaign.share_pct,
+        auto: campaign.share_auto != null ? `${campaign.share_auto}%` : 'לפי נקודת הקצה',
+        placeholder: '%',
+        hint: 'אוטומטי מחלק את השטח לפי החשיבות של נקודת הקצה, מול הקמפיינים שרצים במקביל. ' +
+              'קבוע — רק כשהובטח לקמפיין נתח מסוים, בלי קשר לשאר.' },
+    ],
+    onSave: async (v) => {
+      if (v.share_pct != null && (v.share_pct < 1 || v.share_pct > 100)) {
+        throw new Error('נתח בין 1 ל-100');
+      }
+      const res = await patchCampaign(campaign.id, { share_pct: v.share_pct, week: state.week });
+      engineToast(res, v.share_pct == null ? 'הנתח חזר לאוטומטי.' : `נקבע נתח של ${v.share_pct}%.`);
+      await reload();
+      return false;
+    },
+  });
+}
+
+/**
  * duplicate: הטופס נפתח עם ההגדרות של campaign, והשמירה יוצרת קמפיין חדש
  * עם אותו תוכן (זוויות, ניסוחים וקבצים) — משנים רק את מה שצריך.
  */
@@ -412,9 +439,6 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
   const source = campaign;
   if (duplicate) campaign = { ...source, name: `${source.name} (עותק)` };
   const structure = campaign?.structure ?? 'general';
-  // המבנה נקבע ברגע שנכנס תוכן — זוויות לא עוברות לרשימות של "כללי" ולהפך.
-  // בשכפול המבנה תמיד של המקור (השרת לא מקבל אחר).
-  const structureLocked = duplicate || !!campaign?.content?.length;
   // קמפיין מלפני השדה: התקופה מוסקת מהתאריכים (שבועות שלמים / חודש / ידני).
   // קמפיין ישן עם התחלה ובלי סוף נשאר "בלי תאריך סיום" — אחרת שמירה בלי
   // שינוי הייתה ממציאה לו סוף בשקט.
@@ -446,27 +470,9 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       { name: 'channel_ids', label: 'על אילו ערוצים הקמפיין יושב', type: 'multicheck',
         options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
         value: campaign?.channels?.map((c) => c.id) },
-      { name: 'structure', label: 'מבנה התוכן', type: 'radio', value: structure,
-        options: [['general', 'כללי'], ['angles', 'לפי זוויות']],
-        disabled: structureLocked,
-        hint: structureLocked
-          ? 'כבר יש לקמפיין תוכן, ולכן המבנה קבוע. אפשר לשנות אותו רק כשהקמפיין ריק.'
-          : 'כללי — לכל ערוץ רשימת פוסטים משלו. לפי זוויות — כל מסר נכתב בניסוח לכל אחד מהערוצים.' },
-      { name: 'importance', label: 'חשיבות (1–10)', type: 'number',
-        value: campaign?.importance ?? 5,
-        hint: 'זה מה שקובע כמה שטח מגיע לקמפיין. השאר את הנתח על "אוטומטי".' },
-      { name: 'share_pct', label: 'נתח מהשטח', type: 'auto',
-        value: campaign?.share_pct,
-        auto: campaign?.share_auto != null ? `${campaign.share_auto}%` : 'לפי החשיבות',
-        placeholder: '%',
-        hint: 'אוטומטי מחלק את השטח לפי החשיבות מול הקמפיינים שרצים במקביל. ' +
-              'קבוע נועד למקרה שהובטח לקמפיין נתח מסוים בלי קשר לשאר.' },
-      // רלוונטי רק בזוויות — בכללי כל מדיה מקבלת את מספר הפוסטים שלה
-      { name: 'target_posts', label: 'מספר זוויות', type: 'auto',
-        value: campaign?.target_posts, hidden: structure === 'general',
-        auto: campaign?.angles_auto != null ? String(campaign.angles_auto) : 'לפי הערוצים',
-        hint: 'אוטומטי נגזר מהקצב של הערוצים שנבחרו ומאורך הקמפיין.' },
-      { name: 'urgent', label: 'קמפיין דחוף', type: 'checkbox', value: campaign?.urgent },
+      // החשיבות נקבעת בנקודת הקצה, והנתח נגזר ממנה (נתח קבוע — בתפריט ⋮ של
+      // הקמפיין). אין כאן מבנה: קמפיין חדש הוא כללי, ופוסטים בערוצים דומים
+      // מתחברים ב"קשר תוכן" על הלוח.
     ],
     extraActions: campaign && !duplicate && can('settings')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק קמפיין</button>'
@@ -481,7 +487,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         return 'מוסיפים זוויות בכפתור "＋ זווית שוטפת".';
       }
       delete v.ctype;
-      if ((v.structure ?? structure) === 'general' && !v.starts_on) {
+      if (structure === 'general' && !v.starts_on) {
         throw new Error('בקמפיין כללי צריך תאריך יעד לפוסט הראשון — ממנו נפרסים הפוסטים');
       }
       // בלי תאריך לפוסט הראשון אין ממה לחשב סיום — הקמפיין נשמר בלי תאריכים
@@ -504,10 +510,6 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       return false;
     },
     onOpen: () => {
-      $$('#genBody [name="gen_structure"]').forEach((r) =>
-        r.addEventListener('change', () => {
-          $('#genBody [data-field="target_posts"]').hidden = r.value === 'general';
-        }));
       $('#genDelete')?.addEventListener('click', run(async () => {
         if (await deleteCampaign(campaign, reload)) await closeGeneric({ force: true });
       }));
@@ -535,14 +537,14 @@ function campaignHead(c) {
     <div class="cbhead">
       <div>
         <div class="ctitle">
-          <h2>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</h2>
+          <h2>${esc(c.name)}</h2>
           ${c.complete ? `<span class="gst ok" data-tt="סומן מוכן: רק התוכן שנכתב, פרוס על התקופה">
             <i></i>מוכן</span>` : ''}
           ${c.recurring ? `<span class="gst na" data-tt="קמפיין מחזורי: משבצים אותו מחדש מלוח האסטרטגיה">
             <i></i>מחזורי</span>` : ''}
         </div>
         <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
-          · נתח ${c.share_pct != null ? c.share_pct + '%' : 'נגזר מהחשיבות'}
+          ${c.share_pct != null ? `· נתח קבוע ${c.share_pct}%` : ''}
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
@@ -1155,6 +1157,7 @@ function wireCampaignGrid(selected, reload) {
   // תפריט הכותרת משותף לשני המבנים — מחווטים לפני הפיצול
   const actions = {
     edit: () => openCampaignForm(selected, reload),
+    share: () => openShareForm(selected, reload),
     bulk: () => openBulkUpload(selected, reload),
     import: () => openImport(selected, reload),
     complete: run(() => completeCampaign(selected, reload)),
@@ -1205,6 +1208,8 @@ function campaignMenu(c) {
   const angles = c.structure !== 'general';
   const items = [
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
+    can('settings') && `<button type="button" data-act="share">${c.share_pct != null
+      ? `נתח קבוע: ${c.share_pct}%` : 'נתח קבוע…'}</button>`,
     angles && can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס

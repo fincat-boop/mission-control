@@ -9,19 +9,31 @@ test('effectiveShare — share_pct מפורש מנצח את המשקל', () => {
   assert.equal(effectiveShare({ ...span, share_pct: 25, importance: 9 }, []), 0.25);
 });
 
-test('effectiveShare — נגזר מהמשקל מול הקמפיינים החופפים', () => {
-  const a = { ...span, importance: 6 };
-  const b = { ...span, importance: 3 };
+test('effectiveShare — נגזר מחשיבות נקודת הקצה מול הקמפיינים החופפים', () => {
+  const a = { ...span, id: 1, endpoint_importance: 6 };
+  const b = { ...span, id: 2, endpoint_importance: 3 };
   assert.equal(effectiveShare(a, [a, b]), 6 / 9);
 });
 
+test('effectiveShare — החשיבות של הקמפיין עצמו לא נספרת; אותה נקודה = חלוקה שווה', () => {
+  const a = { ...span, id: 1, importance: 9, endpoint_importance: 5 };
+  const b = { ...span, id: 2, importance: 1, endpoint_importance: 5 };
+  assert.equal(effectiveShare(a, [a, b]), 0.5);
+});
+
+test('effectiveShare — הקמפיין בלי endpoint_importance נלקח מהרשימה לפי מזהה', () => {
+  const listed = { ...span, id: 1, endpoint_importance: 8 };
+  const other = { ...span, id: 2, endpoint_importance: 2 };
+  assert.equal(effectiveShare({ ...span, id: 1 }, [listed, other]), 0.8);
+});
+
 test('effectiveShare — בלי חופפים מחזיר 1', () => {
-  assert.equal(effectiveShare({ ...span, importance: 6 }, []), 1);
+  assert.equal(effectiveShare({ ...span, endpoint_importance: 6 }, []), 1);
 });
 
 test('effectiveShare — חופף לא פעיל לא נספר', () => {
-  const a = { ...span, importance: 5 };
-  const inactive = { ...span, importance: 5, active: false };
+  const a = { ...span, id: 1, endpoint_importance: 5 };
+  const inactive = { ...span, id: 2, endpoint_importance: 5, active: false };
   assert.equal(effectiveShare(a, [a, inactive]), 1); // רק a נספר: 5/5
 });
 
@@ -39,12 +51,12 @@ test('angleCount — בלי צרכים מחזיר null', () => {
 
 test('channelNeeds — קצב × שבועות × נתח, מינימום 1', () => {
   const camp = { starts_on: '2026-08-01', ends_on: '2026-08-07', active: true, importance: 5 };
-  const needs = channelNeeds(camp, [{ id: 1, target_per_week: 3 }], [camp]);
+  const needs = channelNeeds(camp, [{ id: 1, max_per_week: 3 }], [camp]);
   assert.equal(needs.get(1), 3); // שבוע אחד, נתח 1, קצב 3
 });
 
 test('channelNeeds — בלי תאריכים מחזיר מפה ריקה', () => {
-  assert.equal(channelNeeds({ active: true }, [{ id: 1, target_per_week: 3 }], []).size, 0);
+  assert.equal(channelNeeds({ active: true }, [{ id: 1, max_per_week: 3 }], []).size, 0);
 });
 
 /* ========================= קמפיין כללי ========================= */
@@ -55,8 +67,8 @@ import { generalGridFor, gridFor, resolvePeriod, structureChangeError } from '..
 const twoWeeks = {
   starts_on: '2026-11-01', ends_on: '2026-11-14', active: true, importance: 5, structure: 'general',
 };
-const chA = { id: 1, name: 'פייסבוק', target_per_week: 3 };
-const chB = { id: 2, name: 'ניוזלטר', target_per_week: 1 };
+const chA = { id: 1, name: 'פייסבוק', max_per_week: 3 };
+const chB = { id: 2, name: 'ניוזלטר', max_per_week: 1 };
 const slotItem = (id, channel, order, status) => ({
   id, slot_channel_id: channel, sort_order: order,
   variants: status ? [{ id: id * 10, channel_id: channel, status, body: 'x' }] : [],

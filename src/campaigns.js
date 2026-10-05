@@ -31,10 +31,21 @@ const daysBetween = (a, b) => {
 };
 
 /**
+ * הקמפיינים עם החשיבות של נקודת הקצה שלהם — הרשימה ש-effectiveShare מחלק
+ * ביניהם. כל מי שמחשב נתח או צורך (channelNeeds) טוען דרכה.
+ */
+export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance
+  from campaigns c join endpoints e on e.id = c.endpoint_id`;
+
+/**
  * הנתח שהקמפיין תופס בפועל.
  *
- * share_pct מפורש מנצח. בלעדיו הנתח נגזר מהמשקל של הקמפיין מול הקמפיינים
- * שרצים במקביל — כי קמפיין בלי נתח מוגדר לא אמור לתפוס את כל השטח.
+ * share_pct מפורש מנצח. בלעדיו הנתח נגזר מהחשיבות של נקודת הקצה של הקמפיין
+ * מול נקודות הקצה של הקמפיינים שרצים במקביל — כי קמפיין בלי נתח מוגדר לא
+ * אמור לתפוס את כל השטח. החשיבות נקבעת במקום אחד (נקודת הקצה): קמפיינים של
+ * אותה נקודה מתחלקים שווה בשווה, ונקודה חשובה יותר מקבלת יותר.
+ * לקמפיין אין חשיבות משלו (העמודה campaigns.importance כבר לא נקראת).
+ * @param concurrent שורות מ-CAMPAIGNS_WEIGHTED_SQL (בלי endpoint_importance — 5)
  */
 export function effectiveShare(campaign, concurrent = []) {
   if (campaign.share_pct != null) return campaign.share_pct / 100;
@@ -44,9 +55,11 @@ export function effectiveShare(campaign, concurrent = []) {
     (!c.ends_on || !campaign.starts_on || c.ends_on >= campaign.starts_on) &&
     (!c.starts_on || !campaign.ends_on || c.starts_on <= campaign.ends_on));
 
-  const totalWeight = overlapping.reduce((s, c) => s + (c.importance ?? 5), 0);
+  const weight = (c) =>
+    Number((concurrent.find((x) => x.id === c.id) ?? c).endpoint_importance ?? 5);
+  const totalWeight = overlapping.reduce((s, c) => s + weight(c), 0);
   if (!totalWeight) return 1;
-  return (campaign.importance ?? 5) / totalWeight;
+  return weight(campaign) / totalWeight;
 }
 
 /** כמה פוסטים הקמפיין צריך בכל אחת מהמדיות שלו */
@@ -58,7 +71,8 @@ export function channelNeeds(campaign, channels, concurrent = []) {
   const share = effectiveShare(campaign, concurrent);
 
   for (const ch of channels) {
-    const rate = Number(ch.target_per_week ?? ch.max_per_week ?? 1);
+    // מספר אחד לערוץ: כמה פוסטים בשבוע הוא מפרסם (אותו מספר שהמנוע מציית לו)
+    const rate = Number(ch.max_per_week ?? 1);
     needs.set(ch.id, Math.max(1, Math.round(rate * weeks * share)));
   }
   return needs;
@@ -373,7 +387,7 @@ export async function freeAngleSlots(campaignId, count) {
   const channels = await rows(
     `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [campaignId]);
-  const concurrent = await rows('select * from campaigns');
+  const concurrent = await rows(CAMPAIGNS_WEIGHTED_SQL);
   const existing = await rows(
     'select sort_order from content_items where campaign_id = $1', [campaignId]);
   const need = campaign.content_complete_at
@@ -414,7 +428,7 @@ export function resolvePeriod(b, before = null) {
     if (!p) return { error: 'תקופת הקמפיין לא תקינה' };
     if (p.unit === 'open') {
       // רק לקמפיין ישן לפי זוויות: בכללי המשבצות נפרסות על החלון ודורשות סוף
-      const structure = b.structure ?? before?.structure ?? 'angles';
+      const structure = b.structure ?? before?.structure ?? 'general';
       if (structure === 'general') return { error: 'קמפיין כללי צריך תאריך סיום' };
       return { period: 'open', ends_on: null };
     }
@@ -679,7 +693,8 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
  * מקבלת לאורך הזמן. הנתח של כל חודש מנורמל ל-100% מהקמפיינים שרצים בו.
  */
 export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
-  const campaigns = await rows('select * from campaigns where active = true and paused_at is null');
+  const campaigns = await rows(
+    `${CAMPAIGNS_WEIGHTED_SQL} where c.active = true and c.paused_at is null`);
   const endpoints = await rows('select id, name, importance from endpoints where active = true order by importance desc, id');
 
   const now = new Date();
@@ -699,7 +714,7 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
     const weights = new Map();
     const drivers = new Map(); // אילו קמפיינים מזינים כל נקודה בחודש הזה
     for (const c of live) {
-      const w = c.share_pct != null ? c.share_pct : (c.importance ?? 5) * 5;
+      const w = c.share_pct != null ? c.share_pct : (c.endpoint_importance ?? 5) * 5;
       weights.set(c.endpoint_id, (weights.get(c.endpoint_id) ?? 0) + w);
       if (!drivers.has(c.endpoint_id)) drivers.set(c.endpoint_id, []);
       drivers.get(c.endpoint_id).push(c.name);
@@ -730,14 +745,14 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
  * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין.
  *
  * הנתח (target_pct): מה שנקבע ידנית בקמפיין, ובלעדיו החלק היחסי לפי חשיבות
- * מול הקמפיינים החופפים (effectiveShare — אותו חשבון כמו המנוע והטופס).
+ * נקודת הקצה מול הקמפיינים החופפים (effectiveShare — אותו חשבון כמו גודל הלוח).
  * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
  * הקמפיין מתוך הפרסומים של כל הקמפיינים בטבלה — אותו בסיס כמו הנתח, שמתחלק
  * בין קמפיינים (תוכן שוטף ופוסטים בלי תוכן לא נספרים בשום צד).
  */
 export async function currentAllocation() {
   const today = ymd(new Date());
-  const all = await rows('select * from campaigns');
+  const all = await rows(CAMPAIGNS_WEIGHTED_SQL);
   const running = await rows(
     `select c.*, e.name as endpoint_name
        from campaigns c join endpoints e on e.id = c.endpoint_id

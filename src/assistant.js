@@ -73,12 +73,12 @@ export function takeProposal(id, userId) {
  */
 async function snapshot() {
   const endpoints = await rows('select id, name, importance, min_days_between, active from endpoints order by id');
-  const channels = await rows(`select id, name, max_per_week, target_per_week, max_promo_per_week,
+  const channels = await rows(`select id, name, max_per_week, max_promo_per_week,
                max_value_per_week, max_hybrid_per_week, urgent_reserve_pct,
                blocked_days, active
           from channels order by sort_order, id`);
   const campaigns = await rows(`select c.id, c.name, c.endpoint_id, c.starts_on, c.ends_on, c.share_pct,
-               c.importance, c.target_posts, c.active, c.paused_at,
+               c.target_posts, c.active, c.paused_at,
                (select count(*)::int from content_items ci where ci.campaign_id = c.id) as content_count,
                (select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
                   from campaign_channels cc where cc.campaign_id = c.id) as channel_ids
@@ -109,7 +109,7 @@ function systemPrompt(user, snap) {
 
 ## איך המערכת בנויה
 - **נקודת קצה** = מוצר או יעד שיווקי. לכל אחת חשיבות (importance) שקובעת כמה שטח אוויר מגיע לה.
-- **קמפיין** שייך לנקודת קצה אחת, יש לו חלון תאריכים, נתח (share_pct) או חשיבות, ורשימת ערוצים.
+- **קמפיין** שייך לנקודת קצה אחת, יש לו חלון תאריכים (חובה) ורשימת ערוצים. לקמפיין אין חשיבות משלו: הנתח שלו נגזר מחשיבות נקודת הקצה מול הקמפיינים שרצים במקביל, אלא אם נקבע לו נתח קבוע (share_pct).
 - **תוכן** (זווית) שייך לקמפיין או רץ ברקע (evergreen). לכל זווית יש **גרסה נפרדת לכל ערוץ** —
   אותו רעיון, ניסוח אחר לפייסבוק ולניוזלטר.
 - **פוסט** = תוכן ששובץ בערוץ בתאריך. פוסט בלי תוכן משויך הוא "חסר תוכן".
@@ -358,9 +358,7 @@ const WRITE_TOOLS = {
         name: { type: 'string' },
         starts_on: { type: 'string', description: 'YYYY-MM-DD' },
         ends_on: { type: 'string', description: 'YYYY-MM-DD' },
-        share_pct: { type: 'integer', description: 'נתח קבוע באחוזים. בלעדיו הנתח נגזר מהחשיבות.' },
-        importance: { type: 'integer' },
-        target_posts: { type: 'integer' },
+        share_pct: { type: 'integer', description: 'נתח קבוע באחוזים — רק כשהובטח נתח מסוים. בלעדיו הנתח נגזר מחשיבות נקודת הקצה.' },
         goal: { type: 'string' },
         channel_ids: { type: 'array', items: { type: 'integer' }, description: 'הערוצים שהקמפיין יושב עליהם' },
       },
@@ -381,8 +379,6 @@ const WRITE_TOOLS = {
         starts_on: { type: 'string' },
         ends_on: { type: 'string' },
         share_pct: { type: 'integer', description: 'נתח קבוע באחוזים' },
-        importance: { type: 'integer' },
-        target_posts: { type: 'integer' },
         goal: { type: 'string' },
         active: { type: 'boolean' },
         channel_ids: { type: 'array', items: { type: 'integer' } },
@@ -601,8 +597,7 @@ const WRITE_TOOLS = {
       properties: {
         channel_id: { type: 'integer' },
         name: { type: 'string' },
-        max_per_week: { type: 'integer' },
-        target_per_week: { type: 'number' },
+        max_per_week: { type: 'integer', description: 'פוסטים בשבוע' },
         max_promo_per_week: { type: 'integer' },
         max_value_per_week: { type: 'integer' },
         max_hybrid_per_week: { type: 'integer' },
@@ -733,10 +728,6 @@ async function checkChannelUpdate(a) {
           `(${clash.slice(0, 3).map((p) => p.title).join(', ')})`);
       }
     }
-  }
-  const cap = a.max_per_week;
-  if (cap != null && cap < (ch.target_per_week ?? 0)) {
-    warnings.push(`התקרה השבועית (${cap}) נמוכה מהיעד השבועי (${ch.target_per_week})`);
   }
   return { warnings };
 }

@@ -666,7 +666,6 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 }
 .caps span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caps:hover { filter: brightness(1.12); }
-.caps.urgent { box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
 .caps.dragging { cursor: grabbing; opacity: .85; z-index: 5; }
 /* קמפיין מושהה: הצבע נשאר, אבל הפס מפוספס ודהוי כדי שיהיה ברור שהוא לא רץ */
 .caps.paused {
@@ -1417,3 +1416,12 @@ button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 .msel-pop input { width: 15px; height: 15px; accent-color: var(--accent); flex: none; }
 /* בתוך חלון (שגולל בעצמו) הרשימה נפתחת בתוך הזרימה — לא נחתכת בתחתית החלון */
 dialog .msel-pop { position: static; margin-top: 4px; box-shadow: none; }
+
+/* "מתקדם" בתוך ערוץ / נקודת קצה — מה שנדרש לעיתים רחוקות, מקופל עם שורת סיכום.
+   תחום תחת details.item כדי לגבור על העיצוב של השורה החיצונית */
+details.item details.adv { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+details.item details.adv > summary {
+  padding: 4px 0; gap: 6px; font-size: 12.5px; color: var(--ink-2);
+}
+details.item details.adv > summary::after { margin-inline-start: 2px; }
+details.item details.adv[open] > summary { margin-bottom: 10px; }
