@@ -1,6 +1,6 @@
 import { $, $$, esc, run } from '../core/dom.js';
 import { api } from '../core/api.js';
-import { state } from '../core/state.js';
+import { can, state } from '../core/state.js';
 import { goToTab } from './refresh.js';
 
 /**
@@ -73,9 +73,15 @@ export function resetSetupStatus() {
 
 /* ---------- ציור ---------- */
 
-/** כפתור שמנווט ליעד של צעד — גם מחוץ לכרטיס (המצב הריק של הלוח) */
+/**
+ * כפתור שמנווט ליעד של צעד — גם מחוץ לכרטיס (המצב הריק של הלוח). יעד בניהול
+ * (ערוצים, נקודות קצה, חיבור, פרסום אוטומטי) דורש הרשאת הגדרות — בלעדיה
+ * הכפתור היה מוביל לטופס נעול, ובמקומו נכתב מה חסר.
+ */
 export const setupGoButton = (target, label, primary = false) =>
-  `<button type="button" class="btn small${primary ? ' primary' : ''}"
+  target.tab === 'manage' && !can('settings')
+    ? '<span class="setup-wait">צריך הרשאת הגדרות</span>'
+    : `<button type="button" class="btn small${primary ? ' primary' : ''}"
      data-setup-go="${esc(JSON.stringify(target))}">${esc(label)}</button>`;
 
 function stepLine(s, primary) {
