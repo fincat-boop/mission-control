@@ -177,6 +177,33 @@ alter table content_assets
 
 create index if not exists content_assets_variant_idx on content_assets (variant_id);
 
+-- מדיה ב-Cloudflare R2 (bucket ציבורי, ראו src/media.js): הבייטים לא במסד,
+-- רק המפתח. ה-URL המלא לא נשמר — הוא נגזר מ-R2_PUBLIC_BASE_URL בזמן קריאה,
+-- כדי שמעבר לדומיין מותאם לא ידרוש מיגרציה. קובץ ישן (bytea) מועבר ל-R2
+-- ברקע ע"י התחזוקה, ואז data מתאפס. בכל רגע יש לפחות אחד מהשניים.
+alter table content_assets add column if not exists storage_key text;
+alter table content_assets alter column data drop not null;
+create unique index if not exists content_assets_storage_key_idx
+  on content_assets (storage_key) where storage_key is not null;
+do $$ begin
+  alter table content_assets add constraint content_assets_has_bytes
+    check (data is not null or storage_key is not null);
+exception when duplicate_object then null; end $$;
+
+-- סל מחזור של מדיה: קובץ שנמחק מהממשק (או יתום שנמצא בסריקה) לא נמחק
+-- מ-R2 מיד אלא אחרי delete_after — חלון לשחזור מגיבוי. התחזוקה השעתית
+-- מוחקת את מה שהגיע זמנו (src/maintenance.js).
+create table if not exists media_trash (
+  id           serial primary key,
+  org_id       int references orgs(id),
+  bucket       text not null,
+  storage_key  text not null,
+  delete_after timestamptz not null,
+  created_at   timestamptz not null default now()
+);
+create unique index if not exists media_trash_key_idx on media_trash (bucket, storage_key);
+create index if not exists media_trash_due_idx on media_trash (delete_after);
+
 create table if not exists posts (
   id           serial primary key,
   channel_id   int not null references channels(id) on delete cascade,
@@ -448,7 +475,7 @@ begin
     'users','endpoints','channels','campaigns','campaign_channels',
     'content_items','content_variants','content_assets','posts',
     'post_results','strategy_milestones','tasks','engine_settings','activity_log',
-    'channel_connections','publish_log'
+    'channel_connections','publish_log','media_trash'
   ] loop
     -- insert בלי org_id מקבל אוטומטית את הארגון הפעיל
     execute format(

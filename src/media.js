@@ -21,8 +21,9 @@ import { publicAssetsReady } from './publish/public-assets.js';
 
 export const mediaReady = () => publicAssetsReady();
 
+// תקרה 2047MB: content_assets.size_bytes הוא int (עד 2^31-1 בייטים)
 const envMb = Number(process.env.MAX_MEDIA_MB);
-export const MAX_MEDIA_MB = Number.isFinite(envMb) && envMb > 0 ? envMb : 1024;
+export const MAX_MEDIA_MB = Number.isFinite(envMb) && envMb > 0 ? Math.min(envMb, 2047) : 1024;
 export const MAX_MEDIA_BYTES = Math.floor(MAX_MEDIA_MB * 1024 * 1024);
 
 /** ימים שקובץ שנמחק נשאר ב-bucket לפני מחיקה סופית (חלון שחזור) */
