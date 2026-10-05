@@ -68,9 +68,18 @@ test('isOwnKey — רק מפתח שהונפק לארגון הזה', () => {
   assert.equal(isOwnKey(3, 'media/33/' + k.split('/').slice(2).join('/')), false);
 });
 
-test('legacyMediaKey — דטרמיניסטי', () => {
-  assert.equal(legacyMediaKey(2, 17, 'סרטון.MP4'), 'media/2/legacy-17/סרטון.mp4');
-  assert.equal(legacyMediaKey(2, 17, 'סרטון.MP4'), legacyMediaKey(2, 17, 'סרטון.MP4'));
+test('legacyMediaKey — דטרמיניסטי, HMAC שאי אפשר לנחש, תלוי סוד', async () => {
+  const { createHmac } = await import('node:crypto');
+  const k = legacyMediaKey(2, 17, 'סרטון.MP4', 'secret-a');
+  const tag = createHmac('sha256', 'secret-a').update('legacy:2:17').digest('hex').slice(0, 32);
+  assert.equal(k, `media/2/legacy-${tag}/סרטון.mp4`);
+  assert.match(k, /^media\/2\/legacy-[0-9a-f]{32}\/סרטון\.mp4$/);
+  assert.equal(legacyMediaKey(2, 17, 'סרטון.MP4', 'secret-a'), k);           // אידמפוטנטי
+  assert.notEqual(legacyMediaKey(2, 18, 'סרטון.MP4', 'secret-a'), k);        // קובץ אחר
+  assert.notEqual(legacyMediaKey(3, 17, 'סרטון.MP4', 'secret-a'), k);        // ארגון אחר
+  assert.notEqual(legacyMediaKey(2, 17, 'סרטון.MP4', 'secret-b'), k);        // סביבה אחרת
+  assert.equal(isOwnKey(2, k), false);                                        // לא דרך complete
+  assert.throws(() => legacyMediaKey(2, 17, 'a.png', ''), /SESSION_SECRET/);
 });
 
 test('mediaUrl — בסיס בלי / כפול, קידוד לכל מקטע', () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { deleteObject, headObject, listObjects, presignPut, putObject } from './r2.js';
 import { publicAssetsReady } from './publish/public-assets.js';
 
@@ -10,7 +10,7 @@ import { publicAssetsReady } from './publish/public-assets.js';
  * (presigned PUT), בלי לעבור בזיכרון של השרת.
  *
  * פריסת המפתחות: media/<org>/<uuid>/<שם-קובץ-בטוח>
- *               media/<org>/legacy-<asset id>/<שם>   (העברת bytea ישנים)
+ *               media/<org>/legacy-<hmac>/<שם>   (העברת bytea ישנים)
  *
  * ה-URL המלא לא נשמר במסד — רק המפתח (storage_key). הכתובת נגזרת בזמן
  * קריאה מ-R2_PUBLIC_BASE_URL, כדי שמעבר לדומיין מותאם לא ידרוש מיגרציה.
@@ -102,9 +102,19 @@ export function safeFilename(name) {
 export const newMediaKey = (orgId, filename) =>
   `media/${Number(orgId)}/${randomUUID()}/${safeFilename(filename)}`;
 
-/** המפתח של קובץ ישן שהועבר מ-bytea — דטרמיניסטי, ולכן הרצה חוזרת לא משכפלת */
-export const legacyMediaKey = (orgId, assetId, filename) =>
-  `media/${Number(orgId)}/legacy-${Number(assetId)}/${safeFilename(filename)}`;
+/**
+ * המפתח של קובץ ישן שהועבר מ-bytea: media/<org>/legacy-<hmac>/<שם>.
+ * דטרמיניסטי (הרצה חוזרת דורסת את אותו אובייקט, לא משכפלת), אבל אי אפשר
+ * לנחש אותו בלי SESSION_SECRET — מזהה רץ (legacy-17) היה חושף את כל הקבצים
+ * הישנים ב-bucket הציבורי. גם מונע התנגשות בין מסד מקומי לפרוד באותו bucket
+ * (לכל סביבה סוד אחר).
+ */
+export function legacyMediaKey(orgId, assetId, filename, secret = process.env.SESSION_SECRET) {
+  if (!secret) throw new Error('חסר SESSION_SECRET — נדרש למפתח של קובץ ישן');
+  const tag = createHmac('sha256', secret)
+    .update(`legacy:${Number(orgId)}:${Number(assetId)}`).digest('hex').slice(0, 32);
+  return `media/${Number(orgId)}/legacy-${tag}/${safeFilename(filename)}`;
+}
 
 /** התחילית של כל המדיה של ארגון — לסריקת יתומים */
 export const orgMediaPrefix = (orgId) => `media/${Number(orgId)}/`;
