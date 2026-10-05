@@ -70,6 +70,7 @@ export async function renderData() {
     dataToolbar(stats.period) + resultsPanel(entry)
     + `<div id="sumSec">${summaryPanel(summary)}</div>`
     + `<div id="perfSec">${performancePanel(perf)}</div>`
+    + `<div class="subsec"><h2>שיבוץ ופעילות בתקופה</h2></div>`
     + statCards(stats) + statTables(stats) + activityPanel(activity);
   wireData();
   restoreDirty();
@@ -294,7 +295,8 @@ function summaryPanel(s) {
   const t = s.totals;
   if (!t.posts) {
     return `<div class="subsec"><h2>סיכום</h2><div class="panel">
-      <div class="empty">אין פוסטים שפורסמו בתקופה הזו — אין מה לסכם. נסו תקופה ארוכה יותר.</div>
+      <div class="empty">אין פוסטים שפורסמו בתקופה הזו — אין מה לסכם.
+        ${state.dataPeriod === '365' ? '' : '<button class="btn small" data-period="365">הצג שנה אחרונה</button>'}</div>
     </div></div>`;
   }
 
@@ -327,7 +329,9 @@ function summaryPanel(s) {
 async function confirmDiscard() {
   if (!dirty.size) return true;
   const ok = await confirmDialog(
-    `יש ${dirty.size} שורות עם תוצאות שלא נשמרו. להמשיך בלי לשמור?`,
+    dirty.size === 1
+      ? 'יש שורה אחת עם תוצאות שלא נשמרו. להמשיך בלי לשמור?'
+      : `יש ${dirty.size} שורות עם תוצאות שלא נשמרו. להמשיך בלי לשמור?`,
     { okLabel: 'להמשיך בלי לשמור', danger: true });
   if (ok) dirty.clear();
   return ok;
@@ -444,7 +448,7 @@ async function goToPerfSetting() {
 function performancePanel(p) {
   const head = `<tr><th>שם</th><th></th><th>ציון</th><th>מדגם</th></tr>`;
   const table = (title, list, labelKey) => `
-    <div class="subsec"><h2>${esc(title)}</h2><div class="panel">
+    <div class="subsec"><h3 class="bdtitle">${esc(title)}</h3><div class="panel">
       <table class="stattable"><thead>${head}</thead>
       <tbody>${effRows(list, labelKey)}</tbody></table>
     </div></div>`;
@@ -457,9 +461,9 @@ function performancePanel(p) {
   }
 
   const combos = p.combos.length
-    ? `<div class="subsec"><h2>שילובים שנמדדו בפועל</h2><div class="panel">
+    ? `<div class="subsec"><h3 class="bdtitle">שילובים שנמדדו בפועל</h3><div class="panel">
         <table class="stattable">
-          <thead><tr><th>מדיה</th><th>מתי</th><th></th><th>ציון</th><th>מדגם</th></tr></thead>
+          <thead><tr><th>ערוץ</th><th>מתי</th><th></th><th>ציון</th><th>מדגם</th></tr></thead>
           <tbody>${p.combos.map((c) => `<tr>
             <td>${esc(c.channel_name)}</td>
             <td>${esc(c.dow_label)} · ${esc(c.bucket_label)}</td>
@@ -468,8 +472,8 @@ function performancePanel(p) {
             <td class="effn">${c.n} פוסטים</td>
           </tr>`).join('')}</tbody>
         </table></div></div>`
-    : `<div class="subsec"><h2>שילובים שנמדדו בפועל</h2><div class="panel">
-        <div class="empty">עוד אין שילוב אחד עם מספיק מדידות (צריך 3 לפחות לאותו מדיה·יום·שעה).</div>
+    : `<div class="subsec"><h3 class="bdtitle">שילובים שנמדדו בפועל</h3><div class="panel">
+        <div class="empty">עוד אין שילוב אחד עם מספיק מדידות (צריך 3 לפחות לאותו ערוץ·יום·שעה).</div>
       </div></div>`;
 
   // רשימת "ממתינים להזנת תוצאות" שהייתה כאן עברה לטבלת ההזנה בראש הטאב
@@ -479,7 +483,7 @@ function performancePanel(p) {
         כך שפוסט בודד מוצלח לא קובע. ${p.measured} פוסטים נמדדו בתקופה.
       </p></div>
     ${table('לפי נקודת קצה', p.endpoints, 'name')}
-    ${table('לפי מדיה', p.channels, 'name')}
+    ${table('לפי ערוץ', p.channels, 'name')}
     ${table('לפי יום בשבוע', p.days, 'label')}
     ${table('לפי שעה ביום', p.buckets, 'label')}
     ${combos}`;
@@ -503,7 +507,7 @@ function dataToolbar(period) {
   </div>`;
 }
 
-/** מספר גדול עם כותרת קטנה — התמונה הראשונה שרואים */
+/** מספר גדול עם כותרת קטנה — מצב השיבוץ בתקופה (התוצאות עצמן בסיכום למעלה) */
 function statCards(s) {
   const card = (label, value, note = '', tone = '') =>
     `<div class="statcard${tone ? ` ${tone}` : ''}">
@@ -519,7 +523,7 @@ function statCards(s) {
     ${card('פורסם בפועל', s.totals.published, perWeek)}
     ${card('מתוכנן קדימה', s.totals.scheduled)}
     ${card('ממתין לאישור', s.totals.pending, '', s.totals.pending ? 'warn' : '')}
-    ${card('חורים', s.totals.holes, 'שיבוץ בלי תוכן', s.totals.holes ? 'bad' : '')}
+    ${card('חסר תוכן', s.totals.holes, 'פוסטים בלי תוכן', s.totals.holes ? 'bad' : '')}
     ${card('ערך לכל מכירתי', s.value_per_promo ?? '—',
            s.value_per_promo === null ? 'לא פורסם מכירתי' : '')}
     ${card('תכנים חדשים', s.totals.content_created)}
@@ -528,6 +532,9 @@ function statCards(s) {
     ${card('מבצעים דחופים', s.totals.urgent)}
   </div>`;
 }
+
+/** שורת מצב ריק בתוך טבלה — אותה שורה אחת שאומרת מה לעשות */
+const emptyRow = (cols, msg) => `<tr><td colspan="${cols}" class="empty">${esc(msg)}</td></tr>`;
 
 function statTables(s) {
   const bar = (pct, color) =>
@@ -564,17 +571,17 @@ function statTables(s) {
     `<span class="kindstat"><i style="background:${KIND_VAR[k]}"></i>${KIND_HE[k]}: <b>${s.kinds[k]}</b></span>`
   ).join('');
 
-  return `<div class="subsec"><h2>מי קיבל שטח</h2>
+  return `<div class="subsec"><h3 class="bdtitle">מי קיבל שטח</h3>
     <div class="panel"><table class="stattable">
       <thead><tr><th>נקודת קצה</th><th>פורסם</th><th>שובץ</th><th>נתח בפועל</th>
-                 <th>לפי משקל</th><th>פרסום אחרון</th></tr></thead>
-      <tbody>${endpoints}</tbody></table></div></div>
+                 <th>לפי חשיבות</th><th>פרסום אחרון</th></tr></thead>
+      <tbody>${endpoints || emptyRow(6, 'אין נקודות קצה — מוסיפים בניהול.')}</tbody></table></div></div>
 
-  <div class="subsec"><h2>קצב לפי ערוץ</h2>
+  <div class="subsec"><h3 class="bdtitle">פוסטים בשבוע לפי ערוץ</h3>
     <div class="panel"><table class="stattable">
       <thead><tr><th>ערוץ</th><th>פורסם</th><th>שובץ</th><th>בשבוע בפועל</th>
                  <th>יעד</th><th>עמידה</th></tr></thead>
-      <tbody>${channels}</tbody></table></div>
+      <tbody>${channels || emptyRow(6, 'אין ערוצים — מוסיפים בניהול.')}</tbody></table></div>
     <div class="kindrow">תמהיל מה שפורסם: ${kinds}</div></div>`;
 }
 
@@ -595,7 +602,9 @@ function activityPanel(a) {
       <span class="periodpick small">${filters}</span></h2>
     <div class="panel">${rows
       ? `<table class="stattable log"><tbody>${rows}</tbody></table>`
-      : '<div class="empty">אין פעולות בתקופה הזו.</div>'}</div></div>`;
+      : `<div class="empty">${state.dataVia
+        ? 'אין פעולות מהסוג הזה בתקופה. "הכול" מציג את כל היומן.'
+        : 'אין פעולות בתקופה הזו.'}</div>`}</div></div>`;
 }
 
 function wireData() {
