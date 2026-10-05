@@ -927,3 +927,10 @@ button.btn.bell .badge {
 
 /* סרגל התקופות בטאב הנתונים: שמונה אפשרויות — נשבר לשורה שנייה במסך צר */
 #data .toolbar .periodpick { flex-wrap: wrap; }
+
+/* "השפעה על השיבוץ" מעל הציונים המנורמלים: נקודה + טקסט */
+.engline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; }
+.engstate { font-weight: 600; white-space: nowrap; }
+.engstate i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-inline-end: 6px; vertical-align: 0; background: var(--muted); }
+.engstate.on i { background: var(--st-good); }
+.enghint { color: var(--muted); }

@@ -415,6 +415,32 @@ function effRows(list, labelKey) {
   </tr>`).join('');
 }
 
+/**
+ * האם הציונים האלה מזיזים את הלוח — המתג use_performance בניהול. בלי
+ * השורה הזו אין דרך לדעת מכאן אם המספרים רק מוצגים או גם משבצים.
+ */
+function engineLine(p) {
+  const on = p.use_performance;
+  return `<div class="engline">
+    <span class="engstate ${on ? 'on' : 'off'}"><i></i>השפעה על השיבוץ: ${on ? 'פעילה' : 'כבויה'}</span>
+    <span class="enghint">${on
+      ? 'המנוע מעדיף נקודות, ערוצים, ימים ושעות עם ציון גבוה.'
+      : 'הציונים רק מוצגים כאן ולא משנים את הלוח.'}</span>
+    <button class="btn small" data-goto-perf>לשינוי בניהול</button>
+  </div>`;
+}
+
+/** מעבר להגדרה עצמה: טאב ניהול, פתיחת "מתקדם — כללי המנוע" וגלילה אל המתג */
+async function goToPerfSetting() {
+  await goToTab('manage');
+  const box = $('#engUsePerf');
+  if (!box) return toast('ההגדרה נמצאת בניהול ← מערכת ← "מתקדם — כללי המנוע"');
+  const details = box.closest('details');
+  if (details) details.open = true;
+  box.scrollIntoView({ block: 'center' });
+  box.focus();
+}
+
 function performancePanel(p) {
   const head = `<tr><th>שם</th><th></th><th>ציון</th><th>מדגם</th></tr>`;
   const table = (title, list, labelKey) => `
@@ -424,7 +450,7 @@ function performancePanel(p) {
     </div></div>`;
 
   if (!p.measured) {
-    return `<div class="subsec"><h2>ביצועים מנורמלים</h2><div class="panel">
+    return `<div class="subsec"><h2>ביצועים מנורמלים</h2>${engineLine(p)}<div class="panel">
       <div class="empty">עוד אין תוצאות מוזנות בתקופה הזו.
       ממלאים כמה מספרים בטבלה למעלה — אחרי כמה פוסטים יופיע כאן ציון ביצועים.</div>
     </div></div>`;
@@ -447,7 +473,7 @@ function performancePanel(p) {
       </div></div>`;
 
   // רשימת "ממתינים להזנת תוצאות" שהייתה כאן עברה לטבלת ההזנה בראש הטאב
-  return `<div class="subsec"><h2>ביצועים מנורמלים</h2>
+  return `<div class="subsec"><h2>ביצועים מנורמלים</h2>${engineLine(p)}
       <p class="sechint">
         1.00 = ממוצע. הציון מנורמל בתוך כל ערוץ ומכווץ לפי גודל המדגם,
         כך שפוסט בודד מוצלח לא קובע. ${p.measured} פוסטים נמדדו בתקופה.
@@ -573,6 +599,10 @@ function activityPanel(a) {
 
 function wireData() {
   wireResults();
+  // מואצל: #perfSec מצויר מחדש אחרי שמירת תוצאות, והכפתור נוצר מחדש איתו
+  $('#perfSec')?.addEventListener('click', (e) => {
+    if (e.target.closest('[data-goto-perf]')) run(goToPerfSetting)();
+  });
   $$('#data [data-period]').forEach((b) => b.addEventListener('click', run(async () => {
     if (!(await confirmDiscard())) return;
     state.dataPeriod = b.dataset.period;

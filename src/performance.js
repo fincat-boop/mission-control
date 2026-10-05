@@ -1,4 +1,4 @@
-import { rows } from './db.js';
+import { one, rows } from './db.js';
 import { periodOf } from './stats.js';
 
 /**
@@ -193,10 +193,11 @@ async function loadResults(period) {
  */
 export async function buildPerformance(from, to) {
   const period = periodOf(from, to);
-  const [results, endpoints, channels] = await Promise.all([
+  const [results, endpoints, channels, settings] = await Promise.all([
     loadResults(period),
     rows('select id, name from endpoints order by id'),
     rows('select id, name from channels order by sort_order, id'),
+    one('select use_performance from engine_settings limit 1'),
   ]);
 
   const { scored } = scoreAll(results);
@@ -251,6 +252,8 @@ export async function buildPerformance(from, to) {
     period: { from: period.from, to: period.to, days: period.days },
     measured: scored.length,
     shrink_k: SHRINK_K,
+    // האם הציונים האלה מזיזים בפועל את השיבוץ (מתג בניהול → מתקדם)
+    use_performance: !!settings?.use_performance,
     endpoints: named(byEndpoint, endpoints),
     channels: named(byChannel, channels),
     days: [...byDow].map(([dow, v]) => ({ dow, label: HE_DAYS[dow], ...v }))
