@@ -1,7 +1,6 @@
 import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, copyLinkButton, esc, run, toast, wireCopyLinks } from '../core/dom.js';
-import { openTemplateFiller } from '../ui/templateFiller.js';
 import { openNewsletterEditor } from '../ui/hubFill.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
@@ -11,103 +10,11 @@ import { openImport } from '../ui/importDialog.js';
 import { acceptAttr, progressList, uploadBulk, uploadFiles } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
 
-/* ========================= ניוזלטר: תבנית המילוי ========================= */
-
-// תבנית המילוי של ה-HUB, בקאש קצר כדי לא לשאול בכל פתיחת טופס
-let tplCache = null; // { at:number, value }
-async function newsletterTemplate() {
-  const now = Date.now();
-  if (tplCache && now - tplCache.at < 60000) return tplCache.value;
-  try {
-    const { template, fill_url } = await api('/publish/newsletter-template');
-    const value = template ? { ...template, fill_url } : template;
-    tplCache = { at: now, value };
-    return value;
-  } catch {
-    return null; // תקלת HUB לא תשבור את טופס העריכה — נופלים לממשק הבסיסי
-  }
-}
-
-// שדות שהמילוי האוטומטי של ה-HUB מכסה (תוכן/תאריך) — לא מציגים בטופס.
-// "כותרת" בכוונה לא כאן: ממלאים אותה ידנית בטופס (הוחלט 30.8.2026) —
-// הערך שנשלח ב-field_values גובר על ברירת המחדל של ה-HUB (שם הפוסט).
-const AUTO_FILLED = new Set(
-  ['תוכן', 'גוף הגיליון', 'גוף ההודעה', 'תאריך',
-   'content', 'body', 'subject', 'date'].map((s) => s.toLowerCase()));
-const isAutoFilled = (f) =>
-  AUTO_FILLED.has((f.label ?? '').trim().toLowerCase()) ||
-  AUTO_FILLED.has((f.name ?? '').trim().toLowerCase());
+/* ========================= ניוזלטר ========================= */
 
 /** מחווט פעם אחת מ-app.js — סגירת דיאלוג התצוגה המקדימה */
 export function wireMailPreview() {
   $('#previewClose').addEventListener('click', () => $('#previewDlg').close());
-}
-
-/** מציג את ה-HTML שה-HUB רינדר ב-iframe מבודד (בלי סקריפטים) */
-/**
- * עמודת התצוגה החיה בדיאלוג גרסת המייל: iframe מבודד (בלי סקריפטים)
- * שמתרענן ~600 מ"ש אחרי ההקלדה האחרונה. מונה ריצות מגן מפני מרוץ —
- * תשובה איטית של בקשה ישנה לא דורסת חדשה.
- */
-function mountLivePreview({ tplFields, title, values }) {
-  const dlg = $('#genDlg');
-  dlg.classList.add('with-live-preview');
-
-  const pane = document.createElement('div');
-  pane.id = 'livePreviewPane';
-  pane.innerHTML = `
-    <div class="lp-head">תצוגה חיה — כך ייראה המייל אצל הנמען</div>
-    <div class="lp-warn" id="lpWarn" hidden></div>
-    <div id="lpFrameWrap"></div>`;
-  dlg.insertBefore(pane, dlg.querySelector('.dactions'));
-
-  let seq = 0;
-  let timer = null;
-
-  const refresh = async () => {
-    const my = ++seq;
-    // הערכים מהממלא של ה-HUB (values), או משדות fv_ מקומיים אם קיימים
-    const fieldValues = { ...(values ? values() : {}) };
-    for (const f of tplFields) {
-      const el = $(`#gen_fv_${f.name}`);
-      if (el) fieldValues[f.name] = el.value;
-    }
-    try {
-      const preview = await api('/publish/newsletter-preview', {
-        method: 'POST',
-        body: {
-          subject: $('#gen_subject')?.value ?? '',
-          htmlBody: $('#gen_body')?.value ?? '',
-          name: title,
-          fieldValues,
-        },
-      });
-      if (my !== seq) return;
-      $('#lpWarn').hidden = true;
-      // iframe חדש בכל רענון (במקום להחליף src): ניווט של iframe קיים
-      // נערם בהיסטוריית הדפדפן, וכפתור "אחורה" היה מדפדף בין תצוגות.
-      const frame = document.createElement('iframe');
-      frame.id = 'lpFrame';
-      frame.title = 'תצוגה מקדימה של המייל';
-      // allow-same-origin בלבד (בלי allow-scripts): sandbox ריק = מקור
-      // אטום, והדפדפן לא שולח את קוקי ה-session — הנתיב מחזיר 401.
-      // סקריפטים נשארים חסומים, וה-CSP של העמוד חוסם אותם גם כך.
-      frame.setAttribute('sandbox', 'allow-same-origin');
-      frame.src = `/api/publish/newsletter-frame/${preview.frame_token}`;
-      $('#lpFrameWrap').replaceChildren(frame);
-    } catch (e) {
-      if (my !== seq) return;
-      const warn = $('#lpWarn');
-      warn.hidden = false;
-      warn.textContent = `התצוגה לא נטענה: ${e.message}`;
-    }
-  };
-  const queue = () => { clearTimeout(timer); timer = setTimeout(refresh, 600); };
-
-  ['#gen_subject', '#gen_body', ...tplFields.map((f) => `#gen_fv_${f.name}`)]
-    .forEach((sel) => $(sel)?.addEventListener('input', queue));
-  refresh();
-  return { refresh };
 }
 
 /* ========================= קמפיינים ותוכן ========================= */
@@ -1275,64 +1182,6 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
   if (channel?.platform === 'newsletter') return openNewsletterEditor({ item, channelId, reload });
   const v = item.variants.find((x) => x.channel_id === channelId) ?? null;
 
-  // ערוץ מייל (HUB): נושא + גוף HTML + רשימות יעד. הרשימות מגיעות מה-HUB —
-  // אם הוא לא זמין, הטופס נפתח בלי הבורר עם הסבר, והבחירה הקיימת נשמרת.
-  const isMail = channel?.platform === 'newsletter';
-  const vMeta = v?.meta ?? {};
-
-  // תבנית המילוי של ה-HUB: אם יש, מוסיפים טופס שדות. אין תבנית (null) —
-  // הממשק הבסיסי בלבד. שדות שהמילוי האוטומטי מכסה מסוננים החוצה.
-  const template = isMail ? await newsletterTemplate() : null;
-  const tplFields = template ? (template.fields ?? []).filter((f) => !isAutoFilled(f)) : [];
-
-  // הערכים חיים אצלנו; המילוי עצמו נעשה בממלא של ה-HUB (טאב + postMessage).
-  // תאימות אחורה: גוף שנכתב לפני המעבר נזרע לשדה התוכן של התבנית.
-  const externalValues = { ...(vMeta.field_values ?? {}) };
-  if (template && v?.body?.trim()) {
-    const contentField = (template.fields ?? []).find((f) =>
-      ['תוכן', 'גוף הגיליון', 'גוף ההודעה'].includes(f.name));
-    if (contentField && !String(externalValues[contentField.name] ?? '').trim()) {
-      externalValues[contentField.name] = v.body;
-    }
-  }
-
-  // ניוזלטר עם תבנית: ממלא התבניות הוא המסך — נפתח ישר, בלי דיאלוג
-  // ביניים. הרשימה תמיד רשימת העל (ברירת המחדל של ה-HUB) — אין בורר.
-  if (isMail && template?.html) {
-    openTemplateFiller({
-      html: template.html,
-      fields: template.fields ?? [],
-      values: externalValues,
-      subject: vMeta.subject ?? '',
-      readyButton: v?.status !== 'ready',
-      title: `מילוי תוכן — ${item.title}`,
-      onSave: (vals, { subject, ready }) => {
-        const cleaned = {};
-        for (const [k, val] of Object.entries(vals)) {
-          if (String(val ?? '').trim()) cleaned[k] = val;
-        }
-        (async () => {
-          try {
-            await api(`/content/${item.id}/variants/${channelId}`, {
-              method: 'PUT',
-              body: {
-                body: v?.body ?? null,
-                status: ready ? 'ready' : (v?.status ?? 'draft'),
-                meta: { ...vMeta, subject: subject || null, field_values: cleaned },
-                week: state.week,
-              },
-            });
-            toast(ready ? 'נשמר וסומן מוכן לשליחה.' : 'התוכן נשמר.');
-            await reload();
-          } catch (e) {
-            toast(`השמירה נכשלה: ${e.message}`);
-          }
-        })();
-      },
-    });
-    return;
-  }
-
   // הקבצים של המדיה הזו בלבד, ולצידם מה שמשותף לכל המדיות של הזווית
   const mine = (item.variant_assets ?? []).filter((a) => a.variant_id === v?.id);
   const shared = item.assets ?? [];
@@ -1345,23 +1194,14 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
   openGeneric({
     title: `${item.title} — ${channel?.name ?? ''}`,
     fields: [
-      ...(isMail ? [{ name: 'subject', label: 'נושא המייל', type: 'text',
-                      value: vMeta.subject,
-                      hint: 'הניוזלטר נשלח לרשימה הכללית (רשימת העל) ב-HUB' }] : []),
-      // עם תבנית — כל התוכן ממולא בממלא של ה-HUB (הכפתור למטה); בלי
-      // תבנית — כותבים גוף חופשי כאן.
-      ...(template ? [] : [{
-        name: 'body',
-        label: isMail ? 'גוף המייל (HTML)' : 'הטקסט כפי שהוא ייצא במדיה הזו',
-        type: 'textarea', value: v?.body,
-      }]),
+      { name: 'body', label: 'הטקסט כפי שהוא ייצא במדיה הזו', type: 'textarea', value: v?.body },
       { name: 'status', label: 'מצב', type: 'select', value: v?.status ?? 'draft',
         options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
                   ['not_relevant', 'לא רלוונטי למדיה הזו']] },
       { name: '__files', label: `תמונות וסרטונים ל${channel?.name ?? 'מדיה הזו'}`,
         type: 'files', existing: files },
     ],
-    // כפתורי קיצור משמאל: "מוכן לשליחה" (כל מדיה) ו"תצוגה מקדימה" (מייל)
+    // כפתור קיצור משמאל: "מוכן לשליחה"
     extraActions: (() => {
       const btns = [];
       if (v?.status !== 'ready') {
@@ -1374,11 +1214,6 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
     onSave: async (val) => {
       const body = { ...val };
       delete body.__files;
-      if (isMail) {
-        // meta נשלח רק כשיש מה לעדכן — כך כשל טעינת רשימות לא מוחק בחירה קיימת
-        body.meta = { ...vMeta, subject: val.subject ?? null };
-        delete body.subject;
-      }
       body.week = state.week;
       await api(`/content/${item.id}/variants/${channelId}`, { method: 'PUT', body });
 
@@ -1400,18 +1235,11 @@ async function openVariantForm({ item, channelId, campaign }, reload) {
           toast('הקובץ הוסר.');
         })));
       // "מוכן לשליחה" — מעביר את שדה המצב ל"מוכן" ומפעיל את השמירה הרגילה,
-      // כך שכל הלוגיקה (קבצים, meta של מייל) רצה כמו בשמירה ידנית.
+      // כך שכל הלוגיקה (קבצים) רצה כמו בשמירה ידנית.
       $('#markReady')?.addEventListener('click', () => {
         $('#gen_status').value = 'ready';
         $('#genSave').click();
       });
-      // תצוגה חיה — עמודה צמודה משמאל שמתעדכנת תוך כדי הקלדה. הרינדור
-      // כולו ב-HUB (newsletter-preview); כאן רק debounce ותצוגת התוצאה.
-      const preview = isMail
-        ? mountLivePreview({ tplFields, title: item.title, values: () => externalValues })
-        : null;
-
-
     },
   });
 }
