@@ -1151,3 +1151,12 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .boot-err .panel { max-width: 420px; padding: 24px; text-align: center; }
 .boot-err h2 { font-size: 16px; margin-bottom: 8px; }
 .boot-err p { color: var(--ink-2); font-size: 13.5px; line-height: 1.6; margin-bottom: 18px; }
+
+/* טוסט: שגיאה ואזהרה נשארות עד ✕ (core/dom.js) */
+#toast { max-width: min(560px, calc(100vw - 32px)); line-height: 1.5; }
+#toast.warn { border-color: var(--st-warn); }
+#toast .toast-x {
+  margin-inline-start: 12px; background: none; border: none; color: var(--ink-2);
+  font: inherit; font-size: 13px; padding: 2px 6px; border-radius: 6px; cursor: pointer;
+}
+#toast .toast-x:hover, #toast .toast-x:focus-visible { color: var(--ink-1); background: var(--panel-2); }
