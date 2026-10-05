@@ -12,7 +12,7 @@
 
 import { one, rows, tx } from './db.js';
 import { METRICS, parseMetric } from './performance.js';
-import { periodOf } from './stats.js';
+import { POST_AT, inLocalDays, periodOf } from './stats.js';
 
 /** כמה שורות לכל היותר בשמירה אחת — הגנה מפני גוף ענק, לא מגבלה מעשית */
 export const MAX_BATCH = 300;
@@ -186,10 +186,8 @@ export function mergeResult(existing, set) {
 
 /* ========================= מסד ========================= */
 
-/** הסינון המשותף: פורסם, ותאריך הפרסום (שעון ישראל) בתוך הטווח */
-const IN_PERIOD = `p.status = 'published'
-  and (coalesce(p.published_at, p.scheduled_at) at time zone 'Asia/Jerusalem')::date
-      between $1::date and $2::date`;
+/** הסינון המשותף: פורסם, ובתקופה לפי אותה הגדרה כמו /stats ו-/performance */
+const IN_PERIOD = `p.status = 'published' and ${inLocalDays(POST_AT)}`;
 
 /**
  * הפוסטים שפורסמו בתקופה, לטבלת ההזנה. בלי all — רק מי שאין לו עדיין
