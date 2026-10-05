@@ -5,7 +5,7 @@ import {
   FILL_INIT, cleanFillValues, initMessage, newsletterHubTag, newsletterPostAction,
   readFillMessage, seedValues,
 } from '../public/js/core/hubFill.js';
-import { choosePrimary, postFacts, rescheduleApproves } from '../public/js/core/postActions.js';
+import { choosePrimary, postFacts, publishingStuck, rescheduleApproves } from '../public/js/core/postActions.js';
 
 /* ---------- פרוטוקול חלון העורך (BoardFill.tsx ב-HUB) ---------- */
 
@@ -112,4 +112,22 @@ test('choosePrimary — ניוזלטר שבידי ה-HUB: "פתח ב-HUB"', () =
 test('rescheduleApproves — ניוזלטר לא מאושר אחרי מועד חדש (מעבירים ל-HUB)', () => {
   assert.equal(rescheduleApproves(nl({ status: 'failed' }), ALL), false);
   assert.equal(rescheduleApproves(nl({ status: 'failed', platform: 'facebook' }), ALL), true);
+});
+
+test('שחרר פרסום תקוע — ניוזלטר שהועבר: רק 10 דקות אחרי המועד, לא אחרי ההעברה', async () => {
+  const { resetClockStart, resetTooSoon } = await import('../src/publish/runner.js');
+  const now = new Date('2026-10-05T12:00:00Z');
+  const row = { publishing_started_at: '2026-10-03T09:00:00Z', scheduled_at: '2026-10-06T07:00:00Z',
+    hub_transferred_at: '2026-10-03T09:00:00Z' };
+  assert.equal(resetTooSoon(resetClockStart(row), now), true);       // לפני המועד
+  assert.equal(resetTooSoon(resetClockStart({ ...row, scheduled_at: '2026-10-05T11:55:00Z' }), now), true);
+  assert.equal(resetTooSoon(resetClockStart({ ...row, scheduled_at: '2026-10-05T11:45:00Z' }), now), false);
+  // פוסט רגיל — מתי שנתפס
+  assert.equal(resetTooSoon(resetClockStart({ ...row, hub_transferred_at: null }), now), false);
+
+  const f = postFacts({ status: 'publishing', platform: 'newsletter', external_url: 'https://h/e',
+    ...row }, { status: 'ready' });
+  assert.equal(publishingStuck(f, now), false);
+  assert.equal(publishingStuck(postFacts({ status: 'publishing', platform: 'newsletter', ...row,
+    scheduled_at: '2026-10-05T11:45:00Z' }, null), now), true);
 });

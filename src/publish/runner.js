@@ -484,12 +484,29 @@ export const RESET_TOO_SOON = 'הפרסום התחיל לפני פחות מ-10 �
 export const resetTooSoon = (startedAt, now = new Date()) =>
   startedAt != null && now.getTime() - new Date(startedAt).getTime() < RESET_MIN_MS;
 
+export const RESET_TOO_SOON_HUB =
+  'הניוזלטר בידי ה-HUB ומחכה למועד — אפשר לשחרר אותו רק 10 דקות אחרי המועד';
+
+/**
+ * מאיזה רגע סופרים את 10 הדקות של "שחרר פרסום תקוע": ניוזלטר שהועבר
+ * ל-HUB (שיכול לחכות ימים לאישור ולמועד) — מהמאוחר מבין ההעברה למועד;
+ * כל השאר — מתי שנתפס ל-publishing.
+ */
+export function resetClockStart({ publishing_started_at: started, scheduled_at: scheduled,
+                                  hub_transferred_at: transferred }) {
+  if (!transferred) return started ?? null;
+  return newsletterClockStart({ started, scheduled });
+}
+
 /** מחזיר { post } או { error } (פרסום שהתחיל לפני פחות מ-RESET_MIN_MS) או null */
 export async function resetPublishing(postId, user) {
   const post = await loadPostBrief(postId);
   if (!post || post.status !== 'publishing') return null;
-  const started = await one('select publishing_started_at from posts where id = $1', [postId]);
-  if (resetTooSoon(started?.publishing_started_at)) return { error: RESET_TOO_SOON };
+  const clock = await one(
+    'select publishing_started_at, scheduled_at, hub_transferred_at from posts where id = $1', [postId]);
+  if (resetTooSoon(clock ? resetClockStart(clock) : null)) {
+    return { error: clock?.hub_transferred_at ? RESET_TOO_SOON_HUB : RESET_TOO_SOON };
+  }
   const note = `הפרסום סומן כתקוע ידנית${user?.name ? ` על ידי ${user.name}` : ''} — ` +
     'בודקים בעמוד אם הפוסט עלה, ואז מסמנים פורסם או מפרסמים שוב';
   const r = await failPost(post, note,

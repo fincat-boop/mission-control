@@ -455,6 +455,19 @@ test('ה-HUB כבר מכיר את post-<id> ואנחנו לא — מחוברים
   assert.equal(pv.json.post.hub_stale, false);
 });
 
+test('שחרר פרסום תקוע — ניוזלטר שהועבר מראש: לא לפני המועד, גם שעות אחרי ההעברה', { skip }, async () => {
+  const { post: id } = await newsletter({ at: inHours(3) });
+  await call('POST', `/posts/${id}/newsletter/transfer`);
+  await q(`update posts set publishing_started_at = now() - interval '5 hours' where id = $1`, [id]);
+  const r = await call('POST', `/posts/${id}/reset-publishing`);
+  assert.equal(r.status, 409);
+  assert.match(r.json.error, /אחרי המועד/);
+  await q(`update posts set scheduled_at = now() - interval '11 minutes' where id = $1`, [id]);
+  const ok = await call('POST', `/posts/${id}/reset-publishing`);
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+  assert.equal(ok.json.post.status, 'failed');
+});
+
 /* ---------- SSO ---------- */
 
 test('SSO: jti נוצל פעם אחת בלבד; שורות שפגו נמחקות', { skip }, async () => {

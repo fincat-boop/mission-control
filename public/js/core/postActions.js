@@ -47,7 +47,12 @@ export function postFacts(post, variant) {
     autoReady: autoReady(post),
     hasContent: !!post.content_id,
     variantReady: variant?.status === 'ready',
-    publishingStartedAt: post.publishing_started_at ?? null,
+    // ניוזלטר שהועבר ל-HUB מחכה לאישור ולמועד — "תקוע" נספר רק מהמועד
+    // (המאוחר מבין ההעברה למועד), כמו resetClockStart בשרת
+    publishingStartedAt: post.hub_transferred_at && post.publishing_started_at
+      ? new Date(Math.max(new Date(post.publishing_started_at).getTime(),
+        new Date(post.scheduled_at).getTime())).toISOString()
+      : post.publishing_started_at ?? null,
     // ניוזלטר שבידי ה-HUB: הקישור למסך האישור שם
     hubUrl: post.platform === 'newsletter' && post.status === 'publishing' ? post.external_url ?? null : null,
   };
