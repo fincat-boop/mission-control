@@ -145,11 +145,11 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
 
       const vmap = new Map();
       const vs = await client.query(
-        'select id, channel_id, body, status from content_variants where content_id = $1', [it.id]);
+        'select id, channel_id, body, status, meta from content_variants where content_id = $1', [it.id]);
       for (const v of vs.rows) {
         const { rows: [nv] } = await client.query(
-          `insert into content_variants (content_id, channel_id, body, status)
-           values ($1,$2,$3,$4) returning id`, [copy.id, v.channel_id, v.body, v.status]);
+          `insert into content_variants (content_id, channel_id, body, status, meta)
+           values ($1,$2,$3,$4,$5) returning id`, [copy.id, v.channel_id, v.body, v.status, v.meta]);
         vmap.set(v.id, nv.id);
         variantsN++;
       }
