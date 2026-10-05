@@ -8,6 +8,7 @@
   --ink-2:   #9c9ca4;
   --muted:   #66666e;
   --accent:  #4da3ff;
+  --neon:    #22d3ff;
   --leg-hybrid: #3987e5;
   --leg-promo:  #eb6834;
   --leg-value:  #1baf7a;
@@ -775,8 +776,14 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .cbhead .off { color: var(--st-warn); }
 
 /* תפריט שלוש הנקודות (כותרת קמפיין, שורת קמפיין) — נפתח למטה, צמוד לקצה הכפתור */
-button.btn.kebab { padding: 4px 6px; line-height: 0; color: var(--ink-2); }
-button.btn.kebab[aria-expanded="true"] { border-color: var(--accent); color: var(--ink-1); }
+/* כחול ניאון — אותו סימן בכל מקום, כדי שיהיה קל למצוא את הפעולות */
+button.btn.kebab {
+  padding: 4px 6px; line-height: 0; color: var(--neon);
+  border-color: rgba(34,211,255,.45); box-shadow: 0 0 8px rgba(34,211,255,.25);
+}
+button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] {
+  border-color: var(--neon); box-shadow: 0 0 12px rgba(34,211,255,.45);
+}
 .pmenu.down { top: calc(100% + 6px); bottom: auto; inset-inline-start: auto; inset-inline-end: 0; z-index: 30; }
 
 .track { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }

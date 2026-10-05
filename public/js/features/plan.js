@@ -546,8 +546,8 @@ function campaignHead(c) {
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
-      ${campaignMenu(c)}
       ${c.required ? fillLine(c) : ''}
+      ${campaignMenu(c)}
     </div>
     ${c.required ? weekToggle(c) : ''}`;
 }
