@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { autoFill, bad, updateById, wrap } from './_shared.js';
+import { bad, updateById, wrap } from './_shared.js';
 import { buildBoard } from '../board.js';
 import { requirePerm } from '../auth.js';
 import { campaignWindowWarning, gapWarning, softWarning } from '../gap.js';
@@ -8,6 +8,8 @@ import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
 import { assetView } from '../media.js';
+import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
+import { candidateColumnsSql } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
 
 const r = Router();
@@ -226,10 +228,124 @@ r.delete('/posts/:id/results', requirePerm('content'), wrap(async (req, res) => 
   res.json({ ok: true });
 }));
 
+/**
+ * הסרת פוסט מהלוח. בכוונה בלי מילוי אוטומטי אחריה: מי שמוחק פוסט רוצה
+ * מקום פנוי, לא פוסט אחר (לרוב עם אותו תוכן) שקופץ למקומו. התוכן נרשם
+ * כוויתור לשבוע הזה בערוץ הזה, כדי שגם מילוי שיופעל משינוי אחר לא יחזיר
+ * אותו לשם (engine_dismissals).
+ */
 r.delete('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
-  await query('delete from posts where id = $1', [req.params.id]);
-  const engine = await autoFill(req.body?.week);
-  res.json({ ok: true, engine });
+  const post = await one(
+    'delete from posts where id = $1 returning id, content_id, channel_id, scheduled_at',
+    [req.params.id]
+  );
+  if (post?.content_id) await recordDismissals([post]);
+  res.json({ ok: true });
+}));
+
+/**
+ * תוכן שאפשר לשייך לפוסט: לפי נקודת קצה (לא חובה), ערוץ (חובה) ותאריך
+ * (לחלון הקמפיין). משמש את "שייך תוכן" בחלון הפוסט ואת הוספת פוסט ידנית.
+ */
+r.get('/posts/candidates', wrap(async (req, res) => {
+  const channelId = Number(req.query.channel_id);
+  if (!channelId) return bad(res, 'צריך ערוץ');
+  const endpointId = Number(req.query.endpoint_id) || null;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date ?? '') ? req.query.date : null;
+  res.json({ candidates: await contentCandidates({ endpointId, channelId, date }) });
+}));
+
+/**
+ * שיוך תוכן לפוסט שאין לו תוכן ("חסר תוכן"). אותם כללים כמו המנוע: ניסוח
+ * לערוץ הזה, אותה נקודת קצה (תוכן תמיד שייך לנקודה — ראו content_items),
+ * קמפיין לא מושהה ותאריך בתוך החלון שלו. משימות "לכתוב"/"החלפה" נסגרות.
+ */
+r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res) => {
+  const contentId = Number(req.body?.content_id);
+  if (!contentId) return bad(res, 'צריך לבחור תוכן');
+
+  const post = await one(
+    `select p.*, c.name as channel_name, c.active as channel_active,
+            (p.scheduled_at at time zone 'Asia/Jerusalem')::date as local_date
+       from posts p join channels c on c.id = p.channel_id
+      where p.id = $1`,
+    [req.params.id]
+  );
+  if (!post) return bad(res, 'לא נמצא פוסט כזה', 404);
+  if (['published', 'publishing'].includes(post.status)) {
+    return bad(res, 'הפוסט כבר יצא לאוויר — אי אפשר לשנות לו תוכן', 409);
+  }
+  if (post.content_id) return bad(res, 'לפוסט הזה כבר יש תוכן', 409);
+  if (new Date(post.scheduled_at) <= new Date()) {
+    return bad(res, 'אי אפשר לשייך תוכן לפוסט שהמועד שלו עבר');
+  }
+  if (!post.channel_active) return bad(res, `הערוץ ${post.channel_name} מושבת`, 409);
+
+  const c = await one(
+    `select ci.id, ci.title, ci.kind, ci.endpoint_id, ${candidateColumnsSql()},
+            ca.name as campaign_name, ca.paused_at, ca.starts_on, ca.ends_on,
+            v.status as variant_status,
+            (select active from endpoints where id = ci.endpoint_id) as endpoint_active,
+            ci.slot_channel_id is null or exists (
+              select 1 from campaign_channels cc
+               where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id
+            ) as slot_channel_ok
+       from content_items ci
+       left join campaigns ca       on ca.id = ci.campaign_id
+       left join content_variants v on v.content_id = ci.id and v.channel_id = $2
+      where ci.id = $1`,
+    [contentId, post.channel_id]
+  );
+  if (!c) return bad(res, 'לא נמצא תוכן כזה', 404);
+  if (!c.variant_status || c.variant_status === 'not_relevant') {
+    return bad(res, `אין לתוכן הזה ניסוח ל${post.channel_name} — כותבים אותו קודם בתוכן`);
+  }
+  // משבצת-מדיה של קמפיין כללי שייכת למדיה אחת — וכשהמדיה הוסרה מהקמפיין
+  // היא נשמרת אבל לא משובצת (כמו במנוע, ראו planWeek)
+  if (c.slot_channel_id && (c.slot_channel_id !== post.channel_id || !c.slot_channel_ok)) {
+    return bad(res, c.slot_channel_id !== post.channel_id
+      ? 'התוכן הזה הוא משבצת של ערוץ אחר בקמפיין'
+      : `הערוץ ${post.channel_name} הוסר מהקמפיין "${c.campaign_name}" — התוכן שלו לא משובץ`);
+  }
+  if (!c.endpoint_active) return bad(res, 'נקודת הקצה של התוכן הזה מושבתת', 409);
+  if (post.endpoint_id && c.endpoint_id !== post.endpoint_id) {
+    return bad(res, 'התוכן שייך לנקודת קצה אחרת מזו של הפוסט');
+  }
+  if (c.campaign_id) {
+    if (c.paused_at) return bad(res, `הקמפיין "${c.campaign_name}" מושהה`, 409);
+    const day = post.local_date;
+    if ((c.starts_on && c.starts_on > day) || (c.ends_on && c.ends_on < day)) {
+      return bad(res, `הפוסט מחוץ לתאריכי הקמפיין "${c.campaign_name}"` +
+        ` (${c.starts_on ?? '…'} – ${c.ends_on ?? '…'})`);
+    }
+    // קמפיין מוכן: הפריט יוצא לא לפני התאריך המתוכנן שלו — כמו במנוע
+    const planned = plannedDate(c);
+    if (planned && day < planned) {
+      return bad(res, `"${c.title}" מתוכנן ל-${planned} בקמפיין "${c.campaign_name}"` +
+        ' (קמפיין מוכן) — אי אפשר לשייך אותו לפוסט מוקדם יותר');
+    }
+  }
+  // פוסט בלי נקודת קצה מקבל את של התוכן — ואז חל עליו אותו כלל כמו בהזזה:
+  // נקודת קצה אחת, ערוץ אחד, יום אחד.
+  if (!post.endpoint_id) {
+    const clash = await one(
+      `select title from posts
+        where id <> $1 and endpoint_id = $2 and channel_id = $3
+          and (scheduled_at at time zone 'Asia/Jerusalem')::date = $4::date`,
+      [post.id, c.endpoint_id, post.channel_id, post.local_date]
+    );
+    if (clash) {
+      return bad(res, `כבר יש פוסט לאותה נקודת קצה בערוץ הזה באותו יום: ${clash.title}`, 409);
+    }
+  }
+
+  // פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן" — האישור לא היה על התוכן הזה
+  const done = await attachToPost(post.id, {
+    content_id: c.id, title: c.title, kind: c.kind, endpoint_id: c.endpoint_id,
+  });
+  if (!done) return bad(res, 'הפוסט השתנה בינתיים — רעננו ונסו שוב', 409);
+  res.json({ post: done.post, draft: c.variant_status !== 'ready',
+             approval_reset: done.approval_reset });
 }));
 
 /** סימון "פורסם" — מעדכן גם את המשימה הצמודה */

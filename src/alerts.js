@@ -1,7 +1,11 @@
-import { one, rows } from './db.js';
+import { currentOrg, one, rows } from './db.js';
+import { isPlatformOrg } from './platform.js';
 import { effectiveCadenceDays, ymd } from './board.js';
 import { campaignsWithHealth } from './campaigns.js';
 import { postsOnBlockedDays } from './respace.js';
+import { suppressTaskedAlerts } from './task-lifecycle.js';
+import { backupAlerts, readBackupLayers } from './backup-status.js';
+import { mediaReady } from './media.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -10,16 +14,20 @@ const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי
  * ולכן אין מצב שהתראה נשארת תלויה אחרי שהבעיה נפתרה.
  *
  * רמות: crit (חוסם), warn (דורש טיפול), info (לידיעה)
+ *
+ * user — מי מבקש. התראה שדורשת הרשאה כדי לפעול (perm: 'approve' /
+ * 'settings') מוצגת רק למי שיכול לפעול עליה. בלי user (העוזר) — הכול.
  */
 
 const DAY = 86400000;
 const UPCOMING_WINDOW_DAYS = 7; // מתי מתחילים להתריע על קמפיין שעומד להתחיל
 
-export async function buildAlerts() {
+export async function buildAlerts(user = null) {
   const settings = await one('select * from engine_settings limit 1');
   const alertHours = settings?.content_alert_hours ?? 48;
 
-  const [campaigns, endpoints, holes, pending, soonWithoutContent, failed, missed] = await Promise.all([
+  const [campaigns, endpoints, holes, pending, soonWithoutContent, failed, missed, openTasks,
+         backupLayers] = await Promise.all([
     campaignsWithHealth(),
     endpointsWithoutAir(),
     rows(`select p.id, p.scheduled_at, e.name as endpoint_name, c.name as channel_name
@@ -58,6 +66,11 @@ export async function buildAlerts() {
              and p.scheduled_at between now() - interval '7 days'
                                     and now() - interval '30 minutes'
            order by p.scheduled_at`),
+    // משימות פתוחות (שלא נדחו) שכבר מכסות התראה על אותו פוסט — suppressTaskedAlerts
+    rows(`select post_id, kind from tasks
+           where not done and post_id is not null and kind in ('approve','write')
+             and (snoozed_until is null or snoozed_until <= now())`),
+    readBackupLayers(),
   ]);
 
   const alerts = [];
@@ -122,7 +135,7 @@ export async function buildAlerts() {
     alerts.push({
       id: `hole-${h.id}`,
       level: 'crit',
-      title: `הלוח מחכה לתוכן — ${h.endpoint_name ?? 'לא משויך'}`,
+      title: `חסר תוכן על הלוח — ${h.endpoint_name ?? 'לא משויך'}`,
       detail: `${h.channel_name} · ${new Date(h.scheduled_at).toLocaleDateString('he-IL')}`,
       tab: 'board',
       post_id: h.id,
@@ -135,6 +148,7 @@ export async function buildAlerts() {
       level: 'warn',
       title: `ממתין לאישור: ${p.title}`,
       detail: `${p.channel_name} · ${new Date(p.scheduled_at).toLocaleDateString('he-IL')}`,
+      perm: 'approve', // רק מי שיכול לאשר
       tab: 'tasks',
       post_id: p.id,
     });
@@ -172,7 +186,7 @@ export async function buildAlerts() {
     alerts.push({
       id: `no-text-${p.id}`,
       level: 'crit',
-      title: `אין טקסט לפוסט שמתפרסם בקרוב`,
+      title: `חסר תוכן לפוסט שמתפרסם בקרוב`,
       detail: `${p.title} · ${p.channel_name} · ` +
               `${new Date(p.scheduled_at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}`,
       tab: 'board',
@@ -197,37 +211,90 @@ export async function buildAlerts() {
   }
 
   // ה-volume של המסד מוגבל. עדיף להתריע לפני שנגמר המקום מאשר לגלות את זה
-  // כשהעלאה נכשלת. "קבצים מצורפים" = רק מה שעוד יושב במסד (bytea) — מדיה
-  // ב-R2 לא תופסת מקום כאן, וקבצים ישנים עוברים לשם ברקע.
-  const VOLUME_MB = 500;
+  // כשהעלאה נכשלת. גלוי רק למי שיש הרשאת הגדרות, וההסבר אומר מה תופס מקום.
   const size = await one(
     `select pg_database_size(current_database()) as bytes,
             (select coalesce(sum(size_bytes),0) from content_assets
-              where data is not null)::bigint as assets`
+              where data is not null)::bigint as assets,
+            pg_total_relation_size('backups') as backups,
+            pg_total_relation_size('activity_log') as log`
   );
-  const usedMb = Number(size.bytes) / 1048576;
-  if (usedMb > VOLUME_MB * 0.7) {
-    alerts.push({
-      id: 'storage',
-      level: usedMb > VOLUME_MB * 0.9 ? 'crit' : 'warn',
-      title: 'האחסון מתמלא',
-      detail: `${Math.round(usedMb)}MB מתוך ${VOLUME_MB}MB · ` +
-              `מהם ${Math.round(Number(size.assets) / 1048576)}MB קבצים מצורפים`,
-      tab: 'manage',
-    });
-  }
+  // גיבוי ונפח המסד — של המערכת כולה, לא של ארגון; רק לארגון הפלטפורמה
+  const platformSignals = systemAlertsAllowed(user, currentOrg());
+  const storage = platformSignals && storageAlert({
+    usedBytes: Number(size.bytes), assetsBytes: Number(size.assets),
+    backupsBytes: Number(size.backups), logBytes: Number(size.log),
+    limitMb: storageLimitMb(), mediaInR2: mediaReady(),
+  });
+  if (storage) alerts.push(storage);
+
+  if (platformSignals) alerts.push(...backupAlerts(backupLayers));
 
   const order = { crit: 0, warn: 1, info: 2 };
-  alerts.sort((a, b) => order[a.level] - order[b.level]);
+  // סימן אחד לכל פוסט: משימה פתוחה היא ה-to-do, ההתראה המקבילה מתייתרת
+  const shown = alertsForUser(suppressTaskedAlerts(alerts, openTasks), user);
+  shown.sort((a, b) => order[a.level] - order[b.level]);
 
   return {
-    alerts,
+    alerts: shown,
     counts: {
-      total: alerts.length,
-      crit: alerts.filter((a) => a.level === 'crit').length,
-      warn: alerts.filter((a) => a.level === 'warn').length,
-      info: alerts.filter((a) => a.level === 'info').length,
+      total: shown.length,
+      crit: shown.filter((a) => a.level === 'crit').length,
+      warn: shown.filter((a) => a.level === 'warn').length,
+      info: shown.filter((a) => a.level === 'info').length,
     },
+  };
+}
+
+/**
+ * התראות כלל-מערכתיות (גיבוי, נפח המסד) — רק בארגון הפלטפורמה (PLATFORM_ORG_ID).
+ * הארגון: של המשתמש, ואם אין (העוזר) — הארגון הפעיל בהקשר. ההרשאה (settings)
+ * נבדקת בנפרד ב-alertsForUser.
+ */
+export function systemAlertsAllowed(user, ctxOrg = null, env = process.env) {
+  return isPlatformOrg(user?.org_id ?? ctxOrg, env);
+}
+
+/** האם המשתמש רשאי לראות התראה (perm = ההרשאה שנדרשת כדי לפעול עליה) */
+export function alertsForUser(alerts, user) {
+  if (!user) return alerts;
+  return alerts.filter((a) => !a.perm || user.is_owner || user[`perm_${a.perm}`]);
+}
+
+/** תקרת נפח המסד ב-MB — STORAGE_ALERT_MB, ברירת מחדל 500 (ה-volume ב-Railway) */
+export function storageLimitMb(env = process.env) {
+  const n = Number(env.STORAGE_ALERT_MB);
+  return Number.isFinite(n) && n > 0 ? n : 500;
+}
+
+const mb = (bytes) => Math.round(bytes / 1048576);
+
+/**
+ * התראת אחסון (טהורה): מעל 70% מהתקרה — דורש טיפול, מעל 90% — חוסם.
+ * ההסבר אומר מה תופס מקום עכשיו ושהפינוי אצל המפתח — אין כאן כפתור
+ * שהמשתמש יכול ללחוץ עליו, ולכן גם אין "פתח".
+ */
+export function storageAlert({ usedBytes, assetsBytes = 0, backupsBytes = 0, logBytes = 0,
+                               limitMb = 500, mediaInR2 = false }) {
+  const used = usedBytes / 1048576;
+  if (used <= limitMb * 0.7) return null;
+  const parts = [
+    ['גיבויים פנימיים', backupsBytes], ['קבצים שעוד שמורים במסד', assetsBytes], ['יומן פעולות', logBytes],
+  ].filter(([, b]) => mb(b) > 0).map(([label, b]) => `${label} ${mb(b)}MB`);
+  return {
+    id: 'storage',
+    level: used > limitMb * 0.9 ? 'crit' : 'warn',
+    perm: 'settings',
+    title: 'המסד מתמלא',
+    detail: [
+      `${Math.round(used)}MB מתוך ${limitMb}MB`,
+      parts.length ? `הכי הרבה: ${parts.join(', ')}` : null,
+      mediaInR2
+        ? 'תמונות וסרטונים חדשים כבר נשמרים באחסון המדיה (R2) ולא תופסים כאן מקום'
+        : 'אחסון המדיה (R2) לא מוגדר, ולכן כל קובץ שעולה נשמר במסד',
+      'הפינוי או הגדלת הנפח — אצל המפתח; מעבירים לו את ההודעה הזו',
+    ].filter(Boolean).join(' · '),
+    tab: null,
   };
 }
 

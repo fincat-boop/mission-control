@@ -346,6 +346,10 @@ alter table tasks add column if not exists meta jsonb;
 create unique index if not exists tasks_open_failed_post_idx
   on tasks (post_id) where kind = 'failed' and done = false;
 
+-- "דחה עד מחר": משימה שנדחתה לא מוצגת ברשימה הפתוחה ולא נספרת בתגית
+-- עד הזמן הזה. null = לא נדחתה.
+alter table tasks add column if not exists snoozed_until timestamptz;
+
 create table if not exists engine_settings (
   id                  int primary key default 1 check (id = 1),
   min_gap_days        int not null default 7,
@@ -400,6 +404,17 @@ create table if not exists backups (
 );
 
 create index if not exists backups_created_at_idx on backups (created_at desc);
+
+-- תוצאת הניסיון האחרון של כל שכבת גיבוי (db = בתוך המסד, drive, r2 = מלא).
+-- גלובלית כמו backups — הגיבוי רץ על כל המסד, לא לכל ארגון. מוצגת בניהול
+-- ומזינה את התראות הגיבוי (src/backup-status.js).
+create table if not exists backup_status (
+  layer           text primary key check (layer in ('db','drive','r2')),
+  last_attempt_at timestamptz not null default now(),
+  last_result     text not null check (last_result in ('ok','failed','skipped')),
+  last_error      text,
+  last_success_at timestamptz
+);
 
 -- ========================= הגבלת קצב בהתחברות =========================
 -- ניסיונות התחברות כושלים, להגנה מפני brute-force. מבוסס-DB ולא מונה
@@ -460,6 +475,14 @@ alter table posts
   add column if not exists approved_by   int references users(id) on delete set null,
   add column if not exists approved_at   timestamptz;
 
+-- מתי הפוסט נתפס ל-publishing — כדי לזהות פרסום שנתקע באמצע (runner.js)
+alter table posts add column if not exists publishing_started_at timestamptz;
+-- פוסט שכבר היה ב-publishing לפני העמודה: השעון מתחיל מהעלייה הזו, לא
+-- מהמועד/האישור (שהיו מסמנים אותו מיד כתקוע). אידמפוטנטי — אחרי הפעם
+-- הראשונה אין שורות כאלה.
+update posts set publishing_started_at = now()
+ where status = 'publishing' and publishing_started_at is null;
+
 -- סטטוסים חדשים למסלול: approved (אושר לשליחה אוטומטית) → publishing → published,
 -- וכשל הופך ל-failed (נשאר על הלוח עד טיפול, לא נעלם).
 alter table posts drop constraint if exists posts_status_check;
@@ -510,6 +533,36 @@ create index if not exists endpoints_org_idx         on endpoints (org_id);
 create index if not exists channels_org_idx          on channels (org_id);
 create index if not exists tasks_org_idx             on tasks (org_id);
 
+-- auto_hole: פוסט חסר תוכן שהמנוע עצמו יצר (חלון "מלא את השבוע"). רק אליו
+-- המילוי האוטומטי השקט רשאי לשייך תוכן — פוסט שהמשתמש יצר, או שהתוכן שלו
+-- נמחק, מתמלא רק כשהמשתמש רואה ובוחר. ההשלמה לאחור רצה פעם אחת בלבד, ביחד
+-- עם יצירת העמודה, כדי שהרצה חוזרת לא תסמן פוסטים שנוצרו ידנית אחר כך.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = current_schema()
+                    and table_name = 'posts' and column_name = 'auto_hole') then
+    alter table posts add column auto_hole boolean not null default false;
+    update posts set auto_hole = true
+     where content_id is null and title in ('ממתין לתוכן','חסר תוכן') and status <> 'published';
+  end if;
+end $$;
+
+-- ========================= ויתורים של המנוע =========================
+-- תוכן שהמשתמש הוריד מערוץ בשבוע מסוים (מחיקת פוסט, "בטל" על מילוי
+-- אוטומטי). המילוי האוטומטי רץ אחרי כל שינוי, ובלי הרשומה הזו הוא היה
+-- מחזיר את אותו תוכן לאותו מקום בשינוי הבא. נמחק אחרי ~8 שבועות
+-- (recordDismissals ב-engine.js).
+create table if not exists engine_dismissals (
+  id          serial primary key,
+  org_id      int references orgs(id),
+  week_start  date not null,
+  content_id  int not null references content_items(id) on delete cascade,
+  channel_id  int not null references channels(id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+create unique index if not exists engine_dismissals_key_idx
+  on engine_dismissals (org_id, week_start, content_id, channel_id);
+
 -- ========================= מולטי-טננט שלב 2: RLS =========================
 -- שלב 2b: הבידוד יורד ל-DB. שלוש אבני יסוד:
 --   1. engine_settings הופכת מסינגלטון (id=1) לשורה-לכל-ארגון (PK org_id).
@@ -544,7 +597,7 @@ begin
     'users','endpoints','channels','campaigns','campaign_channels',
     'content_items','content_variants','content_assets','posts',
     'post_results','strategy_milestones','tasks','engine_settings','activity_log',
-    'channel_connections','publish_log','media_trash'
+    'channel_connections','publish_log','media_trash','engine_dismissals'
   ] loop
     -- insert בלי org_id מקבל אוטומטית את הארגון הפעיל
     execute format(

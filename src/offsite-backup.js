@@ -18,11 +18,12 @@ const TIERS = {
   monthly: { keep: Infinity, take: (d) => d.getDate() === 1 },
 };
 
+/** @returns {Promise<'ok'|'skipped'>} — לרישום מצב השכבה (backup-status.js) */
 export async function offsiteBackup(dump) {
   const rootId = process.env.GOOGLE_DRIVE_FOLDER_ID;
   if (!rootId) {
     console.log('GOOGLE_DRIVE_FOLDER_ID לא מוגדר — מדלג על גיבוי חיצוני');
-    return;
+    return 'skipped';
   }
 
   const now = new Date(dump.created_at);
@@ -42,6 +43,7 @@ export async function offsiteBackup(dump) {
     for (const f of stale) await deleteFile(f.id);
     if (stale.length) console.log(`  ${stale.length} גיבויי ${tier} ישנים נמחקו מ-Drive`);
   }
+  return 'ok';
 }
 
 /**

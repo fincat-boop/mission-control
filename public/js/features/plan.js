@@ -425,11 +425,8 @@ function wirePlan(campaign, endpointId, content) {
       if (!ok) return;
       const res = await api(`/campaigns/${id}/${paused ? 'resume' : 'pause'}`,
         { method: 'POST', body: { week: state.week } });
-      toast(paused
-        ? 'הקמפיין חזר לפעול.' +
-          (res.cleared ? ` ${res.cleared} שיבוצים ישנים נוקו —` : '') +
-          (res.engine?.placed ? ` המנוע שיבץ ${res.engine.placed} מחדש.` : ' המנוע ימקם אותו מחדש בפעם הבאה שיש מקום.')
-        : `הקמפיין הושהה${res.held ? ` · ${res.held} שיבוצים ירדו מהלוח` : ''}.`);
+      if (paused) await import('../ui/engineDialog.js').then(({ engineToast }) => engineToast(res, 'הקמפיין חזר לפעול.' + (res.cleared ? ` ${res.cleared} פוסטים ישנים נוקו.` : '') + (res.engine?.placed || res.engine?.attached ? '' : ' המנוע ימקם אותו מחדש בפעם הבאה שיש מקום.')));
+      else toast(`הקמפיין הושהה${res.held ? ` · ${res.held} שיבוצים ירדו מהלוח` : ''}.`);
       await reload();
     })));
 

@@ -2,7 +2,8 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildSlots, buildUsage, chooseForSlot, holeReason, nextSlot, outsideCampaignWindow,
+  blockedContent, buildSlots, buildUsage, chooseForSlot, chooseHoleFills, holeReason, nextSlot,
+  openHoles, outsideCampaignWindow, planItemKey, recheckSelection, selectPlanItems,
 } from '../src/engine.js';
 import { weekMeta } from '../src/board.js';
 
@@ -178,6 +179,231 @@ test('holeReason — אין תוכן / תוכן רק של קמפיינים מח�
   assert.match(holeReason([out, out], '2026-11-10'), /קמפיינים שלא רצים/);
   assert.match(holeReason([out, bg], '2026-11-10'), /אף גרסה לא מתאימה/);
   assert.match(holeReason([out], '2027-01-10'), /אף גרסה לא מתאימה/);
+});
+
+/* ========================= ויתורים ========================= */
+
+test('blockedContent — משובץ השבוע וגם ויתור של המשתמש חוסמים את אותו ערוץ בלבד', () => {
+  const set = blockedContent(
+    [{ channel_id: 1, content_id: 10 }, { channel_id: 2, content_id: null }],
+    [{ channel_id: 3, content_id: 11 }],
+  );
+  assert.ok(set.has('1:10'));
+  assert.ok(set.has('3:11'));
+  assert.ok(!set.has('2:11'));
+  assert.equal(set.size, 2);
+});
+
+/* ========================= מילוי פוסטים חסרי תוכן ========================= */
+
+const NOW = new Date('2026-10-05T08:00:00');
+const hole = (over = {}) => ({
+  id: 100, channel_id: 1, endpoint_id: 7, content_id: null, status: 'scheduled',
+  kind: 'value', title: 'חסר תוכן', published_at: null,
+  scheduled_at: new Date('2026-10-08T12:00:00').toISOString(), ...over,
+});
+const holeItem = (over = {}) => ({
+  id: 1, endpoint_id: 7, kind: 'value', title: 'תוכן', campaign_id: null,
+  eligible_channel_ids: [1], ready_channel_ids: [1], ...over,
+});
+
+test('openHoles — רק עתידיים, מתוכננים, בלי תוכן, בערוץ ונקודה פעילים', () => {
+  const existing = [
+    hole({ id: 1 }),
+    hole({ id: 2, content_id: 5 }),
+    hole({ id: 3, scheduled_at: new Date('2026-10-04T10:00:00').toISOString() }),
+    hole({ id: 4, status: 'pending_approval' }),
+    hole({ id: 5, channel_id: 99 }),
+    hole({ id: 6, endpoint_id: null }),
+    hole({ id: 7, endpoint_id: 8 }),
+  ];
+  const ids = openHoles(existing, [{ id: 1 }], [{ id: 7 }], NOW).map((h) => h.id);
+  assert.deepEqual(ids, [1]);
+});
+
+test('chooseHoleFills — מוכן קודם לטיוטה', () => {
+  const fills = chooseHoleFills({
+    holes: [hole()],
+    content: [holeItem({ id: 1, ready_channel_ids: [] }), holeItem({ id: 2 })],
+    usedContent: new Set(),
+  });
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0].content_id, 2);
+  assert.equal(fills[0].post_id, 100);
+  assert.equal(fills[0].draft, false);
+  assert.equal(fills[0].prev_title, 'חסר תוכן');
+});
+
+test('chooseHoleFills — טיוטה ממלאת כשאין מוכן, ומסומנת כטיוטה', () => {
+  const fills = chooseHoleFills({
+    holes: [hole()],
+    content: [holeItem({ ready_channel_ids: [] })],
+    usedContent: new Set(),
+  });
+  assert.equal(fills[0].draft, true);
+});
+
+test('chooseHoleFills — בתוך המוכנים, סוג שתואם לפוסט קודם', () => {
+  const fills = chooseHoleFills({
+    holes: [hole({ kind: 'promo' })],
+    content: [holeItem({ id: 1, kind: 'value' }), holeItem({ id: 2, kind: 'promo' })],
+    usedContent: new Set(),
+  });
+  assert.equal(fills[0].content_id, 2);
+  assert.equal(fills[0].kind, 'promo');
+  assert.equal(fills[0].prev_kind, 'promo');
+});
+
+test('chooseHoleFills — נקודה אחרת, ערוץ בלי ניסוח, ויתור וחלון שנגמר — לא ממלאים', () => {
+  const fills = chooseHoleFills({
+    holes: [hole()],
+    content: [
+      holeItem({ id: 1, endpoint_id: 8 }),
+      holeItem({ id: 2, eligible_channel_ids: [2], ready_channel_ids: [2] }),
+      holeItem({ id: 3 }),
+      holeItem({ id: 4, campaign_id: 9, campaign_starts_on: '2026-09-01', campaign_ends_on: '2026-10-07' }),
+    ],
+    usedContent: new Set(['1:3']),
+  });
+  assert.deepEqual(fills, []);
+});
+
+test('chooseHoleFills — אותו תוכן לא ממלא שני פוסטים, ומסומן כמשומש לשאר הריצה', () => {
+  const used = new Set();
+  const fills = chooseHoleFills({
+    holes: [hole({ id: 1 }), hole({ id: 2, scheduled_at: new Date('2026-10-09T12:00:00').toISOString() })],
+    content: [holeItem({ id: 5 })],
+    usedContent: used,
+  });
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0].post_id, 1);
+  assert.ok(used.has('1:5'));
+});
+
+test('chooseHoleFills — תוכן חד-פעמי שכבר שובץ בעבר לא חוזר', () => {
+  const history = new Map([[5, { lastByChannel: new Map([[1, '2026-09-01']]) }]]);
+  const fills = chooseHoleFills({
+    holes: [hole()], content: [holeItem({ id: 5 })], usedContent: new Set(), history,
+  });
+  assert.deepEqual(fills, []);
+});
+
+/* ========================= בחירה מתוך ההצעה ========================= */
+
+const PLAN = {
+  placements: [{ content_id: 1, channel_id: 1, scheduled_at: 'A', endpoint_id: 7 },
+               { content_id: 2, channel_id: 1, scheduled_at: 'B', endpoint_id: 7 }]
+    .map((x) => ({ ...x, key: planItemKey('placement', x) })),
+  attachments: [{ post_id: 50, content_id: 3 }].map((x) => ({ ...x, key: planItemKey('attach', x) })),
+  holes: [{ channel_id: 2, scheduled_at: 'C', endpoint_id: 8 }]
+    .map((x) => ({ ...x, key: planItemKey('hole', x) })),
+};
+
+test('planItemKey — מפתחות יציבים ונבדלים לפי סוג', () => {
+  assert.equal(PLAN.placements[0].key, '1|1|A|7');
+  assert.equal(PLAN.attachments[0].key, 'attach|50|3');
+  assert.equal(PLAN.holes[0].key, 'hole|2|C|8');
+});
+
+test('selectPlanItems — בלי selected הכול נשאר, כמו תמיד', () => {
+  const { plan, skipped } = selectPlanItems(PLAN, null);
+  assert.equal(plan, PLAN);
+  assert.equal(skipped, 0);
+});
+
+test('selectPlanItems — רק המסומנים, ומסומן שכבר לא בהצעה נספר כמדולג', () => {
+  const { plan, skipped } = selectPlanItems(PLAN, ['2|1|B|7', 'attach|50|3', '9|9|Z|9']);
+  assert.deepEqual(plan.placements.map((p) => p.content_id), [2]);
+  assert.equal(plan.attachments.length, 1);
+  assert.equal(plan.holes.length, 0);
+  assert.equal(skipped, 1);
+});
+
+/* ========================= קיבולת: שינוי סוג ========================= */
+
+test('buildUsage.retag — שיוך תוכן מכירתי לפוסט שסומן ערך מעדכן את היחס בלי לתפוס מקום', () => {
+  const week = weekMeta('2026-08-12');
+  const usage = buildUsage([channel({ max_per_week: 3 })],
+    [{ channel_id: 1, kind: 'value', scheduled_at: new Date(`${week.days[2].date}T10:00:00`) }],
+    SETTINGS);
+  usage.retag(1, week.days[2].date, 'value', 'promo');
+  const r = usage.ratioReport();
+  assert.equal(r.counts.promo, 1);
+  assert.equal(r.counts.value, 0);
+  assert.equal(usage.remaining(1), 2);
+});
+
+test('openHoles autoOnly — המילוי השקט רואה רק פוסטים שהמנוע יצר כחסרי תוכן', () => {
+  const existing = [hole({ id: 1, auto_hole: true }), hole({ id: 2, auto_hole: false }), hole({ id: 3 })];
+  const all = openHoles(existing, [{ id: 1 }], [{ id: 7 }], NOW).map((h) => h.id);
+  const auto = openHoles(existing, [{ id: 1 }], [{ id: 7 }], NOW, { autoOnly: true }).map((h) => h.id);
+  assert.deepEqual(all, [1, 2, 3]);
+  assert.deepEqual(auto, [1]);
+});
+
+test('chooseHoleFills — תקרת מכירתי ליום מלאה: פוסט ערך לא מתמלא במכירתי', () => {
+  const at = '2026-10-08T12:00:00';
+  const existing = [
+    { channel_id: 1, kind: 'promo', scheduled_at: new Date('2026-10-08T09:00:00') },
+    { channel_id: 1, kind: 'value', scheduled_at: new Date(at) },
+    ...Array.from({ length: 6 }, (_, i) =>
+      ({ channel_id: 1, kind: 'value', scheduled_at: new Date(`2026-10-0${4 + (i % 3)}T10:00:00`) })),
+  ];
+  const usage = () => buildUsage([channel({ max_per_week: 20 })], existing, SETTINGS);
+  const h = hole({ scheduled_at: new Date(at).toISOString() });
+
+  const blocked = chooseHoleFills({
+    holes: [h], content: [holeItem({ id: 1, kind: 'promo' })], usedContent: new Set(), usage: usage(),
+  });
+  assert.deepEqual(blocked, []);
+
+  // יש גם תוכן ערך — הוא נבחר במקום המכירתי שנחסם
+  const fallback = chooseHoleFills({
+    holes: [h],
+    content: [holeItem({ id: 1, kind: 'promo' }), holeItem({ id: 2, kind: 'value', ready_channel_ids: [] })],
+    usedContent: new Set(), usage: usage(),
+  });
+  assert.equal(fallback[0].content_id, 2);
+});
+
+test('buildUsage.retag — מעדכן גם את מונה המכירתי ליום', () => {
+  const usage = buildUsage([channel({ max_per_week: 20 })],
+    [{ channel_id: 1, kind: 'value', scheduled_at: new Date('2026-10-08T10:00:00') },
+     ...Array.from({ length: 8 }, () =>
+       ({ channel_id: 1, kind: 'value', scheduled_at: new Date('2026-10-05T10:00:00') }))],
+    SETTINGS);
+  assert.equal(usage.allowsRetag(1, '2026-10-08', 'value', 'promo'), true);
+  usage.retag(1, '2026-10-08', 'value', 'promo');
+  // תקרה של מכירתי אחד ביום — עכשיו תפוסה
+  assert.equal(usage.allows(1, '2026-10-08', 'promo'), false);
+  assert.equal(usage.allowsRetag(1, '2026-10-08', 'value', 'promo'), false);
+});
+
+test('chooseHoleFills — משבצת-מדיה של ערוץ אחר לא ממלאת פוסט, גם כשיש לה ניסוח לערוץ', () => {
+  const fills = chooseHoleFills({
+    holes: [hole()],
+    content: [holeItem({ id: 1, campaign_id: 9, slot_channel_id: 2 }), holeItem({ id: 2, slot_channel_id: 1, campaign_id: 9 })],
+    usedContent: new Set(),
+  });
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0].content_id, 2);
+});
+
+test('recheckSelection — מכירתי שנשען על ערך שהורד מהסימון יורד, עם סיבה', () => {
+  const ch = channel({ max_per_week: 10 });
+  const ctx = { channels: [ch], existing: [], settings: SETTINGS };
+  const pl = (id, kind, date) => ({ key: `k${id}`, title: `t${id}`, channel_id: 1, kind, date });
+  const full = [pl(1, 'value', '2026-10-04'), pl(2, 'value', '2026-10-05'),
+                pl(3, 'value', '2026-10-06'), pl(4, 'promo', '2026-10-07')];
+
+  const all = recheckSelection({ placements: full, attachments: [], holes: [] }, ctx);
+  assert.equal(all.placements.length, 4);
+  assert.deepEqual(all.dropped, []);
+
+  const onlyPromo = recheckSelection({ placements: [full[0], full[3]], attachments: [], holes: [] }, ctx);
+  assert.deepEqual(onlyPromo.placements.map((p) => p.key), ['k1']);
+  assert.equal(onlyPromo.dropped[0].key, 'k4');
+  assert.match(onlyPromo.dropped[0].reason, /ערך/);
 });
 
 /* ========================= קמפיין מוכן ========================= */

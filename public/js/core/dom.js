@@ -11,13 +11,61 @@ export const esc = (v) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 let toastTimer;
+let toastHold = false; // הטוסט הנוכחי מחכה ללחיצה — ריחוף/פוקוס עוצרים את ההסתרה
+const hideToast = () => { $('#toast').style.display = 'none'; };
+
 export function toast(msg, isError = false) {
   const t = $('#toast');
+  toastHold = false;
   t.textContent = msg;
   t.classList.toggle('err', isError);
   t.style.display = 'block';
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.style.display = 'none'), 3200);
+  toastTimer = setTimeout(hideToast, 3200);
+}
+
+/** ריחוף או פוקוס על טוסט עם פעולה עוצרים את הספירה; היציאה מחדשת אותה */
+function wireToastHold(t) {
+  if (t.dataset.holdWired) return;
+  t.dataset.holdWired = '1';
+  const pause = () => { if (toastHold) clearTimeout(toastTimer); };
+  const resume = () => {
+    if (!toastHold) return;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, 3000);
+  };
+  t.addEventListener('mouseenter', pause);
+  t.addEventListener('focusin', pause);
+  t.addEventListener('mouseleave', resume);
+  t.addEventListener('focusout', resume);
+}
+
+/**
+ * טוסט עם כפתור פעולה ("בטל"). נשאר ~8 שניות — מספיק לקרוא ולהחליט;
+ * ריחוף או פוקוס עוצרים את הספירה, כדי שמי שמגיע עם מקלדת לא יפספס.
+ * אותו אלמנט #toast (role=status), כך שקורא מסך מכריז עליו כמו על כל טוסט.
+ */
+export function toastAction(msg, label, onClick, ms = 8000) {
+  const t = $('#toast');
+  wireToastHold(t);
+  const text = document.createElement('span');
+  text.textContent = msg;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toast-act';
+  btn.textContent = label;
+  btn.addEventListener('click', () => {
+    toastHold = false;
+    clearTimeout(toastTimer);
+    hideToast();
+    onClick();
+  }, { once: true });
+  t.replaceChildren(text, btn);
+  t.classList.remove('err');
+  t.style.display = 'block';
+  toastHold = true;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, ms);
 }
 
 /** עוטף פעולה כך ששגיאת שרת תוצג כטוסט במקום להיעלם בקונסול */

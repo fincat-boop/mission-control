@@ -89,7 +89,7 @@
   <div id="enginePlan"></div>
   <div class="dactions">
     <button class="btn" id="eCancel">ביטול</button>
-    <button class="btn primary" id="eApply" disabled>שבץ הכול</button>
+    <button class="btn primary" id="eApply" disabled>שבץ את המסומנים</button>
   </div>
 </dialog>
 
@@ -141,6 +141,11 @@
     <select id="apEndpoint"></select>
   </div>
   <div class="frow">
+    <label for="apContent">תוכן</label>
+    <select id="apContent"></select>
+    <div class="ap-hint" id="apContentHint"></div>
+  </div>
+  <div class="frow">
     <label for="apKind">סוג</label>
     <select id="apKind">
       <option value="value">ערך</option>
@@ -154,8 +159,8 @@
   </div>
   <div class="dactions">
     <button class="btn" id="apCancel" style="margin-inline-end:auto">ביטול</button>
-    <button class="btn" id="apAddOnly">הוסף פוסט</button>
-    <button class="btn primary" id="apAddAndCheck">הוסף ובדוק שיבוץ מחדש</button>
+    <button class="btn" id="apAddAndCheck">הוסף ופתח את מילוי השבוע</button>
+    <button class="btn primary" id="apAddOnly">הוסף פוסט</button>
   </div>
 </dialog>
 
@@ -232,7 +237,7 @@
 </dialog>
 
 <div id="tt"></div>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script type="module" src="/app.js"></script>
 </body>

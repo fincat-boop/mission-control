@@ -3,6 +3,7 @@ import { fmtDate, ymd } from '../core/format.js';
 import { api } from '../core/api.js';
 import { can, epColor, rebuildEpColors, state } from '../core/state.js';
 import { goToTab, refreshBoard } from '../ui/refresh.js';
+import { engineToast } from '../ui/engineDialog.js';
 
 /* ========================= אסטרטגיה ========================= */
 
@@ -232,10 +233,8 @@ function wireStrategy() {
         const steps = Math.abs(deltaHalves);
         const moved = res.moved_posts
           ? ` · ${res.moved_posts} שיבוצים זזו איתו` : '';
-        const filled = res.engine?.placed
-          ? ` · המנוע מילא ${res.engine.placed} משבצות פנויות` : '';
-        toast((steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
-                           : `הקמפיין הוזז ב-${steps} חצאי חודש.`) + moved + filled);
+        engineToast(res, (steps === 1 ? 'הקמפיין הוזז בחצי חודש.'
+                                      : `הקמפיין הוזז ב-${steps} חצאי חודש.`) + moved);
         await Promise.all([renderStrategy(), refreshBoard()]);
       });
 

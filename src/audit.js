@@ -40,6 +40,7 @@ const ENTITY_HE = {
   engine: 'מנוע השיבוץ',
   urgent: 'מבצע דחוף',
   auth: 'התחברות',
+  results: 'תוצאות',
 };
 
 /** שם הישות מתוך גוף התשובה — כך היומן מציג שם ולא רק מזהה */
@@ -80,6 +81,8 @@ function describe(req, payload, deletedName) {
     'content/link':       ['update',  `קישר את התוכן ${label} למשבצת במדיה נוספת`],
     'content/unlink':     ['update',  `ניתק את הקישור של התוכן ${label} — לכל משבצת עותק משלה`],
     'engine/apply':       ['apply',   'הריץ את מנוע השיבוץ ומילא את השבוע'],
+    'engine/undo':        ['delete',  'ביטל מילוי אוטומטי של המנוע'],
+    'posts/attach-content': ['update', `שייך תוכן לפוסט ${label}`],
     'urgent/commit':      ['create',  `שיבץ מבצע דחוף ${label}`],
     'auth/login':         ['login',   'התחבר למערכת'],
     'auth/logout':        ['logout',  'התנתק'],
@@ -89,6 +92,12 @@ function describe(req, payload, deletedName) {
   if (key && special[key]) {
     const [action, summary] = special[key];
     return { action, entity, entity_id: /^\d+$/.test(id ?? '') ? id : null, summary };
+  }
+  // שמירה מרוכזת מטבלת התוצאות (PUT /results) — כמה פוסטים, מתוך התשובה
+  if (entity === 'results' && !id && req.method === 'PUT') {
+    const n = (payload?.saved ?? 0) + (payload?.cleared ?? 0);
+    return { action: 'update', entity, entity_id: null,
+      summary: n === 1 ? 'הזין תוצאות לפוסט אחד' : `הזין תוצאות ל-${n} פוסטים` };
   }
   // מחיקת גרסה למדיה מגיעה כ-DELETE על content/:id/variants/:channelId
   if (entity === 'content' && sub === 'variants' && req.method === 'DELETE') {

@@ -1,4 +1,5 @@
 import { one, rows } from './db.js';
+import { contentHints } from './candidates.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const HE_MONTHS = [
@@ -101,6 +102,13 @@ export async function buildBoard(anchorDate) {
     one('select * from engine_settings limit 1'),
   ]);
 
+  // content_hint — לפוסט חסר תוכן: האם יש לנקודה תוכן עם ניסוח לערוץ
+  // הזה שאפשר לשייך ('ready' / 'draft'), כדי שהלוח יראה "יש טיוטה". אותו
+  // כלל כמו רשימת "שייך תוכן" (candidates.js) — כולל התאריך המתוכנן של
+  // קמפיין מוכן — כך שהרמז לא מבטיח תוכן שהרשימה לא תציג.
+  const hints = await contentHints(posts, ymd);
+  for (const p of posts) p.content_hint = hints.get(p.id) ?? null;
+
   const hybridWeight = Number(settings?.hybrid_weight ?? 0.5);
 
   // שיבוצים לפי ערוץ ולפי יום
@@ -201,6 +209,7 @@ function shapePost(p) {
     endpoint_name: p.endpoint_name,
     content_id: p.content_id,
     variant_status: p.variant_status,
+    content_hint: p.content_hint ?? null,
     title: p.title,
     kind: p.kind,
     status: p.status,

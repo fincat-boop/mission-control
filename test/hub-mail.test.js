@@ -67,9 +67,65 @@ test('בלי הגדרות env — HubMailError 503, בלי קריאת רשת', a
   assert.equal(f.calls.length, 0);
 });
 
-test('רשת נפלה — HubMailError 502', async () => {
-  const f = async () => { throw new Error('ECONNREFUSED'); };
-  await assert.rejects(() => newsletterStatus('c1', f), (e) => e instanceof HubMailError && e.status === 502);
+test('רשת נפלה — HubMailError 502, אחרי שני ניסיונות חוזרים', async () => {
+  let calls = 0;
+  const f = async () => { calls += 1; throw new Error('ECONNREFUSED'); };
+  await assert.rejects(() => newsletterStatus('c1', f, { delays: [0, 0] }),
+    (e) => e instanceof HubMailError && e.status === 502);
+  assert.equal(calls, 3);
+});
+
+test('call — נשלח עם signal (תקרת זמן), ו-timeout נחשב תקלה זמנית שחוזרת', async () => {
+  const signals = [];
+  let n = 0;
+  const f = async (_url, init) => {
+    signals.push(init.signal);
+    n += 1;
+    if (n === 1) throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    return { ok: true, status: 200, json: async () => ({ ok: true, campaign_id: 'c1', status: 'sent' }) };
+  };
+  const s = await newsletterStatus('post-1', f, { delays: [0, 0] });
+  assert.equal(s.status, 'sent');
+  assert.equal(n, 2);
+  assert.ok(signals[0] instanceof AbortSignal);
+
+  const always = async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }); };
+  await assert.rejects(() => newsletterStatus('post-1', always, { delays: [0, 0] }),
+    (e) => e instanceof HubMailError && e.status === 502 && /לא ענה תוך 15 שניות/.test(e.message));
+});
+
+test('withRetry — 5xx חוזר עד שמצליח; 4xx והגדרה חסרה לא חוזרים', async () => {
+  const seq = (...statuses) => {
+    const calls = [];
+    const fn = async (url, init) => {
+      calls.push(url);
+      const st = statuses[Math.min(calls.length - 1, statuses.length - 1)];
+      return { ok: st < 300, status: st, json: async () => (st < 300 ? { ok: true, campaign_id: 'c9', status: 'scheduled' } : { ok: false }) };
+    };
+    fn.calls = calls;
+    return fn;
+  };
+  const sleeps = [];
+  const retry = { delays: [10, 20], sleep: async (ms) => { sleeps.push(ms); } };
+  const input = { externalRef: 'post-1', subject: 'א', htmlBody: 'ב' };
+
+  const f1 = seq(503, 502, 200);
+  assert.equal((await createNewsletter(input, f1, retry)).campaign_id, 'c9');
+  assert.equal(f1.calls.length, 3);
+  assert.deepEqual(sleeps, [10, 20]);
+
+  const f2 = seq(500, 500, 500, 200);
+  await assert.rejects(() => createNewsletter(input, f2, retry), (e) => e.status === 500);
+  assert.equal(f2.calls.length, 3); // שניים נוספים, לא יותר
+
+  const f3 = seq(422);
+  await assert.rejects(() => createNewsletter(input, f3, retry), (e) => e.status === 422);
+  assert.equal(f3.calls.length, 1);
+
+  delete process.env.HUB_API_URL;
+  const f4 = seq(200);
+  await assert.rejects(() => newsletterStatus('x', f4, retry), (e) => e.status === 503);
+  assert.equal(f4.calls.length, 0);
 });
 
 test('newsletterStatus — external_ref עם תווים מיוחדים עובר encodeURIComponent', async () => {

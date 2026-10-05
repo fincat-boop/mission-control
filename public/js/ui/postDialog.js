@@ -3,7 +3,8 @@ import { confirmDialog } from '../core/confirm.js';
 import { api } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
 import { goToTab, refreshAfterPostChange } from '../ui/refresh.js';
-import { isImage, isVideo } from '../core/format.js';
+import { isImage, isVideo, ymd } from '../core/format.js';
+import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
 
 /* ========================= תצוגת פוסט מהלוח ========================= */
 
@@ -47,11 +48,23 @@ const ACT = {
       toast('הפרסום בוטל, השיבוץ חזר למתוכנן.');
     },
   },
+  attach: {
+    label: 'שייך תוכן',
+    keepOpen: true,
+    run: async (post) => {
+      await showAttachPicker(post);
+      return false; // החלון נשאר פתוח — הבחירה קורית בתוכו
+    },
+  },
   openContent: {
     label: '✏️ פתח בתוכן',
     keepOpen: true,
     run: async (post) => {
-      if (!post.content_id) return toast('לשיבוץ הזה אין תוכן משויך.', true);
+      // פוסט חסר תוכן: אין לאן "לפתוח" — מציעים לשייך לו תוכן במקום
+      if (!post.content_id) {
+        await showAttachPicker(post);
+        return false;
+      }
       $('#postDlg').close();
       const { content } = await api('/content');
       const item = content.find((c) => c.id === post.content_id);
@@ -66,12 +79,73 @@ const ACT = {
     label: 'הסר מהלוח',
     danger: true,
     run: async (post) => {
-      if (!(await confirmDialog('להסיר את השיבוץ מהלוח? התוכן עצמו יישאר.', { danger: true }))) return false;
-      const res = await api(`/posts/${post.id}`, { method: 'DELETE', body: { week: state.week } });
-      toast('השיבוץ הוסר.' + (res.engine?.placed ? ' המנוע מילא את המקום שהתפנה.' : ''));
+      if (!(await confirmDialog('להסיר את הפוסט מהלוח? התוכן עצמו יישאר.', { danger: true }))) return false;
+      await api(`/posts/${post.id}`, { method: 'DELETE' });
+      // המחיקה לא ממלאת מחדש — המקום נשאר פנוי (docs/ux-overhaul.md, עיקרון 1)
+      toast('הפוסט הוסר.' + (post.content_id
+        ? ' המקום נשאר פנוי, והמילוי האוטומטי לא יחזיר את התוכן הזה לשבוע הזה.' : ''));
     },
   },
 };
+
+/** מעבר ל"קמפיינים ותוכן" של הנקודה — כשאין עדיין מה לשייך */
+async function goToEndpointContent(endpointId) {
+  $('#postDlg').close();
+  state.planEndpoint = endpointId ?? null;
+  state.planCampaign = null;
+  state.planBackground = false;
+  await goToTab('plan');
+}
+
+/**
+ * "שייך תוכן": התוכן שמתאים לנקודה ולערוץ של הפוסט, בתוך החלון — מוכן
+ * קודם, אחר כך טיוטות. בחירה משייכת מיד (השרת בודק שוב את כל הכללים)
+ * ומציגה את הפוסט מחדש, עכשיו עם התוכן. אין מה לשייך — כפתור ליצירת תוכן.
+ */
+async function showAttachPicker(post) {
+  const box = $('#pAttachBox');
+  if (!box) return;
+  const opener = $('#postPreview .pvattach');
+  if (opener) opener.hidden = true;
+  box.hidden = false;
+  box.innerHTML = '<div class="empty">טוען…</div>';
+  const list = await loadCandidates({
+    endpointId: post.endpoint_id, channelId: post.channel_id,
+    date: ymd(new Date(post.scheduled_at)),
+  });
+
+  if (list.length === 0) {
+    box.innerHTML = `<div class="pick-empty">${post.endpoint_id
+      ? 'אין תוכן לנקודה הזו בערוץ הזה.' : 'אין תוכן עם ניסוח לערוץ הזה.'}
+      <div><button type="button" class="btn small primary" id="pGoPlan">לכתוב תוכן ב"קמפיינים ותוכן"</button></div></div>`;
+    $('#pGoPlan').addEventListener('click', run(() => goToEndpointContent(post.endpoint_id)));
+    return;
+  }
+
+  box.innerHTML = candidateButtons(list, !post.endpoint_id);
+  const buttons = [...box.querySelectorAll('[data-content-id]')];
+  buttons.forEach((b) =>
+    b.addEventListener('click', run(async () => {
+      // לחיצה אחת בלבד — כפולה הייתה שולחת שני שיוכים (השני נכשל ב-409)
+      buttons.forEach((x) => { x.disabled = true; });
+      let r;
+      try {
+        r = await api(`/posts/${post.id}/attach-content`, {
+          method: 'POST', body: { content_id: Number(b.dataset.contentId) },
+        });
+      } catch (e) {
+        buttons.forEach((x) => { x.disabled = false; });
+        throw e;
+      }
+      toast((r.draft
+        ? 'התוכן שויך — הניסוח לערוץ הזה עוד בטיוטה; מסמנים "מוכן" לפני פרסום.'
+        : 'התוכן שויך לפוסט.') +
+        (r.approval_reset ? ' האישור לפרסום אוטומטי בוטל — צריך לאשר שוב עם התוכן החדש.' : ''));
+      await refreshAfterPostChange();
+      $('#postDlg').close();
+      await openPostPreview(post.id);
+    })));
+}
 
 async function runAction(key) {
   if (!previewPost) return;
@@ -160,7 +234,10 @@ export async function openPostPreview(postId) {
   } else if (post.status === 'published') {
     if (can('content')) menu.push('unpublish');
   }
-  menu.push('openContent');
+  const attachable = !post.content_id && can('content') &&
+    !['published', 'publishing'].includes(post.status);
+  if (attachable) menu.unshift('attach');
+  else menu.push('openContent');
   if (can('content') && post.status !== 'publishing') menu.push('remove');
 
   const menuEl = $('#pMenu');
@@ -228,9 +305,14 @@ export async function openPostPreview(postId) {
 
     ${body ? `<div class="pvbody">${esc(body)}</div>
               <div class="pvcopy"><button type="button" class="btn small" id="pCopyBody">העתק טקסט</button></div>`
-            : `<div class="pvempty">${post.platform === 'newsletter'
+            : !post.content_id
+              ? `<div class="pvempty">חסר תוכן — לפוסט הזה עוד לא שויך תוכן.</div>
+                 ${attachable ? `<div class="pvattach">
+                   <button type="button" class="btn small primary" id="pAttachBtn">שייך תוכן</button></div>
+                   <div id="pAttachBox" hidden></div>` : ''}`
+              : `<div class="pvempty">${post.platform === 'newsletter'
                 ? 'אין עדיין תוכן לניוזלטר — ממלאים דרך "פתח בתוכן".'
-                : 'אין עדיין טקסט לגרסה של המדיה הזו.'}</div>`}
+                : 'אין עדיין טקסט לגרסה של הערוץ הזה.'}</div>`}
 
     ${body && variant && variant.status !== 'ready' && post.status !== 'published'
       ? `<div class="pvwarn">הגרסה במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
@@ -251,6 +333,7 @@ export async function openPostPreview(postId) {
       ? `<div class="pvauto">✓ פורסם אוטומטית —
          <a href="${esc(post.external_url)}" target="_blank" rel="noopener">לצפייה בפוסט</a></div>` : ''}`;
   wireCopyLinks($('#postPreview'));
+  $('#pAttachBtn')?.addEventListener('click', run(() => showAttachPicker(post)));
   // מעתיק בדיוק את מה שהתצוגה מראה — לשליחה ידנית (וואטסאפ) או להדבקה
   const copyBtn = $('#pCopyBody');
   copyBtn?.addEventListener('click', run(async () => {

@@ -1,6 +1,7 @@
 import { one, rows, query } from './db.js';
 import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
+import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
 
 /**
@@ -27,19 +28,27 @@ const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי
 
 /**
  * מתכנן שבוע. לא כותב כלום.
+ *
+ * holes:false — המילוי האוטומטי שרץ אחרי כל שינוי: משבץ ומשייך רק תוכן
+ * קיים, ולא מציע פוסטים חסרי תוכן. אותם (ואת משימות "לכתוב" שלהם) מציע
+ * רק חלון "מלא את השבוע", שבו המשתמש רואה ומאשר כל פריט.
+ *
  * @param {string|Date} [anchorDate] תאריך כלשהו בתוך השבוע המבוקש
- * @returns {Promise<{week:object, placements:object[], holes:object[], notes:string[]}>}
+ * @param {{holes?:boolean}} [opts]
+ * @returns {Promise<{week:object, placements:object[], attachments:object[], holes:object[], notes:string[]}>}
  */
-export async function planWeek(anchorDate) {
+export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   const week = weekMeta(anchorDate);
   const from = week.startDate;
   const to = new Date(week.endDate);
   to.setHours(23, 59, 59, 999);
 
-  const [settings, channels, endpoints, content, existing, campaigns] = await Promise.all([
+  const [settings, channels, endpoints, content, existing, campaigns, dismissals] = await Promise.all([
     one('select * from engine_settings limit 1'),
     rows('select * from channels where active = true order by sort_order, id'),
-    rows('select * from endpoints where active = true'),
+    // סדר קבוע: בשוויון ציון הנקודה הראשונה זוכה, ותכנון וביצוע חייבים
+    // לבחור אותה נקודה — אחרת המפתחות שהמשתמש סימן לא יימצאו בהצעה הטרייה
+    rows('select * from endpoints where active = true order by id'),
     // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
     // תוכן של קמפיין מושהה לא נכנס לתכנון.
     //
@@ -68,13 +77,14 @@ export async function planWeek(anchorDate) {
                    select 1 from campaign_channels cc
                     where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
            group by ci.id, ca.id
-           order by ci.created_at`),
+           order by ci.created_at, ci.id`),
     // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
     // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
     // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
     // שכבר קרתה, בדיוק כמו ב-board.js.
     rows(
-      `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status
+      `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status,
+              p.title, p.published_at, p.auto_hole
          from posts p
          left join content_items ci on ci.id = p.content_id
          left join campaigns ca     on ca.id = ci.campaign_id
@@ -84,12 +94,18 @@ export async function planWeek(anchorDate) {
       [from, to]
     ),
     rows('select * from campaigns where active = true and paused_at is null'),
+    // תוכן שהמשתמש הוריד מהשבוע הזה (מחיקת פוסט / ביטול מילוי) — לא חוזר
+    rows('select content_id, channel_id from engine_dismissals where week_start = $1', [week.start]),
   ]);
 
   const notes = [];
   if (channels.length === 0) notes.push('אין ערוצים פעילים.');
   if (endpoints.length === 0) notes.push('אין נקודות קצה פעילות.');
-  if (content.length === 0) notes.push('אין תוכן מוכן — המנוע יסמן חורים בלבד.');
+  if (content.length === 0) {
+    notes.push(withHoles
+      ? 'אין תוכן מוכן — המנוע יכול רק לסמן פוסטים חסרי תוכן.'
+      : 'אין תוכן מוכן לשיבוץ.');
+  }
 
   // יעילות נמדדת מתוצאות אמיתיות. נטענת רק כשהמתג דלוק — כשהוא כבוי
   // אין אפילו שאילתה, והמנוע מתנהג בדיוק כמו לפני הפיצ'ר.
@@ -100,14 +116,26 @@ export async function planWeek(anchorDate) {
   // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון.
   const usage = buildUsage(channels, existing, settings);
 
-  // תוכן שכבר משובץ השבוע לא יוצע שוב לאותו ערוץ
-  const usedContent = new Set(
-    existing.filter((p) => p.content_id).map((p) => `${p.channel_id}:${p.content_id}`)
-  );
+  // תוכן שכבר משובץ השבוע — או שהמשתמש הוריד מהשבוע — לא יוצע שוב לאותו ערוץ
+  const usedContent = blockedContent(existing, dismissals);
 
   // ההיסטוריה המלאה של כל פריט תוכן — בלעדיה תוכן חד-פעמי היה חוזר לאוויר
   // בכל שבוע שבו הוא לא במקרה משובץ
   const history = await contentHistory();
+
+  // קודם ממלאים את מה שכבר על הלוח וחסר לו תוכן, ורק אחר כך פותחים פוסטים
+  // חדשים — אחרת תוכן שנכתב בדיוק בשביל פוסט ריק נוחת במשבצת אחרת והריק נשאר.
+  const attachments = chooseHoleFills({
+    // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
+    // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
+    holes: openHoles(existing, channels, endpoints, new Date(), { autoOnly: !withHoles }),
+    content, usedContent, history, settings, usage,
+  }).map((a) => ({
+    ...a,
+    channel_name: channels.find((ch) => ch.id === a.channel_id)?.name ?? '',
+    endpoint_name: endpoints.find((e) => e.id === a.endpoint_id)?.name ?? '',
+    key: planItemKey('attach', a),
+  }));
 
   // נקודת קצה לא מקבלת שני פוסטים באותה מדיה באותו יום.
   // בלי זה אפשר להגיע למצב שבו באותו יום ובאותו ערוץ יוצא גם תוכן מכירתי
@@ -159,6 +187,7 @@ export async function planWeek(anchorDate) {
       reason: pick.reason,
       score: Number(pick.score.toFixed(2)),
     };
+    placement.key = planItemKey('placement', placement);
     placements.push(placement);
 
     usage.take(slot.channel_id, slot.dateKey, pick.content.kind, hour);
@@ -168,7 +197,10 @@ export async function planWeek(anchorDate) {
     debts.markScheduled(pick.endpoint.id);
   }
 
-  const holes = findHoles({ endpoints, content, debts, channels, usage, week, existing });
+  const holes = withHoles
+    ? findHoles({ endpoints, content, debts, channels, usage, week, existing })
+        .map((h) => ({ ...h, key: planItemKey('hole', h) }))
+    : [];
 
   const ratio = usage.ratioReport();
   if (ratio.promoBlocked > 0) {
@@ -178,13 +210,18 @@ export async function planWeek(anchorDate) {
     );
   }
 
-  return {
+  const result = {
     week: { start: week.start, end: week.end, label: week.label },
     placements,
+    attachments,
     holes,
     ratio,
     notes,
   };
+  // מצב הלוח שהתכנון נשען עליו — לבדיקה חוזרת של בחירה חלקית ב-applyWeek.
+  // לא נספר (enumerable:false), ולכן לא נשלח ללקוח ב-/engine/plan.
+  Object.defineProperty(result, 'ctx', { value: { channels, existing, settings }, enumerable: false });
+  return result;
 }
 
 // שרשרת שממתינה שהריצה הקודמת תיגמר, כדי שתי הרצות חופפות (למשל שינוי
@@ -197,35 +234,74 @@ export function withEngineLock(fn) {
 }
 
 /**
- * מתכננת שבוע וכותבת בפועל את מה שהיא הציעה — פוסטים חדשים למשבצות
- * פנויות, ומשימת "לכתוב" לכל חור. לא נוגעת במה שכבר על הלוח.
+ * מתכננת שבוע וכותבת בפועל את מה שהיא הציעה: פוסטים חדשים למשבצות פנויות,
+ * תוכן לפוסטים קיימים שחסר להם תוכן, ו — רק כש-holes דלוק (חלון "מלא את
+ * השבוע") — פוסטים חסרי תוכן עם משימת "לכתוב". לא מזיזה שום דבר שעל הלוח.
+ *
+ * selected — רשימת מפתחות (key) מתוך ההצעה שהמשתמש ראה. התכנון רץ שוב
+ * טרי (כדי לא לכתוב על סמך מצב ישן), ונכתב רק מה שגם נבחר וגם עדיין
+ * מופיע בהצעה הטרייה. מה שנבחר ונעלם בינתיים נספר ב-skipped.
+ *
  * @param {string|Date} [anchorDate]
- * @returns {Promise<{placed:number, holes:number}>}
+ * @param {{holes?:boolean, selected?:string[]|null}} [opts]
+ * @returns {Promise<{placed:number, attached:number, holes:number, skipped:number,
+ *   created_ids:number[], created_items:object[], attached_items:object[], summary:object[]}>}
  */
-export async function applyWeek(anchorDate) {
-  const plan = await planWeek(anchorDate);
+export async function applyWeek(anchorDate, { holes: withHoles = true, selected = null } = {}) {
+  const fresh = await planWeek(anchorDate, { holes: withHoles });
+  const { plan, skipped: stale } = selectPlanItems(fresh, selected);
+  // בחירה חלקית: מכירתי שעבר את שער היחס בזכות פריטי ערך שהמשתמש הוריד
+  // מהסימון כבר לא מאוזן — יורד, ונאמר למה
+  let dropped = [];
+  if (Array.isArray(selected)) {
+    ({ placements: plan.placements, dropped } = recheckSelection(plan, fresh.ctx));
+  }
+  const skipped = stale + dropped.length;
 
-  const created = [];
+  const createdIds = [];
+  const created = []; // { post_id, content_id } — "בטל" מוחק רק מה שלא השתנה מאז
+  const summary = [];
+  const brief = (x, attach = false) =>
+    ({ title: x.title, channel_name: x.channel_name, day_label: x.day_label, attach });
+
   for (const p of plan.placements) {
-    created.push(await one(
+    const post = await one(
       `insert into posts (channel_id, endpoint_id, content_id, title, kind,
                           scheduled_at, status, note)
-       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
+       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning id`,
       [p.channel_id, p.endpoint_id, p.content_id, p.title, p.kind, p.scheduled_at, p.reason]
-    ));
+    );
+    createdIds.push(post.id);
+    created.push({ post_id: post.id, content_id: p.content_id });
+    summary.push(brief(p));
   }
 
-  const holes = [];
+  // השם והסוג הקודמים חוזרים ללקוח, כדי ש"בטל" יחזיר את הפוסט בדיוק כמו שהיה
+  const attached = [];
+  for (const a of plan.attachments) {
+    const done = await attachToPost(a.post_id, a);
+    if (!done) continue; // מישהו שייך תוכן לפוסט הזה בינתיים, או שהמועד עבר
+    // title — מה שהשיוך כתב; "בטל" מחזיר רק אם הכותרת לא נערכה מאז.
+    // closed_task_ids — בדיוק המשימות שהשיוך סגר, ש"בטל" יפתח מחדש.
+    attached.push({ post_id: a.post_id, content_id: a.content_id, title: a.title,
+                    prev_title: a.prev_title, prev_kind: a.prev_kind,
+                    closed_task_ids: done.closed_task_ids });
+    summary.push(brief(a, true));
+  }
+
+  let holeCount = 0;
   for (const h of plan.holes) {
     // status='scheduled', לא 'hole': המשבצת משובצת לפי האסטרטגיה כמו כל
     // שיבוץ אחר (תופסת קיבולת אמיתית, נספרת בסיכום) — רק שאין לה תוכן
-    // עדיין. content_id נשאר null, ולכן שכבת התצוגה מסמנת אותה "אין תוכן".
+    // עדיין. content_id נשאר null, ולכן הלוח מסמן אותה "חסר תוכן".
     const post = await one(
-      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note)
-       values ($1,$2,'ממתין לתוכן',$3,$4,'scheduled',$5) returning *`,
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status, note, auto_hole)
+       values ($1,$2,'חסר תוכן',$3,$4,'scheduled',$5,true) returning id`,
       [h.channel_id, h.endpoint_id, h.kind, h.scheduled_at, h.reason]
     );
-    holes.push(post);
+    createdIds.push(post.id);
+    created.push({ post_id: post.id, content_id: null });
+    holeCount += 1;
     await query(
       `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
        values ($1,$2,'write',$3,$4,true,$5)`,
@@ -235,7 +311,249 @@ export async function applyWeek(anchorDate) {
     );
   }
 
-  return { placed: created.length, holes: holes.length };
+  return {
+    placed: plan.placements.length,
+    attached: attached.length,
+    holes: holeCount,
+    skipped,
+    dropped: dropped.map(({ title, reason }) => ({ title, reason })),
+    created_ids: createdIds,
+    created_items: created,
+    attached_items: attached,
+    summary,
+  };
+}
+
+/**
+ * משייך תוכן לפוסט קיים שאין לו תוכן: הכותרת והסוג מהתוכן, נקודת הקצה
+ * רק אם לא הייתה. משימות "לכתוב" ו"החלפה" של הפוסט נסגרות — התנאי שלהן
+ * נפתר. פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן": האישור ניתן לפוסט בלי
+ * התוכן הזה. מחזיר null אם בינתיים כבר יש לפוסט תוכן, הוא יצא לאוויר,
+ * או שהמועד שלו עבר. משמש גם את המנוע וגם את "שייך תוכן" בחלון הפוסט.
+ * @returns {Promise<{post:object, closed_task_ids:number[], approval_reset:boolean}|null>}
+ */
+export async function attachToPost(postId, c) {
+  const post = await one(
+    `update posts p set content_id = $2, title = $3, kind = $4,
+                        endpoint_id = coalesce(p.endpoint_id, $5),
+                        status = case when p.status = 'approved' then 'scheduled' else p.status end,
+                        approved_by = case when p.status = 'approved' then null else p.approved_by end,
+                        approved_at = case when p.status = 'approved' then null else p.approved_at end
+       from (select status as old_status from posts where id = $1) o
+      where p.id = $1 and p.content_id is null
+        and p.status not in ('published','publishing') and p.scheduled_at > now()
+      returning p.*, o.old_status`,
+    [postId, c.content_id, c.title, c.kind, c.endpoint_id]
+  );
+  if (!post) return null;
+  const closed = await rows(
+    `update tasks set done = true, done_at = now()
+      where post_id = $1 and kind in ('write','swap') and done = false
+      returning id`,
+    [postId]
+  );
+  const { old_status: oldStatus, ...row } = post;
+  return {
+    post: row,
+    closed_task_ids: closed.map((t) => t.id),
+    approval_reset: oldStatus === 'approved',
+  };
+}
+
+/**
+ * זוכר שהמשתמש הוריד תוכן מערוץ בשבוע מסוים (מחיקת פוסט, ביטול מילוי),
+ * כדי שהמילוי האוטומטי הבא — שרץ אחרי כל שינוי אחר — לא יחזיר אותו מיד.
+ * רשומות בנות יותר משמונה שבועות נמחקות על הדרך; אין בהן צורך יותר.
+ * @param {{content_id:number|null, channel_id:number, scheduled_at:string|Date}[]} list
+ */
+export async function recordDismissals(list) {
+  const items = (list ?? []).filter((x) => x?.content_id && x.channel_id && x.scheduled_at);
+  if (items.length === 0) return;
+  for (const x of items) {
+    await query(
+      `insert into engine_dismissals (week_start, content_id, channel_id)
+       values ($1,$2,$3) on conflict do nothing`,
+      [weekMeta(x.scheduled_at).start, x.content_id, x.channel_id]
+    );
+  }
+  await query(`delete from engine_dismissals where week_start < current_date - 56`);
+}
+
+/**
+ * תוכן שאפשר לשייך לפוסט בערוץ channelId: יש לו ניסוח לערוץ (מוכן או
+ * טיוטה), הקמפיין שלו לא מושהה, והתאריך (אם נתון) בתוך חלון הקמפיין.
+ * endpointId null = מכל נקודות הקצה (פוסט שעוד אין לו נקודה).
+ * מוכן קודם; בתוך כל קבוצה — מה שעוד לא שובץ בערוץ הזה, ואז הוותיק.
+ */
+export async function contentCandidates({ endpointId = null, channelId, date = null }) {
+  const list = await rows(
+    `select ci.id, ci.title, ci.kind, ci.endpoint_id, e.name as endpoint_name,
+            ca.name as campaign_name, v.status as variant_status, ${candidateColumnsSql()},
+            exists (select 1 from posts p2
+                     where p2.content_id = ci.id and p2.channel_id = $2
+                       and p2.status <> 'hole') as used_on_channel
+       from content_items ci
+       join content_variants v on v.content_id = ci.id and v.channel_id = $2
+                              and v.status in ('ready','draft')
+       join endpoints e        on e.id = ci.endpoint_id
+       left join campaigns ca  on ca.id = ci.campaign_id
+      where ($1::int is null or ci.endpoint_id = $1)
+        and ${candidateFilterSql({ channel: '$2::int', date: '$3::date' })}
+      order by (v.status = 'ready') desc, used_on_channel, ci.created_at
+      limit 100`,
+    [endpointId, channelId, date]
+  );
+  // קמפיין מוכן: לא לפני התאריך המתוכנן של הפריט (candidateFits)
+  return list.filter((c) => candidateFits(c, channelId, date));
+}
+
+/* ========================= בחירה מתוך ההצעה ========================= */
+
+/**
+ * מפתח יציב לפריט בהצעה — מה שחלון המילוי שולח בחזרה כ"מסומן".
+ * שיבוץ ופוסט חסר תוכן מזוהים לפי תוכן/ערוץ/מועד/נקודה; שיוך לפי הפוסט שמתמלא.
+ */
+export function planItemKey(type, x) {
+  if (type === 'attach') return `attach|${x.post_id}|${x.content_id}`;
+  const head = type === 'hole' ? 'hole' : x.content_id;
+  return `${head}|${x.channel_id}|${x.scheduled_at}|${x.endpoint_id}`;
+}
+
+/**
+ * חיתוך של ההצעה הטרייה עם מה שהמשתמש סימן. בלי selected — הכול, כמו
+ * תמיד (העוזר, מילוי אוטומטי). skipped = מסומנים שכבר לא בהצעה.
+ */
+export function selectPlanItems(plan, selected) {
+  if (!Array.isArray(selected)) return { plan, skipped: 0 };
+  const want = new Set(selected.map(String));
+  const keep = (list) => (list ?? []).filter((x) => want.has(x.key));
+  const out = {
+    ...plan,
+    placements: keep(plan.placements),
+    attachments: keep(plan.attachments),
+    holes: keep(plan.holes),
+  };
+  const found = out.placements.length + out.attachments.length + out.holes.length;
+  return { plan: out, skipped: want.size - found };
+}
+
+/**
+ * בדיקה חוזרת של שער היחס על מה שנבחר בפועל. התכנון אישר כל מכירתי מול
+ * כל ההצעה; אם המשתמש הוריד פריטי ערך, מכירתי שנשען עליהם כבר לא מאוזן.
+ * קודם נכנס כל מה שאינו מכירתי (ערך, משולב, פוסטים חסרי תוכן, שיוכים),
+ * ורק אז כל מכירתי נבדק מחדש מול usage.allows — אותו שער כמו בתכנון.
+ * @returns {{placements:object[], dropped:object[]}}
+ */
+export function recheckSelection(plan, { channels, existing, settings }) {
+  const usage = buildUsage(channels, existing, settings);
+  for (const a of plan.attachments ?? []) usage.retag(a.channel_id, a.date, a.prev_kind, a.kind);
+  for (const h of plan.holes ?? []) usage.take(h.channel_id, h.date, h.kind, -1);
+  for (const p of plan.placements.filter((x) => x.kind !== 'promo')) {
+    usage.take(p.channel_id, p.date, p.kind, -1);
+  }
+  const dropped = [];
+  for (const p of plan.placements.filter((x) => x.kind === 'promo')) {
+    if (usage.allows(p.channel_id, p.date, 'promo')) {
+      usage.take(p.channel_id, p.date, 'promo', -1);
+    } else {
+      dropped.push({
+        key: p.key, title: p.title,
+        reason: 'בלי פריטי הערך שהורדו מהסימון אין מספיק ערך לאזן את הפוסט המכירתי',
+      });
+    }
+  }
+  const gone = new Set(dropped.map((d) => d.key));
+  return { placements: plan.placements.filter((p) => !gone.has(p.key)), dropped };
+}
+
+/* ========================= פוסטים חסרי תוכן ========================= */
+
+/**
+ * תוכן שלא יוצע לערוץ השבוע: כבר משובץ בו, או שהמשתמש הוריד אותו ממנו.
+ * @returns {Set<string>} `${channel_id}:${content_id}`
+ */
+export function blockedContent(existing, dismissals = []) {
+  const set = new Set(
+    existing.filter((p) => p.content_id).map((p) => `${p.channel_id}:${p.content_id}`)
+  );
+  for (const d of dismissals) set.add(`${d.channel_id}:${d.content_id}`);
+  return set;
+}
+
+/**
+ * פוסטים על הלוח שאין להם תוכן ושעוד אפשר למלא: עתידיים, מתוכננים,
+ * בערוץ פעיל ועם נקודת קצה פעילה (בלי נקודה אין לפי מה לבחור תוכן).
+ * autoOnly — רק פוסטים שהמנוע יצר כחסרי תוכן (auto_hole), למילוי השקט.
+ */
+export function openHoles(existing, channels, endpoints, now = new Date(), { autoOnly = false } = {}) {
+  const active = new Set(channels.map((ch) => ch.id));
+  const activeEp = new Set(endpoints.map((e) => e.id));
+  return existing
+    .filter((p) => !p.content_id && p.status === 'scheduled' && !p.published_at &&
+                   activeEp.has(p.endpoint_id) && active.has(p.channel_id) &&
+                   (!autoOnly || p.auto_hole) &&
+                   new Date(p.scheduled_at) > now)
+    .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+}
+
+/**
+ * לכל פוסט חסר תוכן — התוכן שימלא אותו, אם יש: אותה נקודת קצה, גרסה
+ * לערוץ שלו, בתוך חלון הקמפיין, ולא משובץ (או הורד) השבוע באותו ערוץ.
+ * מוכן קודם לטיוטה, ובתוך כל קבוצה — מה שתואם לסוג שהפוסט סומן בו.
+ * מעדכנת את usedContent, כדי שאותו תוכן לא ימלא שני פוסטים ולא ייפתח
+ * לו פוסט חדש אחר כך באותה ריצה.
+ *
+ * usage (לא חובה בבדיקות): הפוסט כבר נספר בקיבולת לפי הסוג שסומן לו. תוכן
+ * מסוג אחר עובר את אותם שערים כמו שיבוץ חדש (מכסה לסוג, מכירתי ליום, יחס
+ * ערך/מכירתי) דרך allowsRetag; אם הסוג נחסם — עוברים למועמד הבא, ומועמד
+ * מאותו סוג של הפוסט תמיד עובר. אחרי הבחירה — retag, כדי שהבאים יראו אותו.
+ */
+export function chooseHoleFills({
+  holes, content, usedContent, history = new Map(), settings = null, usage = null,
+}) {
+  const out = [];
+  for (const h of holes) {
+    const at = new Date(h.scheduled_at);
+    const dateKey = ymd(at);
+    const slot = { channel_id: h.channel_id, dateKey };
+    const fits = content.filter((c) =>
+      c.endpoint_id === h.endpoint_id &&
+      (c.eligible_channel_ids ?? []).includes(h.channel_id) &&
+      fitsSlotChannel(c, h.channel_id) &&
+      !usedContent.has(`${h.channel_id}:${c.id}`) &&
+      !outsideCampaignWindow(c, dateKey) &&
+      reusable(c, slot, history, settings)
+    );
+    if (fits.length === 0) continue;
+
+    const isReady = (c) => (c.ready_channel_ids ?? []).includes(h.channel_id);
+    fits.sort((a, b) => (isReady(b) - isReady(a)) ||
+                        ((b.kind === h.kind) - (a.kind === h.kind)));
+    const c = fits.find((x) => !usage || usage.allowsRetag(h.channel_id, dateKey, h.kind, x.kind));
+    if (!c) continue;
+    usedContent.add(`${h.channel_id}:${c.id}`);
+    usage?.retag(h.channel_id, dateKey, h.kind, c.kind);
+
+    out.push({
+      post_id: h.id,
+      channel_id: h.channel_id,
+      endpoint_id: h.endpoint_id,
+      content_id: c.id,
+      title: c.title,
+      kind: c.kind,
+      prev_title: h.title ?? null,
+      prev_kind: h.kind,
+      scheduled_at: at.toISOString(),
+      date: dateKey,
+      day_label: `${HE_DAYS[at.getDay()]} ${at.getDate()}.${at.getMonth() + 1}`,
+      time: `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`,
+      draft: !isReady(c),
+      reason: isReady(c)
+        ? 'הפוסט חיכה לתוכן — יש עכשיו תוכן מוכן לנקודה ולערוץ'
+        : 'הפוסט חיכה לתוכן — יש טיוטה; צריך לכתוב את הניסוח הסופי',
+    });
+  }
+  return out;
 }
 
 /* ========================= חוב אוויר ========================= */
@@ -434,6 +752,47 @@ export function buildUsage(channels, existing, settings) {
       weekKind[kind] = (weekKind[kind] ?? 0) + 1;
     },
 
+    /**
+     * האם פוסט שכבר נספר יכול להחליף סוג (שיוך תוכן לפוסט חסר תוכן). בלי
+     * בדיקת תקציב — הפוסט כבר תופס את מקומו. אותו סוג — תמיד מותר.
+     */
+    allowsRetag(channelId, dateKey, fromKind, toKind) {
+      if (fromKind === toKind) return true;
+      const u = byChannel.get(channelId);
+      if (!u) return false;
+      const capField = { promo: 'max_promo_per_week', value: 'max_value_per_week',
+                         hybrid: 'max_hybrid_per_week' }[toKind];
+      const cap = u.ch[capField];
+      if (cap != null && u.byKind[toKind] >= cap) return false;
+      if (toKind === 'promo') {
+        if ((promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
+        // שער היחס, כשהפוסט כבר לא נספר בסוג הקודם שלו
+        const without = { ...weekKind, [fromKind]: Math.max(0, (weekKind[fromKind] ?? 0) - 1) };
+        const w = kindWeights(without, hybridWeight);
+        if (w.value < minRatio * (w.promo + 1)) {
+          promoBlocked += 1;
+          return false;
+        }
+      }
+      return true;
+    },
+
+    /** פוסט שכבר נספר משנה סוג — כל המונים זזים, בלי לתפוס מקום נוסף */
+    retag(channelId, dateKey, fromKind, toKind) {
+      if (fromKind === toKind) return;
+      const u = byChannel.get(channelId);
+      if (u) {
+        u.byKind[fromKind] = Math.max(0, (u.byKind[fromKind] ?? 0) - 1);
+        u.byKind[toKind] = (u.byKind[toKind] ?? 0) + 1;
+      }
+      if (fromKind === 'promo') {
+        promoPerDay.set(dateKey, Math.max(0, (promoPerDay.get(dateKey) ?? 0) - 1));
+      }
+      if (toKind === 'promo') promoPerDay.set(dateKey, (promoPerDay.get(dateKey) ?? 0) + 1);
+      weekKind[fromKind] = Math.max(0, (weekKind[fromKind] ?? 0) - 1);
+      weekKind[toKind] = (weekKind[toKind] ?? 0) + 1;
+    },
+
     remaining: (channelId) => {
       const u = byChannel.get(channelId);
       return u ? Math.max(0, u.budget - u.used) : 0;
@@ -623,6 +982,7 @@ export function chooseForSlot(ctx) {
     const ready = content.filter((c) =>
       c.endpoint_id === e.id &&
       (c.eligible_channel_ids ?? []).includes(slot.channel_id) &&
+      fitsSlotChannel(c, slot.channel_id) &&
       !outsideCampaignWindow(c, slot.dateKey) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&

@@ -7,11 +7,17 @@ import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
 import { confirmDialog } from '../core/confirm.js';
+import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
 
 /* ========================= הלוח ========================= */
 
 export async function renderBoard() {
-  const b = await api(`/board${state.week ? `?week=${state.week}` : ''}`);
+  // רשימת ההקמה — רכה: אם היא נכשלת, הלוח עצמו עדיין מוצג. אחרי שהושלמה
+  // לא נשאלת שוב באותו דף (fetchSetupStatus)
+  const [b, setup] = await Promise.all([
+    api(`/board${state.week ? `?week=${state.week}` : ''}`),
+    fetchSetupStatus(),
+  ]);
   const editable = can('content');
 
   // רשימה אחת שמשמשת גם כמקרא הצבעים וגם כמצב האוויר של כל נקודה.
@@ -68,7 +74,14 @@ export async function renderBoard() {
           s.value_per_promo >= s.min_value_per_promo ? '✓' : '⚠'}`
       : `על כל מכירתי יש <b>${s.value_per_promo} פוסטי ערך</b>`;
 
+  // בלי ערוצים פעילים אין שורות בלוח — כפתור למקום שבו מוסיפים/מפעילים, לא טקסט
+  const chStep = setup?.steps.find((x) => x.id === 'channel');
+  const emptyRow = `<tr><td class="empty" colspan="8">אין ערוצים פעילים — כל ערוץ הוא שורה בלוח.
+    ${setupGoButton(chStep?.target ?? { tab: 'manage', section: 'channels' },
+                    chStep?.action ?? 'לערוצים', true)}</td></tr>`;
+
   $('#board').innerHTML = `
+    <div id="setupCard"></div>
     <div class="oxy"><span class="t">מי מקבל במה:</span>${oxy || '<span class="d">אין נקודות קצה פעילות</span>'}</div>
 
     <div class="toolbar">
@@ -89,13 +102,16 @@ export async function renderBoard() {
     <div class="board panel">
       <table class="grid">
         <thead><tr><th></th>${head}</tr></thead>
-        <tbody>${body || `<tr><td class="empty" colspan="8">אין ערוצים פעילים — מוסיפים אותם במסך "ניהול"</td></tr>`}</tbody>
+        <tbody>${body || emptyRow}</tbody>
       </table>
     </div>
     <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
       — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}`;
+
+  renderSetupCard($('#setupCard'), setup);
+  wireSetupGo($('#board .grid'));
 
   $$('#board [data-week]').forEach((btn) =>
     btn.addEventListener('click', run(async () => {
@@ -237,13 +253,14 @@ function postCard(p) {
   const clickable = `data-post-id="${p.id}" data-post="${payload}"`;
 
   if (p.status === 'hole') {
+    // שורות 'hole' ישנות (לפני שפוסט חסר תוכן הפך לפוסט רגיל בלי content_id).
     // ה"סיבה" שהמנוע כתב מבדילה בין שני מצבים: יש טיוטה שעוד לא אושרה
     // לאף ערוץ פנוי, או שאין בכלל תוכן לנקודה הזו — ראו findHoles ב-engine.js
     const hasDraft = (p.note ?? '').includes('יש תוכן');
     return `<div class="hole${hasDraft ? ' draft' : ''}" ${clickable}
-      data-tt="הלוח מחכה לתוכן: ${esc(KIND_HE[p.kind])} — ${esc(p.endpoint_name ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}">
-      <span class="corner-tag ${hasDraft ? 'yellow' : 'red'}">${hasDraft ? 'יש טיוטה' : 'אין תוכן'}</span>
-      מחכה לתוכן<br><small>${esc(KIND_HE[p.kind])} · ${esc(p.endpoint_name ?? '')}</small></div>`;
+      data-tt="חסר תוכן: ${esc(KIND_HE[p.kind])} — ${esc(p.endpoint_name ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}">
+      <span class="corner-tag ${hasDraft ? 'yellow' : 'red'}">${hasDraft ? 'יש טיוטה' : 'חסר תוכן'}</span>
+      חסר תוכן<br><small>${esc(KIND_HE[p.kind])} · ${esc(p.endpoint_name ?? '')}</small></div>`;
   }
   if (p.status === 'pending_approval') {
     return `<div class="pending" ${clickable}
@@ -276,20 +293,29 @@ function postCard(p) {
   // התגית נגזרת מהמצב האמיתי של התוכן — לא רק "משובץ = מוכן". שיבוץ
   // יכול להיות לפי אסטרטגיה גם בלי תוכן סופי (וגם בלי תוכן בכלל).
   // "פורסם" הוא הדבר היחיד שלא נגזר משום מקום: מישהו צריך לקבוע את זה בפועל.
-  const contentTag = !p.content_id
-    ? { cls: 'red', label: 'אין תוכן' }
+  //
+  // פוסט חסר תוכן (content_id ריק) נשאר הכרטיס הרגיל — צבע הנקודה, כותרת,
+  // שעה — אבל במסגרת מקווקוות, כדי שיהיה ברור שהוא מחכה. content_hint אומר
+  // אם יש לנקודה כבר משהו לשייך לו בערוץ הזה (טיוטה או מוכן).
+  const missing = !p.content_id;
+  const contentTag = missing
+    ? { cls: 'red', label: 'חסר תוכן' }
     : p.variant_status === 'ready'
       ? { cls: 'blue', label: 'יש תוכן' }
       : { cls: 'yellow', label: 'יש טיוטה' };
+  const hint = missing && p.content_hint
+    ? `<i class="hint">${p.content_hint === 'ready' ? 'יש תוכן לשייך' : 'יש טיוטה'}</i>` : '';
 
   const tag = AUTO_TAG[p.status] ?? contentTag;
+  const cls = ['post', p.status === 'failed' && 'failed', missing && 'missing']
+    .filter(Boolean).join(' ');
 
-  return `<div class="post${p.status === 'failed' ? ' failed' : ''}" ${clickable} data-tt="${esc(tip)}"
+  return `<div class="${cls}" ${clickable} data-tt="${esc(missing ? `חסר תוכן · ${tip}` : tip)}"
     style="background:${bg};color:${inkOn(bg)}">
     <span class="corner-tag ${tag.cls}">${tag.label}</span>
     <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
     <div class="meta">
       <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
-      ${esc(p.time)}${who}
+      ${esc(p.time)}${who}${hint}
     </div></div>`;
 }
