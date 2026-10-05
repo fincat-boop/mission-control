@@ -259,11 +259,12 @@ npm run backup
 `pages_manage_posts`, `pages_read_engagement` לפייסבוק;
 `instagram_basic`, `instagram_content_publish` לאינסטגרם (חשבון עסקי מקושר לעמוד).
 
-**מדיה:** פייסבוק מקבל את הקבצים ישירות (תמונה/כמה תמונות/וידאו). אינסטגרם
-מושך מ-URL ציבורי — הקובץ עולה זמנית ל-bucket ציבורי ב-R2 (משתני
-`R2_PUBLIC_BUCKET` + `R2_PUBLIC_BASE_URL`, **נפרד מ-bucket הגיבויים**)
-ונמחק מיד אחרי הפרסום. וידאו לאינסטגרם יוצא כריל; כמה תמונות — קרוסלה.
-גרסת אינסטגרם בלי מדיה לא ניתנת לאישור.
+**מדיה:** קובץ ב-bucket המדיה (ראו "אחסון מדיה") נשלח לפי הקישור הציבורי
+הקבוע שלו — אינסטגרם (`image_url`/`video_url`) ופייסבוק (`url`/`file_url`)
+מושכים אותו בעצמם. קובץ ישן שעוד יושב במסד: פייסבוק מקבל אותו ישירות
+(multipart), ולאינסטגרם הוא עולה עותק זמני ל-bucket הציבורי ונמחק מיד אחרי
+הפרסום (רק העותק הזמני — קובץ קבוע לא נמחק לעולם). וידאו לאינסטגרם יוצא כריל;
+כמה תמונות — קרוסלה. גרסת אינסטגרם בלי מדיה לא ניתנת לאישור.
 
 **וואטסאפ (קבוצה):** אין API רשמי — חצי-אוטומטי: רבע שעה לפני המועד נוצרת
 משימה דחופה עם "העתק טקסט", שולחים ידנית ומסמנים "פורסם".
@@ -283,6 +284,62 @@ npm run backup
 אוטומטי או ידני — שולח `post_published`, וכשל שולח `post_publish_failed`
 (fire-and-forget: כשל מול ה-HUB לא מפיל את הפרסום). id = `<type>:<post id>`,
 ולכן retry לעולם לא נרשם פעמיים. האירועים מזינים את האוטומציות בצד ה-HUB.
+
+## אחסון מדיה (R2)
+
+תמונות, סרטונים, אודיו ו-PDF נשמרים ב-bucket **ציבורי** נפרד ב-Cloudflare R2,
+לא במסד. כל קובץ מקבל קישור ציבורי קבוע שאי אפשר לנחש
+(`<R2_PUBLIC_BASE_URL>/media/<org>/<uuid>/<שם>`) — כפתור **"העתק קישור"** ליד כל
+קובץ, להדבקה ברשת חברתית או לשליחה לעורך. עד `MAX_MEDIA_MB` לקובץ (ברירת מחדל 1GB).
+
+**המסלול:** הדפדפן מבקש חתימה (`POST /api/content/:id/uploads/sign`), מעלה ישירות
+ל-R2 ב-PUT חתום (presigned, 15 דקות) עם פס התקדמות, ומדווח
+(`.../uploads/complete`). השרת לא נוגע בבייטים — הוא בודק ב-HEAD את הגודל והסוג
+האמיתיים (חורג/אסור נמחק מיד) ורושם שורה עם `storage_key`. ה-URL המלא לא נשמר —
+הוא נגזר מ-`R2_PUBLIC_BASE_URL` בזמן קריאה, כך שמעבר לדומיין מותאם לא דורש מיגרציה.
+`GET /api/assets/:id` מפנה (302) לקישור הקבוע. הקוד: `src/media.js`,
+`public/js/core/upload.js`.
+
+**תחזוקה שעתית** (`mediaMaintenance` ב-`src/maintenance.js`, לכל ארגון):
+- קבצים ישנים (bytea במסד) מועברים ל-R2 — 10 לארגון בכל שעה, עם אימות גודל. המקום
+  במסד מתפנה לשימוש חוזר אבל הדיסק לא מתכווץ מעצמו (`VACUUM FULL content_assets`
+  ידני, אם צריך).
+- מחיקה מהממשק → סל מחזור (`media_trash`) ל-30 יום → מחיקה סופית מה-bucket.
+- פעם ביום: אובייקטים תחת `media/<org>/` מעל 24 שעות בלי שורה (העלאה שלא הושלמה,
+  מחיקת זווית/גרסה שלמה) עוברים לסל.
+
+**בלי המשתנים** — הכול עובד כמו קודם: הקבצים עולים לשרת ונשמרים במסד, עד 50MB.
+
+### הגדרה
+
+```
+R2_PUBLIC_BUCKET=...
+R2_PUBLIC_BASE_URL=https://pub-xxxx.r2.dev
+MAX_MEDIA_MB=1024
+```
+
+1. **Cloudflare dashboard → R2 → Create bucket** (למשל `merkaz-bakara-media`) —
+   נפרד מ-bucket הגיבויים, שנשאר פרטי.
+2. ב-bucket החדש: **Settings → Public Development URL → Enable** (או **Custom
+   Domains** — מומלץ לפרוד; ה-r2.dev מוגבל בקצב). הכתובת היא `R2_PUBLIC_BASE_URL`,
+   בלי `/` בסוף.
+3. **Settings → CORS Policy → Add CORS policy** — בלי זה הדפדפן לא יכול להעלות:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://merkaz-bakara-production.up.railway.app", "http://localhost:3000"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["content-type"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+4. ה-API token של `R2_ACCESS_KEY_ID` חייב הרשאת **Object Read & Write** גם על
+   ה-bucket הזה (לא רק על bucket הגיבויים).
+5. להגדיר את המשתנים ב-Railway ולעשות deploy — ה-CSP (`connect-src` ל-endpoint של
+   R2, `media-src` לכתובת הציבורית) נבנה בעליית השרת.
 
 ## מה עוד לא נבנה
 
