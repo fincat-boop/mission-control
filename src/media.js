@@ -139,3 +139,24 @@ export const fmtLimit = (bytes) =>
 
 /** מה הלקוח צריך לדעת בעלייה — נשלח עם /api/me */
 export const mediaConfig = () => ({ ready: mediaReady(), max_mb: MAX_MEDIA_MB });
+
+/**
+ * בדיקת אובייקט שהדפדפן העלה: HEAD (הגודל והסוג האמיתיים, לא מה שהלקוח
+ * הצהיר), ומחיקה מיידית של מה שחורג מהמגבלה או מסוג אסור. presigned PUT
+ * לא אוכף גודל — האכיפה כאן, ואובייקט שאף אחד לא השלים נאסף בסריקת היתומים.
+ * @returns {Promise<{head?:{size:number, contentType:string|null}, problem?:{error:string, status:number}}>}
+ */
+export async function verifyUploaded(key, { store = mediaStore, max = MAX_MEDIA_BYTES } = {}) {
+  const head = await store.head(key);
+  const problem = validateUploaded(head, max);
+  if (!problem) return { head };
+  if (problem.purge) {
+    await store.del(key).catch((e) =>
+      console.error(`מחיקת העלאה פסולה ${key} נכשלה (תיאסף בסריקת היתומים):`, e.message));
+  }
+  return { problem: { error: problem.error, status: problem.status } };
+}
+
+/** הסוג כפי ש-R2 שמר אותו, בלי פרמטרים (charset וכו') */
+export const headMime = (head) =>
+  (head?.contentType ?? '').split(';')[0].trim().toLowerCase() || 'application/octet-stream';

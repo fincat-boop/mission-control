@@ -55,10 +55,11 @@ export async function evictBlocked() {
   }
 }
 
+// המסלול הישן (multipart → bytea): פעיל מקומית ולפני שאחסון המדיה ב-R2
+// מוגדר (ראו src/media.js — שם ההעלאה ישירה מהדפדפן, עד MAX_MEDIA_MB).
 // הקבצים נשמרים במסד, לכן הם עוברים דרך הזיכרון ולא נכתבים לדיסק.
-// 50MB מכסה ריל או סרטון קצר. ה-volume של Postgres הוא 500MB בסך הכול,
-// ולכן יש התראת אחסון ב-alerts.js שמתריעה לפני שנגמר המקום.
-const MAX_FILE_MB = 50;
+// ה-volume של Postgres מוגבל, ולכן יש התראת אחסון ב-alerts.js.
+export const MAX_FILE_MB = 50;
 export const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 20 },

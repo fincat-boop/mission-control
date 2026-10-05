@@ -21,6 +21,9 @@ const SKIP = [
   /^\/assistant\/(chat|status)$/,   // שיחה עם העוזר — הפעולה עצמה נרשמת באישור
   /^\/engine\/plan$/,               // תכנון בלבד, לא כותב כלום
   /^\/urgent\/preview$/,
+  // חתימה להעלאה ל-R2 — לא כותבת כלום; הקובץ נרשם ב-complete / bulk/media
+  /^\/content\/\d+\/uploads\/sign$/,
+  /^\/campaigns\/\d+\/bulk\/sign$/,
 ];
 
 const ENTITY_HE = {
@@ -70,6 +73,7 @@ function describe(req, payload, deletedName) {
     'campaigns/bulk':     ['create',  `העלה קבצים לקמפיין ${label}`],
     'campaigns/assets':   ['create',  `העלה קבצים לקמפיין ${label}`],
     'content/assets':     ['create',  `הוסיף קבצים לתוכן ${label}`],
+    'content/uploads':    ['create',  `הוסיף קובץ לתוכן ${label}`],
     'content/variants':   ['update',  `כתב ניסוח לתוכן ${label} במדיה #${parts[3] ?? ''}`],
     'engine/apply':       ['apply',   'הריץ את מנוע השיבוץ ומילא את השבוע'],
     'urgent/commit':      ['create',  `שיבץ מבצע דחוף ${label}`],

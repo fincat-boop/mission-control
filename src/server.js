@@ -11,6 +11,7 @@ import { audit } from './audit.js';
 import { backupNow, cleanupStaleUrgent, forEachOrg, suggestContentSwaps } from './maintenance.js';
 import { publishTickForOrg, refreshNewsletterMetrics } from './publish/runner.js';
 import api from './routes/api.js';
+import { MAX_FILE_MB } from './routes/_shared.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(here, '..', 'public');
@@ -76,7 +77,7 @@ app.use((err, _req, res, _next) => {
   console.error(err);
   // שגיאות העלאה מ-multer מקבלות הודעה מובנת במקום "משהו נשבר"
   if (err?.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'הקובץ גדול מדי — עד 10MB לקובץ' });
+    return res.status(413).json({ error: `הקובץ גדול מדי — עד ${MAX_FILE_MB}MB לקובץ` });
   }
   if (err?.code === 'LIMIT_FILE_COUNT') {
     return res.status(413).json({ error: 'יותר מדי קבצים בבת אחת — עד 20' });

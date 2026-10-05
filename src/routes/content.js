@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
 import { autoFill, bad, parseIdList, titleFromFilename, updateById, upload, wrap } from './_shared.js';
-import { one, query, rows, tx } from '../db.js';
+import { currentOrg, one, query, rows, tx } from '../db.js';
+import {
+  MAX_MEDIA_BYTES, assetView, headMime, isOwnKey, mediaReady, mediaStore, newMediaKey,
+  validateSignRequest, verifyUploaded,
+} from '../media.js';
 import { angleCount, channelNeeds } from '../campaigns.js';
 import { analyzeImport, runImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
@@ -223,6 +227,26 @@ r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
 
 /* ========================= קבצים מצורפים ========================= */
 
+/**
+ * שני מסלולי העלאה:
+ *
+ * 1. R2 (כש-mediaReady): הדפדפן מבקש חתימה (uploads/sign), מעלה ישירות
+ *    ל-R2 ב-PUT, ומדווח (uploads/complete). השרת לא נוגע בבייטים — רק
+ *    בודק ב-HEAD את הגודל והסוג האמיתיים ורושם שורה עם storage_key.
+ * 2. multipart → bytea במסד (multer, עד 50MB): מקומית ולפני שמשתני
+ *    R2_PUBLIC_* מוגדרים. התחזוקה מעבירה שורות כאלה ל-R2 ברקע.
+ */
+
+/** הגרסה של זווית במדיה מסוימת — נוצרת אם עוד אין, כדי לתלות עליה קבצים */
+async function ensureVariant(contentId, channelId) {
+  return one(
+    `insert into content_variants (content_id, channel_id)
+     values ($1,$2) on conflict (content_id, channel_id) do update set content_id = $1
+     returning *`,
+    [contentId, channelId]
+  );
+}
+
 /** קבצים משותפים לכל המדיות של הזווית */
 r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
   wrap(async (req, res) => {
@@ -234,12 +258,7 @@ r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
 /** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
 r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),
   upload.array('files'), wrap(async (req, res) => {
-    const v = await one(
-      `insert into content_variants (content_id, channel_id)
-       values ($1,$2) on conflict (content_id, channel_id) do update set content_id = $1
-       returning *`,
-      [req.params.id, req.params.channelId]
-    );
+    const v = await ensureVariant(req.params.id, req.params.channelId);
     res.status(201).json({ assets: await saveAssets(req.files, v.content_id, v.id) });
   }));
 
@@ -250,12 +269,98 @@ async function saveAssets(files, contentId, variantId) {
     saved.push(await one(
       `insert into content_assets (content_id, variant_id, filename, mime, size_bytes, data)
        values ($1,$2,$3,$4,$5,$6)
-       returning id, content_id, variant_id, filename, mime, size_bytes`,
+       returning id, content_id, variant_id, filename, mime, size_bytes, storage_key`,
       [contentId, variantId, f.originalname, f.mimetype, f.size, f.buffer]
     ));
   }
-  return saved;
+  return saved.map(assetView);
 }
+
+/** שם התצוגה של קובץ: מה שהלקוח שלח, אחרת המקטע האחרון של המפתח */
+const displayName = (filename, key) =>
+  (typeof filename === 'string' && filename.trim() ? filename.trim() : key.split('/').pop())
+    .slice(0, 255);
+
+/**
+ * בדיקות משותפות לכל קובץ שהדפדפן כבר העלה ל-R2: המפתח שייך לארגון,
+ * עוד לא נרשם, לא בסל המחזור, ו-HEAD מאשר גודל וסוג. מחזיר {head} או
+ * {error, status}.
+ */
+async function checkUploadedKey(key) {
+  if (!isOwnKey(currentOrg(), key)) return { error: 'מפתח קובץ לא תקין', status: 400 };
+  if (await one('select 1 from content_assets where storage_key = $1', [key])) {
+    return { error: 'הקובץ הזה כבר נשמר', status: 409 };
+  }
+  if (await one('select 1 from media_trash where storage_key = $1', [key])) {
+    return { error: 'הקובץ הזה נמחק', status: 409 };
+  }
+  const { head, problem } = await verifyUploaded(key);
+  return problem ?? { head };
+}
+
+/** ערוץ קיים (בארגון — RLS). מזהה לא מספרי לא מגיע ל-SQL. */
+async function channelExists(id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  return !!(await one('select 1 from channels where id = $1', [n]));
+}
+
+/** שורת content_assets לקובץ שיושב ב-R2. runner = client של טרנזקציה או {query}. */
+async function insertR2Asset(runner, { contentId, variantId, key, filename, head }) {
+  const r = await runner.query(
+    `insert into content_assets (content_id, variant_id, filename, mime, size_bytes, storage_key)
+     values ($1,$2,$3,$4,$5,$6)
+     returning id, content_id, variant_id, filename, mime, size_bytes, storage_key`,
+    [contentId, variantId, displayName(filename, key), headMime(head), head.size, key]
+  );
+  return r.rows[0];
+}
+
+/**
+ * שלב 1 בהעלאה ל-R2: חתימה. {filename, mime, size, channel_id?} → {key, url}.
+ * הגודל המוצהר נבדק כאן, והגודל האמיתי שוב ב-complete (HEAD).
+ */
+r.post('/content/:id/uploads/sign', requirePerm('content'), wrap(async (req, res) => {
+  if (!mediaReady()) return bad(res, 'אחסון המדיה לא מוגדר בשרת', 503);
+  const b = req.body ?? {};
+  const err = validateSignRequest(b);
+  if (err) return bad(res, err, Number(b.size) > MAX_MEDIA_BYTES ? 413 : 400);
+
+  const item = await one('select id from content_items where id = $1', [req.params.id]);
+  if (!item) return bad(res, 'לא נמצא תוכן כזה', 404);
+  if (b.channel_id != null && !(await channelExists(b.channel_id))) {
+    return bad(res, 'לא נמצא ערוץ כזה', 404);
+  }
+
+  const key = newMediaKey(currentOrg(), b.filename);
+  res.json({ key, url: mediaStore.presignPut(key), method: 'PUT' });
+}));
+
+/**
+ * שלב 2: הדפדפן סיים את ה-PUT. {key, filename, channel_id?} → שורת קובץ.
+ * בלי channel_id — משותף לזווית; עם — של הגרסה למדיה (נוצרת אם אין).
+ */
+r.post('/content/:id/uploads/complete', requirePerm('content'), wrap(async (req, res) => {
+  if (!mediaReady()) return bad(res, 'אחסון המדיה לא מוגדר בשרת', 503);
+  const { key, filename, channel_id: channelId } = req.body ?? {};
+
+  const item = await one('select id from content_items where id = $1', [req.params.id]);
+  if (!item) return bad(res, 'לא נמצא תוכן כזה', 404);
+
+  if (channelId != null && !(await channelExists(channelId))) {
+    return bad(res, 'לא נמצא ערוץ כזה', 404);
+  }
+
+  const checked = await checkUploadedKey(key);
+  if (checked.error) return bad(res, checked.error, checked.status);
+
+  const variantId = channelId != null ? (await ensureVariant(item.id, channelId)).id : null;
+  const asset = await insertR2Asset({ query }, {
+    contentId: item.id, variantId, key, filename, head: checked.head,
+  });
+  res.status(201).json({ asset: assetView(asset) });
+}));
+
 
 /** הגשת הקובץ עצמו. מאחורי אותה בדיקת התחברות כמו כל השאר. */
 r.get('/assets/:id', wrap(async (req, res) => {
@@ -277,74 +382,118 @@ r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
 
 /**
  * העלאה מרוכזת: כל קובץ הופך לפריט תוכן, והפריטים מתפזרים
- * למשבצות הריקות של הקמפיין לפי הסדר.
+ * למשבצות הריקות של הקמפיין לפי הסדר. שני מסלולים חולקים את הלוגיקה —
+ * multipart (bytea) ו-R2 (קבצים שכבר עלו) — ונבדלים רק בשורת הקובץ.
+ *
+ * @param files [{filename}] — לפי הסדר
+ * @param attach (client, contentId, index) → מוסיף את שורת הקובץ לפריט
  */
+async function bulkAngles(req, res, files, attach) {
+  const campaign = await one('select * from campaigns where id = $1', [req.params.id]);
+  if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  if (!files?.length) return bad(res, 'לא הגיעו קבצים');
+
+  const kind = ['promo', 'value', 'hybrid'].includes(req.body?.kind)
+    ? req.body.kind : 'value';
+  const channelIds = parseIdList(req.body?.ready_channel_ids);
+
+  const existing = await rows(
+    'select sort_order from content_items where campaign_id = $1', [campaign.id]
+  );
+  const taken = new Set(existing.map((x) => x.sort_order));
+
+  const myChannels = await rows(
+    `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
+      where cc.campaign_id = $1 order by ch.sort_order, ch.id`,
+    [campaign.id]
+  );
+  // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו
+  const required = angleCount(campaign, channelNeeds(campaign, myChannels));
+
+  // המשבצות הריקות, לפי הסדר. אם נגמרו — ממשיכים אחרי המשבצת האחרונה.
+  const freeSlots = [];
+  for (let i = 1; required !== null && i <= required; i += 1) {
+    if (!taken.has(i)) freeSlots.push(i);
+  }
+  let overflowFrom = Math.max(0, ...existing.map((x) => x.sort_order), required ?? 0);
+
+  const created = [];
+  await tx(async (client) => {
+    for (const [i, f] of files.entries()) {
+      const slot = freeSlots.shift() ?? (overflowFrom += 1);
+      const item = (await client.query(
+        `insert into content_items (endpoint_id, campaign_id, kind, title,
+                                    ready_channel_ids, sort_order)
+         values ($1,$2,$3,$4,$5::int[],$6) returning *`,
+        [campaign.endpoint_id, campaign.id, kind, titleFromFilename(f.filename),
+         channelIds.length ? channelIds : myChannels.map((c) => c.id), slot]
+      )).rows[0];
+
+      // הזווית נפתחת עם טיוטה לכל מדיה של הקמפיין — הטקסט נכתב לכל אחת בנפרד
+      for (const ch of (channelIds.length ? channelIds : myChannels.map((c) => c.id))) {
+        await client.query(
+          `insert into content_variants (content_id, channel_id, status)
+           values ($1,$2,'draft') on conflict do nothing`,
+          [item.id, ch]
+        );
+      }
+
+      await attach(client, item.id, i);
+      created.push({ id: item.id, title: item.title, slot });
+    }
+  });
+
+  res.status(201).json({
+    created,
+    filled_slots: created.filter((c) => required === null || c.slot <= required).length,
+    overflow: created.filter((c) => required !== null && c.slot > required).length,
+  });
+}
+
+/** העלאה מרוכזת — multipart, הבייטים נשמרים במסד */
 r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
   wrap(async (req, res) => {
-    const campaign = await one('select * from campaigns where id = $1', [req.params.id]);
-    if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
-    if (!req.files?.length) return bad(res, 'לא הגיעו קבצים');
-
-    const kind = ['promo', 'value', 'hybrid'].includes(req.body?.kind)
-      ? req.body.kind : 'value';
-    const channelIds = parseIdList(req.body?.ready_channel_ids);
-
-    const existing = await rows(
-      'select sort_order from content_items where campaign_id = $1', [campaign.id]
-    );
-    const taken = new Set(existing.map((x) => x.sort_order));
-
-    const myChannels = await rows(
-      `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
-        where cc.campaign_id = $1 order by ch.sort_order, ch.id`,
-      [campaign.id]
-    );
-    // כמה זוויות הקמפיין צריך — נגזר מהקצב של המדיות ומהנתח שלו
-    const required = angleCount(campaign, channelNeeds(campaign, myChannels));
-
-    // המשבצות הריקות, לפי הסדר. אם נגמרו — ממשיכים אחרי המשבצת האחרונה.
-    const freeSlots = [];
-    for (let i = 1; required !== null && i <= required; i += 1) {
-      if (!taken.has(i)) freeSlots.push(i);
-    }
-    let overflowFrom = Math.max(0, ...existing.map((x) => x.sort_order), required ?? 0);
-
-    const created = [];
-    await tx(async (client) => {
-      for (const f of req.files) {
-        const slot = freeSlots.shift() ?? (overflowFrom += 1);
-        const item = (await client.query(
-          `insert into content_items (endpoint_id, campaign_id, kind, title,
-                                      ready_channel_ids, sort_order)
-           values ($1,$2,$3,$4,$5::int[],$6) returning *`,
-          [campaign.endpoint_id, campaign.id, kind, titleFromFilename(f.originalname),
-           channelIds.length ? channelIds : myChannels.map((c) => c.id), slot]
-        )).rows[0];
-
-        // הזווית נפתחת עם טיוטה לכל מדיה של הקמפיין — הטקסט נכתב לכל אחת בנפרד
-        for (const ch of (channelIds.length ? channelIds : myChannels.map((c) => c.id))) {
-          await client.query(
-            `insert into content_variants (content_id, channel_id, status)
-             values ($1,$2,'draft') on conflict do nothing`,
-            [item.id, ch]
-          );
-        }
-
-        await client.query(
-          `insert into content_assets (content_id, filename, mime, size_bytes, data)
-           values ($1,$2,$3,$4,$5)`,
-          [item.id, f.originalname, f.mimetype, f.size, f.buffer]
-        );
-        created.push({ id: item.id, title: item.title, slot });
-      }
-    });
-
-    res.status(201).json({
-      created,
-      filled_slots: created.filter((c) => required === null || c.slot <= required).length,
-      overflow: created.filter((c) => required !== null && c.slot > required).length,
-    });
+    const files = (req.files ?? []).map((f) => ({ ...f, filename: f.originalname }));
+    await bulkAngles(req, res, files, (client, contentId, i) => client.query(
+      `insert into content_assets (content_id, filename, mime, size_bytes, data)
+       values ($1,$2,$3,$4,$5)`,
+      [contentId, files[i].originalname, files[i].mimetype, files[i].size, files[i].buffer]
+    ));
   }));
+
+/**
+ * העלאה מרוכזת — R2. הדפדפן כבר העלה כל קובץ (חתימה מול זווית קיימת לא
+ * רלוונטית כאן, ולכן החתימה מגיעה מ-bulk/sign). {kind, files:[{key, filename}]}.
+ * כל המפתחות נבדקים לפני שנוצר משהו — קובץ פסול אחד עוצר את כל המנה.
+ */
+r.post('/campaigns/:id/bulk/sign', requirePerm('content'), wrap(async (req, res) => {
+  if (!mediaReady()) return bad(res, 'אחסון המדיה לא מוגדר בשרת', 503);
+  const b = req.body ?? {};
+  const err = validateSignRequest(b);
+  if (err) return bad(res, err, Number(b.size) > MAX_MEDIA_BYTES ? 413 : 400);
+  const campaign = await one('select id from campaigns where id = $1', [req.params.id]);
+  if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  const key = newMediaKey(currentOrg(), b.filename);
+  res.json({ key, url: mediaStore.presignPut(key), method: 'PUT' });
+}));
+
+r.post('/campaigns/:id/bulk/media', requirePerm('content'), wrap(async (req, res) => {
+  if (!mediaReady()) return bad(res, 'אחסון המדיה לא מוגדר בשרת', 503);
+  const files = Array.isArray(req.body?.files) ? req.body.files.slice(0, 100) : [];
+  if (new Set(files.map((f) => f?.key)).size !== files.length) {
+    return bad(res, 'אותו קובץ נשלח פעמיים');
+  }
+  const heads = [];
+  for (const f of files) {
+    const checked = await checkUploadedKey(f?.key);
+    if (checked.error) return bad(res, `${f?.filename ?? 'קובץ'}: ${checked.error}`, checked.status);
+    heads.push(checked.head);
+  }
+  await bulkAngles(req, res, files, (client, contentId, i) => insertR2Asset(client, {
+    contentId, variantId: null, key: files[i].key, filename: files[i].filename, head: heads[i],
+  }));
+}));
+
 
 /**
  * ייבוא תוכן מטבלה. שני שלבים בכוונה: תצוגה מקדימה שלא כותבת כלום,

@@ -120,3 +120,24 @@ test('validateUploaded — חסר / חורג / סוג אסור / תקין', () =
   assert.equal(validateUploaded({ size: 0, contentType: 'image/png' }, 10).purge, true);
   assert.equal(validateUploaded({ size: 3, contentType: 'image/png; charset=x' }, 10), null);
 });
+
+test('verifyUploaded — חורג נמחק, חסר לא נמחק, תקין מחזיר head', async () => {
+  const { verifyUploaded } = await import('../src/media.js');
+  const deleted = [];
+  const store = (head) => ({ head: async () => head, del: async (k) => { deleted.push(k); } });
+
+  const big = await verifyUploaded('k1', { store: store({ size: 11, contentType: 'video/mp4' }), max: 10 });
+  assert.equal(big.problem.status, 413);
+  assert.deepEqual(deleted, ['k1']);
+
+  const missing = await verifyUploaded('k2', { store: store(null), max: 10 });
+  assert.equal(missing.problem.status, 409);
+  assert.deepEqual(deleted, ['k1']);
+
+  const html = await verifyUploaded('k3', { store: store({ size: 3, contentType: 'text/html' }), max: 10 });
+  assert.equal(html.problem.status, 415);
+  assert.deepEqual(deleted, ['k1', 'k3']);
+
+  const ok = await verifyUploaded('k4', { store: store({ size: 3, contentType: 'image/png' }), max: 10 });
+  assert.deepEqual(ok, { head: { size: 3, contentType: 'image/png' } });
+});
