@@ -11,7 +11,9 @@ import { analyzeImport, runImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
-import { assetOwnerId, linkGroup, mediaOwner, syncFrom } from '../links.js';
+import {
+  LinkError, assetOwnerId, linkGroup, mediaOwner, releaseLinks, syncFrom, unlink,
+} from '../links.js';
 
 const r = Router();
 
@@ -24,6 +26,12 @@ async function slotChannelError(contentId, channelId) {
   const item = await one('select slot_channel_id from content_items where id = $1', [contentId]);
   if (!item?.slot_channel_id || Number(channelId) === item.slot_channel_id) return null;
   return 'הפוסט הזה שייך למדיה אחת בקמפיין כללי — אין לו גרסה למדיה אחרת';
+}
+
+/** שגיאת קישור (LinkError) חוזרת למשתמש כמו שהיא; כל השאר — שגיאת שרת */
+function linkFail(res, e) {
+  if (e instanceof LinkError) return res.status(e.status).json({ error: e.message, ...e.extra });
+  throw e;
 }
 
 /** מקום במשבצת: מספר שלם 1–1000 */
@@ -194,6 +202,14 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
 }));
 
 r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  // משבצות מקושרות מתפרקות קודם: בתוכן שוטף אין משבצות לקשר ביניהן, וכל
+  // אחת נשארת עם עותק משלה של התוכן (קבצים מועתקים מהמקור)
+  const sources = await rows(
+    `select distinct linked_to_id as id from content_items
+      where campaign_id = $1 and linked_to_id is not null`, [req.params.id]);
+  try {
+    for (const s of sources) await releaseLinks(s.id);
+  } catch (e) { return linkFail(res, e); }
   // התוכן נשאר ומתנתק (on delete set null). משבצת-מדיה בלי קמפיין היא
   // סתם תוכן שוטף, ולכן גם השיוך למשבצת יורד.
   await query('update content_items set slot_channel_id = null where campaign_id = $1',
@@ -366,6 +382,10 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
         : 'אי אפשר להעביר תוכן של משבצת לקמפיין לפי זוויות');
     }
   }
+  // משבצת מקושרת שיוצאת מהקמפיין מתנתקת קודם — עם עותק משלה של התוכן
+  if (leavingSlot) {
+    try { await releaseLinks(current.id); } catch (e) { return linkFail(res, e); }
+  }
   const c = await uniqueOrNull(() => updateById('content_items', CONTENT_FIELDS, req.params.id, b));
   if (!c) return bad(res, 'המשבצת תפוסה', 409);
   if (leavingSlot) {
@@ -395,6 +415,18 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   res.json({ content: c, engine });
 }));
 
+/**
+ * "נתק קישור": עוקבת מתנתקת מהמקור שלה; מקור — כל העוקבות שלו מתנתקות.
+ * כל משבצת נשארת עם עותק עצמאי של התוכן (הטקסט כבר אצלה, הקבצים מועתקים).
+ */
+r.post('/content/:id/unlink', requirePerm('content'), wrap(async (req, res) => {
+  let out;
+  try { out = await unlink(req.params.id); } catch (e) { return linkFail(res, e); }
+  const content = await one('select * from content_items where id = $1', [req.params.id]);
+  const engine = await autoFill(req.body?.week);
+  res.json({ content, ...out, engine });
+}));
+
 /** נקודת הקצה של תוכן: מהקמפיין אם יש, אחרת מה שנשלח במפורש */
 async function resolveEndpoint(b) {
   if (b.campaign_id) {
@@ -405,6 +437,11 @@ async function resolveEndpoint(b) {
 }
 
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
+  // מקור שנמחק לא משאיר עוקבות ריקות: כל אחת נשארת עם עותק משלה (הראשונה
+  // יורשת את הקבצים עצמם). עוקבת שנמחקת פשוט יוצאת מהקבוצה.
+  try {
+    await releaseLinks(req.params.id, { sourceGoing: true });
+  } catch (e) { return linkFail(res, e); }
   await query('delete from content_items where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });

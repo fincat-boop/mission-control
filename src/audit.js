@@ -77,6 +77,8 @@ function describe(req, payload, deletedName) {
     'content/assets':     ['create',  `הוסיף קבצים לתוכן ${label}`],
     'content/uploads':    ['create',  `הוסיף קובץ לתוכן ${label}`],
     'content/variants':   ['update',  `כתב ניסוח לתוכן ${label} במדיה #${parts[3] ?? ''}`],
+    'content/link':       ['update',  `קישר את התוכן ${label} למשבצת במדיה נוספת`],
+    'content/unlink':     ['update',  `ניתק את הקישור של התוכן ${label} — לכל משבצת עותק משלה`],
     'engine/apply':       ['apply',   'הריץ את מנוע השיבוץ ומילא את השבוע'],
     'urgent/commit':      ['create',  `שיבץ מבצע דחוף ${label}`],
     'auth/login':         ['login',   'התחבר למערכת'],

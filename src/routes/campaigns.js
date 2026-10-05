@@ -100,7 +100,8 @@ r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
  * וקבצים. השיבוצים בלוח לא מועתקים: המנוע משבץ את החדש לפי התאריכים שלו.
  * קובץ ב-R2 מועתק לאובייקט חדש, כי מחיקה מאחד הקמפיינים מוחקת את האובייקט.
  * העותק מתחיל לא "מוכן" (content_complete_at לא מועתק): הקצאה רגילה לפי
- * קצב על התאריכים החדשים, עד שמסמנים אותו מוכן בעצמו.
+ * קצב על התאריכים החדשים, עד שמסמנים אותו מוכן בעצמו. משבצות מקושרות
+ * נשארות מקושרות בעותק, זו לזו (לעוקבת אין קבצים משלה — הם על המקור).
  */
 r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res) => {
   const src = await one('select * from campaigns where id = $1', [req.params.id]);
@@ -132,6 +133,7 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
       'select * from content_items where campaign_id = $1 order by sort_order, id', [src.id]);
     let variantsN = 0;
     let assetsN = 0;
+    const copyOf = new Map();   // מזהה במקור → מזהה בעותק, לקישורים בין משבצות
     for (const it of items.rows) {
       const { rows: [copy] } = await client.query(
         `insert into content_items (endpoint_id, campaign_id, kind, title, body, ready_channel_ids,
@@ -139,6 +141,7 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
         [c.endpoint_id, c.id, it.kind, it.title, it.body, it.ready_channel_ids,
          it.sort_order, it.evergreen, it.reuse_after_days, it.slot_channel_id]);
+      copyOf.set(it.id, copy.id);
 
       const vmap = new Map();
       const vs = await client.query(
@@ -167,7 +170,17 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
         assetsN++;
       }
     }
-    return { items: items.rows.length, variants: variantsN, assets: assetsN };
+    // משבצות מקושרות נשארות מקושרות בעותק — זו לזו, לא לקמפיין המקורי.
+    // אחרי שכל העותקים נוצרו, כי עוקבת יכולה לבוא לפני המקור שלה בסדר.
+    let linksN = 0;
+    for (const it of items.rows) {
+      const to = it.linked_to_id != null ? copyOf.get(it.linked_to_id) : null;
+      if (!to) continue;
+      await client.query('update content_items set linked_to_id = $1 where id = $2',
+        [to, copyOf.get(it.id)]);
+      linksN++;
+    }
+    return { items: items.rows.length, variants: variantsN, assets: assetsN, links: linksN };
   });
 
   const engine = await autoFill(b.week);
