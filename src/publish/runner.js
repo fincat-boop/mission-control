@@ -303,6 +303,7 @@ export async function publishTickForOrg() {
   if (!settings?.autopublish_enabled) return;
 
   // פוסטים שאושרו והגיע זמנם. איחור גדול מדי לא מתפרסם — נכשל עם הסבר.
+  // קמפיין מושהה לא יוצא — גם פוסט שאושר לפני ההשהיה (הלוח כבר מסתיר אותו).
   // ניוזלטר לא צריך channel_connection (החיבור שלו הוא HUB_API_* בסביבה).
   const due = await rows(
     `select p.id, p.scheduled_at < now() - ($1 || ' hours')::interval as too_late
@@ -311,6 +312,9 @@ export async function publishTickForOrg() {
        left join channel_connections cc on cc.channel_id = c.id
       where p.status = 'approved' and p.scheduled_at <= now()
         and (cc.auto_enabled = true or c.platform = 'newsletter')
+        and not exists (select 1 from content_items ci
+                          join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)
       order by p.scheduled_at`,
     [MAX_LATE_HOURS]
   );
@@ -366,6 +370,9 @@ async function whatsappPrep() {
           order by t.done, t.id desc limit 1
        ) t on true
       where p.status = 'scheduled'
+        and not exists (select 1 from content_items ci
+                          join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)
         and p.scheduled_at between now() - interval '24 hours'
                                and now() + ($1 || ' minutes')::interval`,
     [WA_AHEAD_MINUTES]

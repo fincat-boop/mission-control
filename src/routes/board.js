@@ -70,8 +70,10 @@ export function moveBlocker(current, when, now = new Date()) {
   return null;
 }
 
+// status לא כאן בכוונה: מעבר סטטוס עובר רק בנתיבים הייעודיים (אישור, פרסום,
+// "סמן כפורסם") שבודקים הרשאת approve. אחרת content יכול לקבוע approved.
 const POST_FIELDS = ['channel_id', 'endpoint_id', 'content_id', 'title', 'kind',
-                     'scheduled_at', 'status', 'assignee_id', 'urgent', 'note'];
+                     'scheduled_at', 'assignee_id', 'urgent', 'note'];
 
 r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
