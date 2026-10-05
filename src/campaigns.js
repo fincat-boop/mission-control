@@ -736,7 +736,8 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
  * הנתח (target_pct): מה שנקבע ידנית בקמפיין, ובלעדיו החלק היחסי לפי חשיבות
  * מול הקמפיינים החופפים (effectiveShare — אותו חשבון כמו המנוע והטופס).
  * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
- * הקמפיין מתוך כל הפרסומים בחלון.
+ * הקמפיין מתוך הפרסומים של כל הקמפיינים בטבלה — אותו בסיס כמו הנתח, שמתחלק
+ * בין קמפיינים (תוכן שוטף ופוסטים בלי תוכן לא נספרים בשום צד).
  */
 export async function currentAllocation() {
   const today = ymd(new Date());
@@ -762,12 +763,7 @@ export async function currentAllocation() {
       group by ci.campaign_id`,
     [from, today, running.map((c) => c.id)]
   );
-  const totalRow = await rows(
-    `select count(*)::int as n from posts
-      where status = 'published' and published_at >= $1::date and published_at < ($2::date + 1)`,
-    [from, today]
-  );
-  const total = totalRow[0]?.n ?? 0;
+  const total = counts.reduce((s, c) => s + c.n, 0);
   const countMap = new Map(counts.map((c) => [c.campaign_id, c.n]));
 
   return {
