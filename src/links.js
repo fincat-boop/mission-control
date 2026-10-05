@@ -335,6 +335,11 @@ export async function linkSlots(clickedId, body = {}) {
     'select id, linked_to_id, campaign_id from content_items where id = $1', [clickedId]);
   if (!clicked) throw new LinkError('לא נמצא תוכן כזה', 404);
   const rootId = clicked.linked_to_id ?? clicked.id;
+  // נעילת שורת הקמפיין, כמו בהעלאה המרוכזת וב"קמפיין מוכן" (שדוחס את הסדר):
+  // משבצת היעד נקראת ונוצרת מול סדר יציב
+  if (clicked.campaign_id) {
+    await query('select id from campaigns where id = $1 for update', [clicked.campaign_id]);
+  }
 
   // היעד: פריט קיים לפי מזהה, או מקום (מדיה + מספר משבצת) בקמפיין של המקור
   let target;
