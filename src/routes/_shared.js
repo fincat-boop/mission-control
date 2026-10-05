@@ -1,5 +1,5 @@
 import multer from 'multer';
-import { one } from '../db.js';
+import { currentOrg, one, query } from '../db.js';
 import { applyWeek, withEngineLock } from '../engine.js';
 import { relocateBlocked } from '../respace.js';
 
@@ -21,15 +21,34 @@ export const bad = (res, msg, code = 400) => res.status(code).json({ error: msg 
  * (כלל, קמפיין, תוכן, נקודת קצה, ערוץ). לא נכשלת כשאין מה למלא, ולא
  * מפילה את הבקשה המקורית אם הריצה נתקלת בבעיה — המוטציה שכבר נשמרה
  * חשובה יותר מהמילוי האוטומטי שאחריה.
+ *
+ * מרוסן (docs/ux-overhaul.md, עיקרון 1): משבץ ומשייך רק תוכן קיים. פוסטים
+ * חסרי תוכן ומשימות "לכתוב" נוצרים רק מחלון "מלא את השבוע". התשובה כוללת
+ * את מזהי מה שנוצר/שויך, כדי שהלקוח יוכל להציע "בטל" (POST /engine/undo).
+ *
+ * savepoint: הבקשה כולה היא טרנזקציה אחת (withOrg). שגיאת SQL באמצע
+ * המילוי הייתה משאירה את הטרנזקציה שבורה, וה-commit בסוף היה מתגלגל
+ * אחורה בשקט — כולל השינוי שהמשתמש ביקש. ה-savepoint תוחם את הנזק למילוי.
  */
 export async function autoFill(week) {
+  const inTx = currentOrg() != null;
   try {
-    return await withEngineLock(() => applyWeek(week));
+    if (inTx) await query('savepoint auto_fill');
+    const out = await withEngineLock(() => applyWeek(week, { holes: false }));
+    if (inTx) await query('release savepoint auto_fill');
+    return out;
   } catch (e) {
+    if (inTx) await query('rollback to savepoint auto_fill').catch(() => {});
     console.error('autoFill נכשל:', e);
-    return { placed: 0, holes: 0 };
+    return EMPTY_FILL;
   }
 }
+
+/** תשובת מילוי ריקה — אותה צורה כמו applyWeek, כדי שהלקוח לא יצטרך לבדוק */
+export const EMPTY_FILL = Object.freeze({
+  placed: 0, attached: 0, holes: 0, skipped: 0,
+  created_ids: [], attached_items: [], summary: [],
+});
 
 /**
  * מפנה פוסטים שיושבים על ימים שנחסמו לערוץ שלהם. רץ אחרי שינוי הגדרות

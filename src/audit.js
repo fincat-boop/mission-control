@@ -76,6 +76,8 @@ function describe(req, payload, deletedName) {
     'content/uploads':    ['create',  `הוסיף קובץ לתוכן ${label}`],
     'content/variants':   ['update',  `כתב ניסוח לתוכן ${label} במדיה #${parts[3] ?? ''}`],
     'engine/apply':       ['apply',   'הריץ את מנוע השיבוץ ומילא את השבוע'],
+    'engine/undo':        ['delete',  'ביטל מילוי אוטומטי של המנוע'],
+    'posts/attach-content': ['update', `שייך תוכן לפוסט ${label}`],
     'urgent/commit':      ['create',  `שיבץ מבצע דחוף ${label}`],
     'auth/login':         ['login',   'התחבר למערכת'],
     'auth/logout':        ['logout',  'התנתק'],

@@ -447,6 +447,22 @@ create index if not exists endpoints_org_idx         on endpoints (org_id);
 create index if not exists channels_org_idx          on channels (org_id);
 create index if not exists tasks_org_idx             on tasks (org_id);
 
+-- ========================= ויתורים של המנוע =========================
+-- תוכן שהמשתמש הוריד מערוץ בשבוע מסוים (מחיקת פוסט, "בטל" על מילוי
+-- אוטומטי). המילוי האוטומטי רץ אחרי כל שינוי, ובלי הרשומה הזו הוא היה
+-- מחזיר את אותו תוכן לאותו מקום בשינוי הבא. נמחק אחרי ~8 שבועות
+-- (recordDismissals ב-engine.js).
+create table if not exists engine_dismissals (
+  id          serial primary key,
+  org_id      int references orgs(id),
+  week_start  date not null,
+  content_id  int not null references content_items(id) on delete cascade,
+  channel_id  int not null references channels(id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+create unique index if not exists engine_dismissals_key_idx
+  on engine_dismissals (org_id, week_start, content_id, channel_id);
+
 -- ========================= מולטי-טננט שלב 2: RLS =========================
 -- שלב 2b: הבידוד יורד ל-DB. שלוש אבני יסוד:
 --   1. engine_settings הופכת מסינגלטון (id=1) לשורה-לכל-ארגון (PK org_id).
@@ -481,7 +497,7 @@ begin
     'users','endpoints','channels','campaigns','campaign_channels',
     'content_items','content_variants','content_assets','posts',
     'post_results','strategy_milestones','tasks','engine_settings','activity_log',
-    'channel_connections','publish_log','media_trash'
+    'channel_connections','publish_log','media_trash','engine_dismissals'
   ] loop
     -- insert בלי org_id מקבל אוטומטית את הארגון הפעיל
     execute format(

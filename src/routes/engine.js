@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
-import { bad, wrap } from './_shared.js';
-import { applyWeek, planWeek, withEngineLock } from '../engine.js';
+import { bad, parseIdList, wrap } from './_shared.js';
+import { applyWeek, planWeek, recordDismissals, withEngineLock } from '../engine.js';
 import { planUrgent } from '../urgent.js';
-import { one, query } from '../db.js';
+import { one, query, rows } from '../db.js';
 
 const r = Router();
 
@@ -14,13 +14,73 @@ r.post('/engine/plan', requirePerm('content'), wrap(async (req, res) => {
   res.json(await planWeek(req.body?.week));
 }));
 
-/** ביצוע התכנון. מריץ תכנון טרי כדי שלא ייכתב משהו על סמך מצב ישן. */
+/**
+ * ביצוע התכנון. מריץ תכנון טרי כדי שלא ייכתב משהו על סמך מצב ישן.
+ * selected (לא חובה) — מפתחות הפריטים שהמשתמש השאיר מסומנים בחלון;
+ * נכתב רק מה שגם מסומן וגם עדיין בהצעה הטרייה. בלי selected — הכול.
+ */
 r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
-  const result = await withEngineLock(() => applyWeek(req.body?.week));
-  if (result.placed === 0 && result.holes === 0) {
-    return bad(res, 'אין מה לשבץ — הלוח מלא או שאין תוכן מוכן');
+  const raw = req.body?.selected;
+  if (raw != null && !Array.isArray(raw)) return bad(res, 'selected חייב להיות רשימה');
+  const selected = raw == null ? null : raw.map(String).slice(0, 500);
+  if (selected && selected.length === 0) return bad(res, 'לא סומן אף פריט לשיבוץ');
+
+  const result = await withEngineLock(() => applyWeek(req.body?.week, { selected }));
+  if (result.placed === 0 && result.attached === 0 && result.holes === 0) {
+    return bad(res, result.skipped
+      ? 'הלוח השתנה מאז שההצעה הוצגה, ואף פריט מסומן כבר לא רלוונטי — פתחו שוב את מילוי השבוע'
+      : 'אין מה לשבץ — הלוח מלא או שאין תוכן מוכן', result.skipped ? 409 : 400);
   }
   res.status(201).json(result);
+}));
+
+/**
+ * "בטל" על מילוי של המנוע. מוחק רק פוסטים מהרשימה שעדיין מתוכננים, לא
+ * פורסמו, ונוצרו בחצי השעה האחרונה — כל השאר נשאר. שיוכי תוכן (attached)
+ * חוזרים לפוסט חסר תוכן עם הכותרת והסוג הקודמים, ומשימת "לכתוב" שנסגרה
+ * בשיוך נפתחת שוב. מה שבוטל נרשם כוויתור, כדי שהמילוי הבא לא יחזיר אותו.
+ */
+r.post('/engine/undo', requirePerm('content'), wrap(async (req, res) => {
+  const ids = parseIdList(req.body?.post_ids).slice(0, 500);
+  const attached = Array.isArray(req.body?.attached) ? req.body.attached.slice(0, 500) : [];
+  if (ids.length === 0 && attached.length === 0) return bad(res, 'אין מה לבטל');
+
+  const removed = ids.length
+    ? await rows(
+        `delete from posts
+          where id = any($1::int[]) and status = 'scheduled' and published_at is null
+            and created_at > now() - interval '30 minutes'
+        returning id, content_id, channel_id, scheduled_at`,
+        [ids])
+    : [];
+
+  const detached = [];
+  for (const a of attached) {
+    const postId = Number(a?.post_id);
+    const contentId = Number(a?.content_id);
+    if (!postId || !contentId) continue;
+    const kind = ['promo', 'value', 'hybrid'].includes(a.prev_kind) ? a.prev_kind : null;
+    const title = typeof a.prev_title === 'string' && a.prev_title.trim()
+      ? a.prev_title.trim().slice(0, 200) : 'חסר תוכן';
+    const post = await one(
+      `update posts set content_id = null, title = $3, kind = coalesce($4, kind)
+        where id = $1 and content_id = $2 and status = 'scheduled' and published_at is null
+        returning id, channel_id, scheduled_at`,
+      [postId, contentId, title, kind]
+    );
+    if (!post) continue;
+    await query(
+      `update tasks set done = false, done_at = null
+        where post_id = $1 and kind = 'write' and done = true
+          and done_at > now() - interval '30 minutes'`,
+      [postId]
+    );
+    detached.push({ ...post, content_id: contentId });
+  }
+
+  await recordDismissals([...removed, ...detached]);
+  res.json({ removed: removed.length, detached: detached.length,
+             ignored: ids.length + attached.length - removed.length - detached.length });
 }));
 
 /* ========================= מבצע דחוף ========================= */
