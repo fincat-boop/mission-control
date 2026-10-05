@@ -583,6 +583,17 @@ alter table posts
   add column if not exists hub_digest         text,
   add column if not exists hub_transferred_at timestamptz;
 
+-- ========================= SSO מ-HUB: טוקנים שנוצלו =========================
+-- כל טוקן SSO נושא jti חד-פעמי (lib/mission-control/sso.ts ב-HUB). jti
+-- שכבר נוצל נדחה — טוקן שדלף מלוג בחלון החיים הקצר שלו לא נכנס פעמיים.
+-- טבלת מערכת (בלי org_id ובלי RLS, כמו login_attempts): הכניסה קורית לפני
+-- שיש ארגון. שורות פגות נמחקות בכל כניסה (hub-sso.js).
+create table if not exists sso_used_jti (
+  jti        text primary key,
+  expires_at timestamptz not null
+);
+create index if not exists sso_used_jti_expires_idx on sso_used_jti (expires_at);
+
 -- ========================= מולטי-טננט שלב 2: RLS =========================
 -- שלב 2b: הבידוד יורד ל-DB. שלוש אבני יסוד:
 --   1. engine_settings הופכת מסינגלטון (id=1) לשורה-לכל-ארגון (PK org_id).

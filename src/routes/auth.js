@@ -3,7 +3,7 @@ import { bad, wrap } from './_shared.js';
 import { one } from '../db.js';
 import { clearSession, issueSession } from '../auth.js';
 import { authUrl, exchangeCode, googleReady, signState, verifyState } from '../google-auth.js';
-import { hubSsoReady, verifyHubSsoToken } from '../hub-sso.js';
+import { consumeSsoJti, hubSsoReady, ssoTenantCheck, verifyHubSsoClaims } from '../hub-sso.js';
 import { mediaConfig } from '../media.js';
 import { safeNext } from '../next-path.js';
 
@@ -82,20 +82,38 @@ r.get('/auth/google/callback', wrap(async (req, res) => {
 /* ========================= כניסת SSO מ-HUB ========================= */
 
 /**
- * ניווט שמגיע מכפתור "בקרת שיגור" ב-HUB עם טוקן חתום (60 שניות).
+ * ניווט שמגיע מכפתור "בקרת שיגור" ב-HUB עם טוקן חתום (20 שניות).
  * ?next= אופציונלי — נתיב יחסי באתר בלבד (safeNext), אחרת חוזרים לדף הבית.
- * אותו allowlist כמו Google: רק email שכבר קיים כמשתמש. הקוקי נקבע כאן,
+ * אותו allowlist כמו Google: רק email שכבר קיים כמשתמש. הטוקן חד-פעמי
+ * (jti) ונבדק מול הטננט של המשתמש (tid) — ראו hub-sso.js. הקוקי נקבע כאן,
  * וההפניה ל-'/' עובדת גם עם sameSite:strict כי הדף עצמו סטטי — האימות
  * בפועל קורה ב-fetch של /api/me מתוך הדף (בקשה same-site).
  */
 r.get('/auth/sso', wrap(async (req, res) => {
   if (!hubSsoReady()) return bad(res, 'כניסת SSO לא מוגדרת', 503);
 
-  const email = verifyHubSsoToken(String(req.query.token ?? ''));
-  if (!email) return res.redirect('/login.html?error=sso');
+  const claims = verifyHubSsoClaims(String(req.query.token ?? ''));
+  if (!claims) return res.redirect('/login.html?error=sso');
 
-  const user = await one('select * from users where lower(email) = $1', [email]);
+  // חד-פעמי: הניצול נרשם לפני כל בדיקה אחרת — גם ניסיון שנדחה "שורף" את הטוקן
+  if (claims.jti) {
+    if (!(await consumeSsoJti(claims.jti, claims.exp))) {
+      console.warn(`[auth] SSO — טוקן שכבר נוצל (jti חוזר) עבור ${claims.email}, נדחה`);
+      return res.redirect('/login.html?error=sso');
+    }
+  } else {
+    console.warn(`[auth] SSO — טוקן בלי jti עבור ${claims.email} (HUB ישן?) — אין הגנת שימוש חוזר`);
+  }
+
+  const user = await one('select * from users where lower(email) = $1', [claims.email]);
   if (!user) return res.redirect('/login.html?error=not_approved');
+
+  const tenant = ssoTenantCheck({ tid: claims.tid, userOrgId: user.org_id });
+  if (tenant.warn) console.warn(`[auth] SSO — ${tenant.warn}`);
+  if (!tenant.ok) {
+    console.warn(`[auth] SSO — ${claims.email}: הטננט בטוקן (${claims.tid ?? 'חסר'}) לא מקושר לארגון של המשתמש, נדחה`);
+    return res.redirect('/login.html?error=sso_tenant');
+  }
 
   issueSession(res, user);
   res.redirect(safeNext(req.query.next) ?? '/');
