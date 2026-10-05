@@ -414,7 +414,8 @@ export async function publishTickForOrg() {
 
 /**
  * למה פוסט שתקוע ב-publishing צריך לעבור ל-failed, או null אם עוד מוקדם
- * (טהורה). started — מתי נתפס; לפוסט מלפני העמודה — מתי אושר/המועד.
+ * (טהורה). started — מתי נתפס (publishing_started_at; schema.sql ממלא
+ * אותו לפוסטים שהיו ב-publishing לפני העמודה).
  */
 export function stuckPublishingError({ platform, started }, now = new Date()) {
   if (!started) return null;
@@ -433,7 +434,7 @@ export function stuckPublishingError({ platform, started }, now = new Date()) {
 async function failStuckPublishing(now = new Date()) {
   const stuck = await rows(
     `select p.id, c.platform,
-            coalesce(p.publishing_started_at, p.approved_at, p.scheduled_at) as started
+            p.publishing_started_at as started
        from posts p
        join channels c on c.id = p.channel_id and c.active
       where p.status = 'publishing'

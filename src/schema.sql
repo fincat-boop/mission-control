@@ -444,6 +444,11 @@ alter table posts
 
 -- מתי הפוסט נתפס ל-publishing — כדי לזהות פרסום שנתקע באמצע (runner.js)
 alter table posts add column if not exists publishing_started_at timestamptz;
+-- פוסט שכבר היה ב-publishing לפני העמודה: השעון מתחיל מהעלייה הזו, לא
+-- מהמועד/האישור (שהיו מסמנים אותו מיד כתקוע). אידמפוטנטי — אחרי הפעם
+-- הראשונה אין שורות כאלה.
+update posts set publishing_started_at = now()
+ where status = 'publishing' and publishing_started_at is null;
 
 -- סטטוסים חדשים למסלול: approved (אושר לשליחה אוטומטית) → publishing → published,
 -- וכשל הופך ל-failed (נשאר על הלוח עד טיפול, לא נעלם).
