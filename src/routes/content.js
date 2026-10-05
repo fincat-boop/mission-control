@@ -7,7 +7,7 @@ import {
   newMediaKey, uploadSignedHeaders, validateSignRequest, verifyUploaded,
 } from '../media.js';
 import { channelNeeds, freeAngleSlots, nextSlots } from '../campaigns.js';
-import { analyzeImport, runImport } from '../import.js';
+import { analyzeImport, runImport, undoImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
@@ -967,7 +967,8 @@ r.post('/campaigns/:id/bulk/media', requirePerm('content'), wrap(async (req, res
 r.post('/campaigns/:id/import/preview', requirePerm('content'), wrap(async (req, res) => {
   if (!(await anglesOnly(req, res))) return;
   try {
-    res.json(await analyzeImport(req.params.id, req.body?.text));
+    res.json(await analyzeImport(req.params.id, req.body?.text,
+      { markReady: req.body?.mark_ready === true }));
   } catch (e) {
     return bad(res, e.message);
   }
@@ -997,11 +998,24 @@ r.post('/campaigns/:id/import/analyze', requirePerm('content'), upload.single('f
 
 r.post('/campaigns/:id/import', requirePerm('content'), wrap(async (req, res) => {
   if (!(await anglesOnly(req, res))) return;
+  // נעילת הקמפיין (כמו בהעלאה המרוכזת): המקומות הפנויים נקבעים מול מצב יציב
+  await one('select id from campaigns where id = $1 for update', [req.params.id]);
+  let out;
   try {
-    res.status(201).json(await runImport(req.params.id, req.body?.text));
+    out = await runImport(req.params.id, req.body?.text,
+      { markReady: req.body?.mark_ready === true });
   } catch (e) {
     return bad(res, e.message);
   }
+  // כמו כל שינוי בתוכן: המנוע משבץ ממה שנכנס, והתשובה אומרת מה (עם "בטל")
+  const engine = await autoFill(req.body?.week);
+  res.status(201).json({ ...out, engine });
+}));
+
+/** "בטל ייבוא": הפריטים של המנה שלא נערכו מאז נמחקים (src/import.js) */
+r.delete('/campaigns/:id/import/:batch', requirePerm('content'), wrap(async (req, res) => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.batch)) return bad(res, 'מזהה ייבוא לא תקין');
+  res.json(await undoImport(req.params.id, req.params.batch));
 }));
 
 export default r;

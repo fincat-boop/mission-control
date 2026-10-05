@@ -658,3 +658,7 @@ do $$ begin
       for each row execute function touch_content_item();
   end if;
 end $$;
+
+-- ייבוא מטבלה: כל ייבוא מקבל מזהה מנה אחד — "בטל ייבוא" מוחק את הפריטים של
+-- המנה שאיש לא נגע בהם מאז (src/import.js, undoImport)
+alter table content_items add column if not exists import_batch uuid;
