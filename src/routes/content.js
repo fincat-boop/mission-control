@@ -375,13 +375,14 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
 
   if (slotChannel) {
     // הגרסה היחידה של הפריט — לאותה מדיה. הטקסט שלה הוא הטקסט של הפריט.
-    await query(
+    const variant = await one(
       `insert into content_variants (content_id, channel_id, body, status)
-       values ($1,$2,coalesce($3,''),$4)`,
+       values ($1,$2,coalesce($3,''),$4) returning *`,
       [c.id, slotChannel, b.body ?? null, b.status === 'ready' ? 'ready' : 'draft']
     );
     const engine = await autoFill(b.week);
-    return res.status(201).json({ content: c, engine });
+    // variant — לנעילה האופטימית של השמירה הבאה מאותו טופס (updated_at)
+    return res.status(201).json({ content: c, variant, engine });
   }
 
   // זווית חדשה נפתחת עם גרסת טיוטה לכל מדיה שביקשו — הניסוח נכתב לכל אחת בנפרד
@@ -507,8 +508,13 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   if (['title', 'kind', 'body', 'status'].some((k) => b[k] !== undefined)) {
     await syncFrom(c.id);
   }
+  // משבצת: הגרסה היחידה שלה — לנעילה האופטימית של השמירה הבאה מאותו טופס
+  const variant = c.slot_channel_id
+    ? await one('select * from content_variants where content_id = $1 and channel_id = $2',
+      [c.id, c.slot_channel_id])
+    : null;
   const engine = await autoFill(b.week);
-  res.json({ content: c, engine });
+  res.json({ content: c, variant, engine });
 }));
 
 /**

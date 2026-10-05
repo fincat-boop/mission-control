@@ -65,7 +65,20 @@ export async function closeGeneric({ force = false } = {}) {
     }
   }
   dlg.close();
+  finishClose();
   return true;
+}
+
+/**
+ * onClose של הטופס הנוכחי — פעם אחת לכל פתיחה. נקרא ישירות מכל מסלול סגירה
+ * שלנו (ולא רק מאירוע close, שהדפדפן מעכב בלשונית מוסתרת).
+ */
+function finishClose() {
+  const spec = genSpec;
+  if (spec && !spec.closed) {
+    spec.closed = true;
+    spec.onClose?.();
+  }
 }
 
 /** אחרי שמירה חלקית (למשל קבצים שנכשלו): מה שכבר נשמר הוא נקודת ההשוואה החדשה */
@@ -184,19 +197,13 @@ export function wireGenericDialog() {
   $('#genCancel').addEventListener('click', () => closeGeneric());
   // Esc: הדפדפן סוגר מיד — בטופס עם שינויים עוצרים ושואלים
   $('#genDlg').addEventListener('cancel', (e) => {
-    if (!isDirty()) return;
     e.preventDefault();
     closeGeneric();
   });
-  // onClose — לכל סגירה (שמירה, ביטול, Esc), פעם אחת לכל פתיחה
+  // גיבוי ל-onClose: סגירה ישירה (dlg.close()) מקוד שלא עובר ב-closeGeneric.
+  // אירוע שהגיע אחרי שכבר נפתח טופס חדש — שייך לקודם, שכבר טופל בפתיחה.
   $('#genDlg').addEventListener('close', () => {
-    // אירוע שהגיע אחרי שכבר נפתח טופס חדש — שייך לקודם, שכבר טופל בפתיחה
-    if ($('#genDlg').open) return;
-    const spec = genSpec;
-    if (spec && !spec.closed) {
-      spec.closed = true;
-      spec.onClose?.();
-    }
+    if (!$('#genDlg').open) finishClose();
   });
   $('#genSave').addEventListener('click', run(async () => {
     const values = collectValues(genSpec.fields);
@@ -212,6 +219,7 @@ export function wireGenericDialog() {
         return;
       }
       $('#genDlg').close();
+      finishClose();
       if (msg !== false) toast(typeof msg === 'string' ? msg : 'נשמר.');
     } finally {
       btn.disabled = false;
@@ -298,10 +306,7 @@ function fieldHtml(f) {
 export function openGeneric(spec) {
   // שרשור טפסים (פתיחה מתוך טופס, או לפני שאירוע הסגירה של הקודם הגיע) —
   // ה-onClose של הקודם רץ עכשיו, פעם אחת
-  if (genSpec && !genSpec.closed) {
-    genSpec.closed = true;
-    genSpec.onClose?.();
-  }
+  finishClose();
   genSpec = spec;
   // הדיאלוג משותף לכל הישויות — קישוטי התצוגה החיה של גרסת המייל
   // (עמודה + class) מוסרים לפני כל פתיחה, שלא ידבקו לטופס הבא.

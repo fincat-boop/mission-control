@@ -8,7 +8,7 @@ import { closeGeneric, markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
 import {
-  progressList, setPickedFiles, uploadBulk, uploadEach, uploadFailedMessage, uploadFiles,
+  progressList, setPickedFiles, uploadBulk, uploadEach, uploadFailedMessage,
 } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
 import { engineToast } from '../ui/engineDialog.js';
@@ -570,7 +570,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
           $('#genBody [data-field="target_posts"]').hidden = r.value === 'general';
         }));
       $('#genDelete')?.addEventListener('click', run(async () => {
-        if (await deleteCampaign(campaign, reload)) $('#genDlg').close();
+        if (await deleteCampaign(campaign, reload)) await closeGeneric({ force: true });
       }));
       // בתוכן שוטף אין שם, תאריכים או נתח — נשארת רק נקודת הקצה
       const type = $('#gen_ctype');
@@ -946,6 +946,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     ch.id !== channelId && ch.platform !== 'newsletter');
   // הגרסה שהטופס נפתח איתה — השרת דוחה שמירה מעל גרסה שמישהו שמר בינתיים
   let base = v?.updated_at ?? null;
+  // הפוסט שהטופס עורך — מתעדכן אחרי השמירה הראשונה (גם כשקבצים נכשלו אחריה)
+  let saved = item;
+  let filesChanged = false;
 
   openGeneric({
     guardDirty: true,
@@ -972,18 +975,29 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
       : '') + (canLink ? '<button class="btn" id="genLink">קשר למשבצת אחרת</button>' : ''),
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
+      const input = $('#gen___files');
+      const picked = mail ? [] : [...(input?.files ?? [])];
+      const wantReady = !mail && val.status === 'ready';
       const body = mail
         ? { title: val.title, kind: val.kind, week: state.week }
         : { title: val.title, kind: val.kind, body: val.body ?? '',
             status: val.status, week: state.week };
-      if (item && !mail) body.base_updated_at = base;
-      let saved;
+
+      // פוסט קיים: קבצים קודם — "מוכן" נבדק מול המדיה שכבר עלתה
+      if (saved && picked.length) await uploadPicked(saved.id, picked);
+
+      let res;
       try {
-        saved = item
-          ? (await api(`/content/${item.id}`, { method: 'PATCH', body })).content
-          : (await api('/content', { method: 'POST', body: {
-            ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
-          } })).content;
+        if (saved) {
+          res = await api(`/content/${saved.id}`, { method: 'PATCH',
+            body: mail ? body : { ...body, base_updated_at: base } });
+        } else {
+          // פוסט חדש עם קבצים נוצר קודם כטיוטה; "מוכן" אחרי שהקבצים עלו
+          res = await api('/content', { method: 'POST', body: {
+            ...body, status: picked.length && wantReady ? 'draft' : body.status,
+            campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
+          } });
+        }
       } catch (e) {
         return staleReload(e, val.body, (cur) => {
           $('#gen_body').value = cur?.body ?? '';
@@ -992,13 +1006,22 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           base = cur?.updated_at ?? null;
         });
       }
-
-      const picked = $('#gen___files')?.files;
-      if (picked?.length) {
-        await uploadFiles(saved.id, picked, {
-          onProgress: progressList($('#gen___files_progress'), picked),
-        });
+      const created = !saved;
+      // מכאן הטופס עורך את מה שנשמר: "שמור" שוב לא יוצר פוסט כפול במשבצת תפוסה
+      saved = res.content;
+      base = res.variant?.updated_at ?? base;
+      const fills = [res];
+      if (created) $('#genTitle').textContent = `${channel?.name ?? ''} · פוסט ${index}`;
+      if (created && picked.length) {
+        await uploadPicked(saved.id, picked, () => reload());
+        if (wantReady) {
+          const r2 = await api(`/content/${saved.id}`, { method: 'PATCH',
+            body: { status: 'ready', base_updated_at: base, week: state.week } });
+          base = r2.variant?.updated_at ?? base;
+          fills.push(r2);
+        }
       }
+      engineToast(mergeFills(fills), 'נשמר.');
       await reload();
       if (mail) {
         // הפריט הטרי (עם הגרסה שלו) — אחרי הרענון. העורך נפתח רק אחרי שהטופס
@@ -1008,16 +1031,16 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         if (freshItem) {
           setTimeout(() => openVariantForm({ item: freshItem, channelId, campaign: fresh }, reload));
         }
-        return 'נשמר — ממשיכים לנושא ולתוכן של המייל.';
+        toast('נשמר — ממשיכים לנושא ולתוכן של המייל.');
       }
+      return false;
     },
+    onClose: () => { if (filesChanged) reload(); },
     onOpen: () => {
       wireCopyLinks($('#genBody'));
       $$('#genBody [data-del-asset]').forEach((b) =>
         b.addEventListener('click', run(async () => {
-          await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
-          b.closest('.fileline').remove();
-          toast('הקובץ הוסר.');
+          if (await deleteAssetAsk(b)) filesChanged = true;
         })));
       $('#genDelete')?.addEventListener('click', run(async () => {
         const names = partners.map(slotLabel).join(', ');
@@ -1027,17 +1050,17 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
             : `למחוק את הפוסט הזה? המשבצות המקושרות (${names}) יישארו עם עותק משלהן של התוכן.`;
         if (!(await confirmDialog(question, { danger: true }))) return;
         await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
-        $('#genDlg').close();
+        await closeGeneric({ force: true });
         await reload();
       }));
       $('#genLink')?.addEventListener('click', () => {
-        $('#genDlg').close();
+        closeGeneric({ force: true });
         enterLinkMode(campaign, item, reload);
       });
       $$('#genBody [data-unlink]').forEach((b) =>
         b.addEventListener('click', run(async () => {
           await api(`/content/${b.dataset.unlink}/unlink`, { method: 'POST', body: { week: state.week } });
-          $('#genDlg').close();
+          await closeGeneric({ force: true });
           toast('הקישור נותק — לכל משבצת עותק משלה של התוכן.');
           await reload();
         })));
@@ -1266,6 +1289,9 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
   const bgEndpoint = background?.endpoint_id;
 
   const existingFiles = (item?.assets ?? []).map((a) => assetLine(a, true, false)).join('');
+  // הזווית שהטופס עורך — מתעדכנת אחרי השמירה הראשונה (גם כשקבצים נכשלו אחריה)
+  let saved = item ?? null;
+  let filesChanged = false;
 
   openGeneric({
     guardDirty: true,
@@ -1303,36 +1329,40 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
       const body = { ...v };
       delete body.__files;
       body.week = state.week;
-      if (slot && !item) {
+      if (slot && !saved) {
         body.sort_order = slot;
-        // זווית חדשה נפתחת עם טיוטה לכל מדיה של הקמפיין
+        // זווית חדשה נפתחת עם טיוטה לכל ערוץ של הקמפיין
         body.channel_ids = campaign?.channels?.map((c) => c.id) ?? [];
       }
 
-      const saved = item
-        ? (await api(`/content/${item.id}`, { method: 'PATCH', body })).content
-        : (await api('/content', { method: 'POST', body })).content;
+      const res = saved
+        ? await api(`/content/${saved.id}`, { method: 'PATCH', body })
+        : await api('/content', { method: 'POST', body });
+      // מכאן הטופס עורך את מה שנשמר: "שמור" שוב (אחרי קבצים שנכשלו) לא
+      // נתקל ב"המשבצת תפוסה" ולא יוצר זווית כפולה
+      if (!saved) $('#genTitle').textContent = `זווית ${res.content.sort_order}`;
+      saved = res.content;
 
-      const picked = $('#gen___files')?.files;
-      if (picked?.length) {
-        await uploadFiles(saved.id, picked, {
-          onProgress: progressList($('#gen___files_progress'), picked),
-        });
+      const picked = [...($('#gen___files')?.files ?? [])];
+      if (picked.length) {
+        // הזווית נשמרה גם אם קובץ נכשל — הרשת מראה אותה מיד
+        await uploadPicked(saved.id, picked, () => reload());
       }
+      engineToast(res, 'נשמר.');
       await reload();
+      return false;
     },
+    onClose: () => { if (filesChanged) reload(); },
     onOpen: () => {
       wireCopyLinks($('#genBody'));
       $$('#genBody [data-del-asset]').forEach((b) =>
         b.addEventListener('click', run(async () => {
-          await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
-          b.closest('.fileline').remove();
-          toast('הקובץ הוסר.');
+          if (await deleteAssetAsk(b)) filesChanged = true;
         })));
       $('#genDelete')?.addEventListener('click', run(async () => {
         if (!(await confirmDialog('למחוק את הזווית וכל הגרסאות שלה?', { danger: true }))) return;
         await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
-        $('#genDlg').close();
+        await closeGeneric({ force: true });
         await reload();
       }));
     },
@@ -1625,6 +1655,27 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
       load(cur);
     },
   });
+}
+
+/**
+ * העלאת הקבצים שנבחרו בטופס, אחד-אחד. מה שנכשל נשאר בבורר, והטופס נשאר
+ * פתוח עם הודעה — "שמור" שוב ינסה רק אותם (מה שעלה לא עולה פעמיים).
+ * afterFail — למשל רענון הרשת, כשהפריט עצמו כבר נשמר.
+ */
+async function uploadPicked(contentId, picked, afterFail, channelId = null) {
+  const input = $('#gen___files');
+  const { failed } = await uploadEach(contentId, picked, {
+    channelId, onProgress: progressList($('#gen___files_progress'), picked) });
+  if (!failed.length) {
+    setPickedFiles(input, []);
+    return;
+  }
+  // מה שכבר נשמר הוא נקודת ההשוואה; הקבצים שנכשלו נשארים "לא נשמרו"
+  setPickedFiles(input, []);
+  markGenericClean();
+  setPickedFiles(input, failed.map((f) => f.file));
+  await afterFail?.();
+  throw new Error(uploadFailedMessage(failed));
 }
 
 /** מחיקת קובץ מהטופס — אחרי אישור עם שם הקובץ. מחזיר האם נמחק. */
