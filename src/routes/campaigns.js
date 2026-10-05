@@ -1,12 +1,13 @@
 import { Router } from 'express';
-import { autoFill, bad, updateById, wrap } from './_shared.js';
+import { EMPTY_FILL, autoFill, bad, updateById, wrap } from './_shared.js';
 import {
   campaignsWithHealth, completionSummary, currentAllocation, resolvePeriod, structureChangeError,
 } from '../campaigns.js';
 import { currentOrg, one, rows, tx } from '../db.js';
 import { mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
-import { rerunPeriod, runName } from '../../public/js/core/period.js';
+import { isDate, rerunPeriod, runName } from '../../public/js/core/period.js';
+import { ymd } from '../board.js';
 
 const r = Router();
 
@@ -58,9 +59,18 @@ async function setCampaignChannels(client, campaignId, ids) {
   }
 }
 
+/** תאריך שנשלח חייב להיות תאריך אמיתי — לפני כל כתיבה (או העתקת קבצים ב-R2) */
+function datesError(b) {
+  if (b.starts_on != null && !isDate(b.starts_on)) return 'תאריך היעד לפוסט הראשון לא תקין';
+  if (b.ends_on != null && !isDate(b.ends_on)) return 'תאריך הסיום לא תקין';
+  return null;
+}
+
 /** בדיקות של קמפיין חדש (גם בשכפול). מחזיר הודעת שגיאה או null. */
 function newCampaignError(b) {
   if (!b.endpoint_id || !b.name) return 'צריך נקודת קצה ושם קמפיין';
+  const dateErr = datesError(b);
+  if (dateErr) return dateErr;
   const periodErr = applyPeriod(b, null);
   if (periodErr) return periodErr;
   // בלי מבנה מפורש (העוזר, קריאות API ישנות) — לפי זוויות, כמו עד היום.
@@ -227,6 +237,12 @@ r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) 
 
   const body = req.body ?? {};
   if (!body.starts_on) return bad(res, 'צריך תאריך יעד לפוסט הראשון');
+  const dateErr = datesError(body);
+  if (dateErr) return bad(res, dateErr);
+  // הרצה חדשה מתחילה מהיום והלאה — פוסטים בעבר לא ייצאו לעולם
+  if (body.starts_on < ymd(new Date())) {
+    return bad(res, 'תאריך היעד לפוסט הראשון כבר עבר — בוחרים תאריך מהיום והלאה');
+  }
   let period;
   if (body.period != null) {
     period = { period: body.period, ...(body.ends_on !== undefined ? { ends_on: body.ends_on } : {}) };
@@ -331,6 +347,12 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   // השפעה על המנוע. עותקים נוצרים לא מחזוריים (insertCampaign).
   if (b.recurring !== undefined && typeof b.recurring !== 'boolean') {
     return bad(res, 'ערך לא תקין לקמפיין מחזורי');
+  }
+  // רק הדגל השתנה — אין מה לשבץ, והמילוי האוטומטי לא רץ
+  if (Object.keys(req.body ?? {}).filter((k) => k !== 'week').join() === 'recurring') {
+    const campaign = await one('update campaigns set recurring = $2 where id = $1 returning *',
+      [before.id, b.recurring]);
+    return res.json({ campaign, moved_posts: 0, engine: EMPTY_FILL });
   }
 
   if (b.structure == null) delete b.structure; // עמודה not null — "לא נשלח" = לא נוגעים

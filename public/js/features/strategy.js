@@ -75,13 +75,17 @@ export async function renderStrategy() {
 
     <div class="panel" style="margin-bottom:18px">${gantt(data)}</div>
 
-    ${recurringSection(data.recurring ?? [])}
+    ${recurringSection(data.recurring ?? [], hasTimeline(data))}
 
     <div class="panel" style="max-width:640px">${allocPanel(data.allocation)}</div>`;
 
   wireStrategy();
   wireRecurring(data.recurring ?? []);
 }
+
+/** יש על מה לצייר את הציר: קמפיין פעיל אחד לפחות עם תאריכים */
+const hasTimeline = (data) =>
+  data.endpoints.some((e) => e.campaigns.some((c) => c.active && c.starts_on && c.ends_on));
 
 function gantt(data) {
   const base = ganttBase();
@@ -195,14 +199,16 @@ function suggestedStart(t) {
   return after && after > ymd(new Date()) ? after : nextSunday();
 }
 
-function recurringSection(list) {
+function recurringSection(list, timeline) {
   const settings = can('settings');
+  // גרירה אל הציר — רק כשיש ציר לגרור אליו
+  const drag = settings && timeline;
   const rows = list.map((t) => {
     const unit = t.structure === 'general' ? 'פוסטים' : 'זוויות';
     const runs = t.runs
       ? `${t.runs === 1 ? 'הרצה אחת' : `${t.runs} הרצות`} מהתבנית`
       : 'התבנית עצמה — עוד לא שובץ מחדש';
-    return `<div class="rrow"${settings ? ` draggable="true" data-tpl-drag="${t.id}"` : ''}>
+    return `<div class="rrow"${drag ? ` draggable="true" data-tpl-drag="${t.id}"` : ''}>
       <button type="button" class="rname" data-open-tpl="${t.id}"
         data-tt="פתיחת התבנית בטאב &quot;קמפיינים ותוכן&quot;">
         <i class="dot" style="background:${epColor(t.endpoint_id)}"></i>
@@ -221,7 +227,7 @@ function recurringSection(list) {
     <div class="recurhead">
       <h2>קמפיינים מחזוריים</h2>
       ${list.length && settings ? `<p class="sub">כל שיבוץ יוצר קמפיין חדש עם אותו תוכן ומצבים
-        בתאריכים חדשים. אפשר גם לגרור שורה אל הציר.</p>` : ''}
+        בתאריכים חדשים.${drag ? ' אפשר גם לגרור שורה אל הציר.' : ''}</p>` : ''}
     </div>
     ${list.length ? `<div class="panel recurlist">
       <div class="rrow rhead" aria-hidden="true">
@@ -229,8 +235,10 @@ function recurringSection(list) {
         <span>הרצה אחרונה</span><span></span>
       </div>
       ${rows}
-    </div>` : `<p class="recurempty">אין עדיין קמפיינים מחזוריים. מסמנים קמפיין כמחזורי
-      מתפריט ⋮ שלו, בטאב "קמפיינים ותוכן" — ומכאן משבצים אותו מחדש כשצריך.</p>`}
+    </div>` : `<p class="recurempty">${settings
+      ? `אין עדיין קמפיינים מחזוריים. מסמנים קמפיין כמחזורי מתפריט ⋮ שלו, בטאב
+        "קמפיינים ותוכן" — ומכאן משבצים אותו מחדש כשצריך.`
+      : 'אין עדיין קמפיינים מחזוריים.'}</p>`}
   </section>`;
 }
 
@@ -329,7 +337,11 @@ function wireRecurring(list) {
     const rtl = getComputedStyle(track).direction === 'rtl';
     const offset = rtl ? rect.right - e.clientX : e.clientX - rect.left;
     const half = Math.min(HALVES - 1, Math.max(0, Math.floor(offset / (rect.width / HALVES))));
-    openRerun(t, halfToDate(half, ganttBase()));
+    // נחיתה על עמודת השמות, על הכותרת או על חצי חודש שעבר — לא לפני היום
+    // (השרת דוחה הרצה שמתחילה בעבר)
+    const today = ymd(new Date());
+    const date = offset < 0 ? today : halfToDate(half, ganttBase());
+    openRerun(t, date < today ? today : date);
   });
 }
 

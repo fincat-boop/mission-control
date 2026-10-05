@@ -104,7 +104,18 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
 export function runName(name, start) {
   if (!start) return name;
   const [y, m] = parts(start);
-  return `${name} · ${HE_MONTHS[m - 1]} ${y}`;
+  // תבנית שהשם שלה כבר נגמר ב"· <חודש שנה>" (למשל הרצה שסומנה מחזורית) —
+  // הסיומת מתחלפת, לא מצטברת
+  const base = String(name).replace(new RegExp(` · (${HE_MONTHS.join('|')}) \\d{4}$`), '');
+  return `${base} · ${HE_MONTHS[m - 1]} ${y}`;
+}
+
+/** תאריך אמיתי בפורמט YYYY-MM-DD (לא 2026-02-30, לא '2026-1-5') */
+export function isDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = parts(s);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
 }
 
 /** מספר הימים בטווח, כולל שני הקצוות (1.11–7.11 = 7) */

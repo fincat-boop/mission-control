@@ -113,7 +113,7 @@ test('spreadDate — הראשון ביום ההתחלה, האחרון מקטע �
 
 /* ---------- קמפיין מחזורי: התקופה והשם של הרצה חדשה ---------- */
 
-import { rerunPeriod, runName, spanDays } from '../public/js/core/period.js';
+import { isDate, rerunPeriod, runName, spanDays } from '../public/js/core/period.js';
 
 test('rerunPeriod — תקופה קבועה נשמרת, והסיום מחושב מההתחלה החדשה (קצוות סוף חודש)', () => {
   const tpl = { period: '1m', starts_on: '2026-01-31', ends_on: '2026-02-28' };
@@ -151,4 +151,19 @@ test('runName — שם ההרצה לפי חודש הפוסט הראשון', () =
   assert.equal(runName('השקה', '2026-11-03'), 'השקה · נובמבר 2026');
   assert.equal(runName('השקה', '2027-01-31'), 'השקה · ינואר 2027');
   assert.equal(runName('השקה', null), 'השקה');
+  // תבנית שכבר נושאת סיומת (הרצה שסומנה מחזורית) — הסיומת מתחלפת, לא מצטברת
+  assert.equal(runName('השקה · מרץ 2027', '2027-05-01'), 'השקה · מאי 2027');
+  // סיומת שאינה חודש ושנה נשארת
+  assert.equal(runName('השקה · קיץ', '2027-05-01'), 'השקה · קיץ · מאי 2027');
+});
+
+test('isDate — רק תאריך אמיתי בפורמט YYYY-MM-DD', () => {
+  assert.equal(isDate('2027-02-28'), true);
+  assert.equal(isDate('2028-02-29'), true);
+  assert.equal(isDate('2027-02-29'), false);
+  assert.equal(isDate('2027-13-01'), false);
+  assert.equal(isDate('2027-1-05'), false);
+  assert.equal(isDate('2027-01-05T00:00'), false);
+  assert.equal(isDate('לא תאריך'), false);
+  assert.equal(isDate(20270105), false);
 });

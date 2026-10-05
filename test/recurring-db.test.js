@@ -185,6 +185,10 @@ test('סימון קמפיין מחזורי: PATCH recurring, ערך לא בול�
   const before = await campaign(id);
   const on = await call('PATCH', `/campaigns/${id}`, { recurring: true, week: '2027-02-01' });
   assert.equal(on.status, 200, JSON.stringify(on.json));
+  // דגל בלבד: בלי מילוי אוטומטי (תשובת מילוי ריקה, אותה צורה)
+  assert.equal(on.json.campaign.recurring, true);
+  assert.equal(on.json.engine.placed, 0);
+  assert.deepEqual(on.json.engine.created_ids, []);
   const after = await campaign(id);
   assert.equal(after.recurring, true);
   // שום דבר אחר לא זז
@@ -211,6 +215,22 @@ test('שבץ מחדש: עותק מלא — הגדרות, תוכן עם המצב�
 
   const missing = await call('POST', `/campaigns/${id}/replace`, {});
   assert.equal(missing.status, 400);
+  // תאריך לא אמיתי / בעבר — 400 לפני שום העתקה ב-R2
+  for (const starts_on of ['2027-02-30', '31.3.2027', '2020-01-05']) {
+    const r = await call('POST', `/campaigns/${id}/replace`, { starts_on });
+    assert.equal(r.status, 400, starts_on);
+  }
+  const past = await call('POST', `/campaigns/${id}/replace`, { starts_on: '2020-01-05' });
+  assert.match(past.json.error, /כבר עבר/);
+  const badEnd = await call('POST', `/campaigns/${id}/replace`,
+    { starts_on: '2027-03-31', period: 'custom', ends_on: '2027-04-31' });
+  assert.equal(badEnd.status, 400);
+  assert.equal(copies.length, copiesBefore, 'שום קובץ לא הועתק');
+  const newBad = await call('POST', '/campaigns', {
+    name: 'שבור', endpoint_id: ids.endpoint, starts_on: '2027-02-30', period: '1m', structure: 'general',
+  });
+  assert.equal(newBad.status, 400);
+  assert.match(newBad.json.error, /לא תקין/);
 
   const r = await call('POST', `/campaigns/${id}/replace`, { starts_on: '2027-03-31' });
   assert.equal(r.status, 201, JSON.stringify(r.json));
