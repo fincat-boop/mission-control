@@ -206,6 +206,14 @@ export async function verifyUploaded(key, { store = mediaStore, max = MAX_MEDIA_
 export const headMime = (head) =>
   (head?.contentType ?? '').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
 
+/**
+ * מחיקה סופית מהסל וסריקת יתומים — רק בפרודקשן (או MEDIA_SWEEP=1 במפורש).
+ * שרת מקומי שמחובר בטעות ל-bucket של פרוד רואה מסד אחר, ולכן כל אובייקט
+ * של פרוד נראה לו "יתום" — בלי השער הזה הוא היה שולח אותם לסל ומוחק.
+ */
+export const mediaSweepEnabled = (env = process.env) =>
+  env.NODE_ENV === 'production' || env.MEDIA_SWEEP === '1';
+
 /** שעות שאובייקט בלי שורה צריך לחכות לפני שהוא נחשב יתום (העלאה באמצע) */
 export const ORPHAN_GRACE_HOURS = 24;
 

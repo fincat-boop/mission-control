@@ -4,7 +4,8 @@ import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
 import { weekMeta } from './board.js';
 import {
-  TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, orgMediaPrefix, pickOrphans,
+  TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, mediaSweepEnabled,
+  orgMediaPrefix, pickOrphans,
 } from './media.js';
 
 /**
@@ -270,8 +271,11 @@ export async function migrateLegacyAssets(orgId, store = mediaStore) {
  */
 export async function mediaMaintenance({ store = mediaStore, now = new Date() } = {}) {
   if (!mediaReady()) return;
+  // מחיקות (סל + יתומים) רק בפרודקשן — ראו mediaSweepEnabled. ההעברה מהמסד
+  // רצה בכל סביבה: היא רק מוסיפה אובייקטים, ובמפתח שתלוי בסוד של הסביבה.
+  const destructive = mediaSweepEnabled();
   await forEachOrg(async (orgId) => {
-    const trash = await purgeMediaTrash(store);
+    const trash = destructive ? await purgeMediaTrash(store) : { purged: 0, kept: 0 };
     if (trash.purged || trash.kept) {
       console.log(`מדיה (ארגון ${orgId}): ${trash.purged} נמחקו סופית מהסל` +
         (trash.kept ? `, ${trash.kept} חזרו לשימוש ויצאו מהסל` : ''));
@@ -285,7 +289,7 @@ export async function mediaMaintenance({ store = mediaStore, now = new Date() } 
         (legacy.failed ? `, ${legacy.failed} נכשלו` : '') + ` · נשארו ${left.n}`);
     }
 
-    if (now.getTime() - (lastSweep.get(orgId) ?? 0) >= SWEEP_EVERY_MS) {
+    if (destructive && now.getTime() - (lastSweep.get(orgId) ?? 0) >= SWEEP_EVERY_MS) {
       try {
         const { orphans } = await sweepMediaOrphans(orgId, store, now);
         lastSweep.set(orgId, now.getTime());

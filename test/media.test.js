@@ -194,3 +194,12 @@ test('validateSignRequest — גודל חייב להיות שלם (נחתם כ-c
   const { validateSignRequest } = await import('../src/media.js');
   assert.match(validateSignRequest({ filename: 'a.png', mime: 'image/png', size: 1.5 }, 10), /גודל/);
 });
+
+test('mediaSweepEnabled — רק בפרודקשן או MEDIA_SWEEP=1', async () => {
+  const { mediaSweepEnabled } = await import('../src/media.js');
+  assert.equal(mediaSweepEnabled({ NODE_ENV: 'production' }), true);
+  assert.equal(mediaSweepEnabled({ NODE_ENV: 'development' }), false);
+  assert.equal(mediaSweepEnabled({}), false);
+  assert.equal(mediaSweepEnabled({ MEDIA_SWEEP: '1' }), true);
+  assert.equal(mediaSweepEnabled({ MEDIA_SWEEP: 'true' }), false);
+});
