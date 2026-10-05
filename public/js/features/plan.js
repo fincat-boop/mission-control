@@ -1292,6 +1292,7 @@ function wireCampaignGrid(selected, reload) {
   const actions = {
     edit: () => openCampaignForm(selected, reload),
     share: () => openShareForm(selected, reload),
+    'to-general': run(() => convertToGeneral(selected, reload)),
     bulk: () => openBulkUpload(selected, reload),
     import: () => openImport(selected, reload),
     complete: run(() => completeCampaign(selected, reload)),
@@ -1351,6 +1352,8 @@ function campaignMenu(c) {
       '<button type="button" data-act="complete">קמפיין מוכן</button>',
     can('settings') && c.content_complete_at &&
       '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
+    // קמפיין חדש תמיד כללי; קמפיין ישן לפי זוויות עובר בהמרה (כל ניסוח = פוסט)
+    angles && can('settings') && '<button type="button" data-act="to-general">המר לקמפיין כללי</button>',
     // תבנית ל"שבץ מחדש" בלוח האסטרטגיה
     can('settings') && (c.recurring
       ? '<button type="button" data-act="recurring">הסר מהמחזוריים</button>'
@@ -1358,6 +1361,28 @@ function campaignMenu(c) {
     can('settings') && '<div class="sep"></div><button type="button" data-act="delete" data-danger>מחק קמפיין</button>',
   ].filter(Boolean);
   return kebab('פעולות על הקמפיין', items);
+}
+
+/**
+ * המרה לכללי: כל ניסוח של זווית הופך לפוסט בעמודה של הערוץ שלו, באותו מספר.
+ * הטקסט, הקבצים, המצב והפוסטים שכבר שובצו עוברים איתו. אין דרך חזרה.
+ */
+async function convertToGeneral(campaign, reload) {
+  if (!campaign.ends_on) {
+    toast('לקמפיין אין תאריך סיום — קובעים תקופה ב"ערוך קמפיין", ואז ממירים.', true);
+    return;
+  }
+  const ok = await confirmDialog(
+    `להמיר את "${campaign.name}" לקמפיין כללי?\n` +
+    'כל ניסוח של זווית יהפוך לפוסט נפרד בעמודה של הערוץ שלו (זווית 1 ← פוסט 1 בכל ערוץ), ' +
+    'עם הטקסט, הקבצים, המצב והפוסטים שכבר שובצו. ניסוח שסומן "לא רלוונטי" לא הופך לפוסט.\n' +
+    'אין חזרה למבנה לפי זוויות. אחרי ההמרה אפשר לחבר פוסטים דומים ב"קשר תוכן".',
+    { okLabel: 'המר לכללי' });
+  if (!ok) return;
+  const res = await api(`/campaigns/${campaign.id}/to-general`,
+    { method: 'POST', body: { week: state.week } });
+  engineToast(res, `הקמפיין הומר לכללי — ${res.converted.posts} פוסטים מ-${res.converted.angles} זוויות.`);
+  await reload();
 }
 
 /**

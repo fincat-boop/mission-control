@@ -332,6 +332,131 @@ r.post('/campaigns/:id/reopen', requirePerm('settings'), wrap(async (req, res) =
   res.json({ campaign, engine });
 }));
 
+/**
+ * המרת קמפיין לפי זוויות לכללי. כל ניסוח של זווית (גרסה לערוץ) הופך לפוסט
+ * משלו במשבצת של הערוץ שלו, באותו מספר כמו הזווית (או הפנוי הבא, כשיש שתי
+ * זוויות באותו מקום). עובר איתו: הטקסט והמצב (הגרסה עצמה, כולל meta של
+ * ניוזלטר), הקבצים של הגרסה, הפוסטים שכבר שובצו/פורסמו בערוץ הזה וההחלטות
+ * "לא לשבץ" של המנוע. קבצים משותפים לזווית נשארים בפוסט הראשון ומועתקים
+ * לשאר. הפוסטים לא מקושרים זה לזה — כל ערוץ שומר את הניסוח שלו.
+ * הפריט המקורי של הזווית נשאר כפוסט של הערוץ הראשון שלה (אותו מזהה).
+ */
+r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, res) => {
+  const c = await one('select * from campaigns where id = $1 for update', [req.params.id]);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  if (c.structure === 'general') return bad(res, 'הקמפיין כבר כללי');
+  if (!c.starts_on || !c.ends_on) {
+    return bad(res, 'לקמפיין אין תאריך סיום — קובעים תקופה ב"ערוך קמפיין", ואז ממירים');
+  }
+
+  const channels = await rows(
+    `select ch.id, ch.platform from campaign_channels cc join channels ch on ch.id = cc.channel_id
+      where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [c.id]);
+  const chOrder = new Map(channels.map((ch, i) => [ch.id, i]));
+  const items = await rows(
+    'select * from content_items where campaign_id = $1 order by sort_order, id', [c.id]);
+  const variants = await rows(
+    `select v.id, v.content_id, v.channel_id, v.body, v.status from content_variants v
+       join content_items ci on ci.id = v.content_id
+      where ci.campaign_id = $1`, [c.id]);
+  // "לא רלוונטי לערוץ הזה" — הוחלט שהזווית לא יוצאת בו, ולכן אין לו פוסט
+  const dropped = variants.filter((v) => v.status === 'not_relevant');
+  const shared = await rows(
+    `select a.id, a.content_id, a.storage_key, a.filename from content_assets a
+       join content_items ci on ci.id = a.content_id
+      where ci.campaign_id = $1 and a.variant_id is null`, [c.id]);
+
+  // התוכנית: לכל זווית — משבצת לכל גרסה, לפי סדר הערוצים בקמפיין
+  const used = new Map();   // ערוץ → מספרי משבצות תפוסים
+  const take = (channelId, want) => {
+    const set = used.get(channelId) ?? new Set();
+    used.set(channelId, set);
+    let n = Math.max(1, want);
+    while (set.has(n)) n += 1;
+    set.add(n);
+    return n;
+  };
+  const fallback = channels.find((ch) => ch.platform !== 'newsletter') ?? channels[0];
+  const plan = items.map((it) => {
+    const vs = variants.filter((v) => v.content_id === it.id && v.status !== 'not_relevant')
+      .sort((a, b) => (chOrder.get(a.channel_id) ?? 999) - (chOrder.get(b.channel_id) ?? 999)
+        || a.channel_id - b.channel_id);
+    // זווית בלי אף ניסוח — פוסט אחד (טיוטה) בערוץ הראשון, עם הטקסט של הזווית
+    const targets = vs.length ? vs : fallback ? [{ id: null, channel_id: fallback.id, body: it.body }] : [];
+    return { it, targets: targets.map((v) => ({ v, slot: take(v.channel_id, it.sort_order) })) };
+  });
+
+  // קבצים משותפים ב-R2 שצריך להעתיק (לכל פוסט נוסף של הזווית) — לפני כל
+  // כתיבה במסד, כמו בשכפול: העתקה שנכשלת לא משאירה המרה חצויה
+  const copies = plan.flatMap(({ it, targets }) => targets.slice(1).flatMap(() =>
+    shared.filter((a) => a.content_id === it.id && a.storage_key)));
+  if (copies.length && !mediaReady()) {
+    return bad(res, 'אחסון המדיה לא מוגדר בשרת — אי אפשר להעתיק את הקבצים המשותפים', 503);
+  }
+  const newKeys = [];
+  for (const a of copies) {
+    const key = newMediaKey(currentOrg(), a.filename);
+    await mediaStore.copy(a.storage_key, key);
+    newKeys.push(key);
+  }
+
+  const counts = await tx(async (client) => {
+    let posts = 0;
+    let keyAt = 0;
+    if (dropped.length) {
+      await client.query('delete from content_variants where id = any($1::int[])',
+        [dropped.map((v) => v.id)]);
+    }
+    for (const { it, targets } of plan) {
+      for (const [i, { v, slot }] of targets.entries()) {
+        let id = it.id;
+        if (i === 0) {
+          await client.query(
+            `update content_items set slot_channel_id = $2, sort_order = $3,
+                    body = coalesce($4, body)
+              where id = $1`, [it.id, v.channel_id, slot, v.body]);
+        } else {
+          ({ rows: [{ id }] } = await client.query(
+            `insert into content_items (endpoint_id, campaign_id, kind, title, body, ready_channel_ids,
+                                        sort_order, evergreen, reuse_after_days, slot_channel_id)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
+            [it.endpoint_id, c.id, it.kind, it.title, v.body ?? it.body, it.ready_channel_ids,
+             slot, it.evergreen, it.reuse_after_days, v.channel_id]));
+          await client.query('update content_variants set content_id = $1 where id = $2', [id, v.id]);
+          await client.query('update content_assets set content_id = $1 where variant_id = $2', [id, v.id]);
+          for (const a of shared.filter((x) => x.content_id === it.id)) {
+            await client.query(
+              `insert into content_assets (content_id, filename, mime, size_bytes, data, storage_key)
+               select $1, filename, mime, size_bytes, case when $2::text is null then data end, $2
+                 from content_assets where id = $3`,
+              [id, a.storage_key ? newKeys[keyAt++] : null, a.id]);
+          }
+          const moved = await client.query(
+            'update posts set content_id = $1 where content_id = $2 and channel_id = $3',
+            [id, it.id, v.channel_id]);
+          posts += moved.rowCount;
+          await client.query(
+            `update engine_dismissals set content_id = $1 where content_id = $2 and channel_id = $3`,
+            [id, it.id, v.channel_id]);
+        }
+        // זווית בלי ניסוח: הגרסה של המשבצת נוצרת כטיוטה
+        if (!v.id) {
+          await client.query(
+            `insert into content_variants (content_id, channel_id, body, status)
+             values ($1,$2,$3,'draft') on conflict (content_id, channel_id) do nothing`,
+            [id, v.channel_id, it.body]);
+        }
+      }
+    }
+    await client.query(
+      `update campaigns set structure = 'general', target_posts = null where id = $1`, [c.id]);
+    return { angles: items.length, posts: plan.reduce((s, p) => s + p.targets.length, 0),
+             moved_posts: posts };
+  });
+  const engine = await autoFill(req.body?.week);
+  res.json({ converted: counts, engine });
+}));
+
 r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   const b = { ...(req.body ?? {}) };
 
