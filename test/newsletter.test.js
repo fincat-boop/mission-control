@@ -7,7 +7,7 @@ import {
   nextHubRef, reusableHubStatus, transferBlocker,
 } from '../src/publish/newsletter.js';
 import {
-  STUCK_NEWSLETTER_CAP_ERROR, STUCK_NEWSLETTER_ERROR, publishBlocker, stuckPublishingError,
+  STUCK_NEWSLETTER_CAP_ERROR, STUCK_NEWSLETTER_ERROR, pollDue, publishBlocker, stuckPublishingError,
 } from '../src/publish/runner.js';
 import { weekApprovalReason } from '../src/routes/publish.js';
 import { moveBlocker } from '../src/routes/board.js';
@@ -164,6 +164,17 @@ test('stuckPublishingError — ניוזלטר ישן (נוצר ב-HUB לפני "
   assert.equal(old(80, 'draft'), STUCK_NEWSLETTER_CAP_ERROR);
   // לא ענה — כמו קודם, יממה
   assert.equal(old(30, null), STUCK_NEWSLETTER_ERROR);
+});
+
+test('pollDue — טיוטה ופוסט שנכשל פעם ב-10 דקות; מתוזמן/נשלח בכל טיק', () => {
+  const now = new Date('2026-10-10T12:00:00Z');
+  const ago = (m) => new Date(now.getTime() - m * 60000).toISOString();
+  assert.equal(pollDue({ status: 'publishing', hub_status: 'draft', hub_polled_at: ago(3) }, now), false);
+  assert.equal(pollDue({ status: 'publishing', hub_status: 'draft', hub_polled_at: ago(10) }, now), true);
+  assert.equal(pollDue({ status: 'publishing', hub_status: 'draft', hub_polled_at: null }, now), true);
+  assert.equal(pollDue({ status: 'failed', hub_status: 'scheduled', hub_polled_at: ago(3) }, now), false);
+  assert.equal(pollDue({ status: 'publishing', hub_status: 'scheduled', hub_polled_at: ago(1) }, now), true);
+  assert.equal(pollDue({ status: 'publishing', hub_status: 'sending', hub_polled_at: ago(1) }, now), true);
 });
 
 /* ---------- הזזה של ניוזלטר שהועבר ---------- */

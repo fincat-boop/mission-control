@@ -140,7 +140,8 @@ export function mountHubPreview(host, input, { head = 'תצוגה מקדימה �
   refresh();
   return {
     refresh,
-    queue: () => { clearTimeout(timer); timer = setTimeout(refresh, 600); },
+    // כל רענון הוא קריאה ל-HUB (מוגבל ל-30 בדקה) — מחכים שההקלדה תיעצר
+    queue: () => { clearTimeout(timer); timer = setTimeout(refresh, 1500); },
   };
 }
 

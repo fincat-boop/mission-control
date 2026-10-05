@@ -724,11 +724,25 @@ async function failFromHub(post, error) {
     { title: `שליחת ניוזלטר נכשלה — ${post.channel_name}`, from: ['publishing'], internal: true });
 }
 
-/** הסטטוס האחרון שה-HUB דיווח — לתצוגה בלוח ("ממתין לאישור ב-HUB") */
+/**
+ * הסטטוס האחרון שה-HUB דיווח — לתצוגה בלוח ("ממתין לאישור ב-HUB") — ומתי
+ * נשאל (hub_polled_at), כדי לא לשאול שוב מוקדם מדי (pollDue).
+ */
 async function saveHubStatus(post, status) {
-  if (status === post.hub_status) return;
   await bestEffort(`שמירת סטטוס ה-HUB לפוסט #${post.id} נכשלה:`, () =>
-    query('update posts set hub_status = $2 where id = $1', [post.id, status]));
+    query('update posts set hub_status = $2, hub_polled_at = now() where id = $1', [post.id, status]));
+}
+
+/**
+ * ה-HUB מגביל 30 בקשות לדקה לכל IP. טיוטה שממתינה לאישור (יכולה לחכות
+ * ימים) ופוסט שכבר נכשל (מחכים רק להצלחה מאוחרת) נשאלים פעם ב-10 דקות;
+ * מתוזמן/נשלח ב-HUB — בכל טיק, כמו קודם (טהורה).
+ */
+export const SLOW_POLL_MINUTES = 10;
+export function pollDue({ status, hub_status: hub, hub_polled_at: polled }, now = new Date()) {
+  const slow = status === 'failed' || hub === 'draft';
+  if (!slow || !polled) return true;
+  return now.getTime() - new Date(polled).getTime() >= SLOW_POLL_MINUTES * 60000;
 }
 
 /**
@@ -745,8 +759,8 @@ export async function pollNewsletterOutcomes(fetchImpl = fetch) {
   const state = new Map();
   if (!hubMailReady()) return state;
   const pending = await rows(
-    `select p.id, p.title, p.channel_id, p.endpoint_id, p.kind, p.status,
-            p.external_id, p.hub_status, c.name as channel_name, c.platform
+    `select p.id, p.title, p.channel_id, p.endpoint_id, p.kind, p.status, p.scheduled_at,
+            p.external_id, p.hub_status, p.hub_polled_at, c.name as channel_name, c.platform
        from posts p
        join channels c on c.id = p.channel_id and c.platform = 'newsletter'
       where p.external_id is not null
@@ -755,6 +769,13 @@ export async function pollNewsletterOutcomes(fetchImpl = fetch) {
   );
 
   for (const post of pending) {
+    if (!pollDue(post)) {
+      // לא שואלים עכשיו — מה שה-HUB אמר בפעם האחרונה עדיין קובע לתקיעה
+      if (post.status === 'publishing') {
+        state.set(post.id, { hub: hubWaitState(post.hub_status), scheduled: null });
+      }
+      continue;
+    }
     let s;
     try {
       // פוסט שכבר failed — בדיקה אחת בלי ניסיונות חוזרים, שלא יאט כל טיק כשה-HUB למטה

@@ -41,6 +41,8 @@ r.get('/publish/status', wrap(async (_req, res) => {
  */
 /** שגיאת HUB → תשובה עם ההודעה הידידותית שלו (או הסבר על מפתח שנדחה) */
 function hubFail(res, e) {
+  // ה-HUB מגביל 30 בקשות לדקה — סירוב קצב הוא "נסה שוב", לא תקלה
+  if (e.status === 429) return bad(res, 'ה-HUB עמוס כרגע — נסה שוב בעוד דקה', 429);
   const status = e.status === 401 || e.status === 403 ? 502 : e.status >= 500 ? 502 : e.status;
   const msg = e.status === 401 ? 'ה-HUB דחה את המפתח (HUB_API_KEY) — בדוק שהוא זהה ל-MISSION_CONTROL_API_KEY שם' : e.message;
   return bad(res, msg, status);

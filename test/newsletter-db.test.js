@@ -25,6 +25,7 @@ const hub = {
   byRef: new Map(),
   seq: 0,
   rawNotFound: false,  // 404 בלי JSON (פרוקסי/נתיב שגוי)
+  busy: false,         // 429 — מגבלת הקצב של ה-HUB
 };
 
 function hubServer() {
@@ -40,6 +41,7 @@ function hubServer() {
         res.end(JSON.stringify(data));
       };
       if (req.headers.authorization !== 'Bearer test-hub-key') return json(401, { ok: false, error: 'לא מאומת' });
+      if (hub.busy) return json(429, { ok: false, error: 'יותר מדי בקשות' });
       if (req.method === 'POST' && path === '/api/v1/mission-control/newsletters') {
         const existing = hub.byRef.get(body.external_ref);
         if (existing) {
@@ -175,6 +177,7 @@ after(async () => {
 beforeEach(() => {
   hub.calls.length = 0;
   hub.rawNotFound = false;
+  hub.busy = false;
 });
 
 /* ---------- העבר ל-HUB ---------- */
@@ -321,7 +324,13 @@ test('בדיקת סטטוס: draft נשאר וממתין, אושר → מתוז�
   // הבדיקה הולכת לפי מזהה הקמפיין, לא לפי ה-ref
   assert.ok(hub.calls.some((c) => c.method === 'GET' && c.path.endsWith(`/newsletters/${ext}`)));
 
+  // טיוטה נשאלת פעם ב-10 דקות (מגבלת הקצב של ה-HUB) — מיד אחרי, לא שואלים
   hub.campaigns.get(ext).status = 'scheduled';
+  hub.calls.length = 0;
+  state = await db.withOrg(org, () => runner.pollNewsletterOutcomes());
+  assert.equal(hub.calls.filter((c) => c.path.endsWith(`/newsletters/${ext}`)).length, 0);
+  assert.equal(state.get(id).hub, 'draft'); // מה שנאמר בפעם האחרונה
+  await q(`update posts set hub_polled_at = now() - interval '11 minutes' where id = $1`, [id]);
   state = await db.withOrg(org, () => runner.pollNewsletterOutcomes());
   assert.equal(state.get(id).hub, 'active');
   assert.equal((await post(id)).hub_status, 'scheduled');
@@ -416,6 +425,18 @@ test('ניוזלטר ישן (נוצר ב-HUB ע"י הרַנֶר הקודם): ט�
   const p = await post(id);
   assert.equal(p.status, 'publishing');
   assert.equal(p.hub_status, 'draft');
+});
+
+test('ה-HUB עמוס (429) — העברה ותצוגה מחזירות "נסה שוב בעוד דקה", והפוסט לא זז', { skip }, async () => {
+  const { post: id } = await newsletter();
+  hub.busy = true;
+  const t = await call('POST', `/posts/${id}/newsletter/transfer`);
+  assert.equal(t.status, 429);
+  assert.match(t.json.error, /ה-HUB עמוס כרגע/);
+  assert.equal((await post(id)).status, 'scheduled');
+  const pv = await call('POST', '/publish/newsletter-preview', { subject: 'א', htmlBody: 'ב' });
+  assert.equal(pv.status, 429);
+  assert.match(pv.json.error, /נסה שוב בעוד דקה/);
 });
 
 /* ---------- SSO ---------- */

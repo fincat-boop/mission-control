@@ -581,7 +581,10 @@ alter table posts
   add column if not exists hub_status         text,
   add column if not exists hub_ref            text,
   add column if not exists hub_digest         text,
-  add column if not exists hub_transferred_at timestamptz;
+  add column if not exists hub_transferred_at timestamptz,
+  -- מתי ה-HUB נשאל לאחרונה — טיוטה שממתינה לאישור נשאלת פעם ב-10 דקות
+  -- (מגבלת 30 בקשות לדקה של ה-HUB; runner.js pollDue)
+  add column if not exists hub_polled_at      timestamptz;
 
 -- ========================= SSO מ-HUB: טוקנים שנוצלו =========================
 -- כל טוקן SSO נושא jti חד-פעמי (lib/mission-control/sso.ts ב-HUB). jti
