@@ -7,7 +7,7 @@ import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
-import { acceptAttr, progressList, uploadBulk, uploadFiles } from '../core/upload.js';
+import { progressList, uploadBulk, uploadFiles } from '../core/upload.js';
 
 /* ========================= ניוזלטר: תבנית המילוי ========================= */
 
@@ -221,10 +221,21 @@ function campaignList(endpoint, campaigns, content) {
   const mine = campaigns.filter((c) => c.endpoint_id === endpoint.id);
   const bg = backgroundOf(content, endpoint.id);
   const bgReady = bg.filter((c) => c.variants.some((v) => v.status === 'ready')).length;
-  const group = (title, list) => list.length ? `
+  const group = (title, list, extra = '') => list.length || extra ? `
     <div class="setgroup" style="max-width:none">
       <h2>${esc(title)}</h2>
-      <div class="panel">${list.map(campaignItem).join('')}</div>
+      <div class="panel">${extra}${list.map(campaignItem).join('')}</div>
+    </div>` : '';
+
+  // תוכן ערך שוטף מופיע רק אם נבחר ביצירת קמפיין ויש בו זוויות.
+  // הוא תמיד רץ, ולכן יושב עם הקמפיינים שרצים עכשיו.
+  const bgRow = bg.length ? `
+    <div class="crow2" data-open-background>
+      <div class="cinfo">
+        <b>תוכן ערך שוטף</b>
+        <span class="d">ללא תאריכים · ${bg.length} זוויות · ${bgReady} מוכנות לפחות במדיה אחת</span>
+      </div>
+      <span class="chip on">פעיל</span>
     </div>` : '';
 
   return `
@@ -237,23 +248,8 @@ function campaignList(endpoint, campaigns, content) {
       <div class="spacer"></div>
       ${can('settings') ? '<button class="btn primary" id="addCampaign">＋ קמפיין חדש</button>' : ''}
     </div>
-    <div class="setgroup" style="max-width:none">
-      <h2>תוכן שוטף</h2>
-      <p class="sub">רץ ברקע כל הזמן, בלי תאריכים. המנוע שולף ממנו כשנשאר שטח.</p>
-      <div class="panel">
-        <div class="crow2" data-open-background>
-          <div class="cinfo">
-            <b>תוכן ערך שוטף</b>
-            <span class="d">${bg.length} זוויות · ${bgReady} מהן מוכנות לפחות במדיה אחת</span>
-          </div>
-          <span class="chip ${bg.length ? 'on' : 'bad'}">${
-            bg.length ? 'פעיל' : 'ריק'}</span>
-        </div>
-      </div>
-    </div>
-
-    ${mine.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}
-    ${group('רצים עכשיו', mine.filter((c) => c.phase === 'running'))}
+    ${mine.length || bg.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}
+    ${group('רצים עכשיו', mine.filter((c) => c.phase === 'running'), bgRow)}
     ${group('מתוכננים', mine.filter((c) => c.phase === 'upcoming'))}
     ${group('מושהים', mine.filter((c) => c.phase === 'paused'))}
     ${group('הסתיימו', mine.filter((c) => c.phase === 'ended' || c.phase === 'inactive'))}`;
@@ -279,12 +275,50 @@ function campaignItem(c) {
       <div class="actual" style="width:${pct}%"></div>
     </div>
     <span class="chip ${TONE_CLASS[c.status.tone]}">${esc(c.status.label)}</span>
-    ${can('settings') ? `
-      <button class="btn small${c.paused_at ? ' primary' : ''}"
-        data-toggle-pause="${c.id}" data-paused="${!!c.paused_at}">
-        ${c.paused_at ? '▶ חזרה לחיים' : '⏸ השהה'}</button>
-      <button class="btn small" data-edit-campaign="${c.id}">ערוך</button>` : ''}
+    ${can('settings') ? kebab('פעולות על הקמפיין', [
+      `<button type="button" data-edit-campaign="${c.id}">ערוך</button>`,
+      `<button type="button" data-toggle-pause="${c.id}" data-paused="${!!c.paused_at}">${
+        c.paused_at ? 'חזרה לחיים' : 'השהה'}</button>`,
+      `<button type="button" data-duplicate-campaign="${c.id}">שכפל</button>`,
+    ]) : ''}
   </div>`;
+}
+
+/** כפתור שלוש נקודות ותפריט שנפתח ממנו למטה. items = כפתורים מוכנים. */
+function kebab(label, items) {
+  if (!items.length) return '';
+  return `<span class="pmore">
+    <button class="btn small kebab" data-kebab aria-label="${esc(label)}"
+      aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" width="16" height="16"
+      fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle
+      cx="12" cy="19" r="1.6"/></svg></button>
+    <div class="pmenu down" role="menu" hidden>${items.join('')}</div>
+  </span>`;
+}
+
+/** פתיחה וסגירה של כל תפריטי שלוש הנקודות בתוך #plan — אחד פתוח בכל רגע */
+function wireKebabs() {
+  const closeAll = () => $$('#plan [data-kebab]').forEach((b) => {
+    b.nextElementSibling.hidden = true;
+    b.setAttribute('aria-expanded', 'false');
+  });
+  $$('#plan [data-kebab]').forEach((btn) =>
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = btn.nextElementSibling;
+      const open = menu.hidden;
+      closeAll();
+      if (!open) return;
+      menu.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      // לחיצה בכל מקום אחר (כולל על פריט בתפריט) סוגרת אותו
+      document.addEventListener('click', closeAll, { once: true });
+    }));
+  // פריט בתפריט שבתוך שורה לא פותח את השורה עצמה
+  $$('#plan .pmenu').forEach((m) => m.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAll();
+  }));
 }
 
 function wirePlan(campaign, endpointId, content) {
@@ -331,7 +365,7 @@ function wirePlan(campaign, endpointId, content) {
 
   $$('#plan [data-open-campaign]').forEach((el) =>
     el.addEventListener('click', run(async (e) => {
-      if (e.target.closest('[data-edit-campaign]')) return;
+      if (e.target.closest('.pmore')) return;
       state.planCampaign = Number(el.dataset.openCampaign);
       await renderPlan();
     })));
@@ -342,6 +376,14 @@ function wirePlan(campaign, endpointId, content) {
       const c = state.campaigns.find((x) => x.id === Number(b.dataset.editCampaign));
       openCampaignForm(c, reload);
     }));
+
+  $$('#plan [data-duplicate-campaign]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const c = state.campaigns.find((x) => x.id === Number(b.dataset.duplicateCampaign));
+      openCampaignForm(c, reload, null, { duplicate: true });
+    }));
+
+  wireKebabs();
 
   // בחירת מדיות ישירות מהשורה. קודם היא הייתה שדה אחד מתוך 14 בטופס העריכה.
   $$('#plan [data-pick-channels]').forEach((b) =>
@@ -391,10 +433,23 @@ function openChannelPicker(campaign, reload) {
   });
 }
 
-function openCampaignForm(campaign, reload, defaultEndpoint) {
+/**
+ * duplicate: הטופס נפתח עם ההגדרות של campaign, והשמירה יוצרת קמפיין חדש
+ * עם אותו תוכן (זוויות, ניסוחים וקבצים) — משנים רק את מה שצריך.
+ */
+function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false } = {}) {
+  const source = campaign;
+  if (duplicate) campaign = { ...source, name: `${source.name} (עותק)` };
   openGeneric({
-    title: campaign ? 'עריכת קמפיין' : 'קמפיין חדש',
+    title: duplicate ? `שכפול: ${source.name}` : campaign ? 'עריכת קמפיין' : 'קמפיין חדש',
+    saveLabel: duplicate ? 'שכפל' : undefined,
     fields: [
+      // תוכן ערך שוטף אינו קמפיין אמיתי — זווית בלי קמפיין שהמנוע שולף ממנה
+      // כשנשאר שטח. נבחר כאן רק כדי שיהיה מקום אחד ליצירה של שני הסוגים.
+      ...(campaign ? [] : [{ name: 'ctype', label: 'סוג', type: 'select',
+        options: [['dated', 'קמפיין עם תאריכים'],
+          ['background', 'תוכן ערך שוטף — בלי תאריכים, רץ ברקע כשנשאר שטח']],
+        value: 'dated' }]),
       { name: 'name', label: 'שם הקמפיין', type: 'text', value: campaign?.name },
       { name: 'endpoint_id', label: 'נקודת קצה', type: 'select',
         options: state.endpoints.map((e) => [e.id, e.name]),
@@ -420,23 +475,43 @@ function openCampaignForm(campaign, reload, defaultEndpoint) {
         hint: 'אוטומטי נגזר מהקצב של המדיות שנבחרו ומאורך הקמפיין.' },
       { name: 'urgent', label: 'קמפיין דחוף', type: 'checkbox', value: campaign?.urgent },
     ],
-    extraActions: campaign && can('settings')
+    extraActions: campaign && !duplicate && can('settings')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק קמפיין</button>'
       : '',
     onSave: async (v) => {
+      if (v.ctype === 'background') {
+        if (!v.endpoint_id) throw new Error('צריך לבחור נקודת קצה');
+        state.planEndpoint = v.endpoint_id;
+        state.planCampaign = null;
+        state.planBackground = true;
+        await reload();
+        return 'מוסיפים זוויות בכפתור "＋ זווית שוטפת".';
+      }
+      delete v.ctype;
       v.week = state.week;
+      if (duplicate) {
+        const res = await api(`/campaigns/${source.id}/duplicate`, { method: 'POST', body: v });
+        state.planCampaign = res.campaign.id;
+        await reload();
+        return `הקמפיין שוכפל עם ${res.copied.items} זוויות.`;
+      }
       if (campaign) await api(`/campaigns/${campaign.id}`, { method: 'PATCH', body: v });
       else await api('/campaigns', { method: 'POST', body: v });
       await reload();
     },
     onOpen: () => {
       $('#genDelete')?.addEventListener('click', run(async () => {
-        if (!(await confirmDialog('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.', { danger: true }))) return;
-        await api(`/campaigns/${campaign.id}`, { method: 'DELETE', body: { week: state.week } });
-        $('#genDlg').close();
-        state.planCampaign = null;
-        await reload();
+        if (await deleteCampaign(campaign, reload)) $('#genDlg').close();
       }));
+      // בתוכן שוטף אין שם, תאריכים או נתח — נשארת רק נקודת הקצה
+      const type = $('#gen_ctype');
+      type?.addEventListener('change', () => {
+        const bg = type.value === 'background';
+        $$('#genBody .frow').forEach((row) => {
+          if (row.contains(type) || row.contains($('#gen_endpoint_id'))) return;
+          row.hidden = bg;
+        });
+      });
     },
   });
 }
@@ -497,30 +572,13 @@ function campaignGrid(c) {
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
-      ${can('settings') ? `<button class="btn small" data-edit-campaign="${c.id}">✎ ערוך קמפיין</button>` : ''}
       <div class="fill">
         <b>${c.ready}</b> מתוך <b>${c.required}</b> פוסטים מוכנים
         ${c.missing_content ? `<span class="off">— חסרים ${c.missing_content}</span>`
                             : '<span class="ok">✓</span>'}
       </div>
+      ${campaignMenu()}
     </div>
-
-    ${can('content') ? `<div class="bulk" id="bulkZone">
-      <div>
-        <b>העלאה מרוכזת</b>
-        <span>כל קובץ הופך לזווית חדשה, ונפתחות לה טיוטות לכל מדיה של הקמפיין.</span>
-      </div>
-      <div class="spacer"></div>
-      <select id="bulkKind">
-        <option value="value">ערך</option>
-        <option value="hybrid">משולב</option>
-        <option value="promo">מכירתי</option>
-      </select>
-      <button class="btn primary" id="bulkPick">בחר קבצים</button>
-      <input type="file" id="bulkInput" multiple hidden${acceptAttr() ? ` accept="${esc(acceptAttr())}"` : ''}>
-      <button class="btn" id="importSheet">ייבוא מטבלה</button>
-    </div>
-    <div class="upload-progress" id="bulkProgress" hidden></div>` : ''}
 
     <div class="board panel">
       <table class="grid cgrid">
@@ -557,23 +615,57 @@ function wireCampaignGrid(selected, reload) {
       openVariantForm({ item, channelId, campaign: selected }, reload);
     }));
 
-  $('#importSheet')?.addEventListener('click', () => openImport(selected, reload));
+  const actions = {
+    edit: () => openCampaignForm(selected, reload),
+    bulk: () => openBulkUpload(selected, reload),
+    import: () => openImport(selected, reload),
+    delete: run(() => deleteCampaign(selected, reload)),
+  };
+  $$('#plan .cbhead [data-act]').forEach((b) =>
+    b.addEventListener('click', () => actions[b.dataset.act]()));
+}
 
-  const input = $('#bulkInput');
-  $('#bulkPick')?.addEventListener('click', () => input.click());
-  input?.addEventListener('change', run(async () => {
-    if (!input.files?.length) return;
-    const files = [...input.files];
-    input.value = '';
+/** תפריט שלוש הנקודות בכותרת הקמפיין — כל הפעולות על הקמפיין עצמו */
+function campaignMenu() {
+  const items = [
+    can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
+    can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
+    can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
+    can('settings') && '<div class="sep"></div><button type="button" data-act="delete" data-danger>מחק קמפיין</button>',
+  ].filter(Boolean);
+  return kebab('פעולות על הקמפיין', items);
+}
 
-    toast(`מעלה ${files.length} קבצים…`);
-    const data = await uploadBulk(selected.id, files, {
-      kind: $('#bulkKind').value,
-      onProgress: progressList($('#bulkProgress'), files),
-    });
-    toast(`נוצרו ${data.created.length} זוויות.`);
-    await reload();
-  }));
+async function deleteCampaign(campaign, reload) {
+  if (!(await confirmDialog('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.', { danger: true }))) return false;
+  await api(`/campaigns/${campaign.id}`, { method: 'DELETE', body: { week: state.week } });
+  state.planCampaign = null;
+  await reload();
+  return true;
+}
+
+/** העלאה מרוכזת: כל קובץ הופך לזווית, ונפתחות לה טיוטות לכל מדיה של הקמפיין */
+function openBulkUpload(campaign, reload) {
+  openGeneric({
+    title: `העלאה מרוכזת · ${campaign.name}`,
+    saveLabel: 'העלה',
+    fields: [
+      { name: 'kind', label: 'סוג הזוויות', type: 'select',
+        options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']], value: 'value' },
+      { name: '__files', label: 'קבצים — כל קובץ הופך לזווית חדשה, עם טיוטה לכל מדיה של הקמפיין',
+        type: 'files' },
+    ],
+    onSave: async (v) => {
+      const files = [...($('#gen___files')?.files ?? [])];
+      if (!files.length) throw new Error('צריך לבחור לפחות קובץ אחד');
+      const data = await uploadBulk(campaign.id, files, {
+        kind: v.kind,
+        onProgress: progressList($('#gen___files_progress'), files),
+      });
+      await reload();
+      return `נוצרו ${data.created.length} זוויות.`;
+    },
+  });
 }
 
 /** הזווית: המסר עצמו, הסוג, הקבצים המשותפים */

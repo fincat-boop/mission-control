@@ -54,9 +54,10 @@ export function wireGenericDialog() {
     const btn = $('#genSave');
     btn.disabled = true;
     try {
-      await genSpec.onSave(values);
+      // onSave יכול להחזיר הודעה משלו במקום "נשמר."
+      const msg = await genSpec.onSave(values);
       $('#genDlg').close();
-      toast('נשמר.');
+      toast(typeof msg === 'string' ? msg : 'נשמר.');
     } finally {
       btn.disabled = false;
     }
@@ -122,7 +123,7 @@ function fieldHtml(f) {
 
 /**
  * @param {{title:string, fields:object[], onSave:(v:object)=>Promise<void>,
- *          extraActions?:string, onOpen?:()=>void}} spec
+ *          extraActions?:string, onOpen?:()=>void, saveLabel?:string}} spec
  */
 export function openGeneric(spec) {
   genSpec = spec;
@@ -131,6 +132,7 @@ export function openGeneric(spec) {
   $('#genDlg').classList.remove('with-live-preview');
   $('#livePreviewPane')?.remove();
   $('#genTitle').textContent = spec.title;
+  $('#genSave').textContent = spec.saveLabel ?? 'שמור';
   $('#genBody').innerHTML = spec.fields.map(fieldHtml).join('');
 
   $$('#genBody [data-auto-on]').forEach((r) => r.addEventListener('change', () => {

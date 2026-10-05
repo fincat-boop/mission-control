@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { deleteObject, headObject, listObjects, presignPut, putObject } from './r2.js';
+import { copyObject, deleteObject, headObject, listObjects, presignPut, putObject } from './r2.js';
 import { publicAssetsReady } from './publish/public-assets.js';
 
 /**
@@ -52,6 +52,7 @@ export const mediaStore = {
     presignPut(key, { bucket: process.env.R2_PUBLIC_BUCKET, headers }),
   head: (key) => headObject(key, process.env.R2_PUBLIC_BUCKET),
   put: (key, body, mime) => putObject(key, body, mime, process.env.R2_PUBLIC_BUCKET),
+  copy: (src, dst) => copyObject(src, dst, process.env.R2_PUBLIC_BUCKET),
   del: (key, bucket = process.env.R2_PUBLIC_BUCKET) => deleteObject(key, bucket),
   list: (prefix) => listObjects(prefix, '', { bucket: process.env.R2_PUBLIC_BUCKET }),
 };

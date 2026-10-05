@@ -730,13 +730,10 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .cbhead .ok { color: var(--st-good); }
 .cbhead .off { color: var(--st-warn); }
 
-.bulk {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-  padding: 12px 16px; margin-bottom: 16px; font-size: 12.5px;
-}
-.bulk b { display: block; font-size: 13px; margin-bottom: 2px; }
-.bulk span { color: var(--muted); }
+/* תפריט שלוש הנקודות (כותרת קמפיין, שורת קמפיין) — נפתח למטה, צמוד לקצה הכפתור */
+button.btn.kebab { padding: 4px 6px; line-height: 0; color: var(--ink-2); }
+button.btn.kebab[aria-expanded="true"] { border-color: var(--accent); color: var(--ink-1); }
+.pmenu.down { top: calc(100% + 6px); bottom: auto; inset-inline-start: auto; inset-inline-end: 0; z-index: 30; }
 
 .track { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }
 .slot {
@@ -815,7 +812,6 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .upload-progress .upl-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
 .upload-progress .upl-bar i { display: block; height: 100%; background: var(--accent); transition: width .15s; }
 .upload-progress .upl-pct { color: var(--muted); font-variant-numeric: tabular-nums; text-align: end; }
-#bulkProgress { margin: -6px 0 14px; }
 
 /* פעמון ההתראות */
 button.btn.bell { position: relative; padding: 5px 9px; font-size: 14px; line-height: 1; color: var(--muted, #8a8f98); }
