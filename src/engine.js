@@ -124,15 +124,13 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
     // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
     holes: openHoles(existing, channels, endpoints, new Date(), { autoOnly: !withHoles }),
-    content, usedContent, history, settings,
+    content, usedContent, history, settings, usage,
   }).map((a) => ({
     ...a,
     channel_name: channels.find((ch) => ch.id === a.channel_id)?.name ?? '',
     endpoint_name: endpoints.find((e) => e.id === a.endpoint_id)?.name ?? '',
     key: planItemKey('attach', a),
   }));
-  // הפוסט כבר נספר בקיבולת לפי הסוג שסומן לו; התוכן יכול להיות מסוג אחר
-  for (const a of attachments) usage.retag(a.channel_id, a.prev_kind, a.kind);
 
   // נקודת קצה לא מקבלת שני פוסטים באותה מדיה באותו יום.
   // בלי זה אפשר להגיע למצב שבו באותו יום ובאותו ערוץ יוצא גם תוכן מכירתי
@@ -455,8 +453,15 @@ export function openHoles(existing, channels, endpoints, now = new Date(), { aut
  * מוכן קודם לטיוטה, ובתוך כל קבוצה — מה שתואם לסוג שהפוסט סומן בו.
  * מעדכנת את usedContent, כדי שאותו תוכן לא ימלא שני פוסטים ולא ייפתח
  * לו פוסט חדש אחר כך באותה ריצה.
+ *
+ * usage (לא חובה בבדיקות): הפוסט כבר נספר בקיבולת לפי הסוג שסומן לו. תוכן
+ * מסוג אחר עובר את אותם שערים כמו שיבוץ חדש (מכסה לסוג, מכירתי ליום, יחס
+ * ערך/מכירתי) דרך allowsRetag; אם הסוג נחסם — עוברים למועמד הבא, ומועמד
+ * מאותו סוג של הפוסט תמיד עובר. אחרי הבחירה — retag, כדי שהבאים יראו אותו.
  */
-export function chooseHoleFills({ holes, content, usedContent, history = new Map(), settings = null }) {
+export function chooseHoleFills({
+  holes, content, usedContent, history = new Map(), settings = null, usage = null,
+}) {
   const out = [];
   for (const h of holes) {
     const at = new Date(h.scheduled_at);
@@ -474,8 +479,10 @@ export function chooseHoleFills({ holes, content, usedContent, history = new Map
     const isReady = (c) => (c.ready_channel_ids ?? []).includes(h.channel_id);
     fits.sort((a, b) => (isReady(b) - isReady(a)) ||
                         ((b.kind === h.kind) - (a.kind === h.kind)));
-    const c = fits[0];
+    const c = fits.find((x) => !usage || usage.allowsRetag(h.channel_id, dateKey, h.kind, x.kind));
+    if (!c) continue;
     usedContent.add(`${h.channel_id}:${c.id}`);
+    usage?.retag(h.channel_id, dateKey, h.kind, c.kind);
 
     out.push({
       post_id: h.id,
@@ -695,14 +702,43 @@ export function buildUsage(channels, existing, settings) {
       weekKind[kind] = (weekKind[kind] ?? 0) + 1;
     },
 
-    /** פוסט שכבר נספר משנה סוג (שיוך תוכן לפוסט חסר תוכן) — בלי לתפוס מקום נוסף */
-    retag(channelId, fromKind, toKind) {
+    /**
+     * האם פוסט שכבר נספר יכול להחליף סוג (שיוך תוכן לפוסט חסר תוכן). בלי
+     * בדיקת תקציב — הפוסט כבר תופס את מקומו. אותו סוג — תמיד מותר.
+     */
+    allowsRetag(channelId, dateKey, fromKind, toKind) {
+      if (fromKind === toKind) return true;
+      const u = byChannel.get(channelId);
+      if (!u) return false;
+      const capField = { promo: 'max_promo_per_week', value: 'max_value_per_week',
+                         hybrid: 'max_hybrid_per_week' }[toKind];
+      const cap = u.ch[capField];
+      if (cap != null && u.byKind[toKind] >= cap) return false;
+      if (toKind === 'promo') {
+        if ((promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
+        // שער היחס, כשהפוסט כבר לא נספר בסוג הקודם שלו
+        const without = { ...weekKind, [fromKind]: Math.max(0, (weekKind[fromKind] ?? 0) - 1) };
+        const w = kindWeights(without, hybridWeight);
+        if (w.value < minRatio * (w.promo + 1)) {
+          promoBlocked += 1;
+          return false;
+        }
+      }
+      return true;
+    },
+
+    /** פוסט שכבר נספר משנה סוג — כל המונים זזים, בלי לתפוס מקום נוסף */
+    retag(channelId, dateKey, fromKind, toKind) {
       if (fromKind === toKind) return;
       const u = byChannel.get(channelId);
       if (u) {
         u.byKind[fromKind] = Math.max(0, (u.byKind[fromKind] ?? 0) - 1);
         u.byKind[toKind] = (u.byKind[toKind] ?? 0) + 1;
       }
+      if (fromKind === 'promo') {
+        promoPerDay.set(dateKey, Math.max(0, (promoPerDay.get(dateKey) ?? 0) - 1));
+      }
+      if (toKind === 'promo') promoPerDay.set(dateKey, (promoPerDay.get(dateKey) ?? 0) + 1);
       weekKind[fromKind] = Math.max(0, (weekKind[fromKind] ?? 0) - 1);
       weekKind[toKind] = (weekKind[toKind] ?? 0) + 1;
     },

@@ -326,7 +326,7 @@ test('buildUsage.retag — שיוך תוכן מכירתי לפוסט שסומן 
   const usage = buildUsage([channel({ max_per_week: 3 })],
     [{ channel_id: 1, kind: 'value', scheduled_at: new Date(`${week.days[2].date}T10:00:00`) }],
     SETTINGS);
-  usage.retag(1, 'value', 'promo');
+  usage.retag(1, week.days[2].date, 'value', 'promo');
   const r = usage.ratioReport();
   assert.equal(r.counts.promo, 1);
   assert.equal(r.counts.value, 0);
@@ -339,4 +339,42 @@ test('openHoles autoOnly — המילוי השקט רואה רק פוסטים ש
   const auto = openHoles(existing, [{ id: 1 }], [{ id: 7 }], NOW, { autoOnly: true }).map((h) => h.id);
   assert.deepEqual(all, [1, 2, 3]);
   assert.deepEqual(auto, [1]);
+});
+
+test('chooseHoleFills — תקרת מכירתי ליום מלאה: פוסט ערך לא מתמלא במכירתי', () => {
+  const at = '2026-10-08T12:00:00';
+  const existing = [
+    { channel_id: 1, kind: 'promo', scheduled_at: new Date('2026-10-08T09:00:00') },
+    { channel_id: 1, kind: 'value', scheduled_at: new Date(at) },
+    ...Array.from({ length: 6 }, (_, i) =>
+      ({ channel_id: 1, kind: 'value', scheduled_at: new Date(`2026-10-0${4 + (i % 3)}T10:00:00`) })),
+  ];
+  const usage = () => buildUsage([channel({ max_per_week: 20 })], existing, SETTINGS);
+  const h = hole({ scheduled_at: new Date(at).toISOString() });
+
+  const blocked = chooseHoleFills({
+    holes: [h], content: [holeItem({ id: 1, kind: 'promo' })], usedContent: new Set(), usage: usage(),
+  });
+  assert.deepEqual(blocked, []);
+
+  // יש גם תוכן ערך — הוא נבחר במקום המכירתי שנחסם
+  const fallback = chooseHoleFills({
+    holes: [h],
+    content: [holeItem({ id: 1, kind: 'promo' }), holeItem({ id: 2, kind: 'value', ready_channel_ids: [] })],
+    usedContent: new Set(), usage: usage(),
+  });
+  assert.equal(fallback[0].content_id, 2);
+});
+
+test('buildUsage.retag — מעדכן גם את מונה המכירתי ליום', () => {
+  const usage = buildUsage([channel({ max_per_week: 20 })],
+    [{ channel_id: 1, kind: 'value', scheduled_at: new Date('2026-10-08T10:00:00') },
+     ...Array.from({ length: 8 }, () =>
+       ({ channel_id: 1, kind: 'value', scheduled_at: new Date('2026-10-05T10:00:00') }))],
+    SETTINGS);
+  assert.equal(usage.allowsRetag(1, '2026-10-08', 'value', 'promo'), true);
+  usage.retag(1, '2026-10-08', 'value', 'promo');
+  // תקרה של מכירתי אחד ביום — עכשיו תפוסה
+  assert.equal(usage.allows(1, '2026-10-08', 'promo'), false);
+  assert.equal(usage.allowsRetag(1, '2026-10-08', 'value', 'promo'), false);
 });
