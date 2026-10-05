@@ -8,6 +8,7 @@
 
 import { one, rows } from './db.js';
 import { ymd } from './board.js';
+import { valuePerPromo } from './engine.js';
 
 /** ברירות מחדל: החודש האחרון */
 export function periodOf(from, to) {
@@ -31,7 +32,7 @@ export async function buildStats(from, to) {
   const period = periodOf(from, to);
   const args = [period.start, period.end];
 
-  const [totals, byKind, byChannel, byEndpoint, contentMade, tasks, engine, activity] =
+  const [totals, byKind, byChannel, byEndpoint, contentMade, tasks, engine, activity, settings] =
     await Promise.all([
       one(
         `select
@@ -87,6 +88,8 @@ export async function buildStats(from, to) {
       rows(
         `select via, count(*)::int as n
            from activity_log where created_at between $1 and $2 group by via`, args),
+
+      one('select hybrid_weight from engine_settings limit 1'),
     ]);
 
   // הנתח בפועל: כמה מהשטח שיצא בתקופה הלך לכל נקודת קצה
@@ -109,14 +112,14 @@ export async function buildStats(from, to) {
 
   const kinds = { promo: 0, value: 0, hybrid: 0 };
   for (const k of byKind) kinds[k.kind] = k.n;
-  const valuePerPromo = kinds.promo
-    ? +((kinds.value + kinds.hybrid * 0.5) / kinds.promo).toFixed(1) : null;
+  // אותה נוסחה כמו שער היחס במנוע, עם hybrid_weight של הארגון
+  const ratio = valuePerPromo(kinds, settings?.hybrid_weight ?? 0.5);
 
   return {
     period: { from: period.from, to: period.to, days: period.days },
     totals: { ...totals, ...contentMade, content_created: contentMade.created },
     kinds,
-    value_per_promo: valuePerPromo,
+    value_per_promo: ratio,
     channels,
     endpoints,
     tasks: {
