@@ -60,7 +60,11 @@ export async function planWeek(anchorDate) {
             from content_items ci
             left join content_variants v on v.content_id = ci.id
             left join campaigns ca on ca.id = ci.campaign_id
-           where ca.id is null or ca.paused_at is null
+           where (ca.id is null or ca.paused_at is null)
+             -- משבצת של קמפיין כללי שהמדיה שלה הוסרה מהקמפיין: נשמרת, לא משובצת
+             and (ci.slot_channel_id is null or exists (
+                   select 1 from campaign_channels cc
+                    where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
            group by ci.id, ca.id
            order by ci.created_at`),
     // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס

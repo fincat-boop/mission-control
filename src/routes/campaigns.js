@@ -189,6 +189,29 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     if (err) return bad(res, err, 409);
   }
 
+  // הסרת מדיה מקמפיין כללי שיש לה פוסטים במשבצות: הפוסטים נשמרים (החזרת
+  // המדיה מחזירה אותם), אבל המנוע לא משבץ אותם כל עוד המדיה לא בקמפיין.
+  // אזהרה שאפשר לאשר — כמו המרווח בלוח (confirm_gap).
+  if (Array.isArray(b.channel_ids) && before.structure === 'general' && !b.confirm_gap) {
+    const keep = b.channel_ids.map(Number);
+    const orphans = await rows(
+      `select ch.name, count(*)::int as n
+         from content_items ci join channels ch on ch.id = ci.slot_channel_id
+        where ci.campaign_id = $1 and not (ci.slot_channel_id = any($2::int[]))
+        group by ch.name order by ch.name`,
+      [before.id, keep]);
+    if (orphans.length) {
+      const total = orphans.reduce((sum, o) => sum + o.n, 0);
+      const message =
+        `ב${orphans.map((o) => `${o.name} (${o.n})`).join(', ')} יש ${total} פוסטים של הקמפיין. ` +
+        'אחרי ההסרה הם נשמרים אבל לא ישובצו יותר; מה שכבר בלוח נשאר. ' +
+        'החזרת המדיה לקמפיין מחזירה אותם.';
+      return res.status(409).json({
+        error: message, needs_confirm: true, warning: { message, orphans },
+      });
+    }
+  }
+
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));

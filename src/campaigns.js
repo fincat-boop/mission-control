@@ -347,6 +347,11 @@ export async function campaignsWithHealth() {
       grid: grid.angles,
       // קמפיין כללי: רשימת משבצות לכל מדיה (ריק בקמפיין לפי זוויות)
       slots: general ? grid.channels : [],
+      // פוסטים במשבצות של מדיות שהוסרו מהקמפיין — נשמרים ולא משובצים
+      orphaned: general
+        ? mine.filter((x) => x.slot_channel_id &&
+            !myChannels.some((ch) => ch.id === x.slot_channel_id)).length
+        : 0,
     };
   });
 }

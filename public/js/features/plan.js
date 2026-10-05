@@ -1,4 +1,4 @@
-import { api } from '../core/api.js';
+import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, copyLinkButton, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { openTemplateFiller } from '../ui/templateFiller.js';
@@ -414,6 +414,16 @@ function wirePlan(campaign, endpointId, content) {
   if (campaign) wireCampaignGrid(campaign, reload);
 }
 
+/**
+ * עדכון קמפיין עם אזהרה שאפשר לאשר (הסרת מדיה שיש לה פוסטים בקמפיין
+ * כללי). ביטול באישור משאיר את הטופס פתוח, בלי "נשמר".
+ */
+async function patchCampaign(id, body) {
+  const res = await postWithGapCheck(`/campaigns/${id}`, body, 'PATCH', 'לשמור בכל זאת?');
+  if (!res) throw new Error('השינוי לא נשמר');
+  return res;
+}
+
 /** בחירת המדיות של קמפיין, בטופס אחד קצר במקום בתוך טופס העריכה המלא */
 function openChannelPicker(campaign, reload) {
   if (!can('settings')) return toast('אין לך הרשאה לשנות את המדיות', true);
@@ -428,7 +438,7 @@ function openChannelPicker(campaign, reload) {
     onSave: async (v) => {
       if (!v.channel_ids?.length) throw new Error('צריך לבחור לפחות מדיה אחת');
       v.week = state.week;
-      await api(`/campaigns/${campaign.id}`, { method: 'PATCH', body: v });
+      await patchCampaign(campaign.id, v);
       await reload();
     },
   });
@@ -523,7 +533,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         await reload();
         return `הקמפיין שוכפל עם ${res.copied.items} זוויות.`;
       }
-      if (campaign) await api(`/campaigns/${campaign.id}`, { method: 'PATCH', body: v });
+      if (campaign) await patchCampaign(campaign.id, v);
       else await api('/campaigns', { method: 'POST', body: v });
       await reload();
     },
@@ -673,6 +683,9 @@ function generalBoard(c) {
   return `
     ${campaignHead(c)}
     <div class="gboard">${cols}</div>
+    ${c.orphaned ? `<div class="sumline">
+      <span class="off">${c.orphaned} פוסטים במדיות שהוסרו מהקמפיין</span> —
+      נשמרים ולא משובצים. החזרת המדיה לקמפיין מחזירה אותם.</div>` : ''}
     <div class="sumline">
       כל עמודה היא מדיה, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.
       ייבוא מטבלה זמין בקמפיין לפי זוויות.
