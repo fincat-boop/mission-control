@@ -149,10 +149,15 @@ export async function renderBoard() {
  * שינוי מדיה מותר רק אם לתוכן יש גרסה מוכנה למדיה היעד — אחרת היינו
  * מפרסמים שם ניסוח שנכתב למדיה אחרת.
  */
+const DRAGGABLE = new Set(['scheduled', 'approved', 'failed']);
+
 function wireBoardDrag() {
   let dragged = null;
 
+  // רק מה שעוד לא יצא אפשר להזיז; פורסם / בשליחה / חסר תוכן / ממתין לאישור — לא.
+  // השרת אוכף את אותו כלל (moveBlocker ב-routes/board.js).
   $$('#board [data-post-id]').forEach((el) => {
+    if (!DRAGGABLE.has(JSON.parse(el.dataset.post).status)) return;
     el.setAttribute('draggable', 'true');
     el.addEventListener('dragstart', (e) => {
       dragged = JSON.parse(el.dataset.post);
