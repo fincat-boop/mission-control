@@ -145,12 +145,15 @@ export async function uploadFiles(contentId, files, { channelId = null, onProgre
 /**
  * העלאה מרוכזת לקמפיין: כל קובץ הופך לזווית. כל הקבצים עולים קודם,
  * ורק אז נוצרות הזוויות — במנה אחת, כמו במסלול הישן.
+ * בקמפיין כללי — channelId: כל קובץ ממלא משבצת של המדיה הזו בלבד.
  */
-export async function uploadBulk(campaignId, files, { kind, onProgress } = {}) {
+export async function uploadBulk(campaignId, files, { kind, channelId = null, onProgress } = {}) {
   const list = [...files];
   precheck(list);
+  const extra = channelId ? { channel_id: channelId } : {};
 
-  const legacy = () => legacyMultipart(`/campaigns/${campaignId}/bulk`, list, { kind }, onProgress);
+  const legacy = () => legacyMultipart(`/campaigns/${campaignId}/bulk`, list,
+    { kind, ...extra }, onProgress);
   if (!mediaOn()) return legacy();
 
   const uploaded = [];
@@ -168,7 +171,7 @@ export async function uploadBulk(campaignId, files, { kind, onProgress } = {}) {
     }
   }
   return api(`/campaigns/${campaignId}/bulk/media`, {
-    method: 'POST', body: { kind, files: uploaded },
+    method: 'POST', body: { kind, files: uploaded, ...extra },
   });
 }
 

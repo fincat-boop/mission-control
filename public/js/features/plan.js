@@ -7,7 +7,8 @@ import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
-import { progressList, uploadBulk, uploadFiles } from '../core/upload.js';
+import { acceptAttr, progressList, uploadBulk, uploadFiles } from '../core/upload.js';
+import { inferPeriod } from '../core/period.js';
 
 /* ========================= ניוזלטר: תבנית המילוי ========================= */
 
@@ -263,7 +264,7 @@ function campaignItem(c) {
   return `<div class="crow2${c.paused_at ? ' paused' : ''}" data-open-campaign="${c.id}">
     <div class="cinfo">
       <b>${c.paused_at ? '⏸ ' : c.urgent ? '⚡ ' : ''}${esc(c.name)}</b>
-      <span class="d">${esc(range)}</span>
+      <span class="d">${esc(range)} · ${c.structure === 'general' ? 'כללי' : 'לפי זוויות'}</span>
     </div>
     <button class="chanpick" data-pick-channels="${c.id}"
       data-tt="לחיצה לבחירת המדיות של הקמפיין">
@@ -440,6 +441,15 @@ function openChannelPicker(campaign, reload) {
 function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false } = {}) {
   const source = campaign;
   if (duplicate) campaign = { ...source, name: `${source.name} (עותק)` };
+  const structure = campaign?.structure ?? 'general';
+  // המבנה נקבע ברגע שנכנס תוכן — זוויות לא עוברות לרשימות של "כללי" ולהפך.
+  // בשכפול המבנה תמיד של המקור (השרת לא מקבל אחר).
+  const structureLocked = duplicate || !!campaign?.content?.length;
+  // קמפיין מלפני השדה: התקופה מוסקת מהתאריכים (שבועות שלמים / חודש / ידני)
+  const period = campaign?.period
+    ?? (campaign?.starts_on && campaign?.ends_on
+      ? inferPeriod(campaign.starts_on, campaign.ends_on) : '1m');
+
   openGeneric({
     title: duplicate ? `שכפול: ${source.name}` : campaign ? 'עריכת קמפיין' : 'קמפיין חדש',
     saveLabel: duplicate ? 'שכפל' : undefined,
@@ -455,22 +465,31 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         options: state.endpoints.map((e) => [e.id, e.name]),
         value: campaign?.endpoint_id ?? defaultEndpoint },
       { name: 'goal', label: 'מה המטרה', type: 'text', value: campaign?.goal },
-      { name: 'starts_on', label: 'מתאריך', type: 'date', value: campaign?.starts_on },
-      { name: 'ends_on', label: 'עד תאריך', type: 'date', value: campaign?.ends_on },
+      { name: 'starts_on', label: 'תאריך יעד לפוסט הראשון', type: 'date',
+        value: campaign?.starts_on },
+      { name: 'period', label: 'תקופת הקמפיין', type: 'period', start: 'starts_on',
+        value: period, ends_on: campaign?.ends_on },
       { name: 'channel_ids', label: 'על אילו מדיות הקמפיין יושב', type: 'multicheck',
         options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
         value: campaign?.channels?.map((c) => c.id) },
+      { name: 'structure', label: 'מבנה התוכן', type: 'radio', value: structure,
+        options: [['general', 'כללי'], ['angles', 'לפי זוויות']],
+        disabled: structureLocked,
+        hint: structureLocked
+          ? 'כבר יש לקמפיין תוכן, ולכן המבנה קבוע. אפשר לשנות אותו רק כשהקמפיין ריק.'
+          : 'כללי — לכל מדיה רשימת פוסטים משלה. לפי זוויות — כל מסר נכתב בניסוח לכל אחת מהמדיות.' },
       { name: 'importance', label: 'חשיבות (1–10)', type: 'number',
         value: campaign?.importance ?? 5,
-        hint: 'זה מה שקובע כמה שטח מגיע לקמפיין. השאר את שני השדות הבאים על "אוטומטי".' },
+        hint: 'זה מה שקובע כמה שטח מגיע לקמפיין. השאר את הנתח על "אוטומטי".' },
       { name: 'share_pct', label: 'נתח מהשטח', type: 'auto',
         value: campaign?.share_pct,
         auto: campaign?.share_auto != null ? `${campaign.share_auto}%` : 'לפי החשיבות',
         placeholder: '%',
         hint: 'אוטומטי מחלק את השטח לפי החשיבות מול הקמפיינים שרצים במקביל. ' +
               'קבוע נועד למקרה שהובטח לקמפיין נתח מסוים בלי קשר לשאר.' },
+      // רלוונטי רק בזוויות — בכללי כל מדיה מקבלת את מספר הפוסטים שלה
       { name: 'target_posts', label: 'מספר זוויות', type: 'auto',
-        value: campaign?.target_posts,
+        value: campaign?.target_posts, hidden: structure === 'general',
         auto: campaign?.angles_auto != null ? String(campaign.angles_auto) : 'לפי המדיות',
         hint: 'אוטומטי נגזר מהקצב של המדיות שנבחרו ומאורך הקמפיין.' },
       { name: 'urgent', label: 'קמפיין דחוף', type: 'checkbox', value: campaign?.urgent },
@@ -488,6 +507,9 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         return 'מוסיפים זוויות בכפתור "＋ זווית שוטפת".';
       }
       delete v.ctype;
+      // בלי תאריך לפוסט הראשון אין ממה לחשב סיום — הקמפיין נשמר בלי תאריכים
+      if (!v.starts_on && v.period !== 'custom') delete v.period;
+      if (v.period !== 'custom') delete v.ends_on;
       v.week = state.week;
       if (duplicate) {
         const res = await api(`/campaigns/${source.id}/duplicate`, { method: 'POST', body: v });
@@ -500,6 +522,10 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       await reload();
     },
     onOpen: () => {
+      $$('#genBody [name="gen_structure"]').forEach((r) =>
+        r.addEventListener('change', () => {
+          $('#genBody [data-field="target_posts"]').hidden = r.value === 'general';
+        }));
       $('#genDelete')?.addEventListener('click', run(async () => {
         if (await deleteCampaign(campaign, reload)) $('#genDlg').close();
       }));
@@ -519,20 +545,44 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
 /* ========================= תוכן ========================= */
 
 
-function campaignGrid(c) {
+/** כותרת הקמפיין במסך התוכן — משותפת לזוויות, לכללי ולמצבים הריקים */
+function campaignHead(c) {
   const range = c.starts_on && c.ends_on
     ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
+  return `
+    <div class="cbhead">
+      <div>
+        <h2>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</h2>
+        <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
+          · נתח ${c.share_pct != null ? c.share_pct + '%' : 'נגזר מהמשקל'}
+          ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
+      </div>
+      <div class="spacer"></div>
+      ${campaignMenu(c)}
+      ${c.required ? `<div class="fill">
+        <b>${c.ready}</b> מתוך <b>${c.required}</b> פוסטים מוכנים
+        ${c.missing_content ? `<span class="off">— חסרים ${c.missing_content}</span>`
+                            : '<span class="ok">✓</span>'}
+      </div>` : ''}
+    </div>`;
+}
 
+function campaignGrid(c) {
   if (!c.channels.length) {
-    return `<div class="panel"><div class="empty">
-      לקמפיין הזה לא נבחרו מדיות. בוחרים אותן בעריכת הקמפיין בטאב "אסטרטגיה".
+    return `${campaignHead(c)}<div class="panel"><div class="empty">
+      לקמפיין הזה לא נבחרו מדיות, ולכן אין ממה לגזור כמה תוכן הוא צריך.
+      ${can('settings') ? `<div style="margin-top:14px">
+        <button class="btn primary" data-pick-channels="${c.id}">בחירת מדיות</button></div>` : ''}
     </div></div>`;
   }
-  if (!c.grid.length) {
-    return `<div class="panel"><div class="empty">
+  const empty = c.structure === 'general' ? !c.slots.length : !c.grid.length;
+  if (empty) {
+    return `${campaignHead(c)}<div class="panel"><div class="empty">
       לקמפיין אין תאריכים, ולכן אין ממה לגזור כמה תוכן הוא צריך.
+      ${can('settings') ? 'קובעים אותם ב"ערוך קמפיין" — תאריך לפוסט הראשון ותקופה.' : ''}
     </div></div>`;
   }
+  if (c.structure === 'general') return generalBoard(c);
 
   const head = c.channels.map((ch) =>
     `<th>${esc(ch.name)}<div class="need">${c.needs[ch.id] ?? 0} פוסטים</div></th>`).join('');
@@ -564,21 +614,7 @@ function campaignGrid(c) {
   }).join('');
 
   return `
-    <div class="cbhead">
-      <div>
-        <h2>${c.urgent ? '⚡ ' : ''}${esc(c.name)}</h2>
-        <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
-          · נתח ${c.share_pct != null ? c.share_pct + '%' : 'נגזר מהמשקל'}
-          ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
-      </div>
-      <div class="spacer"></div>
-      <div class="fill">
-        <b>${c.ready}</b> מתוך <b>${c.required}</b> פוסטים מוכנים
-        ${c.missing_content ? `<span class="off">— חסרים ${c.missing_content}</span>`
-                            : '<span class="ok">✓</span>'}
-      </div>
-      ${campaignMenu()}
-    </div>
+    ${campaignHead(c)}
 
     <div class="board panel">
       <table class="grid cgrid">
@@ -592,7 +628,171 @@ function campaignGrid(c) {
 }
 
 
+/* ---------- קמפיין כללי: רשימת פוסטים לכל מדיה, בלי זוויות ---------- */
+
+/**
+ * עמודה לכל מדיה, ובה שורה לכל פוסט שהמדיה צריכה. כל שורה עומדת בפני
+ * עצמה: אין זווית משותפת ואין ניסוח למדיה אחרת. במסך צר העמודות נערמות.
+ */
+function generalBoard(c) {
+  const cols = c.slots.map((col) => {
+    const ready = col.slots.filter((s) => !s.extra && s.state === 'ready').length;
+    const rows = col.slots.map((s) => {
+      const st = CELL[s.state];
+      const item = s.content;
+      return `<li class="gslot${s.past ? ' past' : ''}${s.extra ? ' extra' : ''}${
+          can('content') ? '' : ' ro'}"
+        ${can('content') ? `data-gslot="${s.index}" data-ch="${col.channel_id}"` : ''}>
+        <span class="gnum">${s.index}</span>
+        <span class="gdate">${s.date ? fmtDate(s.date) : 'נוסף'}</span>
+        <span class="gttl${item ? '' : ' none'}">${item
+          ? `${esc(item.title)}${item.assets.length ? ` <span class="gclip">📎${item.assets.length}</span>` : ''}`
+          : (s.past ? 'לא נכתב' : 'לכתוב')}</span>
+        <span class="gst ${st.cls}"><i></i>${esc(st.label)}</span>
+      </li>`;
+    }).join('');
+
+    return `<section class="gcol panel">
+      <div class="gcol-head">
+        <div>
+          <b>${esc(col.channel_name)}</b>
+          <span class="d">${ready} מתוך ${col.need} מוכנים</span>
+        </div>
+        ${can('content') ? `<button class="btn small" data-gbulk="${col.channel_id}">העלאה מרוכזת</button>` : ''}
+      </div>
+      <ol class="gslots">${rows}</ol>
+    </section>`;
+  }).join('');
+
+  return `
+    ${campaignHead(c)}
+    <div class="gboard">${cols}</div>
+    <div class="sumline">
+      כל עמודה היא מדיה, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.
+      ייבוא מטבלה זמין בקמפיין לפי זוויות.
+    </div>`;
+}
+
+function wireGeneralBoard(selected, reload) {
+  $$('#plan [data-gslot]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const channelId = Number(b.dataset.ch);
+      const index = Number(b.dataset.gslot);
+      const item = selected.content.find((x) =>
+        x.slot_channel_id === channelId && x.sort_order === index) ?? null;
+      openSlotForm({ campaign: selected, channelId, index, item }, reload);
+    }));
+
+  $$('#plan [data-gbulk]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const channel = selected.channels.find((x) => x.id === Number(b.dataset.gbulk));
+      openChannelBulk(selected, channel, reload);
+    }));
+}
+
+/**
+ * פוסט במשבצת של קמפיין כללי: טופס אחד פשוט. מתחת לפני השטח — פריט תוכן
+ * וגרסה אחת שלו לאותה מדיה (השרת שומר את הטקסט והמצב על שניהם).
+ */
+function openSlotForm({ campaign, channelId, index, item }, reload) {
+  const channel = state.channels.find((c) => c.id === channelId);
+  const v = item?.variants.find((x) => x.channel_id === channelId) ?? null;
+  // לפריט של מדיה אחת אין "משותף" מול "של המדיה" — כל הקבצים שלו, וכולם ניתנים להסרה
+  const files = [...(item?.assets ?? []), ...(item?.variant_assets ?? [])]
+    .map((a) => assetLine(a, true, false)).join('');
+
+  openGeneric({
+    title: `${channel?.name ?? ''} · פוסט ${index}${item ? '' : ' — חדש'}`,
+    fields: [
+      { name: 'title', label: 'כותרת', type: 'text', value: item?.title },
+      { name: 'kind', label: 'סוג', type: 'select',
+        options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
+        value: item?.kind },
+      { name: 'body', label: `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'מדיה'}`,
+        type: 'textarea', value: v?.body ?? item?.body },
+      { name: '__files', label: 'תמונות, סרטונים ומסמכים', type: 'files', existing: files },
+      { name: 'status', label: 'מצב', type: 'radio',
+        options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום']],
+        value: v?.status === 'ready' ? 'ready' : 'draft' },
+    ],
+    extraActions: item && can('content')
+      ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
+      : '',
+    onSave: async (val) => {
+      if (!val.title) throw new Error('צריך כותרת');
+      const body = { title: val.title, kind: val.kind, body: val.body ?? '',
+                     status: val.status, week: state.week };
+      const saved = item
+        ? (await api(`/content/${item.id}`, { method: 'PATCH', body })).content
+        : (await api('/content', { method: 'POST', body: {
+          ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
+        } })).content;
+
+      const picked = $('#gen___files')?.files;
+      if (picked?.length) {
+        await uploadFiles(saved.id, picked, {
+          onProgress: progressList($('#gen___files_progress'), picked),
+        });
+      }
+      await reload();
+    },
+    onOpen: () => {
+      wireCopyLinks($('#genBody'));
+      $$('#genBody [data-del-asset]').forEach((b) =>
+        b.addEventListener('click', run(async () => {
+          await api(`/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
+          b.closest('.fileline').remove();
+          toast('הקובץ הוסר.');
+        })));
+      $('#genDelete')?.addEventListener('click', run(async () => {
+        if (!(await confirmDialog('למחוק את הפוסט הזה?', { danger: true }))) return;
+        await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
+        $('#genDlg').close();
+        await reload();
+      }));
+    },
+  });
+}
+
+/** העלאה מרוכזת לעמודה של מדיה אחת: כל קובץ ממלא את הפוסט הפנוי הבא שלה */
+function openChannelBulk(campaign, channel, reload) {
+  openGeneric({
+    title: `העלאה מרוכזת · ${channel.name}`,
+    saveLabel: 'העלה',
+    fields: [
+      { name: 'kind', label: 'סוג הפוסטים', type: 'select',
+        options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']], value: 'value' },
+      { name: '__files', label: `קבצים — כל קובץ ממלא את הפוסט הפנוי הבא ב${channel.name}, כטיוטה`,
+        type: 'files' },
+    ],
+    onSave: async (v) => {
+      const files = [...($('#gen___files')?.files ?? [])];
+      if (!files.length) throw new Error('צריך לבחור לפחות קובץ אחד');
+      const data = await uploadBulk(campaign.id, files, {
+        kind: v.kind, channelId: channel.id,
+        onProgress: progressList($('#gen___files_progress'), files),
+      });
+      await reload();
+      return data.overflow
+        ? `נוספו ${data.created.length} פוסטים — ${data.overflow} מעבר למה שהמדיה צריכה.`
+        : `נוספו ${data.created.length} פוסטים.`;
+    },
+  });
+}
+
 function wireCampaignGrid(selected, reload) {
+  // תפריט הכותרת משותף לשני המבנים — מחווטים לפני הפיצול
+  const actions = {
+    edit: () => openCampaignForm(selected, reload),
+    bulk: () => openBulkUpload(selected, reload),
+    import: () => openImport(selected, reload),
+    delete: run(() => deleteCampaign(selected, reload)),
+  };
+  $$('#plan .cbhead [data-act]').forEach((b) =>
+    b.addEventListener('click', () => actions[b.dataset.act]()));
+
+  if (selected.structure === 'general') return wireGeneralBoard(selected, reload);
+
   // לחיצה על הזווית עצמה — עריכת המסר, הסוג והקבצים
   $$('#plan [data-angle]').forEach((b) =>
     b.addEventListener('click', () => {
@@ -615,22 +815,16 @@ function wireCampaignGrid(selected, reload) {
       openVariantForm({ item, channelId, campaign: selected }, reload);
     }));
 
-  const actions = {
-    edit: () => openCampaignForm(selected, reload),
-    bulk: () => openBulkUpload(selected, reload),
-    import: () => openImport(selected, reload),
-    delete: run(() => deleteCampaign(selected, reload)),
-  };
-  $$('#plan .cbhead [data-act]').forEach((b) =>
-    b.addEventListener('click', () => actions[b.dataset.act]()));
 }
 
 /** תפריט שלוש הנקודות בכותרת הקמפיין — כל הפעולות על הקמפיין עצמו */
-function campaignMenu() {
+function campaignMenu(c) {
+  // בקמפיין כללי ההעלאה המרוכזת היא לכל מדיה (בראש העמודה), וייבוא מטבלה לא נתמך
+  const angles = c.structure !== 'general';
   const items = [
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
-    can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
-    can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
+    angles && can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
+    angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     can('settings') && '<div class="sep"></div><button type="button" data-act="delete" data-danger>מחק קמפיין</button>',
   ].filter(Boolean);
   return kebab('פעולות על הקמפיין', items);
@@ -670,8 +864,11 @@ function openBulkUpload(campaign, reload) {
 
 /** הזווית: המסר עצמו, הסוג, הקבצים המשותפים */
 function openAngleForm({ item, campaign, slot, background }, reload) {
+  // קמפיין כללי לא מקבל זוויות — אין להן מקום ברשימות שלו
   const campaignOptions = [['', 'ללא קמפיין — תוכן שוטף'],
-    ...state.campaigns.map((c) => [c.id, c.name])];
+    ...state.campaigns
+      .filter((c) => c.structure !== 'general' || c.id === item?.campaign_id)
+      .map((c) => [c.id, c.name])];
   const inCampaign = !!(campaign?.id ?? item?.campaign_id);
   const owner = state.campaigns.find((c) => c.id === (campaign?.id ?? item?.campaign_id));
   // תוכן שוטף: אין קמפיין לרשת ממנו נקודת קצה, אז היא נלקחת מההקשר
