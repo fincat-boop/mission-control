@@ -1,6 +1,6 @@
 import { api } from '../core/api.js';
 import { goToTab, refreshAlerts, refreshBoard, refreshTaskBadge } from '../ui/refresh.js';
-import { $, $$, esc, run, toast } from '../core/dom.js';
+import { $, $$, copyText, esc, run, toast } from '../core/dom.js';
 import { can, state } from '../core/state.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { hhmm } from '../core/format.js';
@@ -49,7 +49,7 @@ export async function renderTasks() {
 
   $$('#tasks [data-copy]').forEach((b) =>
     b.addEventListener('click', run(async () => {
-      await navigator.clipboard.writeText(b.dataset.copy);
+      await copyText(b.dataset.copy, b.parentElement);
       toast('הטקסט הועתק.');
     })));
 
@@ -136,8 +136,7 @@ function taskRow(t) {
   else if (t.kind === 'approve' && t.post_id && can('approve')) {
     action = `<button class="btn small act" data-approve="${t.post_id}">אשר</button>`;
   } else if (t.kind === 'publish' && t.post_id) {
-    const text = t.content_body || t.post_title || t.title;
-    action = `<button class="btn small act" data-copy="${esc(text)}">העתק טקסט</button>
+    action = `<button class="btn small act" data-copy="${esc(t.copy_text)}">העתק טקסט</button>
               <button class="btn small act" data-publish="${t.post_id}">סמן כפורסם</button>`;
   } else if (t.kind === 'swap' && t.post_id && can('content')) {
     // ההצעה נשמרת ב-meta של המשימה עצמה — לא צריך לחשב אותה שוב בלחיצה

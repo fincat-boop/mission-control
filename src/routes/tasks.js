@@ -12,13 +12,18 @@ r.get('/tasks', wrap(async (_req, res) => {
   const all = await rows(
     `select t.*, u.name as assignee_name, e.name as endpoint_name,
             p.title as post_title, p.scheduled_at, c.name as channel_name,
-            ci.body as content_body
+            -- הטקסט ל"העתק טקסט": הגרסה הנוכחית של התוכן לערוץ של הפוסט
+            -- (בוואטסאפ — הנוסח לוואטסאפ, לא גוף התוכן הכללי), חי ולא מה
+            -- שנשמר כשהמשימה נוצרה. אחריה מה שנשמר במשימה, ואז הכותרת.
+            coalesce(nullif(btrim(v.body), ''), nullif(btrim(t.meta->>'body'), ''),
+                     p.title, t.title) as copy_text
        from tasks t
-       left join users u         on u.id = t.assignee_id
-       left join endpoints e     on e.id = t.endpoint_id
-       left join posts p         on p.id = t.post_id
-       left join channels c      on c.id = p.channel_id
-       left join content_items ci on ci.id = p.content_id
+       left join users u            on u.id = t.assignee_id
+       left join endpoints e        on e.id = t.endpoint_id
+       left join posts p            on p.id = t.post_id
+       left join channels c         on c.id = p.channel_id
+       left join content_variants v on v.content_id = p.content_id
+                                   and v.channel_id = p.channel_id
       order by t.urgent desc, t.due_on nulls last, t.id`
   );
   const today = ymd(new Date());
