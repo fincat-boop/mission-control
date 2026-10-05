@@ -924,3 +924,6 @@ button.btn.bell .badge {
 .topmark { font-size: 11px; color: var(--st-good); margin-inline-start: 8px; white-space: nowrap; }
 .topmark i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--st-good); margin-inline-end: 5px; vertical-align: 0; }
 .bdtable tr.top td:first-child { font-weight: 600; }
+
+/* סרגל התקופות בטאב הנתונים: שמונה אפשרויות — נשבר לשורה שנייה במסך צר */
+#data .toolbar .periodpick { flex-wrap: wrap; }

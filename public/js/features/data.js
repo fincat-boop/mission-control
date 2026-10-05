@@ -3,29 +3,52 @@ import { KIND_HE, KIND_VAR, fmtDate, hhmm, ymd } from '../core/format.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { confirmDialog } from '../core/confirm.js';
+import { DATA_PERIODS, DEFAULT_DATA_PERIOD, isPreset, presetRange } from '../core/dataPeriod.js';
 import { goToTab } from '../ui/refresh.js';
 import { openPostPreview } from '../ui/postDialog.js';
 
 /* ========================= נתונים וסטטיסטיקה ========================= */
 
-/** התקופות המוכנות מראש. 'custom' פותח שני שדות תאריך. */
-const PERIODS = [['7', '7 ימים'], ['30', '30 יום'], ['90', '90 יום'],
-                 ['365', 'שנה'], ['custom', 'טווח מותאם']];
-
 const VIA_HE = { ui: 'ידני', assistant: 'העוזר', system: 'מערכת' };
 
-/** התקופה הנוכחית כפרמטרים ל-API */
+/** התקופה הנוכחית כפרמטרים ל-API. החודשים — לפי שעון ישראל (dataPeriod.js). */
 function dataRange() {
   if (state.dataPeriod === 'custom') {
     return { from: state.dataFrom, to: state.dataTo };
   }
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - (Number(state.dataPeriod) - 1));
-  return { from: ymd(from), to: ymd(to) };
+  return presetRange(state.dataPeriod) ?? presetRange(DEFAULT_DATA_PERIOD);
+}
+
+/**
+ * התקופה שנבחרה נזכרת לכל צופה בדפדפן שלו. localStorage יכול לזרוק
+ * (גלישה פרטית, חסימה) — אז פשוט חוזרים לברירת המחדל.
+ */
+const PERIOD_KEY = 'mc.data.period';
+let periodRestored = false;
+
+function restorePeriod() {
+  if (periodRestored) return;
+  periodRestored = true;
+  state.dataPeriod = DEFAULT_DATA_PERIOD;
+  try {
+    const saved = JSON.parse(localStorage.getItem(PERIOD_KEY) ?? 'null');
+    if (saved && (isPreset(saved.p) || saved.p === 'custom')) {
+      state.dataPeriod = saved.p;
+      state.dataFrom = saved.from ?? null;
+      state.dataTo = saved.to ?? null;
+    }
+  } catch { /* ברירת המחדל */ }
+}
+
+function savePeriod() {
+  try {
+    localStorage.setItem(PERIOD_KEY, JSON.stringify(
+      { p: state.dataPeriod, from: state.dataFrom, to: state.dataTo }));
+  } catch { /* לא נורא — בפעם הבאה ברירת המחדל */ }
 }
 
 export async function renderData() {
+  restorePeriod();
   const { from, to } = dataRange();
   if (state.dataPeriod === 'custom' && (!from || !to)) {
     $('#data').innerHTML = dataToolbar() +
@@ -440,7 +463,7 @@ function dataToolbar(period) {
   const custom = state.dataPeriod === 'custom';
   return `<div class="toolbar">
     <div class="periodpick">
-      ${PERIODS.map(([v, l]) =>
+      ${DATA_PERIODS.map(([v, l]) =>
         `<button data-period="${v}"${state.dataPeriod === v ? ' class="on"' : ''}>${esc(l)}</button>`
       ).join('')}
     </div>
@@ -553,6 +576,7 @@ function wireData() {
   $$('#data [data-period]').forEach((b) => b.addEventListener('click', run(async () => {
     if (!(await confirmDiscard())) return;
     state.dataPeriod = b.dataset.period;
+    savePeriod();
     await renderData();
   })));
   $$('#data [data-via]').forEach((b) => b.addEventListener('click', run(async () => {
@@ -563,6 +587,7 @@ function wireData() {
     $(id)?.addEventListener('change', run(async (e) => {
       if (!(await confirmDiscard())) { e.target.value = state[key] ?? ''; return; }
       state[key] = e.target.value || null;
+      savePeriod();
       await renderData();
     }));
   }
