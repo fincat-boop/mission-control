@@ -134,10 +134,11 @@ export function wireGenericDialog() {
     const btn = $('#genSave');
     btn.disabled = true;
     try {
-      // onSave יכול להחזיר הודעה משלו במקום "נשמר."
+      // onSave יכול להחזיר הודעה משלו במקום "נשמר.", או false — בלי טוסט
+      // (כשהוא מציג משהו אחר במקומו, למשל הוראות כניסה למשתמש חדש)
       const msg = await genSpec.onSave(values);
       $('#genDlg').close();
-      toast(typeof msg === 'string' ? msg : 'נשמר.');
+      if (msg !== false) toast(typeof msg === 'string' ? msg : 'נשמר.');
     } finally {
       btn.disabled = false;
     }

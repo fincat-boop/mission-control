@@ -131,6 +131,17 @@ r.post('/publish/newsletter-preview', wrap(async (req, res) => {
   }
 }));
 
+/**
+ * הדלקת פרסום אוטומטי לערוץ דורשת חיבור שנבדק ועבר. טוקן חדש באותה בקשה
+ * עוד לא נבדק — קודם שומרים, בודקים, ורק אז מדליקים. כיבוי תמיד מותר.
+ * מחזיר הודעת שגיאה או null.
+ */
+export function autoEnableBlocker({ wantsAuto, newToken, saved }) {
+  if (wantsAuto !== true) return null;
+  if (newToken || saved?.last_check_ok !== true) return 'בודקים חיבור לפני שמדליקים פרסום אוטומטי';
+  return null;
+}
+
 /** שמירת חיבור. טוקן שלא נשלח — נשאר כמו שהוא (עריכה בלי להזין מחדש). */
 r.put('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res) => {
   const b = req.body ?? {};
@@ -141,6 +152,10 @@ r.put('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res)
   }
 
   const tokenEnc = b.access_token?.trim() ? encryptSecret(b.access_token.trim()) : null;
+  const saved = await one(
+    'select last_check_ok from channel_connections where channel_id = $1', [channel.id]);
+  const blocked = autoEnableBlocker({ wantsAuto: b.auto_enabled, newToken: !!tokenEnc, saved });
+  if (blocked) return bad(res, blocked);
 
   const c = await one(
     `insert into channel_connections (channel_id, page_id, ig_user_id, access_token_enc, auto_enabled)
@@ -150,6 +165,10 @@ r.put('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res)
        ig_user_id       = coalesce($3, channel_connections.ig_user_id),
        access_token_enc = coalesce($4, channel_connections.access_token_enc),
        auto_enabled     = coalesce($5, channel_connections.auto_enabled),
+       -- טוקן חדש עוד לא נבדק: הבדיקה הקודמת הייתה על הטוקן הישן
+       last_check_ok    = case when $4 is null then channel_connections.last_check_ok end,
+       last_check_at    = case when $4 is null then channel_connections.last_check_at end,
+       last_check_note  = case when $4 is null then channel_connections.last_check_note end,
        updated_at       = now()
      returning channel_id, page_id, ig_user_id, auto_enabled,
                access_token_enc is not null as has_token`,
