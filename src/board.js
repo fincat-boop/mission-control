@@ -225,5 +225,8 @@ export function shapePost(p) {
     time: new Date(p.scheduled_at).toTimeString().slice(0, 5),
     published_at: p.published_at,
     has_results: !!p.has_results,
+    // ניוזלטר שהועבר ל-HUB — לתג "ממתין לאישור ב-HUB" (public/js/core/hubFill.js)
+    ...(p.hub_transferred_at || p.hub_status
+      ? { hub_status: p.hub_status ?? null, hub_transferred_at: p.hub_transferred_at ?? null } : {}),
   };
 }

@@ -184,3 +184,10 @@ test('hubOrigins — שני המקורות, בלי כפילויות ובלי ע�
     ['https://hub.io']);
   assert.deepEqual(hubOrigins({ HUB_API_URL: 'not a url' }), []);
 });
+
+test('shapePost — ניוזלטר שהועבר נושא את מצב ה-HUB ללוח; פוסט רגיל לא', async () => {
+  const { shapePost } = await import('../src/board.js');
+  const base = { id: 1, scheduled_at: '2026-10-07T07:00:00Z', status: 'publishing' };
+  assert.equal(shapePost({ ...base, hub_status: 'draft', hub_transferred_at: 'x' }).hub_status, 'draft');
+  assert.equal('hub_status' in shapePost(base), false);
+});

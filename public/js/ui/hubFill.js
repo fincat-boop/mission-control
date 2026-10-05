@@ -249,7 +249,9 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
   let values = seedValues(saved.meta.field_values, saved.body, fields);
 
   const filledCount = () => Object.keys(cleanFillValues(values)).length;
-  const alive = () => $('#genDlg').open && !!$('#hfBox');
+  // החלון הזה עדיין מוצג (ולא עורך אחר שנפתח מאז בדיאלוג המשותף)
+  const token = String(Math.random()).slice(2);
+  const alive = () => $('#hfPosts')?.dataset.hf === token;
   const firstPostAt = { value: null }; // המועד של הפוסט הקרוב — ל-[[תאריך]] בתצוגה
 
   /** PUT לגרסה. partial: subject/status/body; values — מהזיכרון */
@@ -311,28 +313,34 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
   };
 
   const setNote = (text, bad = false) => {
-    const el = $('#hfNote');
+    const el = alive() ? $('#hfNote') : null;
     if (!el) return;
     el.textContent = text;
     el.classList.toggle('bad', bad);
   };
 
-  async function renderPosts() {
+  const loadPosts = () => api(`/publish/newsletter-posts?content_id=${item.id}&channel_id=${channelId}`)
+    .then((r) => r.posts);
+  /** המועד של הפוסט הקרוב — ל-[[תאריך]] בתצוגה, כמו שיישלח */
+  const notePostAt = (posts) => {
+    const upcoming = posts.find((p) => new Date(p.scheduled_at) > new Date()) ?? posts.at(-1);
+    if (!upcoming || firstPostAt.value === upcoming.scheduled_at) return false;
+    firstPostAt.value = upcoming.scheduled_at;
+    return true;
+  };
+
+  async function renderPosts(preloaded = null) {
+    if (!alive()) return;
     const box = $('#hfPosts');
-    if (!box) return;
-    let posts;
+    let posts = preloaded;
     try {
-      ({ posts } = await api(`/publish/newsletter-posts?content_id=${item.id}&channel_id=${channelId}`));
+      posts ??= await loadPosts();
     } catch (e) {
       box.innerHTML = `<div class="pvwarn">לא הצלחנו לטעון את מצב השליחה: ${esc(e.message)}</div>`;
       return;
     }
     if (!alive()) return;
-    const upcoming = posts.find((p) => new Date(p.scheduled_at) > new Date());
-    if (upcoming && firstPostAt.value !== upcoming.scheduled_at) {
-      firstPostAt.value = upcoming.scheduled_at;
-      preview?.queue();
-    }
+    if (notePostAt(posts)) preview?.queue();
     const transferred = posts.some((p) => p.status === 'publishing' && p.external_id);
     const intro = transferred
       ? '<div class="pvwarn">הניוזלטר כבר הועבר ל-HUB — שינויים שתשמור כאן לא יגיעו לשם. משנים במסך האישור ב-HUB.</div>'
@@ -392,6 +400,10 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
   }
 
 
+  // הפוסטים נטענים לפני הפתיחה — כדי שהתצוגה הראשונה כבר תהיה עם המועד שלהם
+  const firstPosts = await loadPosts().catch(() => null);
+  if (firstPosts) notePostAt(firstPosts);
+
   openGeneric({
     title: `${item.title} — ${channel?.name ?? 'ניוזלטר'}`,
     fields: [
@@ -401,7 +413,7 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
         ? [{ name: 'hubfill', type: 'html', html: hubBlock() }]
         : [{ name: 'body', label: 'גוף המייל (HTML)', type: 'textarea', value: saved.body }]),
       { name: 'status', label: 'מצב', type: 'select', value: saved.status, options: VARIANT_STATUS },
-      { name: 'hubposts', type: 'html', html: '<div class="hubposts" id="hfPosts"><div class="fhint">טוען…</div></div>' },
+      { name: 'hubposts', type: 'html', html: `<div class="hubposts" id="hfPosts" data-hf="${token}"><div class="fhint">טוען…</div></div>` },
     ],
     onSave: async (val) => {
       await saveVariant({ subject: val.subject ?? '', status: val.status, body: template ? undefined : val.body ?? '' });
@@ -425,7 +437,7 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
         onSave: (vals) => { onFillSave(vals); },
         onStatus: (s) => setNote(STATUS_NOTE[s] ?? '', ['silent', 'blocked'].includes(s)),
       }));
-      renderPosts();
+      renderPosts(firstPosts);
     },
   });
 }

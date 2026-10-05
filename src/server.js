@@ -55,6 +55,12 @@ app.use(helmet({
       upgradeInsecureRequests: isProd ? [] : null,
     },
   },
+  // עורך המייל של ה-HUB נפתח בחלון חדש ומחזיר ערכים ב-postMessage דרך
+  // window.opener. ברירת המחדל של helmet (same-origin) מנתקת חלון שנפתח
+  // לאתר אחר: אצל ה-HUB opener ריק, ואצלנו החלון נראה סגור מיד.
+  // allow-popups שומר את הקשר רק לחלונות שאנחנו פותחים — ההודעות מהם
+  // נבדקות לפי מקור וחלון (public/js/core/hubFill.js).
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
 }));
 
 // טבלת תוכן לשנה שלמה, מודבקת מ-Excel, עוברת בקלות את 256kb
