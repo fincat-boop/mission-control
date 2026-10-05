@@ -209,6 +209,9 @@ r.get('/campaigns/:id/complete-preview', wrap(async (req, res) => {
  * לשנות את הסדר היחסי, והמנוע פורס את הפוסטים על אותה תקופה.
  */
 r.post('/campaigns/:id/complete', requirePerm('settings'), wrap(async (req, res) => {
+  // אותה נעילה כמו בהעלאה המרוכזת (routes/content.js), עד סוף הבקשה: הדחיסה
+  // לא רצה באמצע העלאה שחישבה משבצות פנויות לפי הסדר הישן
+  await one('select id from campaigns where id = $1 for update', [req.params.id]);
   const before = await campaignWithHealth(req.params.id);
   if (!before) return bad(res, 'לא נמצא קמפיין כזה', 404);
   const summary = completionSummary(before);
