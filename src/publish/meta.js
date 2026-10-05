@@ -1,7 +1,8 @@
 /**
  * לקוח Meta Graph API — פרסום לעמוד פייסבוק ולחשבון אינסטגרם עסקי.
  *
- * פייסבוק: קבצים עולים ישירות (multipart) — אין צורך ב-URL ציבורי.
+ * פייסבוק: מדיה ב-R2 נשלחת כקישור ציבורי (url / file_url); קובץ ישן
+ * מהמסד עולה ישירות (multipart).
  * אינסטגרם: ה-API מושך את המדיה מ-URL ציבורי (image_url / video_url) —
  * ההעלאה הזמנית ל-R2 קורית ב-runner, לא כאן. וידאו באינסטגרם יוצא כריל.
  */
@@ -63,7 +64,18 @@ const isImage = (m) => /^image\//.test(m);
 const isVideo = (m) => /^video\//.test(m);
 
 /**
- * פרסום לעמוד פייסבוק. assets = [{buffer, mime, filename}].
+ * קובץ לשליחה: {url} — Graph מושך בעצמו מהקישור הציבורי (מדיה ב-R2);
+ * {buffer} — multipart כמו קודם (קובץ ישן מהמסד). field = שם הפרמטר
+ * ל-URL: 'url' לתמונה, 'file_url' לווידאו.
+ */
+function mediaArgs(asset, params, field) {
+  return asset.url
+    ? { params: { ...params, [field]: asset.url } }
+    : { params, form: { source: asset } };
+}
+
+/**
+ * פרסום לעמוד פייסבוק. assets = [{url} או {buffer}, mime, filename].
  * וידאו גובר על תמונות (פוסט וידאו); כמה תמונות = פוסט מרובה תמונות.
  * @returns {{id: string, url: string}}
  */
@@ -73,18 +85,14 @@ export async function publishFacebook({ pageId, token, message, assets = [] }) {
 
   if (video) {
     const r = await graph(`${pageId}/videos`, {
-      method: 'POST', token,
-      params: { description: message },
-      form: { source: video },
+      method: 'POST', token, ...mediaArgs(video, { description: message }, 'file_url'),
     });
     return { id: r.id, url: `https://www.facebook.com/${pageId}/videos/${r.id}` };
   }
 
   if (images.length === 1) {
     const r = await graph(`${pageId}/photos`, {
-      method: 'POST', token,
-      params: { caption: message },
-      form: { source: images[0] },
+      method: 'POST', token, ...mediaArgs(images[0], { caption: message }, 'url'),
     });
     return { id: r.post_id ?? r.id, url: `https://www.facebook.com/${r.post_id ?? r.id}` };
   }
@@ -94,9 +102,7 @@ export async function publishFacebook({ pageId, token, message, assets = [] }) {
     const ids = [];
     for (const img of images) {
       const r = await graph(`${pageId}/photos`, {
-        method: 'POST', token,
-        params: { published: 'false' },
-        form: { source: img },
+        method: 'POST', token, ...mediaArgs(img, { published: 'false' }, 'url'),
       });
       ids.push(r.id);
     }

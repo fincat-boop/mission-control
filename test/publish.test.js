@@ -2,7 +2,7 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { encryptSecret, decryptSecret } from '../src/publish/crypto.js';
-import { publishBlocker } from '../src/publish/runner.js';
+import { facebookAssets, publishBlocker, publishInstagramPost } from '../src/publish/runner.js';
 
 /* ========================= הצפנת טוקנים ========================= */
 
@@ -135,4 +135,121 @@ test('publishBlocker — ניוזלטר עם גרסה לא מוכנה נחסם',
   const p = mailBase();
   p.variant.status = 'draft';
   assert.match(publishBlocker(p), /מוכן/);
+});
+
+/* ========================= מדיה ב-R2 בפרסום ========================= */
+
+const withBase = (fn) => async () => {
+  const saved = process.env.R2_PUBLIC_BASE_URL;
+  process.env.R2_PUBLIC_BASE_URL = 'https://pub-x.r2.dev';
+  try { await fn(); } finally {
+    if (saved === undefined) delete process.env.R2_PUBLIC_BASE_URL;
+    else process.env.R2_PUBLIC_BASE_URL = saved;
+  }
+};
+
+function igDeps() {
+  const calls = { upload: [], remove: [], publish: [] };
+  return {
+    calls,
+    deps: {
+      upload: async (a) => {
+        calls.upload.push(a.filename);
+        return { url: `https://pub-x.r2.dev/publish/tmp-${a.filename}`, key: `publish/tmp-${a.filename}` };
+      },
+      remove: async (keys) => { calls.remove.push(...keys); },
+      publish: async (args) => { calls.publish.push(args); return { id: 'ig1', url: 'https://ig/p/1' }; },
+    },
+  };
+}
+
+const igPost = { ig_user_id: '456' };
+
+test('publishInstagramPost — קובץ ב-R2: הקישור הקבוע, בלי עותק ובלי מחיקה', withBase(async () => {
+  const { calls, deps } = igDeps();
+  await publishInstagramPost({
+    post: igPost, token: 't', text: 'כיתוב',
+    media: [{ storage_key: 'media/1/u/reel.mp4', mime: 'video/mp4', filename: 'reel.mp4' }],
+  }, deps);
+  assert.deepEqual(calls.upload, []);
+  assert.deepEqual(calls.remove, []);
+  assert.deepEqual(calls.publish[0].media,
+    [{ url: 'https://pub-x.r2.dev/media/1/u/reel.mp4', video: true }]);
+}));
+
+test('publishInstagramPost — קובץ ישן: עותק זמני ומחיקה שלו בלבד', withBase(async () => {
+  const { calls, deps } = igDeps();
+  await publishInstagramPost({
+    post: igPost, token: 't', text: '',
+    media: [
+      { storage_key: 'media/1/u/a.jpg', mime: 'image/jpeg', filename: 'a.jpg' },
+      { storage_key: null, data: Buffer.from('x'), mime: 'image/jpeg', filename: 'old.jpg' },
+    ],
+  }, deps);
+  assert.deepEqual(calls.upload, ['old.jpg']);
+  assert.deepEqual(calls.remove, ['publish/tmp-old.jpg']);   // לא media/1/u/a.jpg
+  assert.deepEqual(calls.publish[0].media.map((m) => m.url),
+    ['https://pub-x.r2.dev/media/1/u/a.jpg', 'https://pub-x.r2.dev/publish/tmp-old.jpg']);
+}));
+
+test('publishInstagramPost — גם כשהפרסום נכשל, רק העותק הזמני נמחק', withBase(async () => {
+  const { calls, deps } = igDeps();
+  deps.publish = async () => { throw new Error('Graph נפל'); };
+  await assert.rejects(publishInstagramPost({
+    post: igPost, token: 't', text: '',
+    media: [
+      { storage_key: 'media/1/u/a.jpg', mime: 'image/jpeg', filename: 'a.jpg' },
+      { storage_key: null, data: Buffer.from('x'), mime: 'image/jpeg', filename: 'old.jpg' },
+    ],
+  }, deps), /Graph נפל/);
+  assert.deepEqual(calls.remove, ['publish/tmp-old.jpg']);
+}));
+
+test('facebookAssets — R2 כקישור, ישן כבייטים', withBase(async () => {
+  const out = facebookAssets([
+    { storage_key: 'media/1/u/v.mp4', mime: 'video/mp4', filename: 'v.mp4', data: null },
+    { storage_key: null, data: Buffer.from('ab'), mime: 'image/png', filename: 'p.png' },
+  ]);
+  assert.deepEqual(out[0], { url: 'https://pub-x.r2.dev/media/1/u/v.mp4', mime: 'video/mp4', filename: 'v.mp4' });
+  assert.equal(out[1].buffer.toString(), 'ab');
+  assert.equal(out[1].url, undefined);
+}));
+
+test('publishBlocker — קובץ ב-R2 בלי כתובת ציבורית נחסם', () => {
+  const saved = process.env.R2_PUBLIC_BASE_URL;
+  delete process.env.R2_PUBLIC_BASE_URL;
+  try {
+    const p = base();
+    p.assets = [{ mime: 'image/jpeg', storage_key: 'media/1/u/a.jpg' }];
+    assert.match(publishBlocker(p), /R2_PUBLIC_BASE_URL/);
+  } finally {
+    if (saved !== undefined) process.env.R2_PUBLIC_BASE_URL = saved;
+  }
+});
+
+test('publishFacebook — קישור: url לתמונה, file_url לווידאו, בלי multipart', async () => {
+  const { publishFacebook } = await import('../src/publish/meta.js');
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    sent.push({ path: new URL(url).pathname, body: opts.body });
+    return new Response(JSON.stringify({ id: 'x1', post_id: 'p1' }), { status: 200 });
+  };
+  try {
+    await publishFacebook({ pageId: '9', token: 't', message: 'm',
+      assets: [{ url: 'https://pub-x.r2.dev/media/1/u/p.png', mime: 'image/png', filename: 'p.png' }] });
+    await publishFacebook({ pageId: '9', token: 't', message: 'm',
+      assets: [{ url: 'https://pub-x.r2.dev/media/1/u/v.mp4', mime: 'video/mp4', filename: 'v.mp4' }] });
+    await publishFacebook({ pageId: '9', token: 't', message: 'm',
+      assets: [{ buffer: Buffer.from('ab'), mime: 'image/png', filename: 'old.png' }] });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.match(sent[0].path, /\/9\/photos$/);
+  assert.ok(sent[0].body instanceof URLSearchParams);
+  assert.equal(sent[0].body.get('url'), 'https://pub-x.r2.dev/media/1/u/p.png');
+  assert.match(sent[1].path, /\/9\/videos$/);
+  assert.equal(sent[1].body.get('file_url'), 'https://pub-x.r2.dev/media/1/u/v.mp4');
+  assert.ok(sent[2].body instanceof FormData);           // קובץ ישן — multipart כמו קודם
+  assert.ok(sent[2].body.get('source'));
 });

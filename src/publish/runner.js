@@ -2,6 +2,7 @@ import { one, query, rows } from '../db.js';
 import { decryptSecret } from './crypto.js';
 import { publishFacebook, publishInstagram } from './meta.js';
 import { deletePublicAssets, publicAssetsReady, uploadPublicAsset } from './public-assets.js';
+import { mediaUrl } from '../media.js';
 import { createNewsletter, hubMailReady, newsletterStatus } from '../hub-mail.js';
 import { emitHubEventSafe } from '../hub-events.js';
 
@@ -75,9 +76,12 @@ export async function loadPayload(postId) {
                 [post.content_id, post.channel_id])
     : null;
 
+  // קובץ ב-R2 נשלף בלי bytes (הפלטפורמה מושכת אותו מהקישור הציבורי);
+  // רק קובץ ישן שעוד במסד מביא את הבייטים שלו
   const assets = post.content_id
     ? await rows(
-        `select id, filename, mime, size_bytes, data
+        `select id, filename, mime, size_bytes, storage_key,
+                case when storage_key is null then data end as data
            from content_assets
           where content_id = $1 and (variant_id is null or variant_id = $2)
           order by variant_id nulls last, id`,
@@ -123,7 +127,45 @@ export function publishBlocker({ post, variant, assets }) {
   if (post.platform === 'facebook' && !media.length && !variant.body?.trim()) {
     return 'אין טקסט ואין מדיה — אין מה לפרסם';
   }
+  if (media.some((a) => a.storage_key && !mediaUrl(a.storage_key))) {
+    return 'הכתובת הציבורית של המדיה לא מוגדרת (R2_PUBLIC_BASE_URL) — אי אפשר לשלוח את הקבצים';
+  }
   return null;
+}
+
+/**
+ * הקבצים לפייסבוק: קובץ ב-R2 נשלח כקישור (Graph מושך אותו בעצמו),
+ * קובץ ישן מהמסד — כבייטים ב-multipart כמו קודם.
+ */
+export const facebookAssets = (media) => media.map((a) => (a.storage_key
+  ? { url: mediaUrl(a.storage_key), mime: a.mime, filename: a.filename }
+  : { buffer: a.data, mime: a.mime, filename: a.filename }));
+
+/**
+ * פרסום לאינסטגרם, שמושך מדיה רק מ-URL ציבורי. קובץ ב-R2 — הקישור הקבוע
+ * שלו כמו שהוא. קובץ ישן (bytea) — עותק זמני ב-bucket הציבורי, שנמחק
+ * ב-finally. רק העותקים הזמניים נמחקים: הקבצים הקבועים לעולם לא.
+ */
+export async function publishInstagramPost({ post, token, text, media }, deps = {}) {
+  const {
+    upload = uploadPublicAsset, remove = deletePublicAssets, publish = publishInstagram,
+  } = deps;
+  const tempKeys = [];
+  try {
+    const items = [];
+    for (const a of media) {
+      if (a.storage_key) {
+        items.push({ url: mediaUrl(a.storage_key), video: isVideo(a.mime) });
+        continue;
+      }
+      const { url, key } = await upload({ buffer: a.data, mime: a.mime, filename: a.filename });
+      tempKeys.push(key);
+      items.push({ url, video: isVideo(a.mime) });
+    }
+    return await publish({ igUserId: post.ig_user_id, token, caption: text, media: items });
+  } finally {
+    if (tempKeys.length) await remove(tempKeys);
+  }
 }
 
 /**
@@ -172,7 +214,6 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
 
   const media = assets.filter((a) => isImage(a.mime) || isVideo(a.mime));
   const text = variant.body?.trim() ?? '';
-  const publicKeys = [];
 
   try {
     let result;
@@ -209,24 +250,13 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
       const token = decryptToken(post);
       if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
       result = await publishFacebook({
-        pageId: post.page_id, token, message: text,
-        assets: media.map((a) => ({ buffer: a.data, mime: a.mime, filename: a.filename })),
+        pageId: post.page_id, token, message: text, assets: facebookAssets(media),
       });
     } else {
-      // אינסטגרם מושך מ-URL ציבורי — העלאה זמנית ל-R2, מחיקה אחרי
+      // אינסטגרם מושך מ-URL ציבורי — ראו publishInstagramPost
       const token = decryptToken(post);
       if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
-      const uploaded = [];
-      for (const a of media) {
-        const { url, key } = await uploadPublicAsset({
-          buffer: a.data, mime: a.mime, filename: a.filename,
-        });
-        publicKeys.push(key);
-        uploaded.push({ url, video: isVideo(a.mime) });
-      }
-      result = await publishInstagram({
-        igUserId: post.ig_user_id, token, caption: text, media: uploaded,
-      });
+      result = await publishInstagramPost({ post, token, text, media });
     }
 
     const updated = await one(
@@ -246,8 +276,6 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
     return { ok: true, post: updated };
   } catch (e) {
     return fail(post, e.message);
-  } finally {
-    if (publicKeys.length) await deletePublicAssets(publicKeys);
   }
 }
 
