@@ -86,7 +86,10 @@ const ACT = {
     label: (post) => `אשר את כל המבצע (${post.group_pending})`,
     run: async (post) => {
       const r = await api(`/posts/${post.id}/approve-group`, { method: 'POST' });
-      toast(`אושרו ${r.approved} פוסטים של המבצע — כולם על הלוח, ומשימות האישור נסגרו.`);
+      const skipped = r.skipped?.length
+        ? ` ${r.skipped.length} לא אושרו כי המועד שלהם עבר — קובעים להם מועד חדש ואז מאשרים.` : '';
+      toast(`אושרו ${r.approved} פוסטים של המבצע — על הלוח, ומשימות האישור שלהם נסגרו.${skipped}`,
+        !!skipped);
     },
   },
   reject: {
@@ -520,7 +523,9 @@ function menuKeys(post, f, p) {
   } else if (post.status === 'publishing') {
     if (p.approve && publishingStuck(f)) menu.push('resetPublishing');
   } else if (post.status === 'pending_approval') {
-    if (p.approve) menu.push('approvePending', 'reject');
+    if (p.approve && future) menu.push('approvePending');
+    if (p.approve && p.content && !future) menu.push('reschedule');
+    if (p.approve) menu.push('reject');
   }
   const attachable = !post.content_id && p.content &&
     !['published', 'publishing'].includes(post.status);

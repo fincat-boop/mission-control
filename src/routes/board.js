@@ -239,11 +239,13 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
   // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה
   const results = await one('select * from post_results where post_id = $1', [p.id]);
 
-  // מבצע דחוף שממתין לאישור: כמה פוסטים של אותו מבצע עוד ממתינים (כולל זה)
+  // מבצע דחוף שממתין לאישור: כמה פוסטים של אותו מבצע עוד ממתינים ואפשר
+  // לאשר אותם (המועד לא עבר) — כולל זה
   p.group_pending = p.status === 'pending_approval' && p.urgent_group
     ? (await one(
         `select count(*)::int as n from posts
-          where urgent_group = $1 and status = 'pending_approval'`, [p.urgent_group])).n
+          where urgent_group = $1 and status = 'pending_approval' and scheduled_at > now()`,
+        [p.urgent_group])).n
     : 0;
 
   res.json({ post: p, variant, assets, results });
@@ -436,7 +438,15 @@ r.post('/posts/:id/unpublish', requirePerm('content'), wrap(async (req, res) => 
 }));
 
 /** אישור דחוף־דורס — הרשאה נפרדת */
+export const APPROVE_PAST = 'המועד עבר — קבעו מועד חדש ואז אשרו';
+
 r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
+  const cur = await one('select id, status, scheduled_at from posts where id = $1', [req.params.id]);
+  if (!cur || cur.status !== 'pending_approval') {
+    return bad(res, 'אין שיבוץ שממתין לאישור עם המזהה הזה', 404);
+  }
+  // מועד שעבר: אישור היה משאיר "מתוכנן" שכבר לא יצא — קודם מועד חדש
+  if (new Date(cur.scheduled_at) <= new Date()) return bad(res, APPROVE_PAST);
   const post = await one(
     `update posts set status = 'scheduled' where id = $1 and status = 'pending_approval'
       returning *`,
@@ -452,18 +462,28 @@ r.post('/posts/:id/approve', requirePerm('approve'), wrap(async (req, res) => {
  * לאישור עוברים למתוכנן, ומשימות האישור שלהם נסגרות — כמו אישור של כל אחד.
  */
 r.post('/posts/:id/approve-group', requirePerm('approve'), wrap(async (req, res) => {
+  const group = `urgent_group is not null
+        and urgent_group = (select urgent_group from posts where id = $1)`;
+  // מה שהמועד שלו עבר לא מאושר — חוזר ב-skipped, כמו באישור בודד
+  const skipped = await rows(
+    `select id, title, channel_id from posts
+      where status = 'pending_approval' and ${group} and scheduled_at <= now()`,
+    [req.params.id]
+  );
   const approved = await rows(
     `update posts set status = 'scheduled'
-      where status = 'pending_approval' and urgent_group is not null
-        and urgent_group = (select urgent_group from posts where id = $1)
+      where status = 'pending_approval' and ${group} and scheduled_at > now()
       returning id`,
     [req.params.id]
   );
-  if (approved.length === 0) return bad(res, 'אין במבצע הזה פוסטים שממתינים לאישור', 404);
+  if (approved.length === 0) {
+    return skipped.length ? bad(res, APPROVE_PAST)
+      : bad(res, 'אין במבצע הזה פוסטים שממתינים לאישור', 404);
+  }
   const ids = approved.map((x) => x.id);
   await query(
     `update tasks set done = true, done_at = now() where post_id = any($1::int[]) and done = false`, [ids]);
-  res.json({ approved: ids.length, ids });
+  res.json({ approved: ids.length, ids, skipped });
 }));
 
 /**

@@ -61,7 +61,7 @@ export const publishingStuck = (f, now = new Date()) => f.status === 'publishing
 
 /** "קבע מועד חדש" גם מאשר מיד לפרסום אוטומטי? רק כשהאישור יעבור בשרת. */
 export function rescheduleApproves(f, perms) {
-  return f.status !== 'approved' && !!perms.approve &&
+  return ['scheduled', 'failed'].includes(f.status) && !!perms.approve &&
     f.autoReady && f.hasContent && f.variantReady;
 }
 
@@ -84,7 +84,10 @@ export function choosePrimary(f, perms, now = new Date()) {
     return perms.approve && publishingStuck(f, now) ? only('resetPublishing') : NONE;
   }
   if (f.status === 'pending_approval') {
-    return perms.approve ? { primary: 'approvePending', secondary: 'reject' } : NONE;
+    if (!perms.approve) return NONE;
+    // המועד עבר — השרת לא יאשר; קודם מועד חדש (הרשאת תוכן), או דחייה
+    if (past) return perms.content ? { primary: 'reschedule', secondary: 'reject' } : only('reject');
+    return { primary: 'approvePending', secondary: 'reject' };
   }
   if (!perms.content && !perms.approve) return NONE;
 

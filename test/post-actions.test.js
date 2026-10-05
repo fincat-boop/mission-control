@@ -55,8 +55,13 @@ test('ממתין לאישור — "אשר" ראשית ו"דחה" משנית, ר�
   assert.deepEqual(pick(facts({ status: 'pending_approval', hasContent: false })),
     { primary: 'approvePending', secondary: 'reject' });
   assert.equal(pick(facts({ status: 'pending_approval' }), CONTENT).primary, null);
-  // גם כשהמועד עבר — עדיין שאלה של אישור
-  assert.equal(pick(facts({ status: 'pending_approval', scheduled_at: PAST })).primary, 'approvePending');
+  // המועד עבר — השרת לא יאשר: קודם מועד חדש (או דחייה)
+  assert.deepEqual(pick(facts({ status: 'pending_approval', scheduled_at: PAST })),
+    { primary: 'reschedule', secondary: 'reject' });
+  assert.deepEqual(pick(facts({ status: 'pending_approval', scheduled_at: PAST }), { content: false, approve: true }),
+    { primary: 'reject', secondary: null });
+  // מועד חדש לממתין לא מאשר לפרסום אוטומטי — האישור שלו הוא "אשר" בנפרד
+  assert.equal(rescheduleApproves(facts({ status: 'pending_approval' }), ALL), false);
 });
 
 test('נכשל — "קבע מועד חדש" (ואז אישור)', () => {
