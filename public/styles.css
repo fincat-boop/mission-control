@@ -793,6 +793,49 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .cgrid td.cell.na    { color: var(--muted); opacity: .45; cursor: default; }
 .cgrid td.cell.na:hover { background: none; }
 
+/* קמפיין כללי: עמודה לכל מדיה, שורה לכל פוסט. העמודות נערמות במסך צר.
+   כל שורה היא אותה רשת, כדי שמספר, תאריך ומצב יעמדו על אותו קו אנכי. */
+.gboard {
+  display: grid; gap: 16px; align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+}
+.gcol { padding: 20px 24px 12px; }
+.gcol-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.gcol-head > div { flex: 1; min-width: 0; }
+.gcol-head b { display: block; font-size: 13.5px; font-weight: 650; }
+.gcol-head .d { font-size: 11.5px; color: var(--muted); }
+.gslots { list-style: none; padding: 0; margin: 0 -10px; }
+.gslot {
+  display: grid; grid-template-columns: 22px 44px minmax(0, 1fr) 72px; gap: 10px;
+  align-items: center; padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  font-size: 12.5px; border-top: 1px solid var(--border);
+}
+.gslot:first-child { border-top: none; }
+.gslot:hover { background: var(--panel-2); }
+.gslot.ro { cursor: default; }
+.gslot.ro:hover { background: none; }
+.gslot.past { opacity: .65; }
+.gslot .gnum { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.gslot .gdate { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.gslot.extra .gdate { color: var(--ink-2); }
+.gslot .gttl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gslot .gttl.none { color: var(--muted); }
+.gslot .gclip { color: var(--muted); font-size: 11px; }
+/* מצב = נקודה + טקסט, בלי מסגרת */
+.gst { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.gst i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.gst.ok    { color: var(--st-good); }
+.gst.draft { color: var(--st-warn); }
+.gst.gap   { color: var(--st-crit); }
+.gst.na    { color: var(--muted); }
+
+/* שדה משנה בטופס (מספר שבועות / תאריך סיום ידני) שנפתח לפי הבחירה */
+.frow .subfield { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--ink-2); }
+.frow .subfield[hidden] { display: none; }
+.frow .subfield input[type=number] { width: 86px; flex: none; }
+.frow .subfield input[type=date] { width: auto; }
+.checks label:has(input:disabled) { opacity: .55; cursor: default; }
+
 /* קבצים מצורפים בטופס */
 .fileline {
   display: flex; align-items: center; gap: 9px; padding: 6px 0; font-size: 12.5px;

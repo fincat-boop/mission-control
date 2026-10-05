@@ -1,5 +1,6 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { acceptAttr, fileLimitLabel } from '../core/upload.js';
+import { PERIOD_PRESETS, parsePeriod, periodEnd } from '../core/period.js';
 
 /**
  * דיאלוג טופס כללי.
@@ -11,8 +12,11 @@ import { acceptAttr, fileLimitLabel } from '../core/upload.js';
  * שכבה 1: תלוי רק ב-core, ואף מודול פיצ'ר לא מייבא ממנו רנדרר.
  *
  * סוגי שדות נתמכים:
- *   checkbox · multicheck · select · auto · textarea · files
+ *   checkbox · multicheck · select · radio · auto · period · textarea · files
  *   וכל type נייטיבי אחר (text/date/number/email…) דרך ברירת המחדל.
+ *
+ * כל שורה נושאת data-field="<name>", כדי שטופס יוכל להסתיר שורה שלא
+ * רלוונטית לבחירה אחרת בו (hidden: true מסתיר מההתחלה).
  */
 
 let genSpec = null;
@@ -22,6 +26,16 @@ function collectValues(fields) {
   const values = {};
   for (const f of fields) {
     if (f.type === 'files') continue;      // קבצים נשלחים בנפרד ב-onSave
+    if (f.type === 'radio') {
+      // רדיו מושבת = אין מה לשנות; לא נשלח בכלל, והשרת לא נוגע בערך הקיים
+      const picked = $(`[name="gen_${f.name}"]:checked`);
+      if (picked && !picked.disabled) values[f.name] = picked.value;
+      continue;
+    }
+    if (f.type === 'period') {
+      Object.assign(values, periodValue(f));
+      continue;
+    }
     const el = $(`#gen_${f.name}`);
     if (f.type === 'checkbox') {
       values[f.name] = el.checked;
@@ -47,6 +61,65 @@ function collectValues(fields) {
   return values;
 }
 
+/* ---------- תקופה: בחירה מוכנה, מספר שבועות, או תאריך סיום ידני ---------- */
+
+/** הערך שהשדה מייצג כרגע: '1m' / '<N>w' / 'custom' (+ ends_on בידני) */
+function periodValue(f) {
+  const sel = $(`#gen_${f.name}`).value;
+  if (sel === 'weeks') {
+    const n = Number($(`#gen_${f.name}_weeks`).value);
+    if (!parsePeriod(`${n}w`)) throw new Error('צריך מספר שבועות שלם בין 1 ל-104');
+    return { [f.name]: `${n}w` };
+  }
+  if (sel === 'custom') return { [f.name]: 'custom', ends_on: $(`#gen_${f.name}_end`).value || null };
+  return { [f.name]: sel };
+}
+
+/** 2026-11-11 → 11.11.26 */
+const shortDate = (s) => `${Number(s.slice(8, 10))}.${Number(s.slice(5, 7))}.${s.slice(2, 4)}`;
+
+/** מציג/מסתיר את שדה המשנה, ומעדכן את "רץ עד…" מתחת לבחירה */
+function syncPeriod(f) {
+  const sel = $(`#gen_${f.name}`).value;
+  $(`#gen_${f.name}_weeks_row`).hidden = sel !== 'weeks';
+  $(`#gen_${f.name}_end_row`).hidden = sel !== 'custom';
+
+  const start = f.start ? $(`#gen_${f.start}`)?.value : null;
+  let end = null;
+  if (sel === 'custom') end = $(`#gen_${f.name}_end`).value || null;
+  else if (sel === 'weeks') end = periodEnd(start, `${Number($(`#gen_${f.name}_weeks`).value)}w`);
+  else end = periodEnd(start, sel);
+
+  const note = $(`#gen_${f.name}_note`);
+  if (sel === 'custom') {
+    note.textContent = start && end && end < start ? 'תאריך הסיום מוקדם מהפוסט הראשון' : '';
+  } else if (!start) {
+    note.textContent = 'בוחרים תאריך לפוסט הראשון, ותאריך הסיום יחושב ממנו';
+  } else {
+    note.textContent = end ? `רץ עד ${shortDate(end)}` : '';
+  }
+}
+
+function periodHtml(f, id) {
+  const p = parsePeriod(f.value) ?? parsePeriod('1m');
+  const preset = PERIOD_PRESETS.some(([v]) => v === f.value);
+  const sel = p.unit === 'custom' ? 'custom' : preset ? f.value : 'weeks';
+  const weeks = !preset && p.unit === 'w' ? p.n : '';
+  const opts = [...PERIOD_PRESETS, ['weeks', 'מספר שבועות אחר'], ['custom', 'תאריך סיום ידני']];
+  return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
+    <select id="${id}">${opts.map(([v, l]) =>
+      `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
+    <div class="subfield" id="${id}_weeks_row" hidden>
+      <input id="${id}_weeks" type="number" min="1" max="104" value="${esc(weeks)}"> שבועות
+    </div>
+    <div class="subfield" id="${id}_end_row" hidden>
+      <input id="${id}_end" type="date" value="${esc(sel === 'custom' ? f.ends_on ?? '' : '')}"
+             aria-label="תאריך סיום">
+    </div>
+    <div class="fhint" id="${id}_note" aria-live="polite"></div>
+  </div>`;
+}
+
 export function wireGenericDialog() {
   $('#genCancel').addEventListener('click', () => $('#genDlg').close());
   $('#genSave').addEventListener('click', run(async () => {
@@ -54,9 +127,10 @@ export function wireGenericDialog() {
     const btn = $('#genSave');
     btn.disabled = true;
     try {
-      await genSpec.onSave(values);
+      // onSave יכול להחזיר הודעה משלו במקום "נשמר."
+      const msg = await genSpec.onSave(values);
       $('#genDlg').close();
-      toast('נשמר.');
+      toast(typeof msg === 'string' ? msg : 'נשמר.');
     } finally {
       btn.disabled = false;
     }
@@ -87,6 +161,17 @@ function fieldHtml(f) {
         `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(l)}</option>`
       ).join('')}</select></div>`;
   }
+  if (f.type === 'radio') {
+    const cur = String(f.value ?? '');
+    return `<div class="frow"><label>${esc(f.label)}</label>
+      <div class="checks" role="radiogroup">${f.options.map(([v, l]) =>
+        `<label><input type="radio" name="${id}" value="${esc(v)}"${
+          String(v) === cur ? ' checked' : ''}${f.disabled ? ' disabled' : ''}> ${esc(l)}</label>`
+      ).join('')}</div>
+      ${f.hint ? `<div class="fhint">${esc(f.hint)}</div>` : ''}
+    </div>`;
+  }
+  if (f.type === 'period') return periodHtml(f, id);
   if (f.type === 'auto') {
     const manual = f.value != null;
     return `<div class="frow"><label>${esc(f.label)}</label>
@@ -122,7 +207,7 @@ function fieldHtml(f) {
 
 /**
  * @param {{title:string, fields:object[], onSave:(v:object)=>Promise<void>,
- *          extraActions?:string, onOpen?:()=>void}} spec
+ *          extraActions?:string, onOpen?:()=>void, saveLabel?:string}} spec
  */
 export function openGeneric(spec) {
   genSpec = spec;
@@ -131,7 +216,17 @@ export function openGeneric(spec) {
   $('#genDlg').classList.remove('with-live-preview');
   $('#livePreviewPane')?.remove();
   $('#genTitle').textContent = spec.title;
-  $('#genBody').innerHTML = spec.fields.map(fieldHtml).join('');
+  $('#genSave').textContent = spec.saveLabel ?? 'שמור';
+  $('#genBody').innerHTML = spec.fields.map((f) =>
+    fieldHtml(f).replace('<div class="frow"',
+      `<div class="frow" data-field="${esc(f.name)}"${f.hidden ? ' hidden' : ''}`)).join('');
+
+  for (const f of spec.fields.filter((x) => x.type === 'period')) {
+    const sync = () => syncPeriod(f);
+    [`#gen_${f.name}`, `#gen_${f.name}_weeks`, `#gen_${f.name}_end`, `#gen_${f.start}`]
+      .forEach((sel) => $(sel)?.addEventListener('input', sync));
+    sync();
+  }
 
   $$('#genBody [data-auto-on]').forEach((r) => r.addEventListener('change', () => {
     const input = $(`#gen_${r.dataset.autoOn}`);
