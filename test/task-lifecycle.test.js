@@ -2,7 +2,9 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { autoAssignee, suppressTaskedAlerts, taskCloseReason } from '../src/task-lifecycle.js';
-import { approveTaskBlocked, groupTasks, isSnoozed } from '../src/routes/tasks.js';
+import {
+  BULK_MAX, approveTaskBlocked, groupTasks, invalidTaskShape, isDbId, isRealDate, isSnoozed, parseBulkIds,
+} from '../src/routes/tasks.js';
 
 const NOW = new Date('2026-10-05T12:00:00Z');
 const HOUR = 3600000;
@@ -113,4 +115,40 @@ test('approveTaskBlocked — גם דחייה של משימת אישור דורש
   assert.equal(approveTaskBlocked({ kind: 'approve' }, { snoozed_until: at(5) }, content), true);
   assert.equal(approveTaskBlocked({ kind: 'approve' }, { snoozed_until: at(5) }, { perm_approve: true }), false);
   assert.equal(approveTaskBlocked({ kind: 'write' }, { snoozed_until: at(5) }, content), false);
+});
+
+/* ========================= בדיקת קלט ========================= */
+
+test('isRealDate — רק תאריך שקיים בלוח השנה', () => {
+  assert.equal(isRealDate('2026-02-28'), true);
+  assert.equal(isRealDate('2028-02-29'), true);
+  assert.equal(isRealDate('2026-02-31'), false);
+  assert.equal(isRealDate('2026-13-01'), false);
+  assert.equal(isRealDate('2026-1-5'), false);
+  assert.equal(isRealDate('מחר'), false);
+});
+
+test('isDbId — שלם חיובי בטווח int4', () => {
+  assert.equal(isDbId(5), true);
+  assert.equal(isDbId('5'), true);
+  assert.equal(isDbId(2147483647), true);
+  for (const v of [0, -1, 1.5, 2147483648, '5a', null, 'abc', true]) assert.equal(isDbId(v), false, String(v));
+});
+
+test('parseBulkIds — 1–200 מזהים תקינים, כפולים מאוחדים; אחרת שגיאה בעברית', () => {
+  assert.deepEqual(parseBulkIds([1, '2', 2]), { ids: [1, 2] });
+  assert.match(parseBulkIds([]).error, /לא נבחרו/);
+  assert.match(parseBulkIds('1,2').error, /לא נבחרו/);
+  assert.match(parseBulkIds([1, 99999999999]).error, /לא תקינה/);
+  assert.match(parseBulkIds([1, 'x']).error, /לא תקינה/);
+  assert.match(parseBulkIds(Array.from({ length: BULK_MAX + 1 }, (_, i) => i + 1)).error, /עד 200/);
+});
+
+test('invalidTaskShape — סוג, תאריך, מזהים', () => {
+  assert.equal(invalidTaskShape({ title: 'x', due_on: '2026-10-07', assignee_id: 2 }), null);
+  assert.match(invalidTaskShape({ kind: 'failed' }), /רק משימה כללית/);
+  assert.match(invalidTaskShape({ due_on: '2026-02-31' }), /תאריך היעד/);
+  assert.match(invalidTaskShape({ assignee_id: 'abc' }), /המשתמש שנבחר לא תקין/);
+  assert.match(invalidTaskShape({ assignee_id: 1.5 }), /לא תקין/);
+  assert.match(invalidTaskShape({ post_id: 3000000000 }), /הפוסט לא תקין/);
 });

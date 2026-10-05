@@ -91,18 +91,54 @@ r.get('/tasks/count', wrap(async (_req, res) => {
  * האחראי חייב להיות משתמש של הארגון (RLS מסנן את users) — מפתח זר לבדו
  * לא בודק את זה, כי בדיקת FK עוקפת RLS.
  */
-async function invalidTaskFields(b) {
+const INT4_MAX = 2147483647;
+export const BULK_MAX = 200;
+
+/** מזהה תקין לעמודת int: מספר שלם חיובי בטווח int4 (גם כמחרוזת ספרות) */
+export const isDbId = (v) => {
+  const n = typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v;
+  return Number.isInteger(n) && n > 0 && n <= INT4_MAX;
+};
+
+/** 'YYYY-MM-DD' שהוא תאריך אמיתי — 2026-02-31 נדחה (Postgres היה זורק 500) */
+export function isRealDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
+/**
+ * רשימת מזהים לפעולה מרוכזת: מערך של 1–200 מזהים תקינים. מחזיר
+ * { ids } או { error } בעברית — קלט שבור לא מגיע ל-SQL.
+ */
+export function parseBulkIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return { error: 'לא נבחרו משימות' };
+  if (ids.length > BULK_MAX) return { error: `אפשר לבחור עד ${BULK_MAX} משימות בבת אחת` };
+  if (!ids.every(isDbId)) return { error: 'רשימת המשימות לא תקינה' };
+  return { ids: [...new Set(ids.map(Number))] };
+}
+
+/** בדיקות שדות בלי DB (טהורה) — הודעת שגיאה או null */
+export function invalidTaskShape(b) {
   if ('kind' in b && b.kind != null && b.kind !== 'general') {
     return 'אפשר ליצור ידנית רק משימה כללית — משימות אישור, כשל וכתיבה נוצרות מהמערכת';
   }
-  if ('due_on' in b && b.due_on != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(b.due_on))) {
-    return 'תאריך היעד לא תקין';
-  }
+  if ('due_on' in b && b.due_on != null && !isRealDate(b.due_on)) return 'תאריך היעד לא תקין';
   if ('snoozed_until' in b && b.snoozed_until != null && Number.isNaN(Date.parse(b.snoozed_until))) {
     return 'זמן הדחייה לא תקין';
   }
+  for (const [k, label] of [['assignee_id', 'המשתמש שנבחר'], ['post_id', 'הפוסט'], ['endpoint_id', 'נקודת הקצה']]) {
+    if (k in b && b[k] != null && !isDbId(b[k])) return `${label} לא תקין`;
+  }
+  return null;
+}
+
+async function invalidTaskFields(b) {
+  const shape = invalidTaskShape(b);
+  if (shape) return shape;
   if ('assignee_id' in b && b.assignee_id != null &&
-      !(await one('select 1 from users where id = $1', [b.assignee_id]))) {
+      !(await one('select 1 from users where id = $1', [Number(b.assignee_id)]))) {
     return 'המשתמש שנבחר לא נמצא';
   }
   return null;
@@ -136,6 +172,7 @@ export function approveTaskBlocked(task, body, user) {
 }
 
 r.patch('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
+  if (!isDbId(req.params.id)) return bad(res, 'לא נמצאה משימה כזו', 404);
   const body = { ...req.body };
   const cur = await one('select kind from tasks where id = $1', [req.params.id]);
   if (!cur) return bad(res, 'לא נמצאה משימה כזו', 404);
@@ -156,6 +193,7 @@ r.patch('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
 }));
 
 r.delete('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
+  if (!isDbId(req.params.id)) return bad(res, 'לא נמצאה משימה כזו', 404);
   // מחיקה היא סגירה בדרך אחרת — אותו כלל כמו ב-PATCH
   const cur = await one('select kind from tasks where id = $1', [req.params.id]);
   if (cur && approveTaskBlocked(cur, { done: true }, req.user)) {
@@ -173,8 +211,9 @@ r.delete('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
 r.post('/tasks/bulk', requirePerm('content'), wrap(async (req, res) => {
   const { ids, action } = req.body ?? {};
   if (!['done', 'delete'].includes(action)) return bad(res, 'פעולה לא מוכרת');
-  const list = Array.isArray(ids) ? ids.map(Number).filter(Number.isInteger) : [];
-  if (!list.length) return bad(res, 'לא נבחרו משימות');
+  const parsed = parseBulkIds(ids);
+  if (parsed.error) return bad(res, parsed.error);
+  const list = parsed.ids;
 
   const found = await rows('select id, kind from tasks where id = any($1::int[])', [list]);
   const allowed = found.filter((t) => !approveTaskBlocked(t, { done: true }, req.user)).map((t) => t.id);
