@@ -45,7 +45,10 @@ export async function planWeek(anchorDate) {
     // ready_channel_ids — רק גרסה שסומנה "מוכן". eligible_channel_ids — גם
     // טיוטה: השיבוץ הולך לפי האסטרטגיה, לא לפי אם כבר נכתב טקסט סופי.
     // המנוע ממשיך להעדיף מוכן על פני טיוטה כשיש ברירה (ראו chooseForSlot).
+    // תאריכי הקמפיין נשלפים עם התוכן: תוכן של קמפיין לא יוצא לפני
+    // starts_on ולא אחרי ends_on (ראו outsideCampaignWindow).
     rows(`select ci.*,
+                 ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
                  coalesce(
                    array_agg(v.channel_id) filter (where v.status = 'ready'),
                    '{}'
@@ -58,7 +61,7 @@ export async function planWeek(anchorDate) {
             left join content_variants v on v.content_id = ci.id
             left join campaigns ca on ca.id = ci.campaign_id
            where ca.id is null or ca.paused_at is null
-           group by ci.id
+           group by ci.id, ca.id
            order by ci.created_at`),
     // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
     // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
@@ -517,7 +520,19 @@ function compareKeys(a, b) {
 
 /* ========================= בחירה למשבצת ========================= */
 
-function chooseForSlot(ctx) {
+/**
+ * האם התאריך מחוץ לחלון של הקמפיין שהתוכן שייך אליו. תוכן שוטף (בלי
+ * קמפיין) וקמפיין בלי תאריכים — אף פעם לא מחוץ לחלון. התאריכים הם
+ * YYYY-MM-DD, ולכן השוואת מחרוזות מדויקת.
+ */
+export function outsideCampaignWindow(c, dateKey) {
+  if (!c?.campaign_id) return false;
+  if (c.campaign_starts_on && dateKey < c.campaign_starts_on) return true;
+  if (c.campaign_ends_on && dateKey > c.campaign_ends_on) return true;
+  return false;
+}
+
+export function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
           usedContent, lastPerPair, settings, history, sameDay } = ctx;
 
@@ -542,6 +557,7 @@ function chooseForSlot(ctx) {
     const ready = content.filter((c) =>
       c.endpoint_id === e.id &&
       (c.eligible_channel_ids ?? []).includes(slot.channel_id) &&
+      !outsideCampaignWindow(c, slot.dateKey) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&
       usage.allows(slot.channel_id, slot.dateKey, c.kind)
