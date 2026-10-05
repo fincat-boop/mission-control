@@ -1,6 +1,6 @@
 import { api } from '../core/api.js';
 import { can, rebuildEpColors, state } from '../core/state.js';
-import { $, $$, esc, run, toast } from '../core/dom.js';
+import { $, $$, copyText, esc, run, toast } from '../core/dom.js';
 import { HE_DAYS, fmtDate, ymd } from '../core/format.js';
 import { refreshBoard } from '../ui/refresh.js';
 import { confirmDialog } from '../core/confirm.js';
@@ -410,6 +410,23 @@ async function deleteOrDisable(message, offerDisable, disableNote, deleteLabel) 
   ]);
 }
 
+/**
+ * משתמש חדש לא מקבל הזמנה מהמערכת — מי שהוסיף אותו צריך להגיד לו איך
+ * נכנסים. הכתובת היא של האתר הנוכחי, והכניסה רק עם Google במייל שנרשם.
+ */
+async function teammateAdded(u) {
+  const howTo = (url, email) => `כדי להיכנס: נכנסים ל-${url} ומתחברים עם Google עם ${email}.`;
+  // בתצוגה — בידוד כיווני סביב הכתובת והמייל, שלא יתהפכו בתוך משפט בעברית
+  const iso = (t) => `\u2068${t}\u2069`;
+  const choice = await choiceDialog(`${u.name} נוסף.\n${howTo(iso(location.origin), iso(u.email))}`, [
+    { label: 'סגור', value: null },
+    { label: 'העתק הוראות', value: 'copy', cls: 'primary' },
+  ]);
+  if (choice !== 'copy') return;
+  await copyText(`Mission Control — ${howTo(location.origin, u.email)}`);
+  toast(`ההוראות הועתקו — אפשר להדביק ל${u.name}.`);
+}
+
 function wireManage(ro, connections) {
   const reload = run(async () => { await renderManage(); await refreshBoard(); });
 
@@ -697,6 +714,12 @@ function wireManage(ro, connections) {
       { name: 'perm_approve', label: `אישור פרסום — ${APPROVE_HINT}`, type: 'checkbox' },
       { name: 'perm_users', label: 'ניהול משתמשים', type: 'checkbox' },
     ],
-    onSave: async (v) => { await api('/users', { method: 'POST', body: v }); await reload(); },
+    onSave: async (v) => {
+      const { user } = await api('/users', { method: 'POST', body: v });
+      await reload();
+      // אחרי שחלון הטופס נסגר — במקום "נשמר." מה המשתמש החדש צריך לעשות
+      setTimeout(run(() => teammateAdded(user)));
+      return false;
+    },
   }));
 }
