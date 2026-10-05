@@ -80,6 +80,7 @@ export async function renderData() {
 
 /** השדות בכל שורה, לפי סדר העמודות (וסדר המעבר ב-Enter) */
 const RES_FIELDS = ['reach', 'engagement', 'clicks', 'leads', 'note'];
+const RES_LABELS = { reach: 'חשיפות', engagement: 'מעורבות', clicks: 'קליקים', leads: 'לידים', note: 'הערה' };
 
 /**
  * שורות ששונו ועוד לא נשמרו: post_id -> רק השדות שהשתנו (מחרוזות כמו
@@ -97,8 +98,10 @@ const isMeasuredRow = (r) => ['reach', 'engagement', 'clicks', 'leads'].some((m)
 
 function resultRow(p, editable) {
   const dis = editable ? '' : ' disabled';
+  // לקורא מסך: "שם הפוסט — חשיפות", כי כותרת העמודה רחוקה מהשדה
+  const aria = (f) => `aria-label="${esc(`${p.title} — ${RES_LABELS[f]}`)}"`;
   const num = (f) => `<td class="resnum"><input type="number" min="0" step="1" inputmode="numeric"
-      data-f="${f}" data-orig="${p[f] ?? ''}" value="${p[f] ?? ''}"${dis}></td>`;
+      data-f="${f}" data-orig="${p[f] ?? ''}" value="${p[f] ?? ''}" ${aria(f)}${dis}></td>`;
   const cls = p.has_results && isMeasuredRow(p) ? ' class="measured"' : '';
   return `<tr data-res-row="${p.id}" data-had="${p.has_results ? 1 : 0}"${cls}>
     <td class="when">${esc(fmtDate(ymd(new Date(p.published_at))))}</td>
@@ -108,7 +111,7 @@ function resultRow(p, editable) {
       <div class="reserr" hidden></div></td>
     ${num('reach')}${num('engagement')}${num('clicks')}${num('leads')}
     <td class="resnote"><input type="text" data-f="note" data-orig="${esc(p.note ?? '')}"
-      value="${esc(p.note ?? '')}" placeholder="הערה"${dis}></td>
+      value="${esc(p.note ?? '')}" placeholder="הערה" ${aria('note')}${dis}></td>
   </tr>`;
 }
 
