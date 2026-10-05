@@ -7,6 +7,7 @@ import { mediaUrl } from '../media.js';
 import { createNewsletter, hubMailReady, newsletterStatus } from '../hub-mail.js';
 import { emitHubEventSafe, postEventInput } from '../hub-events.js';
 import { friendlyPublishError } from './errors.js';
+import { itemAssetsSql } from '../links.js';
 
 /**
  * מסלול הפרסום האוטומטי.
@@ -180,14 +181,12 @@ export async function loadPayload(postId) {
 
   // קובץ ב-R2 נשלף בלי bytes (הפלטפורמה מושכת אותו מהקישור הציבורי);
   // רק קובץ ישן שעוד במסד מביא את הבייטים שלו
+  // משבצת מקושרת: הקבצים של המקור (itemAssetsSql עוקב אחרי הקישור)
   const assets = post.content_id
     ? await rows(
-        `select id, filename, mime, size_bytes, storage_key,
-                case when storage_key is null then data end as data
-           from content_assets
-          where content_id = $1 and (variant_id is null or variant_id = $2)
-          order by variant_id nulls last, id`,
-        [post.content_id, variant?.id ?? null])
+        itemAssetsSql(`a.id, a.filename, a.mime, a.size_bytes, a.storage_key,
+                       case when a.storage_key is null then a.data end as data`),
+        [post.content_id, post.channel_id])
     : [];
 
   return { post, variant, assets };

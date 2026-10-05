@@ -192,6 +192,33 @@ create unique index if not exists content_general_slot_idx
   on content_items (campaign_id, slot_channel_id, sort_order)
   where slot_channel_id is not null;
 
+-- משבצות מקושרות (קמפיין כללי): המשבצת העוקבת מצביעה על המקור, ושתיהן
+-- חולקות תוכן אחד — הטקסט והמצב משוכפלים לגרסה של העוקבת בכל כתיבה, והקבצים
+-- יושבים רק על המקור ונקראים דרכו (ראו src/links.js). רמה אחת בלבד: מקור
+-- לא מצביע על אף אחד, ולכל מקור לכל היותר עוקבת אחת בכל מדיה.
+-- deferrable initially immediate: באפליקציה הבדיקה מיידית (הבקשה נשלחת לפני
+-- ה-commit, ובדיקה נדחית הייתה מחזירה 200 ואז מתגלגלת בשקט). השחזור מגיבוי
+-- מכניס שורות לפי הסדר בקובץ, ועוקבת יכולה להופיע לפני המקור שלה — הוא
+-- מריץ set constraints all deferred בתוך הטרנזקציה שלו. פעולת set null עצמה
+-- לא נדחית: מקור שנמחק מנתק מיד.
+alter table content_items
+  add column if not exists linked_to_id int
+    references content_items(id) on delete set null deferrable initially immediate;
+-- גרסה ראשונה של העמודה נוצרה initially deferred — מיישרים (הרצה חוזרת: no-op)
+do $$ begin
+  if exists (select 1 from pg_constraint
+              where conname = 'content_items_linked_to_id_fkey' and condeferred) then
+    alter table content_items
+      alter constraint content_items_linked_to_id_fkey deferrable initially immediate;
+  end if;
+end $$;
+do $$ begin
+  alter table content_items add constraint content_items_link_not_self
+    check (linked_to_id is null or linked_to_id <> id);
+exception when duplicate_object then null; end $$;
+create unique index if not exists content_link_channel_idx
+  on content_items (linked_to_id, slot_channel_id) where linked_to_id is not null;
+
 -- קבצים מצורפים לתוכן: תמונה, מסמך, כל דבר.
 -- נשמרים במסד ולא בדיסק, כדי שסקריפט הגיבוי יכסה אותם כמו כל השאר.
 create table if not exists content_assets (

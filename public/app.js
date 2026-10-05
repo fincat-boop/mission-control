@@ -15,7 +15,7 @@ import { renderStrategy } from './js/features/strategy.js';
 import { wireAIWidget } from './js/features/assistant.js';
 import { paintTaskBadge, renderTasks } from './js/features/tasks.js';
 import { renderData } from './js/features/data.js';
-import { renderPlan, wireMailPreview } from './js/features/plan.js';
+import { leavePlanView, renderPlan, wireMailPreview } from './js/features/plan.js';
 import { renderManage } from './js/features/manage.js';
 import { renderBoard } from './js/features/board.js';
 
@@ -98,6 +98,8 @@ const renderTab = (tab) => RENDERERS[tab]();
 
 /** מעבר לטאב מתוך קוד (למשל לחיצה על פעמון ההתראות) */
 async function showTab(tab) {
+  // מצב "בחירת משבצת לקישור" שייך למסך הקמפיין — יציאה ממנו מבטלת אותו
+  if (tab !== 'plan') leavePlanView();
   state.tab = tab;
   $$('.tab').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.t === tab)));
   for (const key of TABS) $(`#${key}`).hidden = key !== tab;

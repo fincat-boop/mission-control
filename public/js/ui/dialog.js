@@ -13,6 +13,7 @@ import { PERIOD_PRESETS, parsePeriod, periodEnd, periodLabel } from '../core/per
  *
  * סוגי שדות נתמכים:
  *   checkbox · multicheck · select · radio · auto · period · textarea · files
+ *   html (שורת מידע מוכנה, בלי ערך — f.html כבר מוסלש בידי הקורא)
  *   וכל type נייטיבי אחר (text/date/number/email…) דרך ברירת המחדל.
  *
  * כל שורה נושאת data-field="<name>", כדי שטופס יוכל להסתיר שורה שלא
@@ -26,6 +27,7 @@ function collectValues(fields) {
   const values = {};
   for (const f of fields) {
     if (f.type === 'files') continue;      // קבצים נשלחים בנפרד ב-onSave
+    if (f.type === 'html') continue;       // שורת מידע, אין ערך
     if (f.type === 'radio') {
       // רדיו מושבת = אין מה לשנות; לא נשלח בכלל, והשרת לא נוגע בערך הקיים
       const picked = $(`[name="gen_${f.name}"]:checked`);
@@ -180,6 +182,7 @@ function fieldHtml(f) {
     </div>`;
   }
   if (f.type === 'period') return periodHtml(f, id);
+  if (f.type === 'html') return `<div class="frow">${f.html}</div>`;
   if (f.type === 'auto') {
     const manual = f.value != null;
     return `<div class="frow"><label>${esc(f.label)}</label>

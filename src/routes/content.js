@@ -11,6 +11,10 @@ import { analyzeImport, runImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
+import {
+  LinkError, assetOwnerId, linkGroup, linkSlots, lockLinkScope, mediaOwner, releaseLinks, syncFrom,
+  unlink,
+} from '../links.js';
 
 const r = Router();
 
@@ -23,6 +27,12 @@ async function slotChannelError(contentId, channelId) {
   const item = await one('select slot_channel_id from content_items where id = $1', [contentId]);
   if (!item?.slot_channel_id || Number(channelId) === item.slot_channel_id) return null;
   return 'הפוסט הזה שייך למדיה אחת בקמפיין כללי — אין לו גרסה למדיה אחרת';
+}
+
+/** שגיאת קישור (LinkError) חוזרת למשתמש כמו שהיא; כל השאר — שגיאת שרת */
+function linkFail(res, e) {
+  if (e instanceof LinkError) return res.status(e.status).json({ error: e.message, ...e.extra });
+  throw e;
 }
 
 /** מקום במשבצת: מספר שלם 1–1000 */
@@ -53,6 +63,8 @@ async function uniqueOrNull(fn) {
 /** יצירה או עדכון של הגרסה של זווית מסוימת במדיה מסוימת */
 r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
+  // משבצת מקושרת: סדר הנעילה של הקבוצה (קמפיין ← פריטים) לפני כל כתיבה
+  try { await lockLinkScope(req.params.id); } catch (e) { return linkFail(res, e); }
   const slotErr = await slotChannelError(req.params.id, req.params.channelId);
   if (slotErr) return bad(res, slotErr);
   const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
@@ -68,13 +80,26 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
      returning *`,
     [req.params.id, req.params.channelId, b.body ?? null, status, meta]
   );
+  // משבצת מקושרת: אותו טקסט ומצב לכל המשבצות בקבוצה
+  await syncFrom(req.params.id);
   const engine = await autoFill(b.week);
   res.json({ variant: v, engine });
 }));
 
 r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
+  try { await lockLinkScope(req.params.id); } catch (e) { return linkFail(res, e); }
   await query('delete from content_variants where content_id = $1 and channel_id = $2',
     [req.params.id, req.params.channelId]);
+  // משבצת מקושרת: הגרסה המשותפת יורדת מכל המשבצות בקבוצה, כל אחת במדיה שלה
+  const group = await linkGroup(req.params.id);
+  const self = group.find((x) => x.id === Number(req.params.id));
+  if (group.length > 1 && self?.slot_channel_id === Number(req.params.channelId)) {
+    await query(
+      `delete from content_variants v using content_items ci
+        where ci.id = v.content_id and v.channel_id = ci.slot_channel_id
+          and ci.id = any($1::int[])`,
+      [group.map((x) => x.id)]);
+  }
   const engine = await autoFill(req.body?.week);
   res.json({ ok: true, engine });
 }));
@@ -184,6 +209,16 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
 }));
 
 r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  // נעילת הקמפיין לפני הקבוצות (אותו סדר כמו בכל שינוי של משבצות מקושרות)
+  await query('select id from campaigns where id = $1 for update', [req.params.id]);
+  // משבצות מקושרות מתפרקות קודם: בתוכן שוטף אין משבצות לקשר ביניהן, וכל
+  // אחת נשארת עם עותק משלה של התוכן (קבצים מועתקים מהמקור)
+  const sources = await rows(
+    `select distinct linked_to_id as id from content_items
+      where campaign_id = $1 and linked_to_id is not null`, [req.params.id]);
+  try {
+    for (const s of sources) await releaseLinks(s.id);
+  } catch (e) { return linkFail(res, e); }
   // התוכן נשאר ומתנתק (on delete set null). משבצת-מדיה בלי קמפיין היא
   // סתם תוכן שוטף, ולכן גם השיוך למשבצת יורד.
   await query('update content_items set slot_channel_id = null where campaign_id = $1',
@@ -218,7 +253,8 @@ r.get('/content', wrap(async (_req, res) => {
     content: items.map((x) => ({
       ...x,
       variants: variants.filter((v) => v.content_id === x.id),
-      assets: assets.filter((a) => a.content_id === x.id).map(assetView),
+      // משבצת מקושרת מציגה את הקבצים של המקור (הם יושבים רק שם)
+      assets: assets.filter((a) => a.content_id === assetOwnerId(x)).map(assetView),
     })),
   });
 }));
@@ -322,6 +358,9 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
 
 r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   const b = { ...req.body };
+  // משבצת מקושרת: נעילת הקמפיין ואז הקבוצה — לפני ש-updateById נועל את
+  // הפריט עצמו. עריכה של המקור ושל העוקבת במקביל רצות בתור, לא בדדלוק.
+  try { await lockLinkScope(req.params.id); } catch (e) { return linkFail(res, e); }
   const current = await one('select id, campaign_id, slot_channel_id from content_items where id = $1',
     [req.params.id]);
   if (!current) return bad(res, 'לא נמצא תוכן כזה', 404);
@@ -367,6 +406,10 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
         [b.campaign_id, current.slot_channel_id]))?.n ?? 1;
     }
   }
+  // משבצת מקושרת שיוצאת מהקמפיין מתנתקת קודם — עם עותק משלה של התוכן
+  if (leavingSlot) {
+    try { await releaseLinks(current.id); } catch (e) { return linkFail(res, e); }
+  }
   const c = await uniqueOrNull(() => updateById('content_items', CONTENT_FIELDS, req.params.id, b));
   if (!c) return bad(res, 'המשבצת תפוסה', 409);
   if (leavingSlot) {
@@ -390,8 +433,38 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
        ['ready', 'draft'].includes(b.status) ? b.status : null]
     );
   }
+  // משבצת מקושרת: התוכן (כותרת, סוג, טקסט, מצב) אחד לכל הקבוצה — עריכה
+  // מכל משבצת בה עוברת לכולן. המיקום (משבצת, קמפיין) נשאר של כל אחת.
+  if (['title', 'kind', 'body', 'status'].some((k) => b[k] !== undefined)) {
+    await syncFrom(c.id);
+  }
   const engine = await autoFill(b.week);
   res.json({ content: c, engine });
+}));
+
+/**
+ * קישור משבצת למשבצת של מדיה אחרת באותו קמפיין כללי — מכאן הן חולקות תוכן
+ * אחד (טקסט וקבצים), וכל אחת מתוזמנת לפי המדיה שלה. ראו src/links.js.
+ * {target_campaign_slot: {channel_id, sort_order}} או {target_content_id};
+ * יעד עם תוכן דורש replace: true (אחרת 409 עם needs_confirm).
+ */
+r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
+  let out;
+  try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
+  const engine = await autoFill(req.body?.week);
+  res.json({ content: out.source, follower: out.follower, engine });
+}));
+
+/**
+ * "נתק קישור": עוקבת מתנתקת מהמקור שלה; מקור — כל העוקבות שלו מתנתקות.
+ * כל משבצת נשארת עם עותק עצמאי של התוכן (הטקסט כבר אצלה, הקבצים מועתקים).
+ */
+r.post('/content/:id/unlink', requirePerm('content'), wrap(async (req, res) => {
+  let out;
+  try { out = await unlink(req.params.id); } catch (e) { return linkFail(res, e); }
+  const content = await one('select * from content_items where id = $1', [req.params.id]);
+  const engine = await autoFill(req.body?.week);
+  res.json({ content, ...out, engine });
 }));
 
 /** נקודת הקצה של תוכן: מהקמפיין אם יש, אחרת מה שנשלח במפורש */
@@ -416,6 +489,11 @@ async function reopenIfEmpty(campaignId) {
 }
 
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
+  // מקור שנמחק לא משאיר עוקבות ריקות: כל אחת נשארת עם עותק משלה (הראשונה
+  // יורשת את הקבצים עצמם). עוקבת שנמחקת פשוט יוצאת מהקבוצה.
+  try {
+    await releaseLinks(req.params.id, { sourceGoing: true });
+  } catch (e) { return linkFail(res, e); }
   const gone = await one('delete from content_items where id = $1 returning campaign_id',
     [req.params.id]);
   if (gone?.campaign_id) await reopenIfEmpty(gone.campaign_id);
@@ -448,9 +526,10 @@ async function ensureVariant(contentId, channelId) {
 /** קבצים משותפים לכל המדיות של הזווית */
 r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
   wrap(async (req, res) => {
-    const item = await one('select id from content_items where id = $1', [req.params.id]);
-    if (!item) return bad(res, 'לא נמצא תוכן כזה', 404);
-    res.status(201).json({ assets: await saveAssets(req.files, item.id, null) });
+    // משבצת מקושרת: הקובץ נרשם על המקור, ומשם כל הקבוצה רואה אותו
+    const owner = await mediaOwner(req.params.id);
+    if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
+    res.status(201).json({ assets: await saveAssets(req.files, owner.contentId, null) });
   }));
 
 /** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
@@ -458,7 +537,9 @@ r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),
   upload.array('files'), wrap(async (req, res) => {
     const slotErr = await slotChannelError(req.params.id, req.params.channelId);
     if (slotErr) return bad(res, slotErr);
-    const v = await ensureVariant(req.params.id, req.params.channelId);
+    const owner = await mediaOwner(req.params.id, req.params.channelId);
+    if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
+    const v = await ensureVariant(owner.contentId, owner.channelId);
     res.status(201).json({ assets: await saveAssets(req.files, v.content_id, v.id) });
   }));
 
@@ -565,9 +646,12 @@ r.post('/content/:id/uploads/complete', requirePerm('content'), wrap(async (req,
   const checked = await checkUploadedKey(key);
   if (checked.error) return bad(res, checked.error, checked.status);
 
-  const variantId = channelId != null ? (await ensureVariant(item.id, channelId)).id : null;
+  // משבצת מקושרת: הקובץ נרשם על המקור (ובגרסה — על הגרסה של המקור)
+  const owner = await mediaOwner(item.id, channelId);
+  const variantId = owner.channelId != null
+    ? (await ensureVariant(owner.contentId, owner.channelId)).id : null;
   const asset = await insertR2Asset({ query }, {
-    contentId: item.id, variantId, key, filename, head: checked.head,
+    contentId: owner.contentId, variantId, key, filename, head: checked.head,
   });
   res.status(201).json({ asset: assetView(asset) });
 }));

@@ -692,35 +692,175 @@ function completeLine(c) {
 
 /* ---------- קמפיין כללי: רשימת פוסטים לכל מדיה, בלי זוויות ---------- */
 
+/* ---------- משבצות מקושרות: שתי מדיות, תוכן אחד (src/links.js) ---------- */
+
+/** אייקון קו של קישור — הסימן של משבצת מקושרת */
+const LINK_ICON = `<svg class="lnk" viewBox="0 0 24 24" width="13" height="13" fill="none"
+  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+  aria-hidden="true"><path d="m10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/>
+  <path d="m14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>`;
+
+/**
+ * מצב "בחירת משבצת לקישור" על הלוח של קמפיין כללי, או null.
+ * {campaignId, itemId (המשבצת שנלחצה), rootId, rootChannelId, title, label}
+ */
+let linkMode = null;
+
+/** המשבצות שחולקות תוכן עם item (בלי item עצמו), לפי סדר המדיות בקמפיין */
+function linkPartners(c, item) {
+  if (!item) return [];
+  const rootId = item.linked_to_id ?? item.id;
+  const order = (x) => c.channels.findIndex((ch) => ch.id === x.slot_channel_id);
+  return c.content
+    .filter((x) => x.id !== item.id && (x.id === rootId || x.linked_to_id === rootId))
+    .sort((a, b) => order(a) - order(b));
+}
+
+const channelName = (id) => state.channels.find((ch) => ch.id === id)?.name ?? 'מדיה';
+/** "יוטיוב שורטס #2" — משבצת בקמפיין כללי */
+const slotLabel = (x) => `${channelName(x.slot_channel_id)} #${x.sort_order}`;
+
+/** שורת "מקושר ל:" מתחת לכותרת המשבצת בלוח */
+function linkLine(c, item) {
+  const partners = linkPartners(c, item);
+  if (!partners.length) return '';
+  const names = partners.map(slotLabel).join(', ');
+  return `<span class="glink" data-tt="${esc(`התוכן משותף עם ${names}`)}">${LINK_ICON}
+    <span>מקושר ל: ${esc(names)}</span></span>`;
+}
+
+/**
+ * במצב קישור: האם אפשר לבחור את המשבצת הזו כיעד, ואם לא — למה (לעמודה).
+ * מדיה של המקור, ניוזלטר ומדיה שכבר יש בה משבצת מקושרת למקור — כל העמודה
+ * סגורה. בעמודה פתוחה: משבצת ריקה, או משבצת עם תוכן שלא מקושרת לשום דבר.
+ */
+function columnBlock(c, channelId) {
+  if (channelId === linkMode.rootChannelId) return 'המדיה של הפוסט';
+  const ch = state.channels.find((x) => x.id === channelId);
+  if (ch?.platform === 'newsletter') return 'ניוזלטר לא מתקשר';
+  const sibling = c.content.find((x) =>
+    x.linked_to_id === linkMode.rootId && x.slot_channel_id === channelId);
+  return sibling ? `כבר מקושר: #${sibling.sort_order}` : null;
+}
+const slotPickable = (c, item) => !item ||
+  (!item.linked_to_id && !c.content.some((x) => x.linked_to_id === item.id));
+
+function exitLinkMode() {
+  linkMode = null;
+  linkReload = null;
+  document.removeEventListener('keydown', onLinkKey);
+}
+
+/** יציאה ממסך התוכן (מעבר טאב) — מצב הקישור לא נשאר תלוי ברקע */
+export function leavePlanView() {
+  if (linkMode) exitLinkMode();
+}
+
+/** מצב הקישור, רק כשעדיין עומדים על הקמפיין שבו התחיל; אחרת הוא מתבטל */
+function activeLinkMode() {
+  if (linkMode && (state.tab !== 'plan' || state.planCampaign !== linkMode.campaignId)) {
+    exitLinkMode();
+  }
+  return linkMode;
+}
+
+let linkReload = null;
+function onLinkKey(e) {
+  if (!activeLinkMode()) return;
+  if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+  const reload = linkReload;
+  exitLinkMode();
+  reload?.();
+}
+
+/** נכנסים למצב קישור מטופס המשבצת: הטופס נסגר והלוח מסמן את היעדים */
+function enterLinkMode(campaign, item, reload) {
+  const rootId = item.linked_to_id ?? item.id;
+  const root = campaign.content.find((x) => x.id === rootId) ?? item;
+  linkMode = {
+    campaignId: campaign.id, itemId: item.id, rootId, rootChannelId: root.slot_channel_id,
+    title: root.title, label: slotLabel(root),
+  };
+  linkReload = reload;
+  document.addEventListener('keydown', onLinkKey);
+  reload();
+}
+
+/** הקישור עצמו, אחרי לחיצה על משבצת יעד בלוח */
+async function linkTo(campaign, channelId, index, item, reload) {
+  const body = { target_campaign_slot: { channel_id: channelId, sort_order: index }, week: state.week };
+  // משבצת חד-פעמית שכבר פורסמה לא תשובץ שוב — התוכן המקושר לא ייצא בה
+  const published = item && !item.evergreen && item.posts?.some((p) => p.status === 'published');
+  const replaceQuestion = `התוכן הקיים במשבצת יוחלף בתוכן של "${linkMode.title}" ` +
+    `(${linkMode.label}) — הטקסט, הקבצים והמצב.` +
+    (published ? ' המשבצת הזו כבר פורסמה — התוכן המקושר לא ישובץ בה שוב.' : '') + ' להמשיך?';
+  if (item) {
+    if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
+    body.replace = true;
+  }
+  const path = `/content/${linkMode.itemId}/link`;
+  try {
+    await api(path, { method: 'POST', body });
+  } catch (e) {
+    // מישהו מילא את המשבצת בינתיים — אותה שאלה, ושוב עם אישור
+    if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
+    if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
+    await api(path, { method: 'POST', body: { ...body, replace: true } });
+  }
+  const done = `${linkMode.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של המדיה שלה.`;
+  exitLinkMode();
+  toast(done);
+  await reload();
+}
+
+/** הבר שמעל הלוח במצב קישור — הסבר וביטול (לא כפתור צף) */
+const linkBar = () => `
+  <div class="linkbar panel" role="status">
+    ${LINK_ICON}
+    <div>
+      <b>בוחרים משבצת במדיה אחרת</b>
+      <span class="d">היא תחלוק עם ${esc(linkMode.label)} את הטקסט, הקבצים והמצב.
+        כל משבצת תצא במועד של המדיה שלה. Esc לביטול.</span>
+    </div>
+    <button class="btn small" id="linkCancel">ביטול</button>
+  </div>`;
+
 /**
  * עמודה לכל מדיה, ובה שורה לכל פוסט שהמדיה צריכה. כל שורה עומדת בפני
  * עצמה: אין זווית משותפת ואין ניסוח למדיה אחרת. במסך צר העמודות נערמות.
  */
 function generalBoard(c) {
+  // מצב קישור שייך לקמפיין שבו התחיל; מעבר לקמפיין או לטאב אחר מבטל אותו
+  const linking = !!activeLinkMode() && linkMode.campaignId === c.id && can('content');
+
   const cols = c.slots.map((col) => {
+    const blocked = linking ? columnBlock(c, col.channel_id) : null;
     // משבצת מעבר לצורך מוצגת רק כשיש בה פוסט — ריקה כזו לא חסרה לאף אחד
     const rows = col.slots.filter((s) => !s.extra || s.content).map((s) => {
       const st = CELL[s.state];
       const item = s.content;
+      const pick = linking ? (!blocked && slotPickable(c, item) ? ' pick' : ' nopick') : '';
       return `<li class="gslot${s.past ? ' past' : ''}${s.extra ? ' extra' : ''}${
-          can('content') ? '' : ' ro'}"
+          can('content') ? '' : ' ro'}${pick}"
         ${can('content') ? `data-gslot="${s.index}" data-ch="${col.channel_id}"` : ''}>
         <span class="gnum">${s.index}</span>
         <span class="gdate">${s.date ? fmtDate(s.date) : 'נוסף'}</span>
         <span class="gttl${item ? '' : ' none'}">${item
-          ? `${esc(item.title)}${item.assets.length ? ` <span class="gclip">📎${item.assets.length}</span>` : ''}`
+          ? `<span class="gt">${esc(item.title)}${item.assets.length
+              ? ` <span class="gclip">📎${item.assets.length}</span>` : ''}</span>${linkLine(c, item)}`
           : (s.past ? 'לא נכתב' : 'לכתוב')}</span>
         <span class="gst ${st.cls}"><i></i>${esc(st.label)}</span>
       </li>`;
     }).join('');
 
-    return `<section class="gcol panel">
+    return `<section class="gcol panel${blocked ? ' blocked' : ''}">
       <div class="gcol-head">
         <div>
           <b>${esc(col.channel_name)}</b>
-          <span class="d">${col.ready} מתוך ${col.required} מוכנים</span>
+          <span class="d">${blocked ? esc(blocked) : `${col.ready} מתוך ${col.required} מוכנים`}</span>
         </div>
-        ${can('content') ? `<button class="btn small" data-gbulk="${col.channel_id}">העלאה מרוכזת</button>` : ''}
+        ${can('content') && !linking
+          ? `<button class="btn small" data-gbulk="${col.channel_id}">העלאה מרוכזת</button>` : ''}
       </div>
       <ol class="gslots">${rows}</ol>
     </section>`;
@@ -728,7 +868,8 @@ function generalBoard(c) {
 
   return `
     ${campaignHead(c)}
-    <div class="gboard">${cols}</div>
+    ${linking ? linkBar() : ''}
+    <div class="gboard${linking ? ' linking' : ''}">${cols}</div>
     ${completeLine(c)}
     ${c.orphaned ? `<div class="sumline">
       <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} במדיות שהוסרו מהקמפיין</span> —
@@ -746,8 +887,19 @@ function wireGeneralBoard(selected, reload) {
       const index = Number(b.dataset.gslot);
       const item = selected.content.find((x) =>
         x.slot_channel_id === channelId && x.sort_order === index) ?? null;
+      // במצב קישור הלחיצה בוחרת יעד; משבצת שלא אפשרית — לא עושה כלום
+      if (activeLinkMode()) {
+        if (b.classList.contains('pick')) run(() => linkTo(selected, channelId, index, item, reload))();
+        else toast('בוחרים אחת מהמשבצות המסומנות — במדיה אחרת, ריקה או לא מקושרת.');
+        return;
+      }
       openSlotForm({ campaign: selected, channelId, index, item }, reload);
     }));
+
+  $('#linkCancel')?.addEventListener('click', () => {
+    exitLinkMode();
+    reload();
+  });
 
   $$('#plan [data-gbulk]').forEach((b) =>
     b.addEventListener('click', () => {
@@ -769,11 +921,17 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   // לפריט של מדיה אחת אין "משותף" מול "של המדיה" — כל הקבצים שלו, וכולם ניתנים להסרה
   const files = [...(item?.assets ?? []), ...(item?.variant_assets ?? [])]
     .map((a) => assetLine(a, true, false)).join('');
+  // משבצת מקושרת: שורת "מקושר ל:" בראש הטופס, עם ניתוק לכל משבצת
+  const partners = linkPartners(campaign, item);
+  // אפשר לקשר כשיש בקמפיין עוד מדיה שאינה ניוזלטר
+  const canLink = item && !mail && can('content') && campaign.channels.some((ch) =>
+    ch.id !== channelId && ch.platform !== 'newsletter');
 
   openGeneric({
     title: `${channel?.name ?? ''} · פוסט ${index}${item ? '' : ' — חדש'}`,
     saveLabel: mail ? 'שמור והמשך לעריכת המייל' : undefined,
     fields: [
+      ...(partners.length ? [{ name: '__link', type: 'html', html: linkInfo(item, partners) }] : []),
       { name: 'title', label: mail ? 'כותרת (פנימית — הנושא נכתב בעורך המייל)' : 'כותרת',
         type: 'text', value: item?.title },
       { name: 'kind', label: 'סוג', type: 'select',
@@ -788,9 +946,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           value: v?.status === 'ready' ? 'ready' : 'draft' },
       ]),
     ],
-    extraActions: item && can('content')
+    extraActions: (item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
-      : '',
+      : '') + (canLink ? '<button class="btn" id="genLink">קשר למשבצת אחרת</button>' : ''),
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
       const body = mail
@@ -830,13 +988,50 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           toast('הקובץ הוסר.');
         })));
       $('#genDelete')?.addEventListener('click', run(async () => {
-        if (!(await confirmDialog('למחוק את הפוסט הזה?', { danger: true }))) return;
+        const names = partners.map(slotLabel).join(', ');
+        const question = !partners.length ? 'למחוק את הפוסט הזה?'
+          : item.linked_to_id
+            ? `למחוק את הפוסט הזה? רק המשבצת הזו נמחקת — התוכן נשאר ב${names}.`
+            : `למחוק את הפוסט הזה? המשבצות המקושרות (${names}) יישארו עם עותק משלהן של התוכן.`;
+        if (!(await confirmDialog(question, { danger: true }))) return;
         await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         $('#genDlg').close();
         await reload();
       }));
+      $('#genLink')?.addEventListener('click', () => {
+        $('#genDlg').close();
+        enterLinkMode(campaign, item, reload);
+      });
+      $$('#genBody [data-unlink]').forEach((b) =>
+        b.addEventListener('click', run(async () => {
+          await api(`/content/${b.dataset.unlink}/unlink`, { method: 'POST', body: { week: state.week } });
+          $('#genDlg').close();
+          toast('הקישור נותק — לכל משבצת עותק משלה של התוכן.');
+          await reload();
+        })));
     },
   });
+}
+
+/**
+ * ראש טופס המשבצת כשהיא מקושרת: עם מי, מה זה אומר, וניתוק לכל משבצת.
+ * ניתוק של עוקבת = היא בלבד; כשהטופס הוא של עוקבת, השורה של המקור מנתקת
+ * אותה עצמה.
+ */
+function linkInfo(item, partners) {
+  const names = partners.map(slotLabel).join(', ');
+  const rows = partners.map((p) => `
+    <div class="li-row">
+      <span>${esc(channelName(p.slot_channel_id))} · פוסט ${p.sort_order}</span>
+      ${can('content') ? `<button type="button" class="btn small"
+        data-unlink="${p.linked_to_id ? p.id : item.id}">נתק קישור</button>` : ''}
+    </div>`).join('');
+  return `<div class="linkinfo">
+    <div class="li-head">${LINK_ICON}<b>מקושר ל: ${esc(names)}</b></div>
+    <p class="d">הטקסט, הקבצים והמצב משותפים — שמירה כאן מעדכנת גם את ${esc(names)}.
+      כל משבצת יוצאת במועד של המדיה שלה.</p>
+    ${rows}
+  </div>`;
 }
 
 /** העלאה מרוכזת לעמודה של מדיה אחת: כל קובץ ממלא את הפוסט הפנוי הבא שלה */
