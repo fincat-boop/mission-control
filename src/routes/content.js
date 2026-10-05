@@ -246,24 +246,73 @@ r.patch('/campaigns/:id/order', requirePerm('content'), wrap(async (req, res) =>
   res.json({ ok: true, engine });
 }));
 
+/** פוסטים עתידיים של התוכן שעוד לא יצאו (ופוסטים שעוד לא פורסמו בכלל) */
+const FUTURE_UNPUBLISHED = `p.status in ('scheduled','approved','failed','pending_approval','hole')
+  and p.scheduled_at >= now()`;
+
+/**
+ * מה מחיקת הקמפיין נוגעת בו — לשאלה לפני המחיקה: כמה פריטי תוכן, כמה
+ * פוסטים עתידיים שלהם על הלוח, וכמה כבר פורסמו (נשארים בהיסטוריה תמיד).
+ */
+r.get('/campaigns/:id/delete-impact', wrap(async (req, res) => {
+  const c = await one('select id, name from campaigns where id = $1', [req.params.id]);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  const n = await one(
+    `select (select count(*)::int from content_items where campaign_id = $1) as content,
+            (select count(*)::int from posts p join content_items ci on ci.id = p.content_id
+              where ci.campaign_id = $1 and ${FUTURE_UNPUBLISHED}) as future_posts,
+            (select count(*)::int from posts p join content_items ci on ci.id = p.content_id
+              where ci.campaign_id = $1 and p.status = 'published') as published`,
+    [c.id]);
+  res.json(n);
+}));
+
+/**
+ * מחיקת קמפיין. ?content=delete — גם התוכן שלו נמחק, עם הפוסטים העתידיים
+ * שלו שעוד לא יצאו (מה שפורסם נשאר בהיסטוריה, בלי תוכן). קבצים ב-R2 עוברים
+ * לסל המחזור. ?content=keep (ברירת המחדל לקריאה בלי פרמטר — העוזר, קריאות
+ * ישנות): התוכן נשאר כתוכן שוטף של נקודת הקצה, כמו עד היום.
+ */
 r.delete('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const mode = req.query.content === 'delete' ? 'delete' : 'keep';
   // נעילת הקמפיין לפני הקבוצות (אותו סדר כמו בכל שינוי של משבצות מקושרות)
-  await query('select id from campaigns where id = $1 for update', [req.params.id]);
-  // משבצות מקושרות מתפרקות קודם: בתוכן שוטף אין משבצות לקשר ביניהן, וכל
-  // אחת נשארת עם עותק משלה של התוכן (קבצים מועתקים מהמקור)
-  const sources = await rows(
-    `select distinct linked_to_id as id from content_items
-      where campaign_id = $1 and linked_to_id is not null`, [req.params.id]);
-  try {
-    for (const s of sources) await releaseLinks(s.id);
-  } catch (e) { return linkFail(res, e); }
-  // התוכן נשאר ומתנתק (on delete set null). משבצת-מדיה בלי קמפיין היא
-  // סתם תוכן שוטף, ולכן גם השיוך למשבצת יורד.
-  await query('update content_items set slot_channel_id = null where campaign_id = $1',
-    [req.params.id]);
+  const exists = await one('select id from campaigns where id = $1 for update', [req.params.id]);
+  if (!exists) return bad(res, 'לא נמצא קמפיין כזה', 404);
+
+  let removed = { content: 0, posts: 0 };
+  if (mode === 'delete') {
+    // כל הקבוצה נמחקת יחד — אין טעם להעתיק קבצים לעוקבות שנמחקות גם הן
+    const posts = await rows(
+      `delete from posts p using content_items ci
+        where ci.id = p.content_id and ci.campaign_id = $1 and ${FUTURE_UNPUBLISHED}
+        returning p.id`, [req.params.id]);
+    await query(
+      `insert into media_trash (bucket, storage_key, delete_after)
+       select $2, a.storage_key, now() + make_interval(days => $3)
+         from content_assets a join content_items ci on ci.id = a.content_id
+        where ci.campaign_id = $1 and a.storage_key is not null
+       on conflict (bucket, storage_key) do nothing`,
+      [req.params.id, process.env.R2_PUBLIC_BUCKET ?? '', TRASH_DAYS]);
+    const items = await rows('delete from content_items where campaign_id = $1 returning id',
+      [req.params.id]);
+    removed = { content: items.length, posts: posts.length };
+  } else {
+    // משבצות מקושרות מתפרקות קודם: בתוכן שוטף אין משבצות לקשר ביניהן, וכל
+    // אחת נשארת עם עותק משלה של התוכן (קבצים מועתקים מהמקור)
+    const sources = await rows(
+      `select distinct linked_to_id as id from content_items
+        where campaign_id = $1 and linked_to_id is not null`, [req.params.id]);
+    try {
+      for (const s of sources) await releaseLinks(s.id);
+    } catch (e) { return linkFail(res, e); }
+    // התוכן נשאר ומתנתק (on delete set null). משבצת-ערוץ בלי קמפיין היא
+    // סתם תוכן שוטף, ולכן גם השיוך למשבצת יורד.
+    await query('update content_items set slot_channel_id = null where campaign_id = $1',
+      [req.params.id]);
+  }
   await query('delete from campaigns where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
-  res.json({ ok: true, engine });
+  res.json({ ok: true, content: mode, removed, engine });
 }));
 
 /* ========================= תוכן ========================= */

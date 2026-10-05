@@ -1189,3 +1189,16 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .weekbar .btn.on { border-color: var(--accent); color: var(--accent); }
 #plan.week-only .cgrid tbody tr:not(.inweek),
 #plan.week-only .gslot:not(.inweek) { display: none; }
+
+/* מחיקת קמפיין: מה לעשות עם התוכן */
+.choice-dlg { width: min(440px, 92vw); }
+.choice-dlg .cmsg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 12px; }
+.choice-dlg .choices { display: flex; flex-direction: column; gap: 8px; }
+.choice-dlg .choice {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 13px;
+}
+.choice-dlg .choice:has(input:checked) { border-color: var(--accent); background: var(--panel-2); }
+.choice-dlg .choice input { margin-top: 3px; }
+.choice-dlg .choice > span { display: flex; flex-direction: column; gap: 3px; }
+.choice-dlg .choice .d { color: var(--ink-2); font-size: 12px; line-height: 1.5; }

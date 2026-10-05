@@ -1327,12 +1327,77 @@ async function reopenCampaign(campaign, reload) {
   await reload();
 }
 
+/**
+ * מחיקת קמפיין: קודם כמה תוכן ופוסטים עתידיים יש לו, ואז בחירה — למחוק גם
+ * את התוכן (ברירת המחדל), או להשאיר אותו כתוכן שוטף של נקודת הקצה (ואז
+ * המנוע עשוי לשבץ אותו בהמשך, גם פוסט השקה).
+ * @returns {Promise<boolean>} האם נמחק
+ */
 async function deleteCampaign(campaign, reload) {
-  if (!(await confirmDialog('למחוק את הקמפיין? התוכן שלו יישאר, רק ינותק ממנו.', { danger: true }))) return false;
-  await api(`/campaigns/${campaign.id}`, { method: 'DELETE', body: { week: state.week } });
+  const imp = await api(`/campaigns/${campaign.id}/delete-impact`);
+  const posts = imp.future_posts === 1 ? 'פוסט עתידי אחד' : `${imp.future_posts} פוסטים עתידיים`;
+  const published = imp.published
+    ? `\n${imp.published === 1 ? 'פוסט אחד שכבר פורסם נשאר' : `${imp.published} פוסטים שכבר פורסמו נשארים`} בהיסטוריה.`
+    : '';
+  let mode = 'delete';
+  if (!imp.content) {
+    if (!(await confirmDialog(`למחוק את "${campaign.name}"? אין בו תוכן.`,
+      { okLabel: 'מחק קמפיין', danger: true }))) return false;
+  } else {
+    mode = await choiceDialog({
+      message: `למחוק את "${campaign.name}"?${published}`,
+      options: [
+        ['delete', `מחק גם את התוכן (${imp.content})`,
+          imp.future_posts ? `${posts} יירדו מהלוח.` : 'אין לו פוסטים עתידיים על הלוח.'],
+        ['keep', `השאר את התוכן כתוכן כללי של ${campaign.endpoint_name}`,
+          'הזוויות נשארות בלי קמפיין, והמנוע עשוי לשבץ אותן כשיש מקום — גם פוסטי השקה.' +
+          (imp.future_posts ? ` ${posts} נשארים על הלוח.` : '')],
+      ],
+      okLabel: 'מחק קמפיין',
+    });
+    if (!mode) return false;
+  }
+  const res = await api(`/campaigns/${campaign.id}?content=${mode}`,
+    { method: 'DELETE', body: { week: state.week } });
   state.planCampaign = null;
+  engineToast(res, mode === 'delete'
+    ? `הקמפיין נמחק עם ${res.removed.content} פריטי תוכן${res.removed.posts ? ` ו-${res.removed.posts} פוסטים עתידיים` : ''}.`
+    : 'הקמפיין נמחק — התוכן שלו נשאר כתוכן שוטף.');
   await reload();
   return true;
+}
+
+/**
+ * שאלה עם כמה אפשרויות (רדיו) — הראשונה מסומנת. דיאלוג משלו, כדי שאפשר
+ * יהיה לפתוח אותו גם מעל טופס פתוח (מחיקה מתוך עריכת הקמפיין).
+ * options: [value, label, note]. מחזיר את הערך שנבחר, או null בביטול.
+ */
+function choiceDialog({ message, options, okLabel }) {
+  let dlg = $('#choiceDlg');
+  if (!dlg) {
+    dlg = document.createElement('dialog');
+    dlg.id = 'choiceDlg';
+    dlg.className = 'confirm-dlg choice-dlg';
+    document.body.appendChild(dlg);
+  }
+  dlg.innerHTML = `<p class="cmsg"></p>
+    <div class="choices" role="radiogroup">${options.map(([v, l, note], i) => `
+      <label class="choice"><input type="radio" name="choice" value="${esc(v)}"${i ? '' : ' checked'}>
+        <span><b>${esc(l)}</b>${note ? `<span class="d">${esc(note)}</span>` : ''}</span></label>`).join('')}
+    </div>
+    <div class="dactions">
+      <button type="button" class="btn" data-choice-cancel>ביטול</button>
+      <button type="button" class="btn crit" data-choice-ok>${esc(okLabel)}</button>
+    </div>`;
+  dlg.querySelector('.cmsg').textContent = message;
+  return new Promise((resolve) => {
+    const done = (v) => { dlg.oncancel = null; dlg.close(); resolve(v); };
+    dlg.querySelector('[data-choice-cancel]').addEventListener('click', () => done(null));
+    dlg.querySelector('[data-choice-ok]').addEventListener('click', () =>
+      done(dlg.querySelector('[name="choice"]:checked')?.value ?? null));
+    dlg.oncancel = (e) => { e.preventDefault(); done(null); };
+    dlg.showModal();
+  });
 }
 
 /** העלאה מרוכזת: כל קובץ הופך לזווית, ונפתחות לה טיוטות לכל מדיה של הקמפיין */
