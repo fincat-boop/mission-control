@@ -147,7 +147,8 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
   }
   // משבצת מקושרת: אותו טקסט ומצב לכל המשבצות בקבוצה (downgraded — עוקבות
   // שנשארו טיוטה כי התוכן לא מספיק לערוץ שלהן)
-  const { downgraded } = await syncFrom(req.params.id);
+  const { downgraded } = await syncFrom(req.params.id,
+    { statusChanged: (before?.status ?? null) !== status });
   const engine = await autoFill(b.week);
   res.json({ variant: v, warn, downgraded, engine });
 }));
@@ -527,12 +528,15 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   // משבצת שעוברת ל"מוכן" — אותם כללי תוכן כמו בעריכת גרסה. משבצת שכבר
   // "מוכן" נשמרת, והסיבה (אם יש) חוזרת כ-warn
   let warn = null;
+  // המצב של המשבצת לפני העריכה — המצב עובר לקבוצה המקושרת רק כשהוא השתנה
+  let statusBefore = null;
   if (current.slot_channel_id && !leavingSlot && (b.body !== undefined || b.status !== undefined)) {
     const v = await one(
       `select id, body, status, meta, updated_at from content_variants
         where content_id = $1 and channel_id = $2 for update`,
       [current.id, current.slot_channel_id]);
     if ('base_updated_at' in b && staleVariant(v, b.base_updated_at)) return staleReply(res, v);
+    statusBefore = v?.status ?? null;
     const status = ['ready', 'draft'].includes(b.status) ? b.status : (v?.status ?? 'draft');
     if (status === 'ready') {
       const check = await readyCheck(current.id, current.slot_channel_id, {
@@ -596,7 +600,9 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   // מכל משבצת בה עוברת לכולן. המיקום (משבצת, קמפיין) נשאר של כל אחת.
   let downgraded = [];
   if (['title', 'kind', 'body', 'status'].some((k) => b[k] !== undefined)) {
-    ({ downgraded } = await syncFrom(c.id));
+    ({ downgraded } = await syncFrom(c.id, {
+      statusChanged: ['ready', 'draft'].includes(b.status) && b.status !== statusBefore,
+    }));
   }
   // משבצת: הגרסה היחידה שלה — לנעילה האופטימית של השמירה הבאה מאותו טופס
   const variant = c.slot_channel_id

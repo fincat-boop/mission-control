@@ -69,6 +69,7 @@ before(async () => {
     const ig = await ch('אינסטגרם', 'instagram');
     const yt = await ch('יוטיוב', 'manual');
     const nl = await ch('ניוזלטר', 'newsletter');
+    const fb = await ch('פייסבוק', 'facebook');
     const start = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
     const end = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
     const general = await db.one(
@@ -78,11 +79,11 @@ before(async () => {
       `insert into campaigns (endpoint_id, name, starts_on, ends_on) values ($1,'זוויות',$2,$3)
        returning id`, [ep.id, start, end]);
     for (const c of [general.id, angles.id]) {
-      for (const chId of [ig, yt, nl]) {
+      for (const chId of [ig, yt, nl, fb]) {
         await db.query('insert into campaign_channels (campaign_id, channel_id) values ($1,$2)', [c, chId]);
       }
     }
-    return { endpoint: ep.id, ig, yt, nl, general: general.id, angles: angles.id };
+    return { endpoint: ep.id, ig, yt, nl, fb, general: general.id, angles: angles.id };
   });
 
   const app = express();
@@ -170,12 +171,17 @@ test('קישור: "מוכן" לא עובר לעוקבת באינסטגרם בל�
   assert.match(r.json.downgraded[0].reason, /תמונה או וידאו/);
   assert.equal((await variant(a, ids.yt)).status, 'ready', 'המקור נשאר מוכן');
 
-  // אחרי שלמקור יש תמונה, שמירה שלו מעבירה גם לעוקבת "מוכן"
+  // אחרי שלמקור יש תמונה: עריכת טקסט לא משנה מצב (העוקבת נשארת טיוטה), וסימון
+  // העוקבת "מוכן" עובר — המדיה של המקור מספיקה לאינסטגרם
   await uploadBytes(a);
   r = await call('PATCH', `/content/${a}`, { body: 'כיתוב חדש' });
   assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(await variant(b, ids.ig), { body: 'כיתוב חדש', status: 'draft', meta: null });
+  r = await call('PATCH', `/content/${b}`, { status: 'ready' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.deepEqual(r.json.downgraded, []);
   assert.deepEqual(await variant(b, ids.ig), { body: 'כיתוב חדש', status: 'ready', meta: null });
+  assert.equal((await variant(a, ids.yt)).status, 'ready');
 });
 
 test('שמירה ראשונה במקביל (base null): אחת נשמרת, השנייה 409 — לא דורסת', { skip }, async () => {
@@ -248,4 +254,31 @@ test('הסרת קובץ מחזירה warn לגרסה "מוכן" שאיבדה א�
   assert.equal(r.status, 200, JSON.stringify(r.json));
   const w = r.json.warns.find((x) => x.content_id === a && x.channel_id === ids.ig);
   assert.match(w.warn, /תמונה או וידאו/);
+});
+
+test('עריכת טקסט בעוקבת שנשארה טיוטה: העוקבת טיוטה, המקור נשאר מוכן, הטקסט עובר למקור', { skip }, async () => {
+  const a = await slot(ids.fb, 60, { body: 'פוסט פייסבוק', status: 'ready' });
+  let r = await call('POST', `/content/${a}/link`, {
+    target_campaign_slot: { channel_id: ids.ig, sort_order: 60 } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const b = r.json.follower.id;
+  assert.equal((await variant(b, ids.ig)).status, 'draft', 'אינסטגרם בלי מדיה נשאר טיוטה');
+  assert.equal((await variant(a, ids.fb)).status, 'ready');
+
+  // עריכת טקסט בלבד בעוקבת
+  r = await call('PATCH', `/content/${b}`, { body: 'נערך באינסטגרם' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(await variant(b, ids.ig), { body: 'נערך באינסטגרם', status: 'draft', meta: null });
+  assert.deepEqual(await variant(a, ids.fb), { body: 'נערך באינסטגרם', status: 'ready', meta: null });
+
+  // כמו הטופס: שולח גם את המצב, בלי לשנות אותו (טיוטה) — המקור עדיין מוכן
+  r = await call('PATCH', `/content/${b}`, { body: 'שוב מהטופס', status: 'draft' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(await variant(a, ids.fb), { body: 'שוב מהטופס', status: 'ready', meta: null });
+  assert.equal((await variant(b, ids.ig)).status, 'draft');
+
+  // ועריכת טקסט במקור (בלי שינוי מצב) לא מעבירה "מוכן" לעוקבת
+  r = await call('PUT', `/content/${a}/variants/${ids.fb}`, { body: 'מהמקור', status: 'ready' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(await variant(b, ids.ig), { body: 'מהמקור', status: 'draft', meta: null });
 });
