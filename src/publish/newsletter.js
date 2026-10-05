@@ -142,6 +142,16 @@ export function newsletterDigest({ post, variant }) {
   return createHash('sha256').update(payload).digest('hex').slice(0, 32);
 }
 
+/**
+ * טביעה "לא ידועה": ה-HUB החזיר קמפיין שכבר היה קיים לאותו מפתח ולא ידענו
+ * עליו (למשל הכתיבה אצלנו נפלה אחרי שה-HUB יצר) — אין לנו מושג מה התוכן שם.
+ */
+export const DIGEST_UNVERIFIED = 'unverified';
+
 /** השתנה משהו בלוח מאז ההעברה? (פוסט שהועבר לפני שהטביעה נשמרה — לא ידוע, false) */
 export const hubStale = (payload) =>
-  !!payload.post.hub_digest && newsletterDigest(payload) !== payload.post.hub_digest;
+  !!payload.post.hub_digest && payload.post.hub_digest !== DIGEST_UNVERIFIED &&
+  newsletterDigest(payload) !== payload.post.hub_digest;
+
+/** התוכן ב-HUB לא אומת מול הלוח — "ייתכן שהתוכן ב-HUB ישן, בודקים שם" */
+export const hubUnverified = (post) => post.hub_digest === DIGEST_UNVERIFIED;

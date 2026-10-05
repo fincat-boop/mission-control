@@ -439,6 +439,22 @@ test('ה-HUB עמוס (429) — העברה ותצוגה מחזירות "נסה �
   assert.match(pv.json.error, /נסה שוב בעוד דקה/);
 });
 
+test('ה-HUB כבר מכיר את post-<id> ואנחנו לא — מחוברים אליו, והתוכן מסומן "ייתכן שישן"', { skip }, async () => {
+  const { post: id } = await newsletter();
+  // נוצר ב-HUB, והכתיבה אצלנו לא נשמרה (נפילה אחרי הקריאה)
+  const c = { id: '00000000-0000-4000-8000-00000000orph'.slice(0, 36), external_ref: `post-${id}`,
+    status: 'draft', scheduled_at: inHours(48) };
+  hub.campaigns.set(c.id, c);
+  hub.byRef.set(c.external_ref, c);
+  const r = await call('POST', `/posts/${id}/newsletter/transfer`);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.unverified, true);
+  assert.equal(r.json.post.external_id, c.id);
+  const pv = await call('GET', `/posts/${id}/preview`);
+  assert.equal(pv.json.post.hub_unverified, true);
+  assert.equal(pv.json.post.hub_stale, false);
+});
+
 /* ---------- SSO ---------- */
 
 test('SSO: jti נוצל פעם אחת בלבד; שורות שפגו נמחקות', { skip }, async () => {

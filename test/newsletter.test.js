@@ -2,7 +2,7 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  NEWSLETTER_NO_APPROVE, NOT_APPROVED_ERROR, alreadyTransferred, cleanFieldValues,
+  DIGEST_UNVERIFIED, NEWSLETTER_NO_APPROVE, NOT_APPROVED_ERROR, hubUnverified, alreadyTransferred, cleanFieldValues,
   hasNewsletterContent, hubStale, hubWaitState, newsletterClockStart, newsletterDigest,
   nextHubRef, reusableHubStatus, transferBlocker,
 } from '../src/publish/newsletter.js';
@@ -122,6 +122,14 @@ test('hubStale — רק כשיש טביעה שמורה והיא שונה', () =>
   assert.equal(hubStale(p), false);
   p.variant.meta.subject = 'נושא אחר';
   assert.equal(hubStale(p), true);
+});
+
+test('טביעה "לא ידועה" — לא "השתנה", אלא "ייתכן שישן"', () => {
+  const p = nl();
+  p.post.hub_digest = DIGEST_UNVERIFIED;
+  assert.equal(hubStale(p), false);
+  assert.equal(hubUnverified(p.post), true);
+  assert.equal(hubUnverified({ hub_digest: newsletterDigest(p) }), false);
 });
 
 /* ---------- תקיעה: השעון מתחיל מהמאוחר מבין ההעברה למועד ---------- */

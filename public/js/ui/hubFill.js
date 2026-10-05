@@ -174,6 +174,7 @@ export async function transferToHub(post) {
   if (!ok) return null;
   const r = await api(`/posts/${post.id}/newsletter/transfer`, { method: 'POST' });
   toast(r.idempotent ? 'הניוזלטר כבר הועבר ל-HUB — ממתין לאישור שם.'
+    : r.unverified ? 'הניוזלטר כבר היה ב-HUB — ייתכן שהתוכן שם ישן, בדוק שם לפני האישור.'
     : r.reused ? 'חובר מחדש לקמפיין שכבר היה ב-HUB — ממתין לאישור שם. שינויים מאז ההעברה הקודמת לא הגיעו אליו.'
       : 'הועבר ל-HUB ✓ — ממתין לאישור שם.');
   return r;
@@ -194,7 +195,8 @@ export function newsletterPostNotes(post) {
     const link = post.external_url
       ? ` <a href="${esc(post.external_url)}" target="_blank" rel="noopener">פתח ב-HUB</a>` : '';
     return `<div class="${tag.tone === 'warn' ? 'pvwarn' : 'pvauto'}">${esc(tag.text)}${link}</div>
-      ${post.hub_stale ? `<div class="pvwarn">שינויים שנשמרו בלוח אחרי ההעברה לא הגיעו ל-HUB —
+      ${post.hub_unverified ? '<div class="pvwarn">ייתכן שהתוכן ב-HUB ישן — בדוק שם, במסך האישור.</div>'
+        : post.hub_stale ? `<div class="pvwarn">שינויים שנשמרו בלוח אחרי ההעברה לא הגיעו ל-HUB —
         משנים אותם שם, במסך האישור.</div>` : ''}`;
   }
   if (['scheduled', 'approved'].includes(post.status) && new Date(post.scheduled_at) > new Date()) {
@@ -363,8 +365,9 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
           <span class="when">${esc(shortWhen(p.scheduled_at))}</span>
           ${postStateLine(p)}
           <span class="act">${btn}</span>
-          ${p.hub_stale && p.status === 'publishing'
-            ? '<div class="pvwarn">השתנה כאן משהו אחרי ההעברה — השינוי לא הגיע ל-HUB.</div>' : ''}
+          ${p.status !== 'publishing' ? ''
+            : p.hub_unverified ? '<div class="pvwarn">ייתכן שהתוכן ב-HUB ישן — בדוק שם.</div>'
+            : p.hub_stale ? '<div class="pvwarn">השתנה כאן משהו אחרי ההעברה — השינוי לא הגיע ל-HUB.</div>' : ''}
         </div>`;
       }).join('')}`;
     for (const b of box.querySelectorAll('[data-hf-transfer]')) {

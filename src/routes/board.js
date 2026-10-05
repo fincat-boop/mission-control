@@ -7,7 +7,7 @@ import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
-import { hubStale } from '../publish/newsletter.js';
+import { hubStale, hubUnverified } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
 import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
 import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
@@ -241,7 +241,10 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
     : [];
 
   // ניוזלטר שהועבר ל-HUB: האם השתנה משהו בלוח מאז (השינוי לא יגיע לשם)
-  if (p.platform === 'newsletter') p.hub_stale = hubStale({ post: p, variant });
+  if (p.platform === 'newsletter') {
+    p.hub_stale = hubStale({ post: p, variant });
+    p.hub_unverified = hubUnverified(p);
+  }
 
   // התוצאות נשלחות יחד עם התצוגה המקדימה כדי שהדיאלוג לא יצטרך קריאה שנייה
   const results = await one('select * from post_results where post_id = $1', [p.id]);

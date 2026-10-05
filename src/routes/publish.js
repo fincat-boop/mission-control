@@ -9,7 +9,7 @@ import { loadPayload, publishBlocker, publishOne, resetPublishing,
          transferNewsletter } from '../publish/runner.js';
 import { HubMailError, audienceLists, hubFillUrl, hubMailReady, hubOrigins,
          newsletterTemplate, newsletterPreview } from '../hub-mail.js';
-import { NEWSLETTER_NO_APPROVE, hubStale } from '../publish/newsletter.js';
+import { NEWSLETTER_NO_APPROVE, hubStale, hubUnverified } from '../publish/newsletter.js';
 import { weekMeta } from '../board.js';
 import { friendlyPublishError } from '../publish/errors.js';
 
@@ -357,6 +357,7 @@ r.get('/publish/newsletter-posts', wrap(async (req, res) => {
   res.json({
     posts: posts.map(({ hub_digest: _d, ...p }) => ({
       ...p, hub_stale: hubStale({ post: { ...p, hub_digest: _d }, variant }),
+      hub_unverified: hubUnverified({ hub_digest: _d }),
     })),
   });
 }));

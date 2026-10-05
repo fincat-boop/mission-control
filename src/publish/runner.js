@@ -9,7 +9,7 @@ import { emitHubEventSafe, postEventInput } from '../hub-events.js';
 import { friendlyPublishError } from './errors.js';
 import { itemAssetsSql } from '../links.js';
 import {
-  HUB_MISSING_ERROR, NOT_APPROVED_ERROR, NOT_TRANSFERRED_ERROR, alreadyTransferred,
+  DIGEST_UNVERIFIED, HUB_MISSING_ERROR, NOT_APPROVED_ERROR, NOT_TRANSFERRED_ERROR, alreadyTransferred,
   cleanFieldValues, hubWaitState, newsletterBlocker, newsletterClockStart, newsletterDigest,
   nextHubRef, reusableHubStatus, transferBlocker,
 } from './newsletter.js';
@@ -687,8 +687,11 @@ export async function transferNewsletter(postId, user, { now = new Date(), fetch
             hub_transferred_at = now(), publish_error = null,
             approved_by = $7, approved_at = now()
       where id = $1 returning *`,
+    // הטביעה: קמפיין חדש — מה שנשלח עכשיו; קמפיין קיים שחיברנו אליו מחדש —
+    // נשארת זו מההעברה הקודמת; קמפיין קיים שלא ידענו עליו (ה-HUB החזיר
+    // idempotent) — "לא ידוע", והלוח מזהיר לבדוק ב-HUB
     [post.id, r.campaign_id, hubCampaignUrl(r.campaign_id), r.status ?? 'draft', ref,
-     reuse ? null : newsletterDigest(payload), user?.id ?? null]
+     reuse ? null : r.idempotent ? DIGEST_UNVERIFIED : newsletterDigest(payload), user?.id ?? null]
   );
   // משימת "לא הועבר" / כשל קודם — נסגרת: הניוזלטר בידי ה-HUB עכשיו
   await query(
@@ -700,7 +703,7 @@ export async function transferNewsletter(postId, user, { now = new Date(), fetch
     (r.recipient_count != null ? ` (${r.recipient_count} נמענים)` : '') +
     (user?.name ? ` על ידי ${user.name}` : '') + ' — ממתין לאישור שם');
   console.log(`ניוזלטר #${post.id} ("${post.title}") הועבר ל-HUB — קמפיין ${r.campaign_id}`);
-  return { post: updated, reused: !!reuse };
+  return { post: updated, reused: !!reuse, unverified: !reuse && !!r.idempotent };
 }
 
 /* ========================= ניוזלטר: סגירת מעגל מול ה-HUB ========================= */
