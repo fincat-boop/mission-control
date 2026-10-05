@@ -80,6 +80,7 @@ before(async () => {
   const { default: content } = await import('../src/routes/content.js');
   const { default: campaigns } = await import('../src/routes/campaigns.js');
   const { default: channels } = await import('../src/routes/channels.js');
+  const { default: board } = await import('../src/routes/board.js');
   const { mediaStore } = await import('../src/media.js');
 
   await db.migrate();
@@ -126,6 +127,7 @@ before(async () => {
   app.use(content);
   app.use(campaigns);
   app.use(channels);
+  app.use(board);
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => res.status(500).json({ error: err.message }));
   server = app.listen(0);
@@ -550,4 +552,33 @@ test('מחיקת מדיה (force) של מקור: העוקבות מתנתקות �
   assert.equal((await item(b)).linked_to_id, null);
   assert.equal((await assetsOf(b)).length, 1);
   assert.deepEqual(await variant(b, ids.yt), { body: 'שורד את המחיקה', status: 'ready', meta: null });
+});
+
+test('שיוך תוכן לפוסט חסר תוכן: עוקבת מופיעה כמועמדת ונשלחת עם הטקסט והמדיה של המקור', { skip }, async () => {
+  const a = await slot(ids.ig, 80, { title: 'לשיוך', body: 'טקסט משותף', status: 'ready' });
+  const file = await uploadBytes(a);
+  const b = (await call('POST', `/content/${a}/link`, {
+    target_campaign_slot: { channel_id: ids.yt, sort_order: 80 } })).json.follower.id;
+  // פוסט חסר תוכן ביוטיוב, בתוך חלון הקמפיין
+  const when = new Date(`${ids.start}T09:00:00+03:00`);
+  when.setDate(when.getDate() + 3);
+  const post = await q1(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at)
+     values ($1,$2,'ממתין לתוכן','value',$3) returning id`, [ids.yt, ids.endpoint, when]);
+  const date = when.toISOString().slice(0, 10);
+  const cand = await call('GET',
+    `/posts/candidates?channel_id=${ids.yt}&endpoint_id=${ids.endpoint}&date=${date}`);
+  assert.equal(cand.status, 200, JSON.stringify(cand.json));
+  assert.ok(cand.json.candidates.some((c) => c.id === b), 'העוקבת מועמדת בערוץ שלה');
+  assert.ok(!cand.json.candidates.some((c) => c.id === a), 'המקור לא מועמד בערוץ אחר');
+
+  const r = await call('POST', `/posts/${post.id}/attach-content`, { content_id: b });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const preview = await call('GET', `/posts/${post.id}/preview`);
+  assert.equal(preview.status, 200, JSON.stringify(preview.json));
+  assert.equal(preview.json.variant.body, 'טקסט משותף');
+  assert.deepEqual(preview.json.assets.map((x) => x.id), [file.id]);
+  const { loadPayload } = await import('../src/publish/runner.js');
+  const payload = await db.withOrg(org, () => loadPayload(post.id));
+  assert.deepEqual(payload.assets.map((x) => x.id), [file.id]);
 });
