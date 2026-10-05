@@ -2,7 +2,7 @@ import { one, query, rows, withOrg } from './db.js';
 import { buildDump } from './backup.js';
 import { offsiteBackup } from './offsite-backup.js';
 import { fullBackup } from './full-backup.js';
-import { weekMeta } from './board.js';
+import { weekMeta, ymd } from './board.js';
 import {
   TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, mediaSweepEnabled,
   orgMediaPrefix, pickOrphans,
@@ -126,6 +126,12 @@ export async function suggestContentSwaps() {
          join endpoints e on e.id = ci.endpoint_id and e.active = true
          left join campaigns ca on ca.id = ci.campaign_id
         where (ca.id is null or ca.paused_at is null)
+          and (ci.slot_channel_id is null or exists (
+                select 1 from campaign_channels cc
+                 where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
+          -- תוכן של קמפיין לא מוצע מחוץ לחלון התאריכים שלו
+          and (ca.id is null or ((ca.starts_on is null or ca.starts_on <= $4::date)
+                             and (ca.ends_on is null or ca.ends_on >= $4::date)))
           and not exists (
             select 1 from posts p2
              where p2.content_id = ci.id and p2.channel_id = $1
@@ -134,7 +140,7 @@ export async function suggestContentSwaps() {
           )
         order by e.importance desc, ci.created_at asc
         limit 1`,
-      [post.channel_id, week.startDate, week.endDate]
+      [post.channel_id, week.startDate, week.endDate, ymd(new Date(post.scheduled_at))]
     );
     if (!suggestion) continue; // אין כרגע שום תוכן מוכן להציע במקומו
 

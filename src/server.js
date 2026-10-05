@@ -31,7 +31,11 @@ app.set('trust proxy', 1); // Railway מגיש דרך פרוקסי — נחוץ 
 
 // כותרות אבטחה. CSP מכוון לאפליקציה: הכול מאותו מקור, בלי hosts חיצוניים.
 // 'unsafe-inline' רק ל-style — יש בהצגה מאפייני style="" (הסקריפטים כולם בקבצים).
+// HSTS ו-upgrade-insecure-requests רק בפרודקשן: מקומית אין https, ו-Safari
+// זוכר HSTS גם ל-localhost — כל localhost (כל פורט) היה נאלץ ל-https לשנה.
+const isProd = process.env.NODE_ENV === 'production';
 app.use(helmet({
+  strictTransportSecurity: isProd,
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
@@ -48,6 +52,7 @@ app.use(helmet({
       baseUri: ["'self'"],
       formAction: ["'self'"],
       frameAncestors: ["'none'"],
+      upgradeInsecureRequests: isProd ? [] : null,
     },
   },
 }));

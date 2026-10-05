@@ -26,13 +26,13 @@ export async function api(path, options = {}) {
  * שיבוץ שהשרת מזהיר עליו כצמוד מדי. האזהרה אינה חסימה: מציגים מה
  * שהשרת יודע ושואלים, ומי שמאשר שולח שוב עם confirm_gap.
  */
-export async function postWithGapCheck(path, body, method = 'PATCH') {
+export async function postWithGapCheck(path, body, method = 'PATCH', question = 'לשבץ בכל זאת?') {
   try {
     return await api(path, { method, body });
   } catch (e) {
     if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
     const w = e.payload.warning;
-    if (!(await confirmDialog(`${w.message}\n\nלשבץ בכל זאת?`))) return null;
+    if (!(await confirmDialog(`${w.message}\n\n${question}`))) return null;
     return api(path, { method, body: { ...body, confirm_gap: true } });
   }
 }

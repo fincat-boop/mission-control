@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { bad, updateById, wrap } from './_shared.js';
 import { buildBoard } from '../board.js';
 import { requirePerm } from '../auth.js';
-import { gapWarning } from '../gap.js';
+import { campaignWindowWarning, gapWarning, softWarning } from '../gap.js';
 import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
@@ -26,12 +26,14 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
   }
-  // שיבוץ צמוד מדי לפוסט קיים של אותה נקודה — מזהיר, לא חוסם
-  const gap = await gapWarning({
-    endpointId: b.endpoint_id, channelId: b.channel_id, when: b.scheduled_at,
-  });
-  if (gap && !b.confirm_gap) {
-    return res.status(409).json({ error: gap.message, warning: gap, needs_confirm: true });
+  // שיבוץ צמוד מדי לפוסט קיים של אותה נקודה, או תוכן של קמפיין מחוץ
+  // לחלון שלו — מזהיר, לא חוסם
+  const warning = softWarning(
+    await gapWarning({ endpointId: b.endpoint_id, channelId: b.channel_id, when: b.scheduled_at }),
+    await campaignWindowWarning({ contentId: b.content_id, when: b.scheduled_at }),
+  );
+  if (warning && !b.confirm_gap) {
+    return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
   }
 
   const post = await one(
@@ -125,11 +127,15 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       }
     }
 
-    const gap = await gapWarning({
-      endpointId: endpoint, channelId: channel, when, excludePostId: current.id,
-    });
-    if (gap && !b.confirm_gap) {
-      return res.status(409).json({ error: gap.message, warning: gap, needs_confirm: true });
+    const warning = softWarning(
+      await gapWarning({ endpointId: endpoint, channelId: channel, when, excludePostId: current.id }),
+      // רק כשהתאריך באמת זז — שינוי ערוץ באותו יום לא מעורר אותה שוב
+      b.scheduled_at
+        ? await campaignWindowWarning({ contentId: b.content_id ?? current.content_id, when })
+        : null,
+    );
+    if (warning && !b.confirm_gap) {
+      return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
     }
   }
 

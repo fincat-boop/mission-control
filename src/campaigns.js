@@ -1,6 +1,7 @@
 import { rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
+import { inferPeriod, parsePeriod, periodEnd } from '../public/js/core/period.js';
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -91,12 +92,14 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
   // Object ולא Map — כמו במסלול היציאה השני, אחרת הצרכן מקבל טיפוס אחר
   // תלוי אם יצא תוכן או לא
   if (!angles) {
-    return { angles: [], needs: Object.fromEntries(needs), total_cells: 0, missing: 0, ready: 0 };
+    return { angles: [], needs: Object.fromEntries(needs), total_cells: 0, missing: 0, ready: 0,
+             drafts: 0 };
   }
 
   const byOrder = new Map(content.map((c) => [c.sort_order, c]));
   let missing = 0;
   let ready = 0;
+  let drafts = 0;
   let total = 0;
 
   const list = Array.from({ length: angles }, (_, i) => {
@@ -113,6 +116,7 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
         total += 1;
         if (state === 'ready') ready += 1;
         else missing += 1;
+        if (state === 'draft') drafts += 1;
       }
       return {
         channel_id: ch.id,
@@ -132,7 +136,139 @@ export function gridFor(campaign, content, campaignChannels, today = ymd(new Dat
     };
   });
 
-  return { angles: list, needs: Object.fromEntries(needs), total_cells: total, missing, ready };
+  return { angles: list, needs: Object.fromEntries(needs), total_cells: total, missing, ready,
+           drafts };
+}
+
+/**
+ * קמפיין "כללי": בלי זוויות. לכל מדיה רשימת משבצות משלה, באורך הצורך שלה
+ * (אותו חשבון קצב × שבועות × נתח כמו ברשת הזוויות), וכל משבצת ממולאת
+ * בפריט תוכן של אותה מדיה בלבד (slot_channel_id + sort_order).
+ *
+ * אותן הגדרות כמו ברשת הזוויות: נדרש = סכום הצרכים פחות משבצות שסומנו
+ * "לא רלוונטי", מוכן = גרסה "מוכן", חסר = נדרש − מוכן (טיוטה עדיין חסרה),
+ * וטיוטות נספרות בנפרד לתצוגה. פריט שמעבר לצורך (העלאה מרוכזת שגלשה) מוצג
+ * כמשבצת נוספת ולא נספר.
+ *
+ * מצב משבצת: ready / draft / not_relevant / empty
+ */
+export function generalGridFor(campaign, content, campaignChannels, today = ymd(new Date()),
+                               concurrent = []) {
+  const needs = channelNeeds(campaign, campaignChannels, concurrent);
+  let missing = 0;
+  let ready = 0;
+  let drafts = 0;
+  let total = 0;
+  if (needs.size === 0) {
+    return { channels: [], needs: {}, total_cells: 0, missing: 0, ready: 0, drafts: 0 };
+  }
+
+  const channels = campaignChannels.map((ch) => {
+    let colRequired = 0;
+    let colReady = 0;
+    const need = needs.get(ch.id) ?? 0;
+    const mine = content.filter((x) => x.slot_channel_id === ch.id);
+    const byOrder = new Map(mine.map((x) => [x.sort_order, x]));
+    const count = Math.max(need, ...mine.map((x) => x.sort_order));
+
+    const slots = Array.from({ length: count }, (_, i) => {
+      const item = byOrder.get(i + 1) ?? null;
+      const v = item?.variants?.find((x) => x.channel_id === ch.id) ?? null;
+      const state = item ? (v?.status ?? 'draft') : 'empty';
+      const extra = i + 1 > need;
+      if (!extra && state !== 'not_relevant') {
+        total += 1;
+        colRequired += 1;
+        if (state === 'ready') { ready += 1; colReady += 1; } else missing += 1;
+        if (state === 'draft') drafts += 1;
+      }
+      const date = extra ? null : angleDate(campaign, i, need);
+      return {
+        index: i + 1,
+        date,
+        past: date ? date < today : false,
+        extra,
+        state,
+        content: item,
+        variant_id: v?.id ?? null,
+        has_text: !!v?.body,
+      };
+    });
+
+    return { channel_id: ch.id, channel_name: ch.name, need, required: colRequired,
+             ready: colReady, slots };
+  });
+
+  return { channels, needs: Object.fromEntries(needs), total_cells: total, missing, ready, drafts };
+}
+
+/**
+ * לאילו משבצות נכנסים count קבצים חדשים: קודם המשבצות הפנויות עד הצורך,
+ * לפי הסדר, ואחר כך אחרי המשבצת הגבוהה ביותר (תפוסה או נדרשת).
+ * need = null (אין תאריכים) → הכול בסוף התור.
+ */
+export function nextSlots(need, takenOrders, count) {
+  const taken = new Set(takenOrders);
+  const free = [];
+  for (let i = 1; need != null && i <= need; i += 1) if (!taken.has(i)) free.push(i);
+  let overflowFrom = Math.max(0, ...takenOrders, need ?? 0);
+  return Array.from({ length: count }, () => free.shift() ?? (overflowFrom += 1));
+}
+
+/**
+ * האם מותר לשנות את מבנה הקמפיין. מותר רק כל עוד אין לו תוכן — אחרת
+ * זוויות היו נשארות בלי מקום ברשימות של "כללי", ולהפך.
+ * @returns {string|null} הודעת שגיאה, או null כשמותר
+ */
+export function structureChangeError(current, next, contentCount) {
+  if (next == null || next === current) return null;
+  if (!['angles', 'general'].includes(next)) return 'מבנה קמפיין לא מוכר';
+  if (contentCount > 0) {
+    return 'אי אפשר לשנות את מבנה הקמפיין אחרי שכבר נוסף לו תוכן';
+  }
+  return null;
+}
+
+/**
+ * תאריך הסיום והתקופה שנשמרים, מתוך מה שנשלח (ומהמצב הקודם בעדכון).
+ *
+ *   period נשלח       → ends_on נגזר ממנו (בתקופה ידנית — ends_on שנשלח)
+ *   רק תאריכים נשלחו  → נשמרים כמו שהם, והתקופה מוסקת מהם (גרירה בציר
+ *                        האסטרטגיה, העוזר) — כדי שהטופס יציג אותה נכון
+ *   רק starts_on זז    → בקמפיין עם תקופה קבועה, הסיום זז איתו
+ *
+ * @returns {{error?:string, period?:string|null, ends_on?:string|null}}
+ *          אובייקט ריק = אין מה לשנות
+ */
+export function resolvePeriod(b, before = null) {
+  const start = b.starts_on !== undefined ? b.starts_on : (before?.starts_on ?? null);
+
+  if (b.period != null) {
+    const p = parsePeriod(b.period);
+    if (!p) return { error: 'תקופת הקמפיין לא תקינה' };
+    if (p.unit === 'open') {
+      // רק לקמפיין ישן לפי זוויות: בכללי המשבצות נפרסות על החלון ודורשות סוף
+      const structure = b.structure ?? before?.structure ?? 'angles';
+      if (structure === 'general') return { error: 'קמפיין כללי צריך תאריך סיום' };
+      return { period: 'open', ends_on: null };
+    }
+    if (p.unit === 'custom') {
+      const end = b.ends_on !== undefined ? b.ends_on : (before?.ends_on ?? null);
+      if (!end) return { error: 'בתאריך סיום ידני צריך לבחור תאריך' };
+      return { period: 'custom', ends_on: end };
+    }
+    if (!start) return { error: 'צריך תאריך יעד לפוסט הראשון כדי לחשב את סוף התקופה' };
+    return { period: b.period, ends_on: periodEnd(start, b.period) };
+  }
+
+  if (b.ends_on !== undefined) {
+    return { period: start && b.ends_on ? inferPeriod(start, b.ends_on) : null, ends_on: b.ends_on };
+  }
+
+  if (b.starts_on !== undefined && before?.period && before.period !== 'custom') {
+    return { period: before.period, ends_on: b.starts_on ? periodEnd(b.starts_on, before.period) : null };
+  }
+  return {};
 }
 
 /** כל הקמפיינים עם מצב מלא */
@@ -169,6 +305,7 @@ export async function campaignsWithHealth() {
 
     const shaped = mine.map((x) => ({
       id: x.id, title: x.title, kind: x.kind, sort_order: x.sort_order,
+      slot_channel_id: x.slot_channel_id,
       evergreen: x.evergreen, reuse_after_days: x.reuse_after_days,
       endpoint_id: x.endpoint_id, campaign_id: x.campaign_id,
       // קבצים משותפים לזווית מול קבצים של גרסה מסוימת
@@ -181,8 +318,12 @@ export async function campaignsWithHealth() {
       })),
     }));
 
-    // הקמפיינים האחרים נדרשים כדי לגזור נתח לקמפיין שלא הוגדר לו אחד
-    const grid = gridFor(c, shaped, myChannels, today, list);
+    // הקמפיינים האחרים נדרשים כדי לגזור נתח לקמפיין שלא הוגדר לו אחד.
+    // בקמפיין כללי אין זוויות — הרשת היא רשימת משבצות לכל מדיה.
+    const general = c.structure === 'general';
+    const grid = general
+      ? { ...generalGridFor(c, shaped, myChannels, today, list), angles: [] }
+      : gridFor(c, shaped, myChannels, today, list);
 
     const scheduled = myPosts.filter(
       (p) => ['scheduled', 'approved', 'publishing', 'failed', 'pending_approval'].includes(p.status)).length;
@@ -201,9 +342,11 @@ export async function campaignsWithHealth() {
       share_auto: autoShare,
       angles_auto: autoAngles,
       angles_required: grid.angles.length,
-      angles_written: mine.length,
+      angles_written: general ? 0 : mine.length,
       required: grid.total_cells,      // סך הפוסטים שהקמפיין צריך על כל המדיות
       ready: grid.ready,
+      // טיוטות הן חלק מהחסר (לא מוכנות) — נשלחות בנפרד רק לתצוגה
+      drafts: grid.drafts,
       missing_content: grid.missing,
       needs: grid.needs,
       scheduled,
@@ -214,6 +357,13 @@ export async function campaignsWithHealth() {
       pace: paceOf(c, today, published, grid),
       content: shaped,
       grid: grid.angles,
+      // קמפיין כללי: רשימת משבצות לכל מדיה (ריק בקמפיין לפי זוויות)
+      slots: general ? grid.channels : [],
+      // פוסטים במשבצות של מדיות שהוסרו מהקמפיין — נשמרים ולא משובצים
+      orphaned: general
+        ? mine.filter((x) => x.slot_channel_id &&
+            !myChannels.some((ch) => ch.id === x.slot_channel_id)).length
+        : 0,
     };
   });
 }

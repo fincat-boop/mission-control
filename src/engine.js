@@ -51,10 +51,10 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     // ready_channel_ids — רק גרסה שסומנה "מוכן". eligible_channel_ids — גם
     // טיוטה: השיבוץ הולך לפי האסטרטגיה, לא לפי אם כבר נכתב טקסט סופי.
     // המנוע ממשיך להעדיף מוכן על פני טיוטה כשיש ברירה (ראו chooseForSlot).
-    //
-    // חלון הקמפיין (campaign_starts_on/ends_on) נטען כאן כדי שתוכן של קמפיין
-    // לא ישובץ מחוץ לתאריכים שלו — ראו inCampaignWindow.
-    rows(`select ci.*, ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
+    // תאריכי הקמפיין נשלפים עם התוכן: תוכן של קמפיין לא יוצא לפני
+    // starts_on ולא אחרי ends_on (ראו outsideCampaignWindow).
+    rows(`select ci.*,
+                 ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
                  coalesce(
                    array_agg(v.channel_id) filter (where v.status = 'ready'),
                    '{}'
@@ -66,7 +66,11 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
             from content_items ci
             left join content_variants v on v.content_id = ci.id
             left join campaigns ca on ca.id = ci.campaign_id
-           where ca.id is null or ca.paused_at is null
+           where (ca.id is null or ca.paused_at is null)
+             -- משבצת של קמפיין כללי שהמדיה שלה הוסרה מהקמפיין: נשמרת, לא משובצת
+             and (ci.slot_channel_id is null or exists (
+                   select 1 from campaign_channels cc
+                    where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
            group by ci.id, ca.id
            order by ci.created_at`),
     // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
@@ -411,18 +415,6 @@ export function blockedContent(existing, dismissals = []) {
 }
 
 /**
- * תוכן של קמפיין יוצא רק בתוך התאריכים של הקמפיין. תוכן שוטף (בלי
- * קמפיין) — תמיד. dateKey ותאריכי הקמפיין הם 'YYYY-MM-DD', ולכן השוואת
- * מחרוזות מספיקה.
- */
-export function inCampaignWindow(c, dateKey) {
-  if (!c.campaign_id) return true;
-  if (c.campaign_starts_on && c.campaign_starts_on > dateKey) return false;
-  if (c.campaign_ends_on && c.campaign_ends_on < dateKey) return false;
-  return true;
-}
-
-/**
  * פוסטים על הלוח שאין להם תוכן ושעוד אפשר למלא: עתידיים, מתוכננים,
  * בערוץ פעיל ועם נקודת קצה פעילה (בלי נקודה אין לפי מה לבחור תוכן).
  */
@@ -453,7 +445,7 @@ export function chooseHoleFills({ holes, content, usedContent, history = new Map
       c.endpoint_id === h.endpoint_id &&
       (c.eligible_channel_ids ?? []).includes(h.channel_id) &&
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
-      inCampaignWindow(c, dateKey) &&
+      !outsideCampaignWindow(c, dateKey) &&
       reusable(c, slot, history, settings)
     );
     if (fits.length === 0) continue;
@@ -801,7 +793,19 @@ function compareKeys(a, b) {
 
 /* ========================= בחירה למשבצת ========================= */
 
-function chooseForSlot(ctx) {
+/**
+ * האם התאריך מחוץ לחלון של הקמפיין שהתוכן שייך אליו. תוכן שוטף (בלי
+ * קמפיין) וקמפיין בלי תאריכים — אף פעם לא מחוץ לחלון. התאריכים הם
+ * YYYY-MM-DD, ולכן השוואת מחרוזות מדויקת.
+ */
+export function outsideCampaignWindow(c, dateKey) {
+  if (!c?.campaign_id) return false;
+  if (c.campaign_starts_on && dateKey < c.campaign_starts_on) return true;
+  if (c.campaign_ends_on && dateKey > c.campaign_ends_on) return true;
+  return false;
+}
+
+export function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
           usedContent, lastPerPair, settings, history, sameDay } = ctx;
 
@@ -826,8 +830,8 @@ function chooseForSlot(ctx) {
     const ready = content.filter((c) =>
       c.endpoint_id === e.id &&
       (c.eligible_channel_ids ?? []).includes(slot.channel_id) &&
+      !outsideCampaignWindow(c, slot.dateKey) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
-      inCampaignWindow(c, slot.dateKey) &&
       reusable(c, slot, history, settings) &&
       usage.allows(slot.channel_id, slot.dateKey, c.kind)
     );
@@ -892,7 +896,7 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
     if (debts.scheduledCount(e.id) > 0) continue;         // כבר קיבלה שיבוץ בריצה הזו
     if (existing.some((x) => x.endpoint_id === e.id)) continue; // כבר על הלוח השבוע
 
-    const hasAnyContent = content.some((c) => c.endpoint_id === e.id);
+    const mine = content.filter((c) => c.endpoint_id === e.id);
 
     // הערוץ הכי פנוי — שם נשבץ בלי תוכן. גם טיוטה כבר נבדקה ונפסלה
     // למעלה בלולאת ה-slots הרגילה, אז אם הגענו לכאן — באמת אין כלום.
@@ -918,14 +922,25 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
       date: day.date,
       day_label: day.label,
       scheduled_at: new Date(`${day.date}T${String(hour).padStart(2, '0')}:00:00`).toISOString(),
-      reason: hasAnyContent
-        ? 'יש תוכן לנקודה הזו, אבל אף גרסה לא מתאימה לערוץ פנוי כרגע'
-        : 'אין שום תוכן (גם לא טיוטה) לנקודה הזו',
+      reason: holeReason(mine, day.date),
       days_since: p.daysSince === null ? null : Math.floor(p.daysSince),
     });
   }
 
   return holes;
+}
+
+/**
+ * למה אין תוכן לנקודה במשבצת — הטקסט שמופיע על החור ובמשימת "לכתוב".
+ * תוכן שכולו של קמפיינים שלא רצים בתאריך הזה הוא סיבה אחרת לגמרי מ"אין
+ * גרסה מתאימה", ומי שקורא את ההודעה צריך לדעת איזו מהן.
+ */
+export function holeReason(endpointContent, dateKey) {
+  if (!endpointContent.length) return 'אין שום תוכן (גם לא טיוטה) לנקודה הזו';
+  if (endpointContent.every((c) => outsideCampaignWindow(c, dateKey))) {
+    return 'התוכן של נקודת הקצה שייך לקמפיינים שלא רצים בתאריך הזה, ואין לה תוכן שוטף';
+  }
+  return 'יש תוכן לנקודה הזו, אבל אף גרסה לא מתאימה לערוץ פנוי כרגע';
 }
 
 /** היום שבו יישב חור: לא בתחילת השבוע, ורחוק ככל האפשר משאר הלוח של הערוץ. */

@@ -2,8 +2,8 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  blockedContent, buildSlots, buildUsage, chooseHoleFills, inCampaignWindow, nextSlot,
-  openHoles, planItemKey, selectPlanItems,
+  blockedContent, buildSlots, buildUsage, chooseForSlot, chooseHoleFills, holeReason, nextSlot,
+  openHoles, outsideCampaignWindow, planItemKey, selectPlanItems,
 } from '../src/engine.js';
 import { weekMeta } from '../src/board.js';
 
@@ -88,28 +88,97 @@ test('שני ערוצים לא נערמים על אותו יום', () => {
   assert.equal(Math.max(...perDay.values()), 1, `יום עמוס מדי: ${[...perDay]}`);
 });
 
-/* ========================= חלון קמפיין ========================= */
+/* ========================= חלון הקמפיין ========================= */
 
-test('חלון קמפיין — תוכן שוטף תמיד בפנים', () => {
-  assert.equal(inCampaignWindow({ campaign_id: null }, '2026-10-05'), true);
+const debtsStub = {
+  score: () => 1,
+  parts: () => ({ daysSince: 30, staleness: 2, deficit: 0, performance: null }),
+};
+
+/** בוחר תוכן לכל יום בשבוע בערוץ 1, ומחזיר אילו פריטים נבחרו באיזה יום */
+function pickAcrossWeek(content, anchor = '2026-11-11') {
+  const week = weekMeta(anchor);
+  const ch = channel({ max_per_week: 7 });
+  const settings = { ...SETTINGS, min_gap_days: 0 };
+  const out = new Map();
+  for (const slot of buildSlots(week, [ch], null)) {
+    const pick = chooseForSlot({
+      slot,
+      endpoints: [{ id: 1, name: 'נקודה', importance: 5 }],
+      content,
+      campaigns: [],
+      debts: debtsStub,
+      usage: buildUsage([ch], [], settings),
+      usedContent: new Set(),
+      lastPerPair: new Map(),
+      settings,
+      placements: [],
+      history: new Map(),
+      sameDay: new Set(),
+    });
+    out.set(slot.dateKey, pick?.content.id ?? null);
+  }
+  return { week, out };
+}
+
+const item = (over) => ({
+  id: 1, endpoint_id: 1, kind: 'value', evergreen: false,
+  eligible_channel_ids: [1], ready_channel_ids: [1], ...over,
 });
 
-test('חלון קמפיין — בתוך התאריכים, כולל הקצוות', () => {
-  const c = { campaign_id: 3, campaign_starts_on: '2026-10-01', campaign_ends_on: '2026-10-10' };
-  assert.equal(inCampaignWindow(c, '2026-10-01'), true);
-  assert.equal(inCampaignWindow(c, '2026-10-10'), true);
-  assert.equal(inCampaignWindow(c, '2026-10-05'), true);
+test('outsideCampaignWindow — לפני ההתחלה, אחרי הסוף, ותוכן שוטף', () => {
+  const c = { campaign_id: 7, campaign_starts_on: '2026-11-10', campaign_ends_on: '2026-11-12' };
+  assert.equal(outsideCampaignWindow(c, '2026-11-09'), true);
+  assert.equal(outsideCampaignWindow(c, '2026-11-10'), false);
+  assert.equal(outsideCampaignWindow(c, '2026-11-12'), false);
+  assert.equal(outsideCampaignWindow(c, '2026-11-13'), true);
+  assert.equal(outsideCampaignWindow({ campaign_id: null }, '2020-01-01'), false);
+  assert.equal(outsideCampaignWindow({ campaign_id: 7 }, '2020-01-01'), false); // בלי תאריכים
+  assert.equal(outsideCampaignWindow({ campaign_id: 7, campaign_starts_on: '2026-11-10' },
+    '2030-01-01'), false); // בלי סוף
 });
 
-test('חלון קמפיין — קמפיין שנגמר אתמול לא משתבץ היום, ושעוד לא התחיל — לא', () => {
-  const ended = { campaign_id: 3, campaign_starts_on: '2026-09-01', campaign_ends_on: '2026-10-04' };
-  const future = { campaign_id: 4, campaign_starts_on: '2026-10-06', campaign_ends_on: null };
-  assert.equal(inCampaignWindow(ended, '2026-10-05'), false);
-  assert.equal(inCampaignWindow(future, '2026-10-05'), false);
+test('המנוע לא משבץ תוכן של קמפיין לפני starts_on או אחרי ends_on', () => {
+  // שבוע 8.11–14.11; הקמפיין רץ 10.11–12.11
+  const campaignItem = item({
+    id: 5, campaign_id: 7, campaign_starts_on: '2026-11-10', campaign_ends_on: '2026-11-12',
+  });
+  const { out } = pickAcrossWeek([campaignItem]);
+  for (const [date, picked] of out) {
+    const inside = date >= '2026-11-10' && date <= '2026-11-12';
+    assert.equal(picked, inside ? 5 : null, `${date}: ${picked}`);
+  }
 });
 
-test('חלון קמפיין — בלי תאריכים = פתוח', () => {
-  assert.equal(inCampaignWindow({ campaign_id: 5 }, '2030-01-01'), true);
+test('תוכן שוטף ממלא את הימים שמחוץ לחלון, התוכן של הקמפיין רק בתוכו', () => {
+  const campaignItem = item({
+    id: 5, kind: 'promo', campaign_id: 7,
+    campaign_starts_on: '2026-11-10', campaign_ends_on: '2026-11-30',
+  });
+  const background = item({ id: 9, campaign_id: null });
+  const { out } = pickAcrossWeek([campaignItem, background]);
+  for (const [date, picked] of out) {
+    if (date < '2026-11-10') assert.equal(picked, 9, date);
+    else assert.ok([5, 9].includes(picked), date);
+  }
+});
+
+test('משבצת-מדיה של קמפיין כללי (גרסה למדיה אחת) נבחרת רק במדיה שלה', () => {
+  const general = item({
+    id: 6, campaign_id: 8, slot_channel_id: 2, eligible_channel_ids: [2], ready_channel_ids: [2],
+    campaign_starts_on: '2026-11-01', campaign_ends_on: '2026-11-30',
+  });
+  const { out } = pickAcrossWeek([general]); // הערוץ בבדיקה הוא 1
+  assert.ok([...out.values()].every((v) => v === null));
+});
+
+test('holeReason — אין תוכן / תוכן רק של קמפיינים מחוץ לחלון / תוכן שלא מתאים', () => {
+  const out = { campaign_id: 7, campaign_starts_on: '2027-01-01', campaign_ends_on: '2027-01-31' };
+  const bg = { campaign_id: null };
+  assert.match(holeReason([], '2026-11-10'), /אין שום תוכן/);
+  assert.match(holeReason([out, out], '2026-11-10'), /קמפיינים שלא רצים/);
+  assert.match(holeReason([out, bg], '2026-11-10'), /אף גרסה לא מתאימה/);
+  assert.match(holeReason([out], '2027-01-10'), /אף גרסה לא מתאימה/);
 });
 
 /* ========================= ויתורים ========================= */
@@ -133,7 +202,7 @@ const hole = (over = {}) => ({
   kind: 'value', title: 'חסר תוכן', published_at: null,
   scheduled_at: new Date('2026-10-08T12:00:00').toISOString(), ...over,
 });
-const item = (over = {}) => ({
+const holeItem = (over = {}) => ({
   id: 1, endpoint_id: 7, kind: 'value', title: 'תוכן', campaign_id: null,
   eligible_channel_ids: [1], ready_channel_ids: [1], ...over,
 });
@@ -155,7 +224,7 @@ test('openHoles — רק עתידיים, מתוכננים, בלי תוכן, בע
 test('chooseHoleFills — מוכן קודם לטיוטה', () => {
   const fills = chooseHoleFills({
     holes: [hole()],
-    content: [item({ id: 1, ready_channel_ids: [] }), item({ id: 2 })],
+    content: [holeItem({ id: 1, ready_channel_ids: [] }), holeItem({ id: 2 })],
     usedContent: new Set(),
   });
   assert.equal(fills.length, 1);
@@ -168,7 +237,7 @@ test('chooseHoleFills — מוכן קודם לטיוטה', () => {
 test('chooseHoleFills — טיוטה ממלאת כשאין מוכן, ומסומנת כטיוטה', () => {
   const fills = chooseHoleFills({
     holes: [hole()],
-    content: [item({ ready_channel_ids: [] })],
+    content: [holeItem({ ready_channel_ids: [] })],
     usedContent: new Set(),
   });
   assert.equal(fills[0].draft, true);
@@ -177,7 +246,7 @@ test('chooseHoleFills — טיוטה ממלאת כשאין מוכן, ומסומ�
 test('chooseHoleFills — בתוך המוכנים, סוג שתואם לפוסט קודם', () => {
   const fills = chooseHoleFills({
     holes: [hole({ kind: 'promo' })],
-    content: [item({ id: 1, kind: 'value' }), item({ id: 2, kind: 'promo' })],
+    content: [holeItem({ id: 1, kind: 'value' }), holeItem({ id: 2, kind: 'promo' })],
     usedContent: new Set(),
   });
   assert.equal(fills[0].content_id, 2);
@@ -189,10 +258,10 @@ test('chooseHoleFills — נקודה אחרת, ערוץ בלי ניסוח, וי�
   const fills = chooseHoleFills({
     holes: [hole()],
     content: [
-      item({ id: 1, endpoint_id: 8 }),
-      item({ id: 2, eligible_channel_ids: [2], ready_channel_ids: [2] }),
-      item({ id: 3 }),
-      item({ id: 4, campaign_id: 9, campaign_starts_on: '2026-09-01', campaign_ends_on: '2026-10-07' }),
+      holeItem({ id: 1, endpoint_id: 8 }),
+      holeItem({ id: 2, eligible_channel_ids: [2], ready_channel_ids: [2] }),
+      holeItem({ id: 3 }),
+      holeItem({ id: 4, campaign_id: 9, campaign_starts_on: '2026-09-01', campaign_ends_on: '2026-10-07' }),
     ],
     usedContent: new Set(['1:3']),
   });
@@ -203,7 +272,7 @@ test('chooseHoleFills — אותו תוכן לא ממלא שני פוסטים, �
   const used = new Set();
   const fills = chooseHoleFills({
     holes: [hole({ id: 1 }), hole({ id: 2, scheduled_at: new Date('2026-10-09T12:00:00').toISOString() })],
-    content: [item({ id: 5 })],
+    content: [holeItem({ id: 5 })],
     usedContent: used,
   });
   assert.equal(fills.length, 1);
@@ -214,7 +283,7 @@ test('chooseHoleFills — אותו תוכן לא ממלא שני פוסטים, �
 test('chooseHoleFills — תוכן חד-פעמי שכבר שובץ בעבר לא חוזר', () => {
   const history = new Map([[5, { lastByChannel: new Map([[1, '2026-09-01']]) }]]);
   const fills = chooseHoleFills({
-    holes: [hole()], content: [item({ id: 5 })], usedContent: new Set(), history,
+    holes: [hole()], content: [holeItem({ id: 5 })], usedContent: new Set(), history,
   });
   assert.deepEqual(fills, []);
 });

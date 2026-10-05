@@ -54,3 +54,47 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
         `המרווח שהוגדר הוא ${min} ימים.`,
   };
 }
+
+/**
+ * פוסט של קמפיין שזז (או נוצר) מחוץ לחלון התאריכים של הקמפיין.
+ *
+ * המנוע לא משבץ תוכן של קמפיין מחוץ לחלון שלו, אבל ביד זה לפעמים בדיוק
+ * מה שרוצים (חימום לפני השקה, תזכורת אחרי) — ולכן כאן אזהרה שאפשר לאשר,
+ * כמו המרווח, ולא חסימה.
+ *
+ * @returns {null | {campaign:object, message:string}}
+ */
+export async function campaignWindowWarning({ contentId, when }) {
+  if (!contentId || !when) return null;
+  const c = await one(
+    `select ca.id, ca.name, ca.starts_on, ca.ends_on
+       from content_items ci join campaigns ca on ca.id = ci.campaign_id
+      where ci.id = $1`,
+    [contentId]
+  );
+  if (!c || (!c.starts_on && !c.ends_on)) return null;
+
+  const day = ymd(new Date(when));
+  const before = c.starts_on && day < c.starts_on;
+  const after = c.ends_on && day > c.ends_on;
+  if (!before && !after) return null;
+
+  const fmt = (s) => `${Number(s.slice(8, 10))}.${Number(s.slice(5, 7))}`;
+  const range = c.starts_on && c.ends_on ? `${fmt(c.starts_on)}–${fmt(c.ends_on)}`
+              : c.starts_on ? `מ-${fmt(c.starts_on)}` : `עד ${fmt(c.ends_on)}`;
+  return {
+    campaign: { id: c.id, name: c.name, starts_on: c.starts_on, ends_on: c.ends_on },
+    message: `הפוסט שייך לקמפיין "${c.name}" שרץ ${range}, ` +
+             `והתאריך ${fmt(day)} ${before ? 'לפני תחילת' : 'אחרי סוף'} הקמפיין.`,
+  };
+}
+
+/**
+ * מאחד אזהרות רכות לתשובת 409 אחת — כך שאישור אחד (confirm_gap) מכסה את
+ * כולן, ולא נוצר מצב של אישור, ושוב 409 על אזהרה אחרת.
+ */
+export function softWarning(...warnings) {
+  const list = warnings.filter(Boolean);
+  if (!list.length) return null;
+  return { ...list[0], message: list.map((w) => w.message).join('\n\n'), all: list };
+}
