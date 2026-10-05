@@ -154,3 +154,17 @@ test('presetRange — N ימים כולל היום; ערך לא מוכר', () =>
   assert.equal(isPreset('prev_month'), true);
   assert.equal(isPreset('15'), false);
 });
+
+/* ---------- תקרת int ---------- */
+
+test('parseMetric — מעל 2147483647 נדחה, התקרה עצמה עוברת', async () => {
+  const { parseMetric, METRIC_MAX } = await import('../src/performance.js');
+  assert.equal(parseMetric(String(METRIC_MAX)), METRIC_MAX);
+  assert.throws(() => parseMetric('2147483648'), /גדול מדי/);
+  assert.throws(() => parseMetric(1e12), /גדול מדי/);
+  // ובשמירה המרוכזת — שגיאה לשורה, לא 500
+  const { errors } = validateBatch([{ post_id: 1, reach: '99999999999' }], statuses);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].index, 0);
+  assert.match(errors[0].error, /גדול מדי/);
+});

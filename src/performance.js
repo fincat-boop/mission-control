@@ -30,6 +30,9 @@ export const METRIC_HE = {
   leads: 'לידים',
 };
 
+/** הגבול העליון של int ב-Postgres */
+export const METRIC_MAX = 2147483647;
+
 /**
  * המרת ערך שהוזן בטופס למספר או ל-null.
  *
@@ -37,7 +40,7 @@ export const METRIC_HE = {
  * ריקה, רווחים בלבד, או ערך חסר — כולם "לא נמדד" (null), ולא אפס.
  * אפס מפורש הוא מדידה לגיטימית ונשמר כמו שהוא.
  *
- * @throws {Error} על ערך שאינו מספר אי-שלילי
+ * @throws {Error} על ערך שאינו מספר אי-שלילי, או גדול מ-METRIC_MAX
  */
 export function parseMetric(v) {
   if (v == null) return null;
@@ -46,7 +49,10 @@ export function parseMetric(v) {
   if (!Number.isFinite(n) || n < 0) {
     throw new Error('הערכים חייבים להיות מספרים אי-שליליים');
   }
-  return Math.round(n);
+  const r = Math.round(n);
+  // העמודות הן int של Postgres — מעל התקרה המסד היה זורק 500 באמצע השמירה
+  if (r > METRIC_MAX) throw new Error('המספר גדול מדי');
+  return r;
 }
 
 /** תקרה ליחס של פוסט בודד — פוסט ויראלי אחד לא הופך נקודה ל"יעילה" */
