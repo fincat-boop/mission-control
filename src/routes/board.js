@@ -9,7 +9,7 @@ import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
 import { assetView } from '../media.js';
 import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
-import { candidateColumnsSql } from '../candidates.js';
+import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
 
 const r = Router();
@@ -109,24 +109,25 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     }
 
     // יום שהמדיה לא מקבלת בו תוכן
-    const target = await one('select name, blocked_days from channels where id = $1', [channel]);
+    const target = await one('select name, blocked_days, active from channels where id = $1', [channel]);
     const dow = new Date(when).getDay();
     if ((target?.blocked_days ?? []).includes(dow)) {
       const names = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
       return bad(res, `${target.name} לא מקבל תוכן בימי ${names[dow]}`);
     }
 
-    // מעבר למדיה אחרת דורש שקיימת לתוכן גרסה למדיה הזו — אחרת היינו
-    // מפרסמים שם ניסוח שנכתב למדיה אחרת
-    if (b.channel_id && b.channel_id !== current.channel_id && current.content_id) {
-      const v = await one(
-        'select status from content_variants where content_id = $1 and channel_id = $2',
-        [current.content_id, b.channel_id]
-      );
-      if (!v) {
-        const ch = await one('select name from channels where id = $1', [b.channel_id]);
-        return bad(res, `אין לתוכן הזה גרסה ל${ch?.name ?? 'מדיה הזו'} — כותבים אותה קודם בתוכן`);
-      }
+    // מעבר לערוץ אחר — אותם כללים כמו שיוך תוכן (attach-content): ערוץ פעיל,
+    // ניסוח לתוכן בערוץ הזה שאינו "לא רלוונטי", ומשבצת-מדיה של קמפיין כללי
+    // רק בערוץ שלה. אחרת היינו מפרסמים שם ניסוח שנכתב למדיה אחרת.
+    if (Number(channel) !== current.channel_id) {
+      const contentId = 'content_id' in b ? b.content_id : current.content_id;
+      const item = contentId
+        ? await one('select id, slot_channel_id from content_items where id = $1', [contentId]) : null;
+      const variant = item
+        ? await one('select status from content_variants where content_id = $1 and channel_id = $2',
+                    [item.id, channel]) : null;
+      const blocker = channelChangeBlocker({ target, item, variant }, Number(channel));
+      if (blocker) return bad(res, blocker.error, blocker.status);
     }
 
     const warning = softWarning(
@@ -159,6 +160,27 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   }
   res.json({ post, approval_reset: approvalReset });
 }));
+
+/**
+ * למה אי אפשר להעביר פוסט לערוץ הזה, או null. טהורה (טסט ב-post-move.test.js).
+ * target — שורת הערוץ; item — פריט התוכן של הפוסט (או null); variant — הניסוח
+ * של התוכן לערוץ היעד (או null).
+ */
+export function channelChangeBlocker({ target, item, variant }, channelId) {
+  if (!target) return { status: 404, error: 'לא נמצא ערוץ כזה' };
+  if (!target.active) return { status: 409, error: `הערוץ ${target.name} מושבת` };
+  if (!item) return null;
+  if (!fitsSlotChannel(item, channelId)) {
+    return { status: 400, error: 'התוכן הזה הוא משבצת של ערוץ אחר בקמפיין — הוא לא עובר ערוץ' };
+  }
+  if (!variant) {
+    return { status: 400, error: `אין לתוכן הזה גרסה ל${target.name} — כותבים אותה קודם בתוכן` };
+  }
+  if (variant.status === 'not_relevant') {
+    return { status: 400, error: `התוכן הזה מסומן "לא רלוונטי" ל${target.name}` };
+  }
+  return null;
+}
 
 /** ערך מזהה מהבקשה מול הקיים: null/'' = ריק, אחרת מספר */
 const idOrNull = (v) => (v == null || v === '' ? null : Number(v));
