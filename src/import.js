@@ -209,8 +209,8 @@ export async function analyzeImport(campaignId, text, { markReady = false } = {}
     warnings.push(`עמודות שלא זוהו ולא ייובאו: ${unknown.join(', ')}`);
   }
   if (notInCampaign.length) {
-    warnings.push(`המדיות ${notInCampaign.join(', ')} לא משויכות לקמפיין — ` +
-                  'הניסוחים ייכתבו, אבל המנוע לא ישבץ אליהן עד שיתווספו');
+    warnings.push(`הערוצים ${notInCampaign.join(', ')} לא משויכים לקמפיין — ` +
+                  'הניסוחים ייכתבו, אבל המנוע לא ישבץ אליהם עד שיתווספו');
   }
   if (!channelCols.length && cols.body === -1) {
     warnings.push('אין עמודות ערוץ ואין עמודת טקסט — ייווצרו זוויות בלי ניסוחים, ותצטרך לכתוב אותם ידנית');

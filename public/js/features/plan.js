@@ -179,7 +179,7 @@ function backgroundGrid(endpoint, content) {
         <div class="ameta">${esc(KIND_HE[item.kind])}
           ${item.evergreen ? `· ♻ כל ${item.reuse_after_days ?? '—'} ימים` : '· חד-פעמי'}
           ${item.placements ? `· שובץ ${item.placements}×` : ''}
-          · מוכן ב-${ready} מדיות</div>
+          · מוכן ב-${ready} ערוצים</div>
       </td>${cells}</tr>`;
   }).join('');
 
@@ -200,7 +200,7 @@ function backgroundGrid(endpoint, content) {
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <div class="sumline">כל שורה היא מסר קבוע, וכל עמודה הניסוח שלו למדיה.</div>`
+    <div class="sumline">כל שורה היא מסר קבוע, וכל עמודה הניסוח שלו לערוץ.</div>`
     : '<div class="empty">אין עדיין תוכן שוטף לנקודה הזו.</div>'}`;
 }
 
@@ -246,7 +246,7 @@ function campaignList(endpoint, campaigns, content) {
     <div class="crow2" data-open-background>
       <div class="cinfo">
         <b>תוכן ערך שוטף</b>
-        <span class="d">ללא תאריכים · ${bg.length} זוויות · ${bgReady} מוכנות לפחות במדיה אחת</span>
+        <span class="d">ללא תאריכים · ${bg.length} זוויות · ${bgReady} מוכנות לפחות בערוץ אחד</span>
       </div>
       <span class="chip on">פעיל</span>
     </div>` : '';
@@ -281,10 +281,10 @@ function campaignItem(c) {
       <span class="d">${esc(range)} · ${c.structure === 'general' ? 'כללי' : 'לפי זוויות'}</span>
     </div>
     <button class="chanpick" data-pick-channels="${c.id}"
-      data-tt="לחיצה לבחירת המדיות של הקמפיין">
+      data-tt="לחיצה לבחירת הערוצים של הקמפיין">
       ${c.channels.length
         ? c.channels.map((x) => `<i>${esc(x.name)}</i>`).join('')
-        : '<i class="none">בחר מדיות</i>'}
+        : '<i class="none">בחר ערוצים</i>'}
     </button>
     <div class="abar" style="max-width:150px" data-tt="${c.ready} מתוך ${c.required} מוכנים">
       <div class="actual" style="width:${pct}%"></div>
@@ -475,18 +475,18 @@ async function patchCampaign(id, body) {
 
 /** בחירת המדיות של קמפיין, בטופס אחד קצר במקום בתוך טופס העריכה המלא */
 function openChannelPicker(campaign, reload) {
-  if (!can('settings')) return toast('אין לך הרשאה לשנות את המדיות', true);
+  if (!can('settings')) return toast('אין לך הרשאה לשנות את הערוצים', true);
 
   openGeneric({
     guardDirty: true,
-    title: `מדיות — ${campaign.name}`,
+    title: `ערוצים — ${campaign.name}`,
     fields: [
-      { name: 'channel_ids', label: 'על אילו מדיות הקמפיין יושב', type: 'multicheck',
+      { name: 'channel_ids', label: 'על אילו ערוצים הקמפיין יושב', type: 'multicheck',
         options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
         value: campaign.channels?.map((c) => c.id) },
     ],
     onSave: async (v) => {
-      if (!v.channel_ids?.length) throw new Error('צריך לבחור לפחות מדיה אחת');
+      if (!v.channel_ids?.length) throw new Error('צריך לבחור לפחות ערוץ אחד');
       v.week = state.week;
       const res = await patchCampaign(campaign.id, v);
       engineToast(res, 'הערוצים נשמרו.');
@@ -535,7 +535,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         value: campaign?.starts_on },
       { name: 'period', label: 'תקופת הקמפיין', type: 'period', start: 'starts_on',
         value: period, ends_on: campaign?.ends_on },
-      { name: 'channel_ids', label: 'על אילו מדיות הקמפיין יושב', type: 'multicheck',
+      { name: 'channel_ids', label: 'על אילו ערוצים הקמפיין יושב', type: 'multicheck',
         options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
         value: campaign?.channels?.map((c) => c.id) },
       { name: 'structure', label: 'מבנה התוכן', type: 'radio', value: structure,
@@ -543,7 +543,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         disabled: structureLocked,
         hint: structureLocked
           ? 'כבר יש לקמפיין תוכן, ולכן המבנה קבוע. אפשר לשנות אותו רק כשהקמפיין ריק.'
-          : 'כללי — לכל מדיה רשימת פוסטים משלה. לפי זוויות — כל מסר נכתב בניסוח לכל אחת מהמדיות.' },
+          : 'כללי — לכל ערוץ רשימת פוסטים משלו. לפי זוויות — כל מסר נכתב בניסוח לכל אחד מהערוצים.' },
       { name: 'importance', label: 'חשיבות (1–10)', type: 'number',
         value: campaign?.importance ?? 5,
         hint: 'זה מה שקובע כמה שטח מגיע לקמפיין. השאר את הנתח על "אוטומטי".' },
@@ -556,8 +556,8 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       // רלוונטי רק בזוויות — בכללי כל מדיה מקבלת את מספר הפוסטים שלה
       { name: 'target_posts', label: 'מספר זוויות', type: 'auto',
         value: campaign?.target_posts, hidden: structure === 'general',
-        auto: campaign?.angles_auto != null ? String(campaign.angles_auto) : 'לפי המדיות',
-        hint: 'אוטומטי נגזר מהקצב של המדיות שנבחרו ומאורך הקמפיין.' },
+        auto: campaign?.angles_auto != null ? String(campaign.angles_auto) : 'לפי הערוצים',
+        hint: 'אוטומטי נגזר מהקצב של הערוצים שנבחרו ומאורך הקמפיין.' },
       { name: 'urgent', label: 'קמפיין דחוף', type: 'checkbox', value: campaign?.urgent },
     ],
     extraActions: campaign && !duplicate && can('settings')
@@ -632,7 +632,7 @@ function campaignHead(c) {
             <i></i>מוכן</span>` : ''}
         </div>
         <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
-          · נתח ${c.share_pct != null ? c.share_pct + '%' : 'נגזר מהמשקל'}
+          · נתח ${c.share_pct != null ? c.share_pct + '%' : 'נגזר מהחשיבות'}
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
@@ -809,7 +809,7 @@ function linkPartners(c, item) {
     .sort((a, b) => order(a) - order(b));
 }
 
-const channelName = (id) => state.channels.find((ch) => ch.id === id)?.name ?? 'מדיה';
+const channelName = (id) => state.channels.find((ch) => ch.id === id)?.name ?? 'ערוץ';
 /** "יוטיוב שורטס #2" — משבצת בקמפיין כללי */
 const slotLabel = (x) => `${channelName(x.slot_channel_id)} #${x.sort_order}`;
 
@@ -828,7 +828,7 @@ function linkLine(c, item) {
  * סגורה. בעמודה פתוחה: משבצת ריקה, או משבצת עם תוכן שלא מקושרת לשום דבר.
  */
 function columnBlock(c, channelId) {
-  if (channelId === linkMode.rootChannelId) return 'המדיה של הפוסט';
+  if (channelId === linkMode.rootChannelId) return 'הערוץ של הפוסט';
   const ch = state.channels.find((x) => x.id === channelId);
   if (ch?.platform === 'newsletter') return 'ניוזלטר לא מתקשר';
   const sibling = c.content.find((x) =>
@@ -901,7 +901,7 @@ async function linkTo(campaign, channelId, index, item, reload) {
     if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
     res = await api(path, { method: 'POST', body: { ...body, replace: true } });
   }
-  const done = `${linkMode.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של המדיה שלה.`;
+  const done = `${linkMode.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של הערוץ שלה.`;
   exitLinkMode();
   engineToast(res, done);
   await reload();
@@ -912,9 +912,9 @@ const linkBar = () => `
   <div class="linkbar panel" role="status">
     ${LINK_ICON}
     <div>
-      <b>בוחרים משבצת במדיה אחרת</b>
+      <b>בוחרים משבצת בערוץ אחר</b>
       <span class="d">היא תחלוק עם ${esc(linkMode.label)} את הטקסט, הקבצים והמצב.
-        כל משבצת תצא במועד של המדיה שלה. Esc לביטול.</span>
+        כל משבצת תצא במועד של הערוץ שלה. Esc לביטול.</span>
     </div>
     <button class="btn small" id="linkCancel">ביטול</button>
   </div>`;
@@ -968,10 +968,10 @@ function generalBoard(c) {
     <div class="gboard${linking ? ' linking' : ''}">${cols}</div>
     ${completeLine(c)}
     ${c.orphaned ? `<div class="sumline">
-      <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} במדיות שהוסרו מהקמפיין</span> —
-      נשמרים ולא משובצים. החזרת המדיה לקמפיין מחזירה אותם.</div>` : ''}
+      <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} בערוצים שהוסרו מהקמפיין</span> —
+      נשמרים ולא משובצים. החזרת הערוץ לקמפיין מחזירה אותם.</div>` : ''}
     <div class="sumline">
-      כל עמודה היא מדיה, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.
+      כל עמודה היא ערוץ, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.
       ייבוא מטבלה זמין בקמפיין לפי זוויות.
     </div>`;
 }
@@ -986,7 +986,7 @@ function wireGeneralBoard(selected, reload) {
       // במצב קישור הלחיצה בוחרת יעד; משבצת שלא אפשרית — לא עושה כלום
       if (activeLinkMode()) {
         if (b.classList.contains('pick')) run(() => linkTo(selected, channelId, index, item, reload))();
-        else toast('בוחרים אחת מהמשבצות המסומנות — במדיה אחרת, ריקה או לא מקושרת.');
+        else toast('בוחרים אחת מהמשבצות המסומנות — בערוץ אחר, ריקה או לא מקושרת.');
         return;
       }
       openSlotForm({ campaign: selected, channelId, index, item }, reload);
@@ -1040,7 +1040,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
         value: item?.kind },
       ...(mail ? [] : [
-        { name: 'body', label: `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'מדיה'}`,
+        { name: 'body', label: `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'ערוץ'}`,
           type: 'textarea', value: v?.body ?? item?.body },
         { name: '__files', label: 'תמונות, סרטונים ומסמכים', type: 'files', existing: files },
         { name: 'status', label: 'מצב', type: 'radio',
@@ -1198,7 +1198,7 @@ function linkInfo(item, partners) {
   return `<div class="linkinfo">
     <div class="li-head">${LINK_ICON}<b>מקושר ל: ${esc(names)}</b></div>
     <p class="d">הטקסט, הקבצים והמצב משותפים — שמירה כאן מעדכנת גם את ${esc(names)}.
-      כל משבצת יוצאת במועד של המדיה שלה.</p>
+      כל משבצת יוצאת במועד של הערוץ שלה.</p>
     ${rows}
   </div>`;
 }
@@ -1224,7 +1224,7 @@ function openChannelBulk(campaign, channel, reload) {
       });
       await reload();
       return data.overflow
-        ? `נוספו ${data.created.length} פוסטים — ${data.overflow} מעבר למה שהמדיה צריכה.`
+        ? `נוספו ${data.created.length} פוסטים — ${data.overflow} מעבר למה שהערוץ צריך.`
         : `נוספו ${data.created.length} פוסטים.`;
     },
   });
@@ -1416,7 +1416,7 @@ function openBulkUpload(campaign, reload) {
     fields: [
       { name: 'kind', label: 'סוג הזוויות', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']], value: 'value' },
-      { name: '__files', label: 'קבצים — כל קובץ הופך לזווית חדשה, עם טיוטה לכל מדיה של הקמפיין',
+      { name: '__files', label: 'קבצים — כל קובץ הופך לזווית חדשה, עם טיוטה לכל ערוץ של הקמפיין',
         type: 'files' },
     ],
     onSave: async (v) => {
@@ -1464,7 +1464,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
         value: item?.endpoint_id ?? bgEndpoint,
       }]),
       ...(background && !item ? [{
-        name: 'channel_ids', label: 'לאילו מדיות לפתוח טיוטה', type: 'multicheck',
+        name: 'channel_ids', label: 'לאילו ערוצים לפתוח טיוטה', type: 'multicheck',
         options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
         value: state.channels.filter((c) => c.active).map((c) => c.id),
       }] : []),
@@ -1475,7 +1475,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
         value: item ? item.evergreen : !!background },
       { name: 'reuse_after_days', label: 'מרווח בין חזרות (ימים) — ריק = ברירת המחדל',
         type: 'number', value: item ? item.reuse_after_days : (background ? 30 : null) },
-      { name: '__files', label: 'תמונות, סרטונים ומסמכים (משותפים לכל המדיות)',
+      { name: '__files', label: 'תמונות, סרטונים ומסמכים (משותפים לכל הערוצים)',
         type: 'files', existing: existingFiles },
     ],
     extraActions: item && can('content')
