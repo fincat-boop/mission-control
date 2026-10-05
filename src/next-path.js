@@ -21,5 +21,9 @@ export function safeNext(value) {
   if (url.origin !== base) return null;
   if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return null;
   if (url.pathname === '/login' || url.pathname.startsWith('/login.')) return null;
-  return `${url.pathname}${url.search}${url.hash}`;
+  const out = `${url.pathname}${url.search}${url.hash}`;
+  // הנרמול מקפל קטעי נקודה ("/.//x", "/a/..//x", "/%2e//x") — והתוצאה עלולה
+  // להפוך ל-"//x", שהדפדפן קורא כאתר אחר. הבדיקות חוזרות על מה שיוצא בפועל.
+  if (!out.startsWith('/') || out.startsWith('//') || out.includes('\\')) return null;
+  return out;
 }

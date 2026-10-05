@@ -26,6 +26,18 @@ test('לוכסן הפוך ותווי בקרה נדחים', () => {
   }
 });
 
+test('קטעי נקודה שמתקפלים ל-"//" נדחים — גם מקודדים', () => {
+  for (const v of ['/.//evil.com', '/a/..//evil.com', '/%2e//evil.com', '/%2E//evil.com',
+                   '/x/%2e%2e//evil.com', '/x/%2E%2E//evil.com', '/x/.%2e//evil.com',
+                   '/././/evil.com/#tasks', '/a/b/../..//evil.com']) {
+    assert.equal(safeNext(v), null, v);
+  }
+  // נקודה שלא יוצרת "//" — עדיין נתיב באתר, מנורמל
+  assert.equal(safeNext('/a/../#tasks'), '/#tasks');
+  // "/%2F%2F" מקודד נשאר נתיב באתר (הדפדפן לא מפענח אותו לאתר אחר)
+  assert.equal(safeNext('/%2F%2Fevil.com'), '/%2F%2Fevil.com');
+});
+
 test('לא ל-/api ולא חזרה לדף הכניסה', () => {
   assert.equal(safeNext('/api/auth/logout'), null);
   assert.equal(safeNext('/api'), null);
