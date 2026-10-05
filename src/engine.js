@@ -1,6 +1,7 @@
 import { one, rows, query } from './db.js';
 import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
+import { candidateFilterSql, fitsSlotChannel } from './candidates.js';
 
 /**
  * מנוע השיבוץ.
@@ -374,13 +375,7 @@ export function contentCandidates({ endpointId = null, channelId, date = null })
        join endpoints e        on e.id = ci.endpoint_id
        left join campaigns ca  on ca.id = ci.campaign_id
       where ($1::int is null or ci.endpoint_id = $1)
-        -- משבצת-מדיה של קמפיין כללי: רק במדיה שלה, ורק כל עוד המדיה עדיין בקמפיין
-        and (ci.slot_channel_id is null or (ci.slot_channel_id = $2 and exists (
-              select 1 from campaign_channels cc
-               where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id)))
-        and (ca.id is null or (ca.paused_at is null and (
-              $3::date is null or ((ca.starts_on is null or ca.starts_on <= $3::date)
-                               and (ca.ends_on is null or ca.ends_on >= $3::date)))))
+        and ${candidateFilterSql({ channel: '$2::int', date: '$3::date' })}
       order by (v.status = 'ready') desc, used_on_channel, ci.created_at
       limit 100`,
     [endpointId, channelId, date]
@@ -470,6 +465,7 @@ export function chooseHoleFills({
     const fits = content.filter((c) =>
       c.endpoint_id === h.endpoint_id &&
       (c.eligible_channel_ids ?? []).includes(h.channel_id) &&
+      fitsSlotChannel(c, h.channel_id) &&
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
       !outsideCampaignWindow(c, dateKey) &&
       reusable(c, slot, history, settings)
@@ -887,6 +883,7 @@ export function chooseForSlot(ctx) {
     const ready = content.filter((c) =>
       c.endpoint_id === e.id &&
       (c.eligible_channel_ids ?? []).includes(slot.channel_id) &&
+      fitsSlotChannel(c, slot.channel_id) &&
       !outsideCampaignWindow(c, slot.dateKey) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&

@@ -378,3 +378,13 @@ test('buildUsage.retag — מעדכן גם את מונה המכירתי ליום
   assert.equal(usage.allows(1, '2026-10-08', 'promo'), false);
   assert.equal(usage.allowsRetag(1, '2026-10-08', 'value', 'promo'), false);
 });
+
+test('chooseHoleFills — משבצת-מדיה של ערוץ אחר לא ממלאת פוסט, גם כשיש לה ניסוח לערוץ', () => {
+  const fills = chooseHoleFills({
+    holes: [hole()],
+    content: [holeItem({ id: 1, campaign_id: 9, slot_channel_id: 2 }), holeItem({ id: 2, slot_channel_id: 1, campaign_id: 9 })],
+    usedContent: new Set(),
+  });
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0].content_id, 2);
+});

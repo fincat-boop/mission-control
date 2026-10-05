@@ -285,6 +285,7 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     `select ci.id, ci.title, ci.kind, ci.endpoint_id, ci.campaign_id, ci.slot_channel_id,
             ca.name as campaign_name, ca.paused_at, ca.starts_on, ca.ends_on,
             v.status as variant_status,
+            (select active from endpoints where id = ci.endpoint_id) as endpoint_active,
             ci.slot_channel_id is null or exists (
               select 1 from campaign_channels cc
                where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id
@@ -306,6 +307,7 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
       ? 'התוכן הזה הוא משבצת של ערוץ אחר בקמפיין'
       : `הערוץ ${post.channel_name} הוסר מהקמפיין "${c.campaign_name}" — התוכן שלו לא משובץ`);
   }
+  if (!c.endpoint_active) return bad(res, 'נקודת הקצה של התוכן הזה מושבתת', 409);
   if (post.endpoint_id && c.endpoint_id !== post.endpoint_id) {
     return bad(res, 'התוכן שייך לנקודת קצה אחרת מזו של הפוסט');
   }

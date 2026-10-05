@@ -1,4 +1,5 @@
 import { one, rows } from './db.js';
+import { candidateFilterSql } from './candidates.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const HE_MONTHS = [
@@ -87,6 +88,8 @@ export async function buildBoard(anchorDate) {
     //
     // content_hint — לפוסט חסר תוכן: האם יש לנקודה תוכן עם ניסוח לערוץ
     // הזה שאפשר לשייך ('ready' / 'draft'), כדי שהלוח יראה "יש טיוטה".
+    // אותו כלל כמו רשימת "שייך תוכן" (candidates.js) — הרמז לא מבטיח
+    // תוכן שהרשימה לא תציג.
     rows(
       `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status,
               case when p.content_id is null and p.endpoint_id is not null then (
@@ -98,7 +101,10 @@ export async function buildBoard(anchorDate) {
                                           and v2.status in ('ready','draft')
                   left join campaigns ca2 on ca2.id = ci2.campaign_id
                  where ci2.endpoint_id = p.endpoint_id
-                   and (ca2.id is null or ca2.paused_at is null)
+                   and ${candidateFilterSql({
+                     ci: 'ci2', ca: 'ca2', channel: 'p.channel_id',
+                     date: "(p.scheduled_at at time zone 'Asia/Jerusalem')::date",
+                   })}
               ) end as content_hint
          from posts p
          left join users u          on u.id = p.assignee_id
