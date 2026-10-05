@@ -35,13 +35,34 @@ export const copyLinkButton = (url) => (url
        title="קישור ציבורי קבוע — להדבקה ברשת חברתית או לשליחה לעורך">העתק קישור</button>`
   : '');
 
+/**
+ * העתקה ללוח. Clipboard API קודם; אם הדפדפן מסרב (הרשאה, הקשר לא מאובטח)
+ * — textarea זמני + execCommand. ה-textarea נשתל ליד הכפתור, כי מחוץ
+ * ל-<dialog> מודאלי אי אפשר לבחור בו טקסט.
+ */
+async function copyText(text, near) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch { /* ננסה בדרך הישנה */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+  (near ?? document.body).appendChild(ta);
+  ta.select();
+  const ok = document.execCommand('copy');
+  ta.remove();
+  if (!ok) throw new Error('ההעתקה נכשלה — הדפדפן חסם גישה ללוח');
+}
+
 /** מחווט את כל כפתורי "העתק קישור" בתוך root */
 export function wireCopyLinks(root) {
   root?.querySelectorAll('[data-copy-link]').forEach((b) =>
     b.addEventListener('click', run(async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      await navigator.clipboard.writeText(b.dataset.copyLink);
+      await copyText(b.dataset.copyLink, b.parentElement);
       toast('הקישור הועתק');
     })));
 }
