@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { one } from './db.js';
 import { buildDump } from './backup.js';
-import { deleteObject, getObject, listObjects, putObject, r2Ready } from './r2.js';
+import { deleteObject, getObject, headObject, listObjects, putObject, r2Ready } from './r2.js';
 
 /**
  * גיבוי *מלא* ל-Cloudflare R2 — כולל הבייטים של הקבצים המצורפים, מה שלא
@@ -17,6 +17,10 @@ import { deleteObject, getObject, listObjects, putObject, r2Ready } from './r2.j
  *   monthly — ב-1 לחודש בלבד, נשמר לנצח (אף פעם לא נמחק)
  *
  * הרוטציה מוחקת prefix שלם (dump + כל הקבצים תחתיו).
+ *
+ * גיבוי "שלם" = prefix שיש בו dump.json. הקובץ נכתב אחרון, ולכן גיבוי שנקטע
+ * באמצע (קבצים בלי dump.json) לא נספר ברוטציה, לא מוצג ב-listBackups,
+ * ונמחק בהרצה הבאה כזבל.
  */
 const TIERS = {
   daily:   { keep: 7,        take: () => true },
@@ -73,11 +77,11 @@ export async function fullBackup(dump) {
     console.log(`גיבוי מלא (${tier}) הועלה ל-R2 — ${assetCount} קבצים, ` +
       `${(bytes / 1024 / 1024).toFixed(1)}MB`);
 
-    if (cfg.keep === Infinity) continue;
     const { prefixes } = await listObjects(`${tier}/`, '/');
-    const stale = prefixes.sort().reverse().slice(cfg.keep); // stamp ISO — מיון לקסיקוגרפי = כרונולוגי
+    const complete = await completeSet(prefixes);
+    const stale = prunePlan(prefixes, complete, cfg.keep, prefix);
     for (const p of stale) await deletePrefix(p);
-    if (stale.length) console.log(`  ${stale.length} גיבויי ${tier} ישנים נמחקו מ-R2`);
+    if (stale.length) console.log(`  ${stale.length} גיבויי ${tier} ישנים/חלקיים נמחקו מ-R2`);
   }
 }
 
@@ -96,12 +100,35 @@ export async function downloadFull(prefix) {
   return { dump, assets };
 }
 
-/** רשימת הגיבויים הזמינים לכל רמה (prefixes ממוינים מהחדש לישן) */
+/** ה-prefixes מתוך הרשימה שיש בהם dump.json (גיבוי שהושלם) */
+async function completeSet(prefixes) {
+  const out = new Set();
+  for (const p of prefixes) {
+    if (await headObject(`${p}dump.json`)) out.add(p);
+  }
+  return out;
+}
+
+/**
+ * מה למחוק ברוטציה — טהורה. stamp ISO ⇒ מיון לקסיקוגרפי = כרונולוגי.
+ * שלמים: שומרים את keep החדשים. חלקיים (בלי dump.json): נמחקים אם הם
+ * ישנים מהגיבוי שנכתב עכשיו (current) — הרצה שנקטעה; חדש יותר לא נוגעים
+ * (אולי הרצה מקבילה באמצע).
+ */
+export function prunePlan(prefixes, complete, keep, current) {
+  const done = prefixes.filter((p) => complete.has(p)).sort().reverse();
+  const stale = keep === Infinity ? [] : done.slice(keep);
+  const broken = prefixes.filter((p) => !complete.has(p) && p < current);
+  return [...stale, ...broken];
+}
+
+/** רשימת הגיבויים השלמים לכל רמה (prefixes ממוינים מהחדש לישן) */
 export async function listBackups() {
   const out = {};
   for (const tier of Object.keys(TIERS)) {
     const { prefixes } = await listObjects(`${tier}/`, '/');
-    out[tier] = prefixes.sort().reverse();
+    const complete = await completeSet(prefixes);
+    out[tier] = prefixes.filter((p) => complete.has(p)).sort().reverse();
   }
   return out;
 }
