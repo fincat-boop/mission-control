@@ -572,6 +572,14 @@ export function plannedDate(c) {
     c.campaign_slot_rank - 1, c.campaign_slot_count);
 }
 
+/** בתוך החלון של הקמפיין, אבל לפני התאריך המתוכנן של הפריט (קמפיין מוכן) */
+function waitingForPlannedDate(c, dateKey) {
+  const planned = plannedDate(c);
+  return !!planned && dateKey < planned &&
+    !(c.campaign_starts_on && dateKey < c.campaign_starts_on) &&
+    !(c.campaign_ends_on && dateKey > c.campaign_ends_on);
+}
+
 /**
  * האם התאריך מחוץ לחלון של הקמפיין שהתוכן שייך אליו. תוכן שוטף (בלי
  * קמפיין) וקמפיין בלי תאריכים — אף פעם לא מחוץ לחלון. התאריכים הם
@@ -722,6 +730,11 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
  */
 export function holeReason(endpointContent, dateKey) {
   if (!endpointContent.length) return 'אין שום תוכן (גם לא טיוטה) לנקודה הזו';
+  // קמפיין מוכן: התוכן בחלון, אבל כל פריט מחכה לתאריך המתוכנן שלו
+  if (endpointContent.every((c) => outsideCampaignWindow(c, dateKey)) &&
+      endpointContent.some((c) => waitingForPlannedDate(c, dateKey))) {
+    return 'התוכן של הקמפיין מתוכנן לתאריכים מאוחרים יותר';
+  }
   if (endpointContent.every((c) => outsideCampaignWindow(c, dateKey))) {
     return 'התוכן של נקודת הקצה שייך לקמפיינים שלא רצים בתאריך הזה, ואין לה תוכן שוטף';
   }

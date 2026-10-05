@@ -276,3 +276,12 @@ test('קמפיין מוכן: המשבצת של האחרון התפספסה — �
   assert.equal(at.size, 6, [...at].join(' '));
   assert.ok(at.get(last.id) > '2026-11-26' && at.get(last.id) <= '2026-11-30', at.get(last.id));
 });
+
+test('holeReason — קמפיין מוכן שהתוכן שלו מחכה לתאריך המתוכנן', () => {
+  const items = sixItems(true).slice(1);                  // הראשון כבר יצא; הבא ב-6.11
+  assert.match(holeReason(items, '2026-11-03'), /מתוכנן לתאריכים מאוחרים יותר/);
+  // לפני תחילת הקמפיין — עדיין "קמפיינים שלא רצים"
+  assert.match(holeReason(items, '2026-10-20'), /קמפיינים שלא רצים/);
+  // ביום המתוכנן יש תוכן מתאים — הסיבה הכללית
+  assert.match(holeReason(items, '2026-11-06'), /אף גרסה לא מתאימה/);
+});
