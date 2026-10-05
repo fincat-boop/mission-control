@@ -201,7 +201,6 @@ async function confirmProposal(i) {
       content: `[המשתמש אישר וההצעה בוצעה: ${res.summary}]`,
     });
     toast('בוצע.');
-    await refreshAfterAI();
   } catch (e) {
     // ההצעה נצרכה בשרת גם כשהביצוע נכשל — כפתור "אשר ובצע" שחוזר היה
     // מחזיר 410. הכישלון מוצג על הכרטיס עצמו, וניסיון נוסף = בקשה חדשה.
@@ -213,6 +212,10 @@ async function confirmProposal(i) {
     });
   } finally {
     renderAI();
+  }
+  // מחוץ ל-try: רענון שנכשל אחרי ביצוע מוצלח לא הופך אותו ל"נכשל"
+  if (entry.state === 'done') {
+    await refreshAfterAI().catch((e) => toast(`בוצע, אבל הרענון נכשל: ${e.message}`, true));
   }
 }
 

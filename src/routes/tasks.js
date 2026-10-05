@@ -110,6 +110,11 @@ r.patch('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
 }));
 
 r.delete('/tasks/:id', requirePerm('content'), wrap(async (req, res) => {
+  // מחיקה היא סגירה בדרך אחרת — אותו כלל כמו ב-PATCH
+  const cur = await one('select kind from tasks where id = $1', [req.params.id]);
+  if (cur && approveTaskBlocked(cur, { done: true }, req.user)) {
+    return bad(res, 'משימת אישור נמחקת רק על ידי מי שמורשה לאשר — הפוסט עדיין ממתין לאישור', 403);
+  }
   await query('delete from tasks where id = $1', [req.params.id]);
   res.json({ ok: true });
 }));

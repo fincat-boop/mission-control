@@ -43,12 +43,18 @@ export async function buildAlerts() {
     rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name
             from posts p left join channels c on c.id = p.channel_id
            where p.status = 'failed' and p.scheduled_at >= now() - interval '14 days'
+             and not exists (select 1 from content_items ci
+                               join campaigns ca on ca.id = ci.campaign_id
+                              where ci.id = p.content_id and ca.paused_at is not null)
            order by p.scheduled_at`),
     // המועד עבר ואף אחד לא פרסם/סימן. חצי שעה חסד — וואטסאפ נשלח ידנית,
     // ופרסום אוטומטי עוד יכול להיות בדרך.
     rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
             from posts p left join channels c on c.id = p.channel_id
            where p.status in ('scheduled','approved') and p.published_at is null
+             and not exists (select 1 from content_items ci
+                               join campaigns ca on ca.id = ci.campaign_id
+                              where ci.id = p.content_id and ca.paused_at is not null)
              and p.scheduled_at between now() - interval '7 days'
                                     and now() - interval '30 minutes'
            order by p.scheduled_at`),

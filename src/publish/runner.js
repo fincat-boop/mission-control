@@ -51,18 +51,37 @@ async function logPublish(post, ok, { externalId = null, error = null } = {}) {
 }
 
 /**
+ * כתיבה "על הדרך" בתוך טרנזקציית הטיק. catch רגיל לא מספיק: שגיאת SQL
+ * מבטלת את כל הטרנזקציה, ואז גם הפרסום שאחריה נכשל, וה-commit מגלגל
+ * אחורה פוסטים שכבר יצאו (והם יוצאים שוב בטיק הבא). savepoint תוחם את
+ * הכישלון לכתיבה הזו בלבד.
+ */
+async function bestEffort(label, fn) {
+  await query('savepoint best_effort');
+  try {
+    const out = await fn();
+    await query('release savepoint best_effort');
+    return out;
+  } catch (e) {
+    await query('rollback to savepoint best_effort');
+    console.error(label, e.message);
+    return undefined;
+  }
+}
+
+/**
  * משימת כשל לפוסט: אחת פתוחה לכל היותר. כשל חוזר מעדכן את הכותרת ואת
  * השגיאה במשימה הקיימת (אינדקס ייחודי חלקי ב-schema.sql), לא מוסיף עוד.
  */
 async function recordFailedTask(post, title, error) {
-  await query(
+  await bestEffort('יצירת משימת כשל נכשלה:', () => query(
     `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
      values ($1,$2,'failed',$3,$4,true,(now() at time zone 'Asia/Jerusalem')::date)
      on conflict (post_id) where kind = 'failed' and done = false
      do update set title = excluded.title, subtitle = excluded.subtitle,
                    urgent = true, due_on = excluded.due_on`,
     [title, `"${post.title}": ${error}`, post.id, post.endpoint_id]
-  ).catch((e) => console.error('יצירת משימת כשל נכשלה:', e.message));
+  ));
 }
 
 async function logActivity(action, post, summary) {
@@ -297,7 +316,7 @@ export async function publishTickForOrg() {
     console.error('בדיקת סטטוס ניוזלטרים נכשלה:', e.message));
 
   // וואטסאפ נשלח ידנית — המשימה שלו לא תלויה במתג הפרסום האוטומטי
-  await whatsappPrep().catch((e) => console.error('הכנת משימות וואטסאפ נכשלה:', e.message));
+  await bestEffort('הכנת משימות וואטסאפ נכשלה:', whatsappPrep);
 
   const settings = await one('select autopublish_enabled from engine_settings limit 1');
   if (!settings?.autopublish_enabled) return;
