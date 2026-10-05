@@ -832,6 +832,31 @@ button.btn.kebab[aria-expanded="true"] { border-color: var(--accent); color: var
 .gst.gap   { color: var(--st-crit); }
 .gst.na    { color: var(--muted); }
 
+/* משבצות מקושרות: כותרת + שורת "מקושר ל:" מתחתיה, באותה עמודה של הרשת */
+.gslot .gttl { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.gslot .gt, .gslot .glink { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gslot .glink { display: flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 11px; }
+.gslot .glink > span { overflow: hidden; text-overflow: ellipsis; }
+.lnk { flex: none; }
+/* מצב קישור: היעדים האפשריים מודגשים בעדינות, השאר מתעמעמים */
+.linkbar { display: flex; align-items: center; gap: 14px; padding: 18px 24px; margin-bottom: 16px; }
+.linkbar > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.linkbar b { font-size: 13.5px; font-weight: 650; }
+.linkbar .d { font-size: 12px; color: var(--ink-2); line-height: 1.6; }
+.linkbar .lnk { width: 18px; height: 18px; color: var(--accent); }
+.gboard.linking .gslot.pick { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.gboard.linking .gslot.pick:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.gboard.linking .gslot.nopick { opacity: .38; cursor: default; }
+.gboard.linking .gslot.nopick:hover { background: none; }
+.gboard.linking .gcol.blocked .gcol-head .d { color: var(--ink-2); }
+/* ראש טופס המשבצת כשהיא מקושרת */
+.linkinfo { border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; background: var(--panel-2); }
+.linkinfo .li-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.linkinfo .li-head .lnk { color: var(--accent); }
+.linkinfo .d { margin: 8px 0 4px; font-size: 12px; color: var(--ink-2); line-height: 1.65; }
+.linkinfo .li-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0 0; margin-top: 10px; border-top: 1px solid var(--border); font-size: 12.5px; }
+
 /* מצב המילוי בכותרת הקמפיין — נקודה + טקסט לכל מצב */
 .cbhead .hstats { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .cbhead .hstats .gst { font-size: 12.5px; }
