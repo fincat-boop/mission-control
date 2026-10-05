@@ -192,3 +192,12 @@ test('nextSlots — אף פעם לא מחזיר משבצת תפוסה או כפ�
   assert.equal(new Set(out).size, out.length);
   assert.ok(out.every((s) => !taken.includes(s)));
 });
+
+test('resolvePeriod — open: סוף ריק, רק בקמפיין לפי זוויות', () => {
+  const legacy = { starts_on: '2026-11-01', ends_on: null, period: null, structure: 'angles' };
+  assert.deepEqual(resolvePeriod({ starts_on: '2026-11-01', period: 'open' }, legacy),
+    { period: 'open', ends_on: null });
+  assert.ok(resolvePeriod({ starts_on: '2026-11-01', period: 'open' },
+    { ...legacy, structure: 'general' }).error);
+  assert.ok(resolvePeriod({ starts_on: '2026-11-01', period: 'open', structure: 'general' }).error);
+});

@@ -81,3 +81,15 @@ test('addDays / periodLabel', () => {
   assert.equal(periodLabel('5w'), '5 שבועות');
   assert.equal(periodLabel('custom'), 'תאריך סיום ידני');
 });
+
+test('open — בלי תאריך סיום: תקין, בלי סוף מחושב, עם שם', () => {
+  assert.deepEqual(parsePeriod('open'), { unit: 'open' });
+  assert.equal(periodEnd('2026-11-01', 'open'), null);
+  assert.equal(periodLabel('open'), 'בלי תאריך סיום');
+});
+
+test('periodLabel — חודשים שאינם בין המוכנים', () => {
+  assert.equal(periodLabel('4m'), '4 חודשים');
+  assert.equal(periodLabel('12m'), '12 חודשים');
+  assert.equal(inferPeriod('2026-11-01', periodEnd('2026-11-01', '5m')), '5m');
+});

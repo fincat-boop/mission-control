@@ -112,9 +112,12 @@ exception when duplicate_object then null; end $$;
 -- בשרת (public/js/core/period.js) ונשמר כרגיל — כל השאר ממשיך לקרוא
 -- את ends_on. null = קמפיין מלפני השדה; הטופס מסיק את התקופה מהתאריכים.
 alter table campaigns add column if not exists period text;
+-- 'open' = בלי תאריך סיום (קמפיין ישן לפי זוויות שנשמר כך). האילוץ קיבל
+-- שם חדש כשהפורמט הורחב, כדי שהרצה חוזרת לא תבנה אותו מחדש בכל עלייה.
+alter table campaigns drop constraint if exists campaigns_period_format;
 do $$ begin
-  alter table campaigns add constraint campaigns_period_format
-    check (period is null or period ~ '^([0-9]{1,3}[wm]|custom)$');
+  alter table campaigns add constraint campaigns_period_format_v2
+    check (period is null or period ~ '^([0-9]{1,3}[wm]|custom|open)$');
 exception when duplicate_object then null; end $$;
 
 -- מבנה התוכן: angles = זווית × מדיה (רשת), general = רשימת משבצות

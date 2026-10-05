@@ -6,7 +6,9 @@
  * "רץ עד…" בזמן אמת. מקור אחד, כדי שמה שרואים בטופס הוא מה שנשמר.
  *
  * ערכים: '<N>w' (N שבועות), '<N>m' (N חודשים קלנדריים), 'custom' (תאריך
- * סיום ידני). הסיום כולל: שבוע מ-1.11 רץ עד 7.11.
+ * סיום ידני), 'open' (בלי תאריך סיום — רק לקמפיינים ישנים לפי זוויות שנשמרו
+ * כך, כדי ששמירה בלי שינוי לא תמציא להם סוף). הסיום כולל: שבוע מ-1.11
+ * רץ עד 7.11.
  */
 
 /** האפשרויות בטופס, לפי הסדר. "אחר" ו"ידני" מטופלים בנפרד. */
@@ -21,6 +23,7 @@ export const MAX_MONTHS = 24;
 /** מפרק ערך תקופה. null = לא תקין. */
 export function parsePeriod(p) {
   if (p === 'custom') return { unit: 'custom' };
+  if (p === 'open') return { unit: 'open' };
   const m = /^(\d{1,3})([wm])$/.exec(String(p ?? ''));
   if (!m) return null;
   const n = Number(m[1]);
@@ -50,7 +53,7 @@ export function addDays(s, days) {
  */
 export function periodEnd(start, period) {
   const p = parsePeriod(period);
-  if (!p || p.unit === 'custom' || !start) return null;
+  if (!p || p.unit === 'custom' || p.unit === 'open' || !start) return null;
   if (p.unit === 'w') return addDays(start, p.n * 7 - 1);
 
   const [y, m, d] = parts(start);
@@ -87,5 +90,6 @@ export function periodLabel(period) {
   const p = parsePeriod(period);
   if (!p) return '';
   if (p.unit === 'custom') return 'תאריך סיום ידני';
+  if (p.unit === 'open') return 'בלי תאריך סיום';
   return p.unit === 'w' ? `${p.n} שבועות` : `${p.n} חודשים`;
 }

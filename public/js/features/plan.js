@@ -445,10 +445,13 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
   // המבנה נקבע ברגע שנכנס תוכן — זוויות לא עוברות לרשימות של "כללי" ולהפך.
   // בשכפול המבנה תמיד של המקור (השרת לא מקבל אחר).
   const structureLocked = duplicate || !!campaign?.content?.length;
-  // קמפיין מלפני השדה: התקופה מוסקת מהתאריכים (שבועות שלמים / חודש / ידני)
+  // קמפיין מלפני השדה: התקופה מוסקת מהתאריכים (שבועות שלמים / חודש / ידני).
+  // קמפיין ישן עם התחלה ובלי סוף נשאר "בלי תאריך סיום" — אחרת שמירה בלי
+  // שינוי הייתה ממציאה לו סוף בשקט.
   const period = campaign?.period
     ?? (campaign?.starts_on && campaign?.ends_on
-      ? inferPeriod(campaign.starts_on, campaign.ends_on) : '1m');
+      ? inferPeriod(campaign.starts_on, campaign.ends_on)
+      : campaign?.starts_on && structure !== 'general' ? 'open' : '1m');
 
   openGeneric({
     title: duplicate ? `שכפול: ${source.name}` : campaign ? 'עריכת קמפיין' : 'קמפיין חדש',

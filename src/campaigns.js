@@ -236,6 +236,12 @@ export function resolvePeriod(b, before = null) {
   if (b.period != null) {
     const p = parsePeriod(b.period);
     if (!p) return { error: 'תקופת הקמפיין לא תקינה' };
+    if (p.unit === 'open') {
+      // רק לקמפיין ישן לפי זוויות: בכללי המשבצות נפרסות על החלון ודורשות סוף
+      const structure = b.structure ?? before?.structure ?? 'angles';
+      if (structure === 'general') return { error: 'קמפיין כללי צריך תאריך סיום' };
+      return { period: 'open', ends_on: null };
+    }
     if (p.unit === 'custom') {
       const end = b.ends_on !== undefined ? b.ends_on : (before?.ends_on ?? null);
       if (!end) return { error: 'בתאריך סיום ידני צריך לבחור תאריך' };

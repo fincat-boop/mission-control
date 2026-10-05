@@ -1,6 +1,6 @@
 import { $, $$, esc, run, toast } from '../core/dom.js';
 import { acceptAttr, fileLimitLabel } from '../core/upload.js';
-import { PERIOD_PRESETS, parsePeriod, periodEnd } from '../core/period.js';
+import { PERIOD_PRESETS, parsePeriod, periodEnd, periodLabel } from '../core/period.js';
 
 /**
  * דיאלוג טופס כללי.
@@ -91,7 +91,9 @@ function syncPeriod(f) {
   else end = periodEnd(start, sel);
 
   const note = $(`#gen_${f.name}_note`);
-  if (sel === 'custom') {
+  if (sel === 'open') {
+    note.textContent = 'הקמפיין נשמר בלי תאריך סיום, כמו שהיה';
+  } else if (sel === 'custom') {
     note.textContent = start && end && end < start ? 'תאריך הסיום מוקדם מהפוסט הראשון' : '';
   } else if (!start) {
     note.textContent = 'בוחרים תאריך לפוסט הראשון, ותאריך הסיום יחושב ממנו';
@@ -101,11 +103,16 @@ function syncPeriod(f) {
 }
 
 function periodHtml(f, id) {
-  const p = parsePeriod(f.value) ?? parsePeriod('1m');
-  const preset = PERIOD_PRESETS.some(([v]) => v === f.value);
-  const sel = p.unit === 'custom' ? 'custom' : preset ? f.value : 'weeks';
+  const value = parsePeriod(f.value) ? f.value : '1m';
+  const p = parsePeriod(value);
+  const preset = PERIOD_PRESETS.some(([v]) => v === value);
+  // ערך שמור שאינו בין המוכנים: שבועות → "מספר שבועות אחר" עם המספר;
+  // חודשים (4 חודשים ומעלה) ו"בלי תאריך סיום" → אפשרות משלהם, מסומנת
+  const own = !preset && (p.unit === 'm' || p.unit === 'open');
+  const sel = p.unit === 'custom' ? 'custom' : (preset || own) ? value : 'weeks';
   const weeks = !preset && p.unit === 'w' ? p.n : '';
-  const opts = [...PERIOD_PRESETS, ['weeks', 'מספר שבועות אחר'], ['custom', 'תאריך סיום ידני']];
+  const opts = [...PERIOD_PRESETS, ...(own ? [[value, periodLabel(value)]] : []),
+    ['weeks', 'מספר שבועות אחר'], ['custom', 'תאריך סיום ידני']];
   return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
     <select id="${id}">${opts.map(([v, l]) =>
       `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
