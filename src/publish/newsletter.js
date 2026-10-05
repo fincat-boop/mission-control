@@ -43,19 +43,30 @@ export const hasNewsletterContent = (variant) =>
   !!variant?.body?.trim() || Object.keys(cleanFieldValues(variant?.meta?.field_values)).length > 0;
 
 /**
- * מה חוסם ניוזלטר מלעבור ל-HUB, מבחינת התוכן שלו (null = כלום).
- * hubReady — האם HUB_API_* מוגדרים (הזרקה, לטסטים).
+ * כלל התוכן של ניוזלטר — **המקור היחיד**: גם סימון "מוכן" (readiness.js
+ * contentBlocker) וגם ההעברה ל-HUB ו-publishBlocker עוברים כאן. נושא +
+ * (גוף, או ערך כלשהו שמולא בעורך של ה-HUB). null = התוכן שלם.
+ */
+export function newsletterContentBlocker(variant) {
+  if (!hasNewsletterContent(variant)) {
+    return 'אין תוכן למייל — ממלאים בעורך המייל של ה-HUB (או בשדה התוכן)';
+  }
+  if (!String(variant?.meta?.subject ?? '').trim()) {
+    return 'חסר נושא למייל — ממלאים בעריכת הגרסה של ערוץ המייל';
+  }
+  return null;
+}
+
+/**
+ * מה חוסם ניוזלטר מלעבור ל-HUB (null = כלום): חיבור, תוכן משויך, "מוכן",
+ * וכלל התוכן. hubReady — האם HUB_API_* מוגדרים (הזרקה, לטסטים).
  */
 export function newsletterBlocker({ post, variant }, hubReady) {
   if (!hubReady) return 'חיבור ה-HUB לא מוגדר (HUB_API_URL / HUB_API_KEY בשרת)';
   if (!post.content_id) return 'אין תוכן משויך לפוסט';
   if (!variant || variant.status !== 'ready') return 'הגרסה לערוץ הזה עוד לא מסומנת "מוכן"';
-  if (!hasNewsletterContent(variant)) {
-    return 'אין תוכן למייל — ממלאים בעורך המייל של ה-HUB (או בשדה התוכן)';
-  }
-  if (!variant.meta?.subject?.trim()) return 'חסר נושא למייל — ממלאים בעריכת הגרסה של ערוץ המייל';
   // בלי רשימה — ה-HUB שולח לרשימת העל (ברירת המחדל שלו); אין חסימה.
-  return null;
+  return newsletterContentBlocker(variant);
 }
 
 /** סטטוסים שמהם מותר "העבר ל-HUB" (פוסט שעוד לא יצא מהידיים שלנו) */

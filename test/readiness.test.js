@@ -28,16 +28,19 @@ test('contentBlocker — פייסבוק/וואטסאפ/ידני: צריך טקס
   assert.match(contentBlocker({ platform: 'facebook', variant: null }), /אין טקסט/);
 });
 
-test('contentBlocker — ניוזלטר: תוכן (גוף או שדה תוכן בתבנית) ונושא', () => {
+test('contentBlocker — ניוזלטר: תוכן (גוף או שדה שמולא בעורך ה-HUB) ונושא', () => {
   assert.match(contentBlocker({ platform: 'newsletter',
     variant: { body: '', meta: { subject: 'נושא' } } }), /אין תוכן למייל/);
   assert.match(contentBlocker({ platform: 'newsletter',
     variant: { body: '<p>גוף</p>', meta: {} } }), /חסר נושא/);
   assert.equal(contentBlocker({ platform: 'newsletter',
     variant: { body: '', meta: { subject: 'נושא', field_values: { 'תוכן': 'מילוי' } } } }), null);
-  // שדה אחר בתבנית (כותרת) הוא לא תוכן המייל
+  // כלל אחד עם ההעברה ל-HUB (newsletter.js): כל שדה שמולא בעורך ה-HUB הוא
+  // תוכן — שמות השדות נקבעים בתבנית שם; ריק/רווחים לא נחשב
+  assert.equal(contentBlocker({ platform: 'newsletter',
+    variant: { body: '', meta: { subject: 'נושא', field_values: { 'פתיח': 'x' } } } }), null);
   assert.match(contentBlocker({ platform: 'newsletter',
-    variant: { body: '', meta: { subject: 'נושא', field_values: { 'כותרת': 'x' } } } }),
+    variant: { body: ' ', meta: { subject: 'נושא', field_values: { 'פתיח': '  ' } } } }),
   /אין תוכן למייל/);
 });
 

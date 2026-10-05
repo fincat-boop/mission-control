@@ -10,10 +10,10 @@
  * R2 בשרת — אלה מצב של המערכת, לא של התוכן שהמשתמש כתב.
  */
 
+import { newsletterContentBlocker } from './newsletter.js';
+
 const isMedia = (m) => /^(image|video)\//.test(m ?? '');
 
-/** שדות התבנית של ה-HUB שמחזיקים את גוף המייל (ממלא התבניות) */
-export const MAIL_CONTENT_FIELDS = ['תוכן', 'גוף הגיליון', 'גוף ההודעה'];
 
 /**
  * מה חסר בתוכן של גרסה כדי שתצא בערוץ הזה? null = שום דבר.
@@ -25,19 +25,8 @@ export function contentBlocker({ platform, variant, assets = [] }) {
   const v = variant ?? {};
   const text = String(v.body ?? '').trim();
 
-  if (platform === 'newsletter') {
-    const m = v.meta ?? {};
-    // התוכן חי או בגוף הגרסה או במילוי הממלא של ה-HUB (שדה תוכן בתבנית)
-    const filled = Object.entries(m.field_values ?? {}).some(
-      ([k, val]) => MAIL_CONTENT_FIELDS.includes(k) && String(val ?? '').trim());
-    if (!text && !filled) {
-      return 'אין תוכן למייל — ממלאים בעריכת הגרסה (כפתור המילוי או שדה התוכן)';
-    }
-    if (!String(m.subject ?? '').trim()) {
-      return 'חסר נושא למייל — ממלאים בעריכת הגרסה של ערוץ המייל';
-    }
-    return null;
-  }
+  // ניוזלטר: כלל אחד עם ההעברה ל-HUB — נושא + (גוף או ערך שמולא בעורך ה-HUB)
+  if (platform === 'newsletter') return newsletterContentBlocker(v);
 
   const media = assets.filter((a) => isMedia(a.mime));
   if (platform === 'instagram') {
