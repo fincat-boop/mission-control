@@ -382,3 +382,16 @@ test('completionSummary — מסרב בלי תאריכים או בלי תוכן'
   // תוכן רק במדיה שהוסרה מהקמפיין — אין מה לפרוס
   assert.ok(completionSummary({ ...base, content: [slotItem(1, 2, 1, 'ready')] }).error);
 });
+
+import { readFileSync } from 'node:fs';
+
+test('שכפול — העותק מתחיל לא "מוכן": insertCampaign לא מעתיק content_complete_at', () => {
+  const src = readFileSync(new URL('../src/routes/campaigns.js', import.meta.url), 'utf8');
+  const insert = src.slice(src.indexOf('async function insertCampaign'),
+    src.indexOf("r.post('/campaigns',"));
+  assert.match(insert, /insert into campaigns/);
+  assert.doesNotMatch(insert, /content_complete_at/);
+  // והשכפול יוצר את הקמפיין דרכו
+  const dup = src.slice(src.indexOf("r.post('/campaigns/:id/duplicate'"));
+  assert.match(dup.slice(0, dup.indexOf('}));')), /insertCampaign\(b\)/);
+});

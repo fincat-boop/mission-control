@@ -99,6 +99,8 @@ r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
  * המקור, ומשנים בו מה שרוצים), ואותו תוכן — זוויות, ניסוחים לכל מדיה
  * וקבצים. השיבוצים בלוח לא מועתקים: המנוע משבץ את החדש לפי התאריכים שלו.
  * קובץ ב-R2 מועתק לאובייקט חדש, כי מחיקה מאחד הקמפיינים מוחקת את האובייקט.
+ * העותק מתחיל לא "מוכן" (content_complete_at לא מועתק): הקצאה רגילה לפי
+ * קצב על התאריכים החדשים, עד שמסמנים אותו מוכן בעצמו.
  */
 r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res) => {
   const src = await one('select * from campaigns where id = $1', [req.params.id]);
