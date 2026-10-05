@@ -32,6 +32,9 @@ const validSlot = (n) => Number.isInteger(Number(n)) && Number(n) >= 1 && Number
  * מריץ fn בתוך savepoint. הבקשה כולה רצה בטרנזקציה אחת (withOrg), וכשל
  * ייחודיות היה מפיל אותה בשקט — כאן חוזרים לנקודה שלפני ומחזירים null.
  */
+/** התנגשות על משבצת שנשארה למרות הנעילה (למשל מילוי ידני באותו רגע) */
+const SLOT_RACE = 'המשבצת תפוסה, נסה שוב';
+
 async function uniqueOrNull(fn) {
   await query('savepoint slot_unique');
   try {
@@ -591,7 +594,11 @@ r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
  * @param attach (client, contentId, index) → מוסיף את שורת הקובץ לפריט
  */
 async function bulkAngles(req, res, files, attach) {
-  const campaign = await one('select * from campaigns where id = $1', [req.params.id]);
+  // נעילת שורת הקמפיין עד סוף הבקשה (כל בקשה היא טרנזקציה אחת, withOrg):
+  // המשבצות הפנויות נקראות אחרי הנעילה, ו"קמפיין מוכן" (שדוחס את הסדר)
+  // לוקח אותה נעילה — שתי העלאות במקביל, או העלאה מול סימון, לא יחשבו
+  // את אותה משבצת פנויה
+  const campaign = await one('select * from campaigns where id = $1 for update', [req.params.id]);
   if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
   if (!files?.length) return bad(res, 'לא הגיעו קבצים');
 
@@ -625,7 +632,7 @@ async function bulkAngles(req, res, files, attach) {
   let overflowFrom = Math.max(0, ...existing.map((x) => x.sort_order), required ?? 0);
 
   const created = [];
-  await tx(async (client) => {
+  const ok = await uniqueOrNull(() => tx(async (client) => {
     for (const [i, f] of files.entries()) {
       const slot = freeSlots.shift() ?? (overflowFrom += 1);
       const item = (await client.query(
@@ -648,7 +655,9 @@ async function bulkAngles(req, res, files, attach) {
       await attach(client, item.id, i);
       created.push({ id: item.id, title: item.title, slot });
     }
-  });
+    return true;
+  }));
+  if (!ok) return bad(res, SLOT_RACE, 409);
 
   res.status(201).json({
     created,
@@ -687,7 +696,7 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   const slots = nextSlots(need, existing.map((x) => x.sort_order), files.length);
 
   const created = [];
-  await tx(async (client) => {
+  const ok = await uniqueOrNull(() => tx(async (client) => {
     for (const [i, f] of files.entries()) {
       const slot = slots[i];
       const item = (await client.query(
@@ -704,7 +713,9 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
       await attach(client, item.id, i);
       created.push({ id: item.id, title: item.title, slot });
     }
-  });
+    return true;
+  }));
+  if (!ok) return bad(res, SLOT_RACE, 409);
 
   res.status(201).json({
     created,
