@@ -85,6 +85,7 @@ async function boot() {
   // שחזור התצוגה מה-hash — לפני הרינדור הראשון, כדי שרענון לא יחזיר לדף הבית
   restoreView();
   paintTabs(state.tab);
+  markEntry();
 
   try {
     const [{ channels }, { endpoints }, { users }] = await Promise.all([
@@ -157,11 +158,37 @@ function paintTabs(tab) {
 async function showTab(tab) {
   // מצב "בחירת משבצת לקישור" שייך למסך הקמפיין — יציאה ממנו מבטלת אותו
   if (tab !== 'plan') leavePlanView();
-  if (tab !== state.tab) history.pushState(null, '', location.href);
+  if (tab !== state.tab) {
+    history.pushState(null, '', location.href);
+    navPos += 1;
+  }
   state.tab = tab;
   paintTabs(tab);
   persistView();
+  markEntry();
   await renderTab(tab);
+}
+
+/**
+ * מיקום הרשומה בהיסטוריה (history.state.navPos), כדי לחזור בדיוק לרשומה
+ * של הנתונים כש"אחורה"/"קדימה" מהם בוטל. persistView (state.js, גם
+ * בדרילדאון של plan.js) קורא ל-replaceState עם null — העטיפה כאן שומרת
+ * את הסימון הקיים במקום למחוק אותו. רשומה בלי סימון היא hash שהוקלד
+ * בשורת הכתובת: רשומה חדשה, תמיד בראש ההיסטוריה.
+ */
+const replaceEntry = history.replaceState.bind(history);
+history.replaceState = (data, title, url) => replaceEntry(data ?? history.state, title, url);
+
+let navPos = 0;
+let returningToData = false; // ה-hashchange הבא הוא החזרה שלנו לנתונים — לא לצייר
+const markEntry = () => replaceEntry({ navPos }, '', location.href);
+
+/** "אחורה"/"קדימה"/hash שהוקלד בוטלו בנתונים — חוזרים לרשומה של הנתונים עצמה */
+function returnToData() {
+  const pos = history.state?.navPos;
+  returningToData = true;
+  if (pos == null) history.back();          // hash שהוקלד — הנתונים רשומה אחת אחורה
+  else history.go(navPos - pos);
 }
 
 /**
@@ -173,11 +200,20 @@ async function onHashChange() {
   if (!state.me) return; // עוד בעלייה — boot קורא את ה-hash בעצמו
   // בלי hash = דף הבית (הכתובת שבה המשתמש נחת לפני המעבר הראשון)
   const target = location.hash.slice(1).split(';')[0] || 'board';
+  if (returningToData) {
+    returningToData = false;
+    if (target === 'data') return; // חזרנו לרשומה של הנתונים — הטבלה לא נגעה
+  }
   if (!TABS.includes(target)) return;
   if (state.tab === 'data' && target !== 'data' && !(await confirmLeaveData())) {
-    persistView(); // נשארים — הכתובת חוזרת להצביע על הנתונים
+    // נשארים. לא persistView: הוא היה כותב #data על הרשומה הזו, ובהיסטוריה
+    // היו נשארות שתי רשומות של הנתונים
+    returnToData();
     return;
   }
+  const pos = history.state?.navPos;
+  const typed = pos == null; // hash שהוקלד — רשומה חדשה אחרי הנוכחית
+  navPos = typed ? navPos + 1 : pos;
   // restoreView קובע דרילדאון רק כשהוא ב-hash; בלעדיו — רמת הנקודות
   if (target === 'plan') {
     state.planEndpoint = null;
@@ -188,6 +224,7 @@ async function onHashChange() {
   state.tab = target;
   restoreView();
   paintTabs(state.tab);
+  if (typed) markEntry();
   await renderTab(state.tab);
 }
 
