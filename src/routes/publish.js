@@ -207,6 +207,8 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, re
   if (!['scheduled', 'failed'].includes(payload.post.status)) {
     return bad(res, 'אפשר לאשר רק שיבוץ מתוכנן (או כזה שנכשל)');
   }
+  // מועד שעבר: הרַנֶר היה מפרסם מיד (או מכשיל אחרי 12 שעות) — לא מה שאושר
+  if (isPast(payload.post)) return bad(res, 'המועד עבר — קבעו מועד חדש ואז אשרו');
 
   const blocker = publishBlocker(payload);
   if (blocker) return bad(res, blocker);
@@ -225,11 +227,25 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, re
   res.json({ post });
 }));
 
+const isPast = (post, now = new Date()) => new Date(post.scheduled_at).getTime() < now.getTime();
+
 /**
- * אישור מרוכז לכל השבוע: כל השיבוצים שמוכנים ואפשר לשלוח אותם
+ * למה פוסט לא נכלל באישור המרוכז, או null אם אפשר לאשר אותו.
+ * אותן בדיקות כמו באישור בודד: מועד עתידי, שליחה אוטומטית דלוקה לערוץ
+ * (ניוזלטר — החיבור שלו ב-HUB_API_*), ו-publishBlocker.
+ */
+export function weekApprovalReason(payload, now = new Date()) {
+  if (isPast(payload.post, now)) return 'המועד עבר';
+  const autoOk = payload.post.auto_enabled || payload.post.platform === 'newsletter';
+  return publishBlocker(payload) ??
+    (autoOk ? null : 'השליחה האוטומטית כבויה לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
+}
+
+/**
+ * אישור מרוכז לכל השבוע: כל השיבוצים העתידיים שמוכנים ואפשר לשלוח אותם
  * אוטומטית (תוכן מוכן, ערוץ מחובר, שליחה אוטומטית דלוקה) עוברים ל-approved
  * בבת אחת. שום דבר לא נשלח מיד — הרַנֶר שולח כל אחד במועד שנקבע לו.
- * מה שלא עומד בתנאים נספר ומדווח, לא נופל בשקט.
+ * מה שלא עומד בתנאים חוזר עם הסיבה (skipped), לא נופל בשקט.
  */
 r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) => {
   const week = weekMeta(req.body?.week);
@@ -238,7 +254,7 @@ r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) =>
   to.setHours(23, 59, 59, 999);
 
   const candidates = await rows(
-    `select p.id from posts p
+    `select p.id, p.title from posts p
        join channels c on c.id = p.channel_id
       where p.scheduled_at >= $1 and p.scheduled_at <= $2
         and p.status in ('scheduled', 'failed')
@@ -248,13 +264,12 @@ r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) =>
   );
 
   const eligible = [];
-  let skipped = 0;
-  for (const { id } of candidates) {
+  const skipped = [];
+  for (const { id, title } of candidates) {
     const payload = await loadPayload(id);
-    if (!payload) { skipped++; continue; }
-    const autoOk = payload.post.auto_enabled || payload.post.platform === 'newsletter';
-    if (!autoOk || publishBlocker(payload)) { skipped++; continue; }
-    eligible.push(id);
+    const reason = payload ? weekApprovalReason(payload) : 'הפוסט לא נמצא';
+    if (reason) skipped.push({ id, title, reason });
+    else eligible.push(id);
   }
 
   if (eligible.length) {
