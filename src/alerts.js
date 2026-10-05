@@ -184,12 +184,14 @@ export async function buildAlerts() {
     });
   }
 
-  // הקבצים יושבים במסד, וה-volume שלו מוגבל. עדיף להתריע לפני שנגמר המקום
-  // מאשר לגלות את זה כשהעלאה נכשלת.
+  // ה-volume של המסד מוגבל. עדיף להתריע לפני שנגמר המקום מאשר לגלות את זה
+  // כשהעלאה נכשלת. "קבצים מצורפים" = רק מה שעוד יושב במסד (bytea) — מדיה
+  // ב-R2 לא תופסת מקום כאן, וקבצים ישנים עוברים לשם ברקע.
   const VOLUME_MB = 500;
   const size = await one(
     `select pg_database_size(current_database()) as bytes,
-            (select coalesce(sum(size_bytes),0) from content_assets)::bigint as assets`
+            (select coalesce(sum(size_bytes),0) from content_assets
+              where data is not null)::bigint as assets`
   );
   const usedMb = Number(size.bytes) / 1048576;
   if (usedMb > VOLUME_MB * 0.7) {
