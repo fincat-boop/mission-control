@@ -9,7 +9,11 @@
 
 const GRAPH = 'https://graph.facebook.com/v23.0';
 
-/** קריאת Graph. זורק Error עם ההודעה של Meta כשהתשובה היא שגיאה. */
+/**
+ * קריאת Graph. זורק Error עם ההודעה של Meta כשהתשובה היא שגיאה, ועם
+ * code/subcode/type/status שלה — friendlyPublishError (errors.js) מתרגם
+ * לפיהם להודעה בעברית; הטקסט הגולמי נשמר ב-publish_log.
+ */
 async function graph(path, { method = 'GET', token, params = {}, form = null } = {}) {
   const url = new URL(`${GRAPH}/${path}`);
   let body;
@@ -38,7 +42,9 @@ async function graph(path, { method = 'GET', token, params = {}, form = null } =
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
     const e = data.error ?? {};
-    throw new Error(e.error_user_msg ?? e.message ?? `Graph API ${res.status}`);
+    throw Object.assign(new Error(e.error_user_msg ?? e.message ?? `Graph API ${res.status}`), {
+      code: e.code, subcode: e.error_subcode, type: e.type, status: res.status,
+    });
   }
   return data;
 }

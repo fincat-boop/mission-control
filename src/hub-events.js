@@ -51,6 +51,26 @@ export async function emitHubEvent(input, fetchImpl = fetch) {
 }
 
 /**
+ * האירוע על גורל פוסט (טהורה — נבדקת בטסטים).
+ * id: "<type>:<post id>" — כך retry של אותו אירוע לא נרשם פעמיים. כשל
+ * פרסום מקבל גם attempt (מזהה שורת publish_log): כשל שני של אותו פוסט
+ * הוא אירוע חדש, לא כפילות — אחרת ה-HUB היה מתעלם ממנו בשקט.
+ * email: המייל של בעלי הארגון — אוטומציה ב-HUB נדלקת רק כשמצורף מייל
+ * של איש קשר מוכר שם (למשל: לשלוח לבעלים מייל על כשל).
+ */
+export function postEventInput(type, post, { attempt = null, email = null, extra = {} } = {}) {
+  return {
+    id: attempt == null ? `${type}:${post.id}` : `${type}:${post.id}:${attempt}`,
+    type,
+    ...(email ? { email } : {}),
+    data: {
+      post_id: post.id, title: post.title, channel: post.channel_name,
+      platform: post.platform, kind: post.kind, ...extra,
+    },
+  };
+}
+
+/**
  * גרסת fire-and-forget לזרימות לוח: כשל = console.error, לא זריקה.
  * מחזיר את התוצאה או null בכשל.
  */
