@@ -1040,3 +1040,6 @@ button.btn.danger { color: var(--st-crit); }
 /* נקודת קצה בשורת הרשימה: תוכן ומצב בעמודות קבועות, על אותו קו בכל השורות */
 details.item summary .epcontent { width: 64px; }
 details.item summary .epstate { width: 48px; }
+
+/* הסבר של שורה בכללי המנוע — צמוד לשורה שמעליו */
+.enghint-row { margin: -4px 0 8px; }

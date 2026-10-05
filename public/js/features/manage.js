@@ -328,28 +328,30 @@ function systemGroup(users, settings, backups, ro) {
       <details class="item" data-open-id="engine">
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
-          ${eng('מרווח מינימלי לאותה נקודה באותו ערוץ (ימים)', 'min_gap_days', s.min_gap_days)}
-          ${eng('מקסימום מכירתיים ביום, בכל הערוצים', 'max_promo_per_day', s.max_promo_per_day)}
+          ${eng('ימים לפחות בין שני פוסטים של אותה נקודת קצה באותו ערוץ', 'min_gap_days', s.min_gap_days)}
+          ${eng('פוסטים מכירתיים ביום — לכל היותר, בכל הערוצים יחד', 'max_promo_per_day', s.max_promo_per_day)}
           <div class="prow">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <label class="cbline">
               <input type="checkbox" id="engRatioOn" ${s.min_value_per_promo > 0 ? 'checked' : ''} ${dis}>
-              לאכוף יחס ערך מול מכירתי
+              לדרוש מספר פוסטי ערך על כל פוסט מכירתי
             </label>
-            <input type="number" step="0.5" min="0.5" id="engRatioVal"
+            <input type="number" step="0.5" min="0.5" id="engRatioVal" aria-label="פוסטי ערך לכל מכירתי"
                    value="${s.min_value_per_promo > 0 ? s.min_value_per_promo : 3}"
                    data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 && !ro ? '' : 'disabled'}>
           </div>
-          ${eng('"משולב" נספר כמכירתי', 'hybrid_weight', s.hybrid_weight, '0.1')}
-          ${eng('התראת "מחכה לתוכן" — שעות מראש', 'content_alert_hours', s.content_alert_hours)}
+          <div class="fhint enghint-row">כשמסומן, המנוע לא משבץ פוסט מכירתי אם אין מספיק פוסטי ערך באותו שבוע.</div>
+          ${eng('כמה פוסט "משולב" נחשב מכירתי (0–1)', 'hybrid_weight', s.hybrid_weight, '0.1')}
+          <div class="fhint enghint-row">1 = נספר כמו מכירתי מלא, 0.5 = חצי מכירתי וחצי ערך, 0 = נספר כערך.</div>
+          ${eng('התראה על פוסט חסר תוכן — כמה שעות לפני המועד', 'content_alert_hours', s.content_alert_hours)}
           <div class="prow">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <label class="cbline">
               <input type="checkbox" id="engUsePerf" ${s.use_performance ? 'checked' : ''} ${dis}>
-              לתת ליעילות הנמדדת להשפיע על השיבוץ
+              לתת לביצועים הנמדדים להשפיע על השיבוץ
             </label>
           </div>
-          <div class="fhint" style="margin-top:-8px">
-            כבוי = המערכת רק אוספת ומציגה את התוצאות בטאב "נתונים", בלי לגעת בלוח.
-            כדאי להדליק רק אחרי שיש מספיק מדידות והמספרים שם נראים לך הגיוניים.
+          <div class="fhint enghint-row">
+            דולק = ערוצים, ימים ונקודות קצה שהתוצאות שלהם טובות יותר מקבלים עדיפות בשיבוץ הבא.
+            כבוי = התוצאות רק מוצגות בטאב "נתונים". כדאי להדליק אחרי שיש מספיק מדידות.
           </div>
         </div>
       </details>
@@ -586,8 +588,8 @@ function wireManage(ro, connections) {
     const on = e.target.checked;
     const res = await api('/settings',
       { method: 'PATCH', body: { use_performance: on, week: state.week } });
-    engineToast(res, on ? 'נשמר — היעילות הנמדדת משפיעה עכשיו על השיבוץ.'
-                        : 'נשמר — היעילות רק נמדדת, בלי להשפיע על הלוח.');
+    engineToast(res, on ? 'נשמר — הביצועים הנמדדים משפיעים עכשיו על השיבוץ.'
+                        : 'נשמר — הביצועים רק נמדדים, בלי להשפיע על הלוח.');
     await refreshBoard();
   }));
 
