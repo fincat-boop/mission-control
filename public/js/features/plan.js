@@ -212,9 +212,9 @@ function kebab(label, items) {
   if (!items.length) return '';
   return `<span class="pmore">
     <button class="btn small kebab" data-kebab aria-label="${esc(label)}"
-      aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" width="16" height="16"
-      fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle
-      cx="12" cy="19" r="1.6"/></svg></button>
+      aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20"
+      fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2.3"/><circle cx="12" cy="12" r="2.3"/><circle
+      cx="12" cy="19" r="2.3"/></svg></button>
     <div class="pmenu down" role="menu" hidden>${items.join('')}</div>
   </span>`;
 }

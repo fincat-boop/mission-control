@@ -774,15 +774,14 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .cbhead .ok { color: var(--st-good); }
 .cbhead .off { color: var(--st-warn); }
 
-/* תפריט שלוש הנקודות (כותרת קמפיין, שורת קמפיין) — נפתח למטה, צמוד לקצה הכפתור */
-/* כחול ניאון — אותו סימן בכל מקום, כדי שיהיה קל למצוא את הפעולות */
+/* תפריט שלוש הנקודות (כותרת קמפיין, שורת קמפיין) — נפתח למטה, צמוד לקצה הכפתור.
+   כמו ב-HUB: רק הנקודות בכחול — בלי רקע, מסגרת או זוהר; שטח לחיצה 28px */
 button.btn.kebab {
-  padding: 4px 6px; line-height: 0; color: var(--neon);
-  border-color: rgba(34,211,255,.45); box-shadow: 0 0 8px rgba(34,211,255,.25);
+  width: 28px; height: 28px; padding: 0; line-height: 0; justify-content: center;
+  border: 0; background: transparent; box-shadow: none; color: var(--accent);
+  transition: opacity .15s ease;
 }
-button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] {
-  border-color: var(--neon); box-shadow: 0 0 12px rgba(34,211,255,.45);
-}
+button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] { background: transparent; opacity: .7; }
 .pmenu.down { top: calc(100% + 6px); bottom: auto; inset-inline-start: auto; inset-inline-end: 0; z-index: 30; }
 
 .track { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }
