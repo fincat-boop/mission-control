@@ -81,11 +81,10 @@ export async function buildAlerts(user = null) {
   alerts.push(...campaignAlerts(campaigns, today));
 
   // חסר תוכן — התראה אחת לפוסט; פוסט בלי תוכן שהמועד שלו עבר מקבל אותה
-  // במקום "עבר המועד" (אחרי יומיים — "עבר המועד" לבדו, כמו כל פוסט)
-  const noText = missingContentAlerts(withoutContent, { alertHours });
-  const noTextIds = new Set(noText.map((a) => a.post_id));
-  alerts.push(...failedPostAlerts(failed),
-              ...missedPostAlerts(missed.filter((p) => !noTextIds.has(p.id))));
+  // במקום "עבר המועד" (missedWithoutNoText)
+  const { noText, missed: missedShown } = missedWithoutNoText(
+    missingContentAlerts(withoutContent, { alertHours }), missed, openTasks);
+  alerts.push(...failedPostAlerts(failed), ...missedPostAlerts(missedShown));
 
   for (const e of endpoints) {
     const cadence = effectiveCadenceDays(e);
@@ -438,6 +437,19 @@ export function missingContentAlerts(list, { alertHours = 48, now = new Date() }
       post_id: p.id,
     };
   });
+}
+
+/**
+ * פוסט בלי תוכן שהמועד שלו עבר: "חסר תוכן" מחליף את "עבר המועד" — אבל רק
+ * כשהיא באמת מוצגת. משימת "לכתוב" פתוחה מכסה את "חסר תוכן"
+ * (suppressTaskedAlerts), ומשימה לא מכסה "עבר המועד" — אחרת פוסט שהמועד
+ * שלו עבר היה נשאר בלי שום התראה. טהורה.
+ * @returns {{noText:object[], missed:object[]}} מה שנשאר מכל אחת
+ */
+export function missedWithoutNoText(noText, missed, openTasks = []) {
+  const shown = suppressTaskedAlerts(noText, openTasks);
+  const covered = new Set(shown.map((a) => a.post_id));
+  return { noText: shown, missed: missed.filter((p) => !covered.has(p.id)) };
 }
 
 /**

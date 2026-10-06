@@ -1,8 +1,7 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { missingContentAlerts } from '../src/alerts.js';
+import { missedWithoutNoText, missingContentAlerts } from '../src/alerts.js';
 import { suppressTaskedAlerts } from '../src/task-lifecycle.js';
 
 /**
@@ -39,11 +38,13 @@ test('missingContentAlerts — משימת "לכתוב" פתוחה על הפוס�
   assert.deepEqual(shown.map((a) => a.id), ['no-text-1']);
 });
 
-test('buildAlerts — שאילתה אחת: scheduled + auto_hole + בלי תוכן (לא status=hole), שבוע קדימה ויומיים אחורה', () => {
-  const src = readFileSync(new URL('../src/alerts.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(src, /p\.status = 'hole'/);
-  assert.match(src, /p\.status = 'scheduled' and p\.content_id is null/);
-  assert.match(src, /p\.auto_hole and p\.scheduled_at between/);
-  // "עבר המועד" לא מוצג לפוסט שכבר קיבל "חסר תוכן"
-  assert.match(src, /missed\.filter\(\(p\) => !noTextIds\.has\(p\.id\)\)/);
+test('missedWithoutNoText — "חסר תוכן" מחליף "עבר המועד" רק כשהוא מוצג (משימה מכסה אותו)', () => {
+  const noText = missingContentAlerts([post(1, -20), post(2, -30)], { now });
+  const missed = [{ id: 1 }, { id: 2 }, { id: 3 }];
+  // לפוסט 2 משימת "לכתוב" פתוחה: "חסר תוכן" מוסתר, ולכן "עבר המועד" נשאר
+  const r = missedWithoutNoText(noText, missed, [{ post_id: 2, kind: 'write' }]);
+  assert.deepEqual(r.noText.map((a) => a.id), ['no-text-1']);
+  assert.deepEqual(r.missed.map((p) => p.id), [2, 3]);
+  // בלי משימות — רק פוסט 3 (עם תוכן) מקבל "עבר המועד"
+  assert.deepEqual(missedWithoutNoText(noText, missed).missed.map((p) => p.id), [3]);
 });

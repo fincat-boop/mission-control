@@ -76,10 +76,15 @@ before(async () => {
     const manualSoon = await post(hoursFromNow(20), false);
     const manualLater = await post(hoursFromNow(24 * 4), false);
     const holeTasked = await post(hoursFromNow(24 * 5), true);
-    await db.query(
-      `insert into tasks (title, kind, post_id, endpoint_id) values ('לכתוב', 'write', $1, $2)`,
-      [holeTasked, ep2]);
-    return { running, ended, old, holeSoon, holeFar, holePast, manualSoon, manualLater, holeTasked };
+    // עבר המועד ויש משימת "לכתוב" פתוחה — "חסר תוכן" מוסתר, "עבר המועד" נשאר
+    const holePastTasked = await post(hoursFromNow(-30), true);
+    for (const id of [holeTasked, holePastTasked]) {
+      await db.query(
+        `insert into tasks (title, kind, post_id, endpoint_id) values ('לכתוב', 'write', $1, $2)`,
+        [id, ep2]);
+    }
+    return { running, ended, old, holeSoon, holeFar, holePast, manualSoon, manualLater, holeTasked,
+             holePastTasked };
   });
 });
 
@@ -125,4 +130,7 @@ test('חסר תוכן — auto_hole בשבוע הקרוב / שעבר ביומי�
   // סימן אחד: לפוסט שעבר המועד שלו — "חסר תוכן", לא גם "עבר המועד"
   assert.ok(!byId.has(`post-missed-${ids.holePast}`));
   assert.ok(!shown.some((a) => a.id.startsWith('hole-')));
+  // משימה מכסה את "חסר תוכן" — ולכן פוסט שהמועד שלו עבר נשאר עם "עבר המועד"
+  assert.ok(!byId.has(`no-text-${ids.holePastTasked}`));
+  assert.equal(byId.get(`post-missed-${ids.holePastTasked}`)?.level, 'warn');
 });
