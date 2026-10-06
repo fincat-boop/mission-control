@@ -5,6 +5,7 @@ import { bad, parseIdList, wrap } from './_shared.js';
 import { applyWeek, planWeek, recordDismissals, withEngineLock } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 import { one, query, rows } from '../db.js';
+import { weekMeta } from '../board.js';
 
 const r = Router();
 
@@ -45,7 +46,8 @@ r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
  *  - attached [{post_id, content_id, title, prev_title, prev_kind, closed_task_ids}]
  *    — חוזר לפוסט חסר תוכן רק אם עדיין מתוכנן, עם אותו תוכן ואותה כותרת
  *    שהשיוך כתב; המשימות שהשיוך סגר (לכתוב/החלפה) נפתחות שוב.
- * מה שבוטל נרשם כוויתור, כדי שהמילוי הבא לא יחזיר אותו.
+ * מה שבוטל נרשם כוויתור, כדי שהמילוי הבא לא יחזיר אותו — לשבוע של הפוסט
+ * ולכל שבוע ב-weeks (covered_weeks של המילוי).
  * עד UNDO_MAX מכל סוג — מילוי של קמפיין שלם (autoFillCampaign) עובר על עד
  * 26 שבועות בבת אחת, ו"בטל" אחד מכסה את כולם.
  */
@@ -97,7 +99,13 @@ r.post('/engine/undo', requirePerm('content'), wrap(async (req, res) => {
     detached.push({ ...post, content_id: contentId });
   }
 
-  await recordDismissals([...removed, ...detached]);
+  // השבועות שהמילוי עבר עליהם (covered_weeks של התשובה) — ויתור לכל אחד
+  const weeks = (Array.isArray(req.body?.weeks) ? req.body.weeks : [])
+    .filter((w) => typeof w === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(w))
+    .slice(0, 60)
+    .map((w) => { try { return weekMeta(`${w}T12:00:00`).start; } catch { return null; } })
+    .filter(Boolean);
+  await recordDismissals([...removed, ...detached], { weeks });
   res.json({ removed: removed.length, detached: detached.length,
              ignored: created.length + attached.length - removed.length - detached.length });
 }));

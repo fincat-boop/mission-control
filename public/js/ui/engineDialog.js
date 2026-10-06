@@ -13,7 +13,8 @@ import { KIND_HE } from '../core/format.js';
 const undoFill = run(async (fill) => {
   const r = await api('/engine/undo', {
     method: 'POST',
-    body: { created: fill.created_items ?? [], attached: fill.attached_items ?? [] },
+    body: { created: fill.created_items ?? [], attached: fill.attached_items ?? [],
+            weeks: fill.covered_weeks ?? [] },
   });
   toast(r.removed || r.detached
     ? `המילוי בוטל — הלוח חזר למה שהיה, והמנוע לא יחזיר את התוכן הזה ${

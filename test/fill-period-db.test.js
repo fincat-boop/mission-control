@@ -274,20 +274,21 @@ test('קמפיין חדש עם תוכן (שכפול) ממלא את כל השבו
   assert.equal(fill.placed, posts.length);
   assert.ok(fill.weeks >= 3);
 
+  assert.deepEqual(fill.covered_weeks, [viewed, ...campWeeks].sort());
   const undo = await call('POST', '/engine/undo',
-    { created: fill.created_items, attached: fill.attached_items });
+    { created: fill.created_items, attached: fill.attached_items, weeks: fill.covered_weeks });
   assert.equal(undo.status, 200, JSON.stringify(undo.json));
   assert.equal(undo.json.removed, fill.placed);
   assert.equal((await q('select id from posts where id = any($1::int[])', [fill.created_ids])).length, 0);
-  // הוויתור נרשם לכל שבוע בנפרד — המילוי הבא לא מחזיר תוכן לשבוע שממנו בוטל
-  const undone = new Set(posts.map((p) =>
-    `${fill.created_items.find((c) => c.post_id === p.id).content_id}:${weekOf(p.scheduled_at)}`));
-  const again = await inOrg(() => autoFillCampaign(copyId));
-  const back = await q('select content_id, scheduled_at from posts where id = any($1::int[])',
-    [again.created_ids]);
-  for (const p of back) {
-    assert.ok(!undone.has(`${p.content_id}:${weekOf(p.scheduled_at)}`), 'תוכן שבוטל חזר לאותו שבוע');
-  }
+  // הוויתור נרשם לכל השבועות שהמילוי עבר עליהם — השמירה הבאה לא מחזירה
+  // את התוכן שבוטל לשום שבוע בתקופה (קודם: עבר לשבוע הסמוך)
+  const undone = new Set(fill.created_items.map((c) => c.content_id));
+  const again = await inOrg(() => autoFillCampaign(copyId, inDays(0)));
+  const back = await q('select content_id from posts where id = any($1::int[])', [again.created_ids]);
+  assert.deepEqual(back.filter((p) => undone.has(p.content_id)), [], 'תוכן שבוטל חזר');
+  // שבוש בגוף הבקשה לא מפיל את "בטל"
+  const junk = await call('POST', '/engine/undo', { created: [{ post_id: 999999 }], weeks: ['2026-13-45', 7] });
+  assert.equal(junk.status, 200, JSON.stringify(junk.json));
   await inOrg(async () => {
     await db.query('delete from content_items where endpoint_id = $1', [other.id]);
     await db.query('delete from endpoints where id = $1', [other.id]);

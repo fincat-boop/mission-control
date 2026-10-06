@@ -375,6 +375,8 @@ export async function applyWeek(anchorDate, {
     holes: holeCount,
     // מכירתיים שלא שובצו כי חסר ערך שיאזן אותם (ראו buildUsage)
     promo_blocked: fresh.ratio.promo_blocked_posts,
+    // השבועות שהמילוי עבר עליהם — "בטל" רושם ויתור לכל אחד (recordDismissals)
+    covered_weeks: [fresh.week.start],
     skipped,
     dropped: dropped.map(({ title, reason }) => ({ title, reason })),
     created_ids: createdIds,
@@ -424,17 +426,25 @@ export async function attachToPost(postId, c) {
  * זוכר שהמשתמש הוריד תוכן מערוץ בשבוע מסוים (מחיקת פוסט, ביטול מילוי),
  * כדי שהמילוי האוטומטי הבא — שרץ אחרי כל שינוי אחר — לא יחזיר אותו מיד.
  * רשומות בנות יותר משמונה שבועות נמחקות על הדרך; אין בהן צורך יותר.
+ *
+ * weeks — "בטל" על מילוי של כמה שבועות (autoFillCampaign): הוויתור נרשם
+ * לכל שבוע שהמילוי עבר עליו, לא רק לשבוע של הפוסט — אחרת השמירה הבאה של
+ * הקמפיין הייתה מחזירה את אותו תוכן לשבוע אחר בתקופה.
  * @param {{content_id:number|null, channel_id:number, scheduled_at:string|Date}[]} list
+ * @param {{weeks?:string[]}} [opts] תחילות שבוע, YYYY-MM-DD
  */
-export async function recordDismissals(list) {
+export async function recordDismissals(list, { weeks = [] } = {}) {
   const items = (list ?? []).filter((x) => x?.content_id && x.channel_id && x.scheduled_at);
   if (items.length === 0) return;
   for (const x of items) {
-    await query(
-      `insert into engine_dismissals (week_start, content_id, channel_id)
-       values ($1,$2,$3) on conflict do nothing`,
-      [weekMeta(x.scheduled_at).start, x.content_id, x.channel_id]
-    );
+    const all = new Set([weekMeta(x.scheduled_at).start, ...weeks]);
+    for (const week of all) {
+      await query(
+        `insert into engine_dismissals (week_start, content_id, channel_id)
+         values ($1,$2,$3) on conflict do nothing`,
+        [week, x.content_id, x.channel_id]
+      );
+    }
   }
   await query(`delete from engine_dismissals where week_start < current_date - 56`);
 }

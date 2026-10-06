@@ -90,6 +90,7 @@ export function mergeFillResults(list) {
     created_ids: cat('created_ids'), created_items: cat('created_items'),
     attached_items: cat('attached_items'), summary: cat('summary'),
     weeks: list.filter((r) => r.placed || r.attached || r.holes).length,
+    covered_weeks: [...new Set(cat('covered_weeks'))],
   };
 }
 
