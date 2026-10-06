@@ -83,6 +83,31 @@ export function gapDaysError(b) {
   return null;
 }
 
+/**
+ * נתח קבוע: מספר שלם 1–100, או null/ריק = אוטומטי לפי חשיבות נקודת הקצה.
+ * עד עכשיו נבדק רק בטופס; עכשיו גם בשרת (שמירה, שכפול, תצוגה מקדימה).
+ * מנרמל את b.share_pct במקום, כמו gapDaysError. רק על מה שנשלח בבקשה —
+ * ערך ישן שעובר מהמקור בשכפול לא נבדק כאן.
+ * @returns {string|null}
+ */
+export function shareError(b) {
+  if (!('share_pct' in b) || b.share_pct === undefined) return null;
+  const v = b.share_pct;
+  if (v === null || v === '') { b.share_pct = null; return null; }
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 100) return 'הנתח הקבוע צריך להיות מספר שלם בין 1 ל-100';
+  b.share_pct = n;
+  return null;
+}
+
+/**
+ * מזהה שנשלח בגוף: מספר שלם חיובי (גם כמחרוזת מהטופס). null = לא תקין.
+ */
+const asId = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
 /** בדיקות של קמפיין חדש (גם בשכפול). מחזיר הודעת שגיאה או null. */
 function newCampaignError(b) {
   if (!b.endpoint_id || !b.name) return 'צריך נקודת קצה ושם קמפיין';
@@ -118,7 +143,7 @@ async function insertCampaign(b) {
 
 r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   const b = req.body ?? {};
-  const err = newCampaignError(b);
+  const err = shareError(b) ?? newCampaignError(b);
   if (err) return bad(res, err);
   const c = await insertCampaign(b);
   const engine = await autoFill(b.week);
@@ -139,6 +164,21 @@ const PREVIEW_FIELDS = ['endpoint_id', 'starts_on', 'ends_on', 'period', 'share_
  */
 r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, res) => {
   const b = { ...(req.body ?? {}) };
+  // מזהים כמספרים: endpoint_id כמחרוזת היה מפצל את הקבוצה של הנקודה
+  // ב-normalizeShares (מפתח '4' מול 4), ו-id לא מספרי היה נופל ב-500
+  if (b.id != null) {
+    b.id = asId(b.id);
+    if (b.id == null) return bad(res, 'מזהה הקמפיין לא תקין');
+  }
+  if (b.endpoint_id != null) {
+    b.endpoint_id = asId(b.endpoint_id);
+    if (b.endpoint_id == null) return bad(res, 'מזהה נקודת הקצה לא תקין');
+  }
+  if (b.channel_ids != null) {
+    if (!Array.isArray(b.channel_ids)) return bad(res, 'רשימת הערוצים לא תקינה');
+    b.channel_ids = b.channel_ids.map(asId);
+    if (b.channel_ids.some((x) => x == null)) return bad(res, 'רשימת הערוצים לא תקינה');
+  }
   let before = null;
   if (b.id != null) {
     before = await one('select * from campaigns where id = $1', [b.id]);
@@ -146,7 +186,7 @@ r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, 
   } else if (!b.endpoint_id) {
     return bad(res, 'צריך נקודת קצה');
   }
-  const err = datesError(b) ?? gapDaysError(b) ?? applyPeriod(b, before);
+  const err = datesError(b) ?? gapDaysError(b) ?? shareError(b) ?? applyPeriod(b, before);
   if (err) return bad(res, err);
 
   const draft = { ...(before ?? {}) };
@@ -268,9 +308,12 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
 
   // הנתח הקבוע ומספר הזוויות כבר לא בטופס — עוברים מהמקור, כמו ב"שבץ מחדש".
   // המרווח עובר מהמקור, אלא אם הטופס שלח אחר
+  const body = { ...(req.body ?? {}) };
+  const shareErr = shareError(body);
+  if (shareErr) return bad(res, shareErr);
   const b = { share_pct: src.share_pct, target_posts: src.target_posts,
               min_gap_days: src.min_gap_days,
-              ...(req.body ?? {}), structure: src.structure };
+              ...body, structure: src.structure };
   const err = newCampaignError(b);
   if (err) return bad(res, err);
 
@@ -549,7 +592,7 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
   const periodErr = applyPeriod(b, before);
   if (periodErr) return bad(res, periodErr);
-  const gapErr = gapDaysError(b);
+  const gapErr = gapDaysError(b) ?? shareError(b);
   if (gapErr) return bad(res, gapErr);
 
   // קמפיין מחזורי (תבנית ל"שבץ מחדש" בלוח האסטרטגיה) — דגל בלבד, בלי

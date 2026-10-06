@@ -172,6 +172,21 @@ test('תצוגה מקדימה: עריכה (id) ויצירה (בלי id) — או
   assert.equal(fresh.json.channels[0].siblings, 2);
   assert.equal(fresh.json.channels[0].gap_cap, 3);   // 6 ימים במרווח 3, חלקי 2
 
+  // מזהים כמחרוזות (כמו מטופס) — אותם מספרים בדיוק; קלט שבור — 400 ולא 500
+  const asStrings = await call('POST', '/campaigns/capacity-preview',
+    { ...BF_BODY(ep), endpoint_id: String(ep), channel_ids: [String(ids.fb)], share_pct: '20',
+      min_gap_days: 3 });
+  assert.deepEqual(asStrings.json, fresh.json);
+  for (const body of [{ id: 'abc' }, { id: 1.5 }, { ...BF_BODY(ep), endpoint_id: 'x' },
+                      { ...BF_BODY(ep), channel_ids: ['x'] }, { ...BF_BODY(ep), channel_ids: 6 },
+                      { ...BF_BODY(ep), share_pct: 0 }, { ...BF_BODY(ep), share_pct: 101 }]) {
+    const r = await call('POST', '/campaigns/capacity-preview', body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+  }
+  // השמירה בודקת את הנתח גם בשרת
+  assert.equal((await call('POST', '/campaigns', { ...BF_BODY(ep), share_pct: 150 })).status, 400);
+  assert.equal((await call('PATCH', `/campaigns/${c.id}`, { share_pct: 0 })).status, 400);
+
   // אותן בדיקות כמו בשמירה
   const noEp = await call('POST', '/campaigns/capacity-preview', { starts_on: '2030-11-20' });
   assert.equal(noEp.status, 400);

@@ -1,7 +1,7 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gapDaysError } from '../src/routes/campaigns.js';
+import { gapDaysError, shareError } from '../src/routes/campaigns.js';
 
 /* ========================= מרווח לקמפיין — אימות הקלט ========================= */
 
@@ -30,5 +30,22 @@ test('gapDaysError — מספר שלם 1..30 עובר, ומחרוזת מהטופ
 test('gapDaysError — 0, 31, שבר וטקסט נדחים בעברית', () => {
   for (const v of [0, 31, 2.5, 'abc', -3]) {
     assert.match(gapDaysError({ min_gap_days: v }), /בין 1 ל-30/);
+  }
+});
+
+/* ========================= נתח קבוע — אימות בשרת ========================= */
+
+test('shareError — null/ריק = אוטומטי; 1..100 עובר ומנורמל למספר', () => {
+  for (const [v, n] of [[null, null], ['', null], [1, 1], ['40', 40], [100, 100]]) {
+    const b = { share_pct: v };
+    assert.equal(shareError(b), null);
+    assert.equal(b.share_pct, n);
+  }
+  assert.equal(shareError({}), null);
+});
+
+test('shareError — 0, 101, שבר וטקסט נדחים בעברית', () => {
+  for (const v of [0, 101, 12.5, 'x', -5]) {
+    assert.match(shareError({ share_pct: v }), /בין 1 ל-100/);
   }
 });
