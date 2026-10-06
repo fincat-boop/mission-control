@@ -3,6 +3,7 @@ import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
+import { channelBudget } from './capacity.js';
 
 /**
  * מנוע השיבוץ.
@@ -661,11 +662,11 @@ export function valuePerPromo(kinds, hybridWeight) {
 export function buildUsage(channels, existing, settings) {
   const byChannel = new Map();
   for (const ch of channels) {
-    // חלק מהקיבולת נשמר לדברים דחופים ולכן המנוע לא נוגע בו
-    const reserved = Math.floor(ch.max_per_week * (ch.urgent_reserve_pct / 100));
+    // חלק מהקיבולת נשמר לדברים דחופים ולכן המנוע לא נוגע בו. אותו חשבון
+    // שמחשב כמה נכנס לקמפיין (capacity.js) — מקור אחד.
     byChannel.set(ch.id, {
       ch,
-      budget: Math.max(0, ch.max_per_week - reserved),
+      budget: channelBudget(ch),
       used: 0,
       byKind: { promo: 0, value: 0, hybrid: 0 },
       perDay: new Map(),   // dateKey -> count
