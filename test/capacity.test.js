@@ -252,9 +252,9 @@ test('gapToFit — המרווח הגדול ביותר שבו הקיבולת מג
 test('gapToFit — אחים חולקים את הימים, ולכן צריך מרווח קצר יותר', () => {
   const params = { from: '2026-11-01', to: '2026-11-28',
                    channel: { max_per_week: 7, urgent_reserve_pct: 0 }, share: 1, siblings: 2 };
-  // 28 יום, שני אחים: 4 פוסטים לקמפיין דורשים 8 ימים בפועל → מרווח 3
-  // (מרווח 4 נותן 7 ימים, 3 לכל אח)
-  assert.equal(gapToFit(params, 4), 3);
+  // 28 יום, שני אחים. מרווח 4 נותן 7 ימים: הראשון (rank 0) מקבל 4, השני 3
+  assert.equal(gapToFit(params, 4), 4);
+  assert.equal(gapToFit({ ...params, siblingRank: 1 }, 4), 3);   // 8 ימים במרווח 3
   // לבד: 1, 10, 19, 28.11 — מרווח 9
   assert.equal(gapToFit({ ...params, siblings: 1 }, 4), 9);
 });
@@ -269,4 +269,26 @@ test('endToFit — תאריך הסיום המוקדם ביותר שבו נכנס
   // מעבר לטווח — null
   assert.equal(endToFit('2026-11-01', at, 60, 365), null);
   assert.equal(endToFit(null, at, 1), null);
+});
+
+test('channelCapacity — חלוקה בין 3 אחים כשיש רק 2 ימים: 1, 1, 0 — הסכום לא עובר', () => {
+  // שבוע אחד במרווח 7 עם 8 ימים → 2 ימים (1.11, 8.11)
+  const base = { from: '2026-11-01', to: '2026-11-08',
+                 channel: { max_per_week: 7, urgent_reserve_pct: 0 }, share: 1, gapDays: 7,
+                 siblings: 3 };
+  const parts = [0, 1, 2].map((siblingRank) => channelCapacity({ ...base, siblingRank }));
+  assert.deepEqual(parts.map((p) => p.gapCap), [1, 1, 0]);
+  assert.deepEqual(parts.map((p) => p.capacity), [1, 1, 0]);
+  assert.equal(parts[2].limitedBy, 'gap');
+  assert.equal(parts.reduce((s, p) => s + p.gapCap, 0), 2);
+});
+
+test('siblingsOf — מספר האחים והמקום לפי מזהה; טיוטה אחרונה', async () => {
+  const { siblingsOf } = await import('../src/capacity.js');
+  const a = { id: 5, endpoint_id: 1, active: true, channel_ids: [6],
+              starts_on: '2026-11-01', ends_on: '2026-11-30' };
+  const list = [a, { ...a, id: 2 }, { ...a, id: 9 }];
+  assert.deepEqual(siblingsOf(a, list, 6), { count: 3, rank: 1 });
+  assert.deepEqual(siblingsOf({ ...a, id: undefined }, list, 6), { count: 4, rank: 3 });
+  assert.deepEqual(siblingsOf(a, list, 7), { count: 1, rank: 0 });
 });

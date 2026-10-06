@@ -6,7 +6,7 @@ import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 import {
   averageShares, channelCapacity, effectiveGap, endToFit, gapToFit, normalizeShares, shareOf,
-  siblingCount,
+  siblingsOf,
 } from './capacity.js';
 import { loadGapDays } from './gap.js';
 
@@ -42,7 +42,7 @@ const daysBetween = (a, b) => {
 };
 
 /**
- * הערוצים של כל קמפיין כעמודה בשורה — siblingCount (capacity.js) סופר לפיה
+ * הערוצים של כל קמפיין כעמודה בשורה — siblingsOf (capacity.js) סופר לפיה
  * קמפיינים של אותה נקודה שחולקים ערוץ.
  */
 const CHANNEL_IDS_SQL = `(select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
@@ -50,7 +50,7 @@ const CHANNEL_IDS_SQL = `(select coalesce(array_agg(cc.channel_id order by cc.ch
 
 /**
  * הקמפיינים עם החשיבות של נקודת הקצה שלהם והערוצים שלהם — הרשימה ש-shareOf
- * מחלק ביניהם ו-siblingCount סופר בה. כל מי שמחשב נתח או צורך
+ * מחלק ביניהם ו-siblingsOf סופר בה. כל מי שמחשב נתח או צורך
  * (channelNeeds) טוען דרכה.
  */
 export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance,
@@ -64,7 +64,7 @@ export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_impo
  *
  * המרווח: של הקמפיין (min_gap_days), ובלעדיו הכללי — effectiveGap, אותו
  * מרווח שהמנוע אוכף על התוכן שלו. המרווח הוא לנקודה × ערוץ, ולכן קמפיינים
- * חופפים של אותה נקודה באותו ערוץ חולקים אותו (siblings — siblingCount).
+ * חופפים של אותה נקודה באותו ערוץ חולקים אותו (siblings — siblingsOf).
  * @param concurrent שורות מ-CAMPAIGNS_WEIGHTED_SQL (כולל channel_ids)
  * @param opts.gapDays ברירת המחדל הכללית — engine_settings.min_gap_days (loadGapDays)
  * @returns {Map<number, {wanted, capacity, rateCap, gapCap, siblings, availableDays,
@@ -76,12 +76,13 @@ export function channelCapacities(campaign, channels, concurrent = [], { gapDays
   const share = shareOf(campaign, concurrent);
   const gap = effectiveGap(campaign, { min_gap_days: gapDays });
   for (const ch of channels) {
+    const sib = siblingsOf(campaign, concurrent, ch.id);
     out.set(ch.id, {
       ...channelCapacity({ from: campaign.starts_on, to: campaign.ends_on, channel: ch,
-                           share, gapDays: gap,
-                           siblings: siblingCount(campaign, concurrent, ch.id) }),
+                           share, gapDays: gap, siblings: sib.count, siblingRank: sib.rank }),
       share,
       gapDays: gap,
+      siblingRank: sib.rank,
     });
   }
   return out;
@@ -113,7 +114,8 @@ export function capacityPreview(draft, channels, concurrent = [],
   const gap = effectiveGap(draft, { min_gap_days: gapDays });
   const caps = channelCapacities(draft, channels, concurrent, { gapDays });
   const params = (ch, c) => ({ from: draft.starts_on, to: draft.ends_on, channel: ch,
-                               share: c.share, siblings: c.siblings });
+                               share: c.share, siblings: c.siblings,
+                               siblingRank: c.siblingRank });
 
   const list = [];
   for (const ch of channels) {
@@ -135,9 +137,10 @@ export function capacityPreview(draft, channels, concurrent = [],
         // הנתח והאחים תלויים בחלון — מחושבים מחדש לכל תאריך סיום
         const capacityAt = (to) => {
           const d = { ...draft, ends_on: to };
+          const sib = siblingsOf(d, concurrent, ch.id);
           return channelCapacity({ from: draft.starts_on, to, channel: ch,
                                    share: shareOf(d, concurrent), gapDays: gap,
-                                   siblings: siblingCount(d, concurrent, ch.id) }).capacity;
+                                   siblings: sib.count, siblingRank: sib.rank }).capacity;
         };
         return {
           channel_id: ch.id, written: w, capacity: c?.capacity ?? 0,
@@ -206,6 +209,9 @@ export function noRoomReason(campaign, capacities) {
   }
   if (list.every((c) => c.limitedBy === 'blocked')) {
     return 'כל הימים בתקופה חסומים בערוצים של הקמפיין';
+  }
+  if (list.every((c) => c.limitedBy === 'gap')) {
+    return 'קמפיינים אחרים של אותה נקודת קצה תופסים את כל הימים שהמרווח מאפשר בערוצים של הקמפיין';
   }
   return 'בערוצים של הקמפיין אין פוסטים בשבוע שמותר לשבץ (תקרה 0, או שכולה שמורה לדחופים)';
 }

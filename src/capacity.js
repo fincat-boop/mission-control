@@ -200,8 +200,13 @@ export function shareOf(campaign, concurrent = []) {
  * ימים. נספרים: פעיל, לא מושהה, אותה נקודה, חופף לחלון ויושב על הערוץ
  * (channel_ids — CAMPAIGNS_WEIGHTED_SQL). שורה בלי channel_ids לא נספרת.
  * הקמפיין עצמו (אותו shareKey) נספר פעם אחת, גם אם הוא ברשימה.
+ *
+ * rank = המקום של הקמפיין בין האחים לפי מזהה (טיוטה בלי מזהה — אחרונה).
+ * לפיו מתחלקת השארית כשהימים לא מתחלקים שווה (channelCapacity), כך שסכום
+ * החלקים של כל האחים לא עובר את מה שהמרווח מאפשר.
+ * @returns {{count:number, rank:number}}
  */
-export function siblingCount(campaign, concurrent, channelId) {
+export function siblingsOf(campaign, concurrent, channelId) {
   const key = shareKey(campaign);
   const f = ymdOf(campaign.starts_on);
   const t = ymdOf(campaign.ends_on);
@@ -209,7 +214,9 @@ export function siblingCount(campaign, concurrent, channelId) {
     Number(x.endpoint_id) === Number(campaign.endpoint_id) &&
     x.active && !x.paused_at && overlaps(x, f, t) &&
     (x.channel_ids ?? []).map(Number).includes(Number(channelId)));
-  return 1 + others.length;
+  const order = (c) => (c.id == null ? Infinity : Number(c.id));
+  const rank = others.filter((x) => order(x) < order(campaign)).length;
+  return { count: 1 + others.length, rank };
 }
 
 /**
@@ -230,16 +237,19 @@ export function channelBudget(channel) {
  *   rateCap   = התקציב של המנוע (בלי השמורה לדחופים) × שבועות × נתח
  *   gapCap    = כמה ימים פנויים אפשר לבחור עם מרווח gapDays לפחות ביניהם
  *               (המנוע לא שם שני פוסטים של אותה נקודה באותו ערוץ בתוך המרווח),
- *               מחולק ב-siblings — מספר הקמפיינים של אותה נקודה שחולקים את
- *               הערוץ בחלון (siblingCount). עיגול למטה, אבל לפחות 1 כשיש
- *               בכלל יום. קירוב: אח שחופף רק לחלק מהחלון נספר כאילו חופף
- *               לכולו, והמרווח של האחים נחשב שווה לזה של הקמפיין — המנוע
- *               אוכף את המרווח של כל מועמד בנפרד, וכאן רק מעריכים כמה נכנס.
- *   capacity  = הקטן מביניהם; לפחות 1 כשיש יום פנוי ונתח, 0 כשאין יום פנוי
- *               או כשהתקציב של הערוץ 0 (תקרה 0, או 100% שמורים לדחופים) —
- *               המנוע לעולם לא ישבץ שם, ולכן גם לא דורשים בשבילו תוכן
+ *               מחולק בין siblings — הקמפיינים של אותה נקודה שחולקים את
+ *               הערוץ בחלון (siblingsOf): כל אחד floor(ימים/k), והשארית —
+ *               יום נוסף לכל אחד מהראשונים לפי siblingRank. כך סכום החלקים
+ *               לא עובר את מה שהמרווח מאפשר, ואח יכול לקבל 0.
+ *               קירוב: אח שחופף רק לחלק מהחלון נספר כאילו חופף לכולו,
+ *               והמרווח של האחים נחשב שווה לזה של הקמפיין — המנוע אוכף את
+ *               המרווח של כל מועמד בנפרד, וכאן רק מעריכים כמה נכנס.
+ *   capacity  = הקטן מביניהם; לפחות 1 כשיש יום פנוי, נתח וחלק במרווח. 0
+ *               כשאין יום פנוי, כשהתקציב של הערוץ 0 (תקרה 0, או 100% שמורים
+ *               לדחופים), או כשהאחים תפסו את כל הימים — המנוע לא ישבץ שם,
+ *               ולכן גם לא דורשים בשבילו תוכן
  *   limitedBy = 'blocked' (כל הימים חסומים) / 'budget' (תקציב 0) /
- *               'gap' (המרווח הוא המגביל) / 'rate'
+ *               'gap' (המרווח הוא המגביל, כולל חלק 0 בין אחים) / 'rate'
  *
  * ימים חסומים: blocked_days הם מספרי ימים בשבוע (0 = ראשון), כמו
  * Date.getDay() במנוע (buildSlots / allows).
@@ -249,7 +259,7 @@ export function channelBudget(channel) {
  *          availableDays = מספר הימים הפנויים בטווח
  */
 export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GAP_DAYS,
-                                  siblings = 1 }) {
+                                  siblings = 1, siblingRank = 0 }) {
   const start = utc(from);
   const end = utc(to);
   const span = Math.max(0, Math.round((end - start) / DAY)) + 1;
@@ -273,16 +283,20 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
   for (const d of available) {
     if (d - last >= step) { alone += 1; last = d; }
   }
-  // אחים באותה נקודה×ערוץ חולקים את הימים האלה (ראו siblingCount)
+  // אחים באותה נקודה×ערוץ חולקים את הימים האלה (ראו siblingsOf): חלק שווה,
+  // והשארית לראשונים לפי הסדר — הסכום של כולם = alone בדיוק
   const k = Math.max(1, Math.floor(Number(siblings) || 1));
-  const gapCap = alone > 0 ? Math.max(1, Math.floor(alone / k)) : 0;
+  const rank = Math.max(0, Math.floor(Number(siblingRank) || 0));
+  const gapCap = Math.floor(alone / k) + (rank < alone % k ? 1 : 0);
 
   let capacity = 0;
-  if (available.length && share > 0 && budget > 0) capacity = Math.max(1, Math.min(rateCap, gapCap));
+  if (available.length && share > 0 && budget > 0 && gapCap > 0) {
+    capacity = Math.max(1, Math.min(rateCap, gapCap));
+  }
   let limitedBy = 'rate';
   if (!available.length) limitedBy = 'blocked';
   else if (budget <= 0) limitedBy = 'budget';
-  else if (gapCap < rateCap) limitedBy = 'gap';
+  else if (gapCap === 0 || gapCap < rateCap) limitedBy = 'gap';
 
   return { wanted, capacity, rateCap, gapCap, siblings: k, availableDays: available.length,
            limitedBy };

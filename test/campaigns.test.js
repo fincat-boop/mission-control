@@ -606,14 +606,20 @@ test('channelCapacities — אח לא נספר: נקודה אחרת, ערוץ א
   assert.equal(channelCapacities(a, [fb], [a, ...others], { gapDays: 7 }).get(6).siblings, 1);
 });
 
-test('channelCapacities — חלוקה בין אחים מעגלת למטה, אבל לא ל-0 כשיש יום', () => {
+test('channelCapacities — יום אחד לשלושה אחים: הראשון לפי מזהה מקבל אותו, השאר 0', () => {
   const fb = { id: 6, max_per_week: 7, urgent_reserve_pct: 0 };
   const a = { id: 1, endpoint_id: 4, share_pct: 20, active: true, channel_ids: [6],
               starts_on: '2026-11-01', ends_on: '2026-11-07' };
   const list = [a, { ...a, id: 2 }, { ...a, id: 3 }];
   const d = channelCapacities(a, [fb], list, { gapDays: 7 }).get(6);
   assert.equal(d.siblings, 3);
-  assert.equal(d.gapCap, 1);     // floor(1/3) = 0 → לפחות 1
+  assert.equal(d.gapCap, 1);     // floor(1/3) = 0, והשארית (1) לראשון
+  const last = channelCapacities(list[2], [fb], list, { gapDays: 7 }).get(6);
+  assert.equal(last.gapCap, 0);
+  assert.equal(last.capacity, 0);
+  assert.equal(last.limitedBy, 'gap');
+  assert.match(noRoomReason(list[2], channelCapacities(list[2], [fb], list, { gapDays: 7 })),
+    /קמפיינים אחרים של אותה נקודת קצה/);
 });
 
 /* ========================= תצוגה מקדימה של קיבולת ========================= */
