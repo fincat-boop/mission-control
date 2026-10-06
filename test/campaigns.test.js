@@ -1,40 +1,41 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { effectiveShare, angleCount, channelNeeds } from '../src/campaigns.js';
+import { angleCount, channelCapacities, channelNeeds } from '../src/campaigns.js';
+import { shareOf } from '../src/capacity.js';
 
 const span = { starts_on: '2026-08-01', ends_on: '2026-08-31', active: true };
 
-test('effectiveShare — share_pct מפורש מנצח את המשקל', () => {
-  assert.equal(effectiveShare({ ...span, share_pct: 25, importance: 9 }, []), 0.25);
+test('shareOf (לשעבר effectiveShare) — share_pct מפורש מנצח את המשקל', () => {
+  assert.equal(shareOf({ ...span, share_pct: 25, importance: 9 }, []), 0.25);
 });
 
-test('effectiveShare — נגזר מחשיבות נקודת הקצה מול הקמפיינים החופפים', () => {
-  const a = { ...span, id: 1, endpoint_importance: 6 };
-  const b = { ...span, id: 2, endpoint_importance: 3 };
-  assert.equal(effectiveShare(a, [a, b]), 6 / 9);
+test('shareOf (לשעבר effectiveShare) — נגזר מחשיבות נקודת הקצה מול הקמפיינים החופפים', () => {
+  const a = { ...span, id: 1, endpoint_id: 1, endpoint_importance: 6 };
+  const b = { ...span, id: 2, endpoint_id: 2, endpoint_importance: 3 };
+  assert.equal(shareOf(a, [a, b]), 6 / 9);
 });
 
-test('effectiveShare — החשיבות של הקמפיין עצמו לא נספרת; אותה נקודה = חלוקה שווה', () => {
-  const a = { ...span, id: 1, importance: 9, endpoint_importance: 5 };
-  const b = { ...span, id: 2, importance: 1, endpoint_importance: 5 };
-  assert.equal(effectiveShare(a, [a, b]), 0.5);
+test('shareOf (לשעבר effectiveShare) — החשיבות של הקמפיין עצמו לא נספרת; אותה נקודה = חלוקה שווה', () => {
+  const a = { ...span, id: 1, endpoint_id: 1, importance: 9, endpoint_importance: 5 };
+  const b = { ...span, id: 2, endpoint_id: 1, importance: 1, endpoint_importance: 5 };
+  assert.equal(shareOf(a, [a, b]), 0.5);
 });
 
-test('effectiveShare — הקמפיין בלי endpoint_importance נלקח מהרשימה לפי מזהה', () => {
-  const listed = { ...span, id: 1, endpoint_importance: 8 };
-  const other = { ...span, id: 2, endpoint_importance: 2 };
-  assert.equal(effectiveShare({ ...span, id: 1 }, [listed, other]), 0.8);
+test('shareOf (לשעבר effectiveShare) — הקמפיין בלי endpoint_importance נלקח מהרשימה לפי מזהה', () => {
+  const listed = { ...span, id: 1, endpoint_id: 1, endpoint_importance: 8 };
+  const other = { ...span, id: 2, endpoint_id: 2, endpoint_importance: 2 };
+  assert.equal(shareOf({ ...span, id: 1, endpoint_id: 1 }, [listed, other]), 0.8);
 });
 
-test('effectiveShare — בלי חופפים מחזיר 1', () => {
-  assert.equal(effectiveShare({ ...span, endpoint_importance: 6 }, []), 1);
+test('shareOf (לשעבר effectiveShare) — בלי חופפים מחזיר 1', () => {
+  assert.equal(shareOf({ ...span, endpoint_importance: 6 }, []), 1);
 });
 
-test('effectiveShare — חופף לא פעיל לא נספר', () => {
+test('shareOf (לשעבר effectiveShare) — חופף לא פעיל לא נספר', () => {
   const a = { ...span, id: 1, endpoint_importance: 5 };
   const inactive = { ...span, id: 2, endpoint_importance: 5, active: false };
-  assert.equal(effectiveShare(a, [a, inactive]), 1); // רק a נספר: 5/5
+  assert.equal(shareOf(a, [a, inactive]), 1); // רק a נספר: 5/5
 });
 
 test('angleCount — target_posts מפורש מנצח', () => {
@@ -49,10 +50,33 @@ test('angleCount — בלי צרכים מחזיר null', () => {
   assert.equal(angleCount({}, new Map()), null);
 });
 
-test('channelNeeds — קצב × שבועות × נתח, מינימום 1', () => {
+test('channelNeeds — קצב × שבועות × נתח כשהמרווח לא מגביל (מרווח 1)', () => {
+  const camp = { starts_on: '2026-08-01', ends_on: '2026-08-07', active: true, importance: 5 };
+  const needs = channelNeeds(camp, [{ id: 1, max_per_week: 3 }], [camp], { gapDays: 1 });
+  assert.equal(needs.get(1), 3); // שבוע אחד, נתח 1, קצב 3 (השמורה: floor(0.6) = 0)
+});
+
+test('channelNeeds — מרווח 7 (ברירת המחדל של המנוע): פוסט אחד בשבוע לערוץ', () => {
   const camp = { starts_on: '2026-08-01', ends_on: '2026-08-07', active: true, importance: 5 };
   const needs = channelNeeds(camp, [{ id: 1, max_per_week: 3 }], [camp]);
-  assert.equal(needs.get(1), 3); // שבוע אחד, נתח 1, קצב 3
+  assert.equal(needs.get(1), 1);
+  const d = channelCapacities(camp, [{ id: 1, max_per_week: 3 }], [camp], { gapDays: 7 }).get(1);
+  assert.equal(d.wanted, 3);
+  assert.equal(d.capacity, 1);
+  assert.equal(d.limitedBy, 'gap');
+  assert.equal(d.share, 1);
+});
+
+test('channelNeeds — בלאק פריידי: 16 יום, 5 בשבוע, 40% — הרשת לא דורשת יותר ממה שנכנס', () => {
+  const bf = { id: 7, endpoint_id: 4, share_pct: 40, active: true,
+               starts_on: '2026-11-20', ends_on: '2026-12-05' };
+  const fb = { id: 6, max_per_week: 5, urgent_reserve_pct: 20 };
+  const d = channelCapacities(bf, [fb], [bf], { gapDays: 7 }).get(6);
+  assert.equal(d.wanted, 5);     // החשבון הישן: round(5 × 16/7 × 0.4)
+  assert.equal(d.rateCap, 4);    // round(4 × 16/7 × 0.4)
+  assert.equal(d.gapCap, 3);     // 20.11, 27.11, 4.12
+  assert.equal(d.capacity, 3);
+  assert.equal(d.limitedBy, 'gap');
 });
 
 test('channelNeeds — בלי תאריכים מחזיר מפה ריקה', () => {
@@ -63,19 +87,21 @@ test('channelNeeds — בלי תאריכים מחזיר מפה ריקה', () => 
 
 import { generalGridFor, gridFor, resolvePeriod, structureChangeError } from '../src/campaigns.js';
 
-// שבועיים, שני ערוצים: 3 ו-1 בשבוע → צורך 6 ו-2
+// שבועיים, שני ערוצים: 3 ו-1 בשבוע → צורך 6 ו-2 כשהמרווח לא מגביל (GAP1),
+// ו-2 ו-2 במרווח 7 של המנוע (פוסט אחד בשבוע לנקודה × ערוץ)
 const twoWeeks = {
   starts_on: '2026-11-01', ends_on: '2026-11-14', active: true, importance: 5, structure: 'general',
 };
 const chA = { id: 1, name: 'פייסבוק', max_per_week: 3 };
 const chB = { id: 2, name: 'ניוזלטר', max_per_week: 1 };
+const GAP1 = { gapDays: 1 };
 const slotItem = (id, channel, order, status) => ({
   id, slot_channel_id: channel, sort_order: order,
   variants: status ? [{ id: id * 10, channel_id: channel, status, body: 'x' }] : [],
 });
 
 test('generalGridFor — משבצות לכל מדיה לפי הצורך שלה, בלי זוויות', () => {
-  const g = generalGridFor(twoWeeks, [], [chA, chB], '2026-10-01', [twoWeeks]);
+  const g = generalGridFor(twoWeeks, [], [chA, chB], '2026-10-01', [twoWeeks], GAP1);
   assert.deepEqual(g.needs, { 1: 6, 2: 2 });
   assert.equal(g.channels.length, 2);
   assert.equal(g.channels[0].slots.length, 6);
@@ -95,7 +121,7 @@ test('generalGridFor — נדרש = סכום הצרכים, מוכן = גרסה �
     slotItem(2, 1, 2, 'draft'),
     slotItem(3, 2, 1, 'ready'),
   ];
-  const g = generalGridFor(twoWeeks, content, [chA, chB], '2026-10-01', [twoWeeks]);
+  const g = generalGridFor(twoWeeks, content, [chA, chB], '2026-10-01', [twoWeeks], GAP1);
   assert.equal(g.total_cells, 8);
   assert.equal(g.ready, 2);
   assert.equal(g.missing, 6);          // טיוטה עדיין חסרה — כמו בזוויות
@@ -103,6 +129,13 @@ test('generalGridFor — נדרש = סכום הצרכים, מוכן = גרסה �
   assert.equal(g.channels[0].slots[1].state, 'draft');
   assert.equal(g.channels[1].slots[0].state, 'ready');
   assert.equal(g.channels[1].slots[1].state, 'empty');
+});
+
+test('generalGridFor — מרווח 7: הצורך = מה שהמנוע יכול לשבץ, לא הקצב', () => {
+  const g = generalGridFor(twoWeeks, [], [chA, chB], '2026-10-01', [twoWeeks]);
+  assert.deepEqual(g.needs, { 1: 2, 2: 2 });
+  assert.equal(g.total_cells, 4);
+  assert.deepEqual(g.channels[0].slots.map((s) => s.date), ['2026-11-01', '2026-11-08']);
 });
 
 test('generalGridFor — תוכן של מדיה אחת לא ממלא משבצת של מדיה אחרת', () => {
@@ -133,7 +166,7 @@ test('gridFor — קמפיין לפי זוויות לא השתנה: אותו ח�
   const camp = { ...twoWeeks, structure: 'angles' };
   const angle = { id: 1, sort_order: 1, variants: [
     { id: 1, channel_id: 1, status: 'ready' }, { id: 2, channel_id: 2, status: 'draft' }] };
-  const g = gridFor(camp, [angle], [chA, chB], '2026-10-01', [camp]);
+  const g = gridFor(camp, [angle], [chA, chB], '2026-10-01', [camp], GAP1);
   assert.equal(g.angles.length, 6);   // לפי המדיה התובענית
   assert.equal(g.total_cells, 8);     // 6 + 2, השאר not_needed
   assert.equal(g.ready, 1);

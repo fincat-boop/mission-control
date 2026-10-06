@@ -6,7 +6,9 @@ import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
   newMediaKey, uploadSignedHeaders, validateSignRequest, verifyUploaded,
 } from '../media.js';
-import { CAMPAIGNS_WEIGHTED_SQL, channelNeeds, freeAngleSlots, nextSlots } from '../campaigns.js';
+import {
+  CAMPAIGNS_WEIGHTED_SQL, channelNeeds, freeAngleSlots, loadGapDays, nextSlots,
+} from '../campaigns.js';
 import { analyzeImport, runImport, undoImport } from '../import.js';
 import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
@@ -975,11 +977,13 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   }
 
   // אותו חשבון בדיוק כמו המסך (campaignsWithHealth) — כולל הנתח שנגזר
-  // מהקמפיינים החופפים — כדי שהקבצים ימלאו את המשבצות שהמשתמש רואה
+  // מהקמפיינים החופפים והמרווח של המנוע — כדי שהקבצים ימלאו את המשבצות
+  // שהמשתמש רואה
   const concurrent = await rows(CAMPAIGNS_WEIGHTED_SQL);
+  const gapDays = await loadGapDays();
   // קמפיין שסומן מוכן: אין משבצות ריקות — הקבצים נכנסים בסוף ומגדילים אותו
   const need = campaign.content_complete_at
-    ? null : channelNeeds(campaign, myChannels, concurrent).get(channelId) ?? null;
+    ? null : channelNeeds(campaign, myChannels, concurrent, { gapDays }).get(channelId) ?? null;
 
   const existing = await rows(
     'select sort_order from content_items where campaign_id = $1 and slot_channel_id = $2',

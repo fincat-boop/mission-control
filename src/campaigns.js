@@ -1,9 +1,10 @@
-import { rows } from './db.js';
+import { one, rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
+import { channelCapacity, shareOf } from './capacity.js';
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -11,8 +12,10 @@ import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/co
  * כל זווית היא מסר אחד, וכל מדיה מקבלת ממנה גרסה בניסוח משלה.
  * הרשת הזו היא מה שמסך התוכן מצייר, ותא ריק בה הוא חוסר גלוי.
  *
- * כמה פוסטים מגיעים לקמפיין בכל מדיה נגזר מהקצב הרצוי של המדיה,
- * מאורך הקמפיין ומהנתח שהוקצה לו — לא מתדירות שמוגדרת על הקמפיין.
+ * כמה פוסטים מגיעים לקמפיין בכל מדיה = כמה שהמנוע באמת יכול לשבץ לו
+ * (channelCapacity ב-capacity.js): הקצב של המדיה בלי השמורה לדחופים, אורך
+ * הקמפיין, הנתח שלו, הימים החסומים והמרווח בין פוסטים — לא תדירות שמוגדרת
+ * על הקמפיין.
  */
 
 const DAY = 86400000;
@@ -31,49 +34,52 @@ const daysBetween = (a, b) => {
 };
 
 /**
- * הקמפיינים עם החשיבות של נקודת הקצה שלהם — הרשימה ש-effectiveShare מחלק
+ * הקמפיינים עם החשיבות של נקודת הקצה שלהם — הרשימה ש-shareOf מחלק
  * ביניהם. כל מי שמחשב נתח או צורך (channelNeeds) טוען דרכה.
  */
 export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance
   from campaigns c join endpoints e on e.id = c.endpoint_id`;
 
 /**
- * הנתח שהקמפיין תופס בפועל.
- *
- * share_pct מפורש מנצח. בלעדיו הנתח נגזר מהחשיבות של נקודת הקצה של הקמפיין
- * מול נקודות הקצה של הקמפיינים שרצים במקביל — כי קמפיין בלי נתח מוגדר לא
- * אמור לתפוס את כל השטח. החשיבות נקבעת במקום אחד (נקודת הקצה): קמפיינים של
- * אותה נקודה מתחלקים שווה בשווה, ונקודה חשובה יותר מקבלת יותר.
- * לקמפיין אין חשיבות משלו (העמודה campaigns.importance כבר לא נקראת).
- * @param concurrent שורות מ-CAMPAIGNS_WEIGHTED_SQL (בלי endpoint_importance — 5)
+ * המרווח המינימלי בימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ —
+ * engine_settings.min_gap_days, אותו ערך שהמנוע אוכף (ברירת מחדל 7). כל מי
+ * שמחשב צורך של קמפיין טוען אותו כאן, אחרת הרשת דורשת יותר ממה שנכנס.
  */
-export function effectiveShare(campaign, concurrent = []) {
-  if (campaign.share_pct != null) return campaign.share_pct / 100;
-
-  const overlapping = concurrent.filter((c) =>
-    c.active &&
-    (!c.ends_on || !campaign.starts_on || c.ends_on >= campaign.starts_on) &&
-    (!c.starts_on || !campaign.ends_on || c.starts_on <= campaign.ends_on));
-
-  const weight = (c) =>
-    Number((concurrent.find((x) => x.id === c.id) ?? c).endpoint_importance ?? 5);
-  const totalWeight = overlapping.reduce((s, c) => s + weight(c), 0);
-  if (!totalWeight) return 1;
-  return weight(campaign) / totalWeight;
+export async function loadGapDays() {
+  const s = await one('select min_gap_days from engine_settings limit 1');
+  return Number(s?.min_gap_days ?? 7);
 }
 
-/** כמה פוסטים הקמפיין צריך בכל אחת מהמדיות שלו */
-export function channelNeeds(campaign, channels, concurrent = []) {
-  const needs = new Map();
-  if (!campaign.starts_on || !campaign.ends_on) return needs;
-
-  const weeks = daysBetween(campaign.starts_on, campaign.ends_on) / 7;
-  const share = effectiveShare(campaign, concurrent);
-
+/**
+ * הקיבולת של הקמפיין בכל אחת מהמדיות שלו, עם הפירוט: כמה הקצב רוצה
+ * (wanted), כמה נכנס (capacity), ומה מגביל (limitedBy). הנתח נמדד על חלון
+ * הקמפיין מול הקמפיינים החופפים (shareOf).
+ *
+ * המרווח הוא לנקודה × ערוץ, לא לקמפיין: שני קמפיינים חופפים של אותה נקודה
+ * חולקים אותו בפועל, ו-gapCap כאן לא מחלק אותו ביניהם.
+ * @param concurrent שורות מ-CAMPAIGNS_WEIGHTED_SQL
+ * @param opts.gapDays engine_settings.min_gap_days (loadGapDays)
+ * @returns {Map<number, {wanted, capacity, rateCap, gapCap, availableDays, limitedBy, share}>}
+ */
+export function channelCapacities(campaign, channels, concurrent = [], { gapDays = 7 } = {}) {
+  const out = new Map();
+  if (!campaign.starts_on || !campaign.ends_on) return out;
+  const share = shareOf(campaign, concurrent);
   for (const ch of channels) {
-    // מספר אחד לערוץ: כמה פוסטים בשבוע הוא מפרסם (אותו מספר שהמנוע מציית לו)
-    const rate = Number(ch.max_per_week ?? 1);
-    needs.set(ch.id, Math.max(1, Math.round(rate * weeks * share)));
+    out.set(ch.id, {
+      ...channelCapacity({ from: campaign.starts_on, to: campaign.ends_on, channel: ch,
+                           share, gapDays }),
+      share,
+    });
+  }
+  return out;
+}
+
+/** כמה פוסטים הקמפיין צריך בכל אחת מהמדיות שלו = כמה שבאמת נכנס */
+export function channelNeeds(campaign, channels, concurrent = [], opts = {}) {
+  const needs = new Map();
+  for (const [id, c] of channelCapacities(campaign, channels, concurrent, opts)) {
+    needs.set(id, c.capacity);
   }
   return needs;
 }
@@ -123,11 +129,11 @@ const byOrder = (a, b) => (a.sort_order - b.sort_order) || (a.id - b.id);
  * מצב התא: ready / draft / not_relevant / empty
  */
 export function gridFor(campaign, content, campaignChannels, today = ymd(new Date()),
-                        concurrent = []) {
+                        concurrent = [], opts = {}) {
   if (isCompleteMode(campaign, content)) {
     return completeAnglesGrid(campaign, content, campaignChannels, today);
   }
-  const needs = channelNeeds(campaign, campaignChannels, concurrent);
+  const needs = channelNeeds(campaign, campaignChannels, concurrent, opts);
   const angles = angleCount(campaign, needs);
   // Object ולא Map — כמו במסלול היציאה השני, אחרת הצרכן מקבל טיפוס אחר
   // תלוי אם יצא תוכן או לא
@@ -255,7 +261,7 @@ function completeAnglesGrid(campaign, content, campaignChannels, today) {
 
 /**
  * קמפיין "כללי": בלי זוויות. לכל מדיה רשימת משבצות משלה, באורך הצורך שלה
- * (אותו חשבון קצב × שבועות × נתח כמו ברשת הזוויות), וכל משבצת ממולאת
+ * (אותו חשבון קיבולת כמו ברשת הזוויות — channelNeeds), וכל משבצת ממולאת
  * בפריט תוכן של אותה מדיה בלבד (slot_channel_id + sort_order).
  *
  * אותן הגדרות כמו ברשת הזוויות: נדרש = סכום הצרכים פחות משבצות שסומנו
@@ -266,11 +272,11 @@ function completeAnglesGrid(campaign, content, campaignChannels, today) {
  * מצב משבצת: ready / draft / not_relevant / empty
  */
 export function generalGridFor(campaign, content, campaignChannels, today = ymd(new Date()),
-                               concurrent = []) {
+                               concurrent = [], opts = {}) {
   if (isCompleteMode(campaign, content)) {
     return completeGeneralGrid(campaign, content, campaignChannels, today);
   }
-  const needs = channelNeeds(campaign, campaignChannels, concurrent);
+  const needs = channelNeeds(campaign, campaignChannels, concurrent, opts);
   let missing = 0;
   let ready = 0;
   let drafts = 0;
@@ -388,10 +394,11 @@ export async function freeAngleSlots(campaignId, count) {
     `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [campaignId]);
   const concurrent = await rows(CAMPAIGNS_WEIGHTED_SQL);
+  const gapDays = await loadGapDays();
   const existing = await rows(
     'select sort_order from content_items where campaign_id = $1', [campaignId]);
   const need = campaign.content_complete_at
-    ? null : angleCount(campaign, channelNeeds(campaign, channels, concurrent));
+    ? null : angleCount(campaign, channelNeeds(campaign, channels, concurrent, { gapDays }));
   return { slots: nextSlots(need, existing.map((x) => x.sort_order), count), need };
 }
 
@@ -524,6 +531,7 @@ export async function campaignsWithHealth() {
   const variants = await rows('select * from content_variants order by content_id, channel_id');
   const channels = await rows('select * from channels order by sort_order, id');
   const links = await rows('select * from campaign_channels');
+  const gapDays = await loadGapDays();
 
   const today = ymd(new Date());
   const channelById = new Map(channels.map((c) => [c.id, c]));
@@ -562,8 +570,8 @@ export async function campaignsWithHealth() {
     // בקמפיין כללי אין זוויות — הרשת היא רשימת משבצות לכל מדיה.
     const general = c.structure === 'general';
     const grid = general
-      ? { ...generalGridFor(c, shaped, myChannels, today, list), angles: [] }
-      : gridFor(c, shaped, myChannels, today, list);
+      ? { ...generalGridFor(c, shaped, myChannels, today, list, { gapDays }), angles: [] }
+      : gridFor(c, shaped, myChannels, today, list, { gapDays });
 
     const scheduled = myPosts.filter(
       (p) => ['scheduled', 'approved', 'publishing', 'failed', 'pending_approval'].includes(p.status)).length;
@@ -571,10 +579,9 @@ export async function campaignsWithHealth() {
 
     // מה שהמערכת גוזרת בעצמה. נשלח תמיד — גם כשיש ערך ידני — כדי
     // שהממשק יוכל להראות "אוטומטי = כך וכך" ולא לבקש מספר בלי הקשר.
-    const autoShare = Math.round(
-      effectiveShare({ ...c, share_pct: null }, list) * 100);
+    const autoShare = Math.round(shareOf({ ...c, share_pct: null }, list) * 100);
     const autoAngles = angleCount({ ...c, target_posts: null },
-      channelNeeds(c, myChannels, list));
+      channelNeeds(c, myChannels, list, { gapDays }));
 
     // מה עוד חסר מהיום והלאה — רק בקמפיין שרץ או מתוכנן (מושהה/הסתיים: 0)
     const phase = phaseOf(c, today);
@@ -745,7 +752,7 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
  * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין.
  *
  * הנתח (target_pct): מה שנקבע ידנית בקמפיין, ובלעדיו החלק היחסי לפי חשיבות
- * נקודת הקצה מול הקמפיינים החופפים (effectiveShare — אותו חשבון כמו גודל הלוח).
+ * נקודת הקצה מול הקמפיינים החופפים (shareOf — אותו חשבון כמו גודל הלוח).
  * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
  * הקמפיין מתוך הפרסומים של כל הקמפיינים בטבלה — אותו בסיס כמו הנתח, שמתחלק
  * בין קמפיינים (תוכן שוטף ופוסטים בלי תוכן לא נספרים בשום צד).
@@ -782,7 +789,7 @@ export async function currentAllocation() {
     rows: running.map((c) => {
       const n = countMap.get(c.id) ?? 0;
       const actual = total > 0 ? Math.round((n / total) * 100) : 0;
-      const target = Math.round(effectiveShare(c, all) * 100);
+      const target = Math.round(shareOf(c, all) * 100);
       return {
         campaign_id: c.id,
         campaign_name: c.name,
