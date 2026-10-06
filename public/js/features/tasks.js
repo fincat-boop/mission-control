@@ -1,4 +1,4 @@
-import { api } from '../core/api.js';
+import { api, postWithGapCheck } from '../core/api.js';
 import { goToTab, refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { $, $$, copyText, esc, run, toast } from '../core/dom.js';
 import { can, state } from '../core/state.js';
@@ -167,20 +167,19 @@ export async function renderTasks({ force = false } = {}) {
       await Promise.all([rerender(), refreshBoard()]);
     })));
 
-  // הצעת החלפת תוכן: מעדכן את השיבוץ עם התוכן המוצע וסוגר את המשימה
+  // הצעת החלפת תוכן: מעדכן את השיבוץ עם התוכן המוצע וסוגר את המשימה.
+  // השרת יכול להזהיר (מרווח, פוסט מקושר, מכסות) — מי שמבטל, המשימה נשארת פתוחה
   $$('#tasks [data-swap-post]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       const meta = JSON.parse(b.dataset.swapMeta || '{}');
       if (!meta.suggested_content_id) return toast('אין הצעה שמורה למשימה הזו.', true);
-      await api(`/posts/${b.dataset.swapPost}`, {
-        method: 'PATCH',
-        body: {
-          content_id: meta.suggested_content_id,
-          endpoint_id: meta.suggested_endpoint_id,
-          title: meta.suggested_title,
-          kind: meta.suggested_kind,
-        },
-      });
+      const swapped = await postWithGapCheck(`/posts/${b.dataset.swapPost}`, {
+        content_id: meta.suggested_content_id,
+        endpoint_id: meta.suggested_endpoint_id,
+        title: meta.suggested_title,
+        kind: meta.suggested_kind,
+      }, 'PATCH', 'להחליף בכל זאת?');
+      if (!swapped) return;
       await api(`/tasks/${b.dataset.swapTask}`, { method: 'PATCH', body: { done: true } });
       toast('הוחלף. הפוסט מציג עכשיו את התוכן המוצע.');
       await Promise.all([rerender(), refreshBoard()]);
