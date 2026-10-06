@@ -1,4 +1,4 @@
-import { one, rows, query } from './db.js';
+import { currentOrg, one, rows, query } from './db.js';
 import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
@@ -273,7 +273,31 @@ export async function planWeek(anchorDate, {
 
 // שרשרת שממתינה שהריצה הקודמת תיגמר, כדי שתי הרצות חופפות (למשל שינוי
 // כלל ואז מיד גרירת קמפיין) לא יחשבו את אותה משבצת פנויה פעמיים.
+//
+// השרשרת לבדה לא מספיקה: היא משחררת כשהמילוי נגמר, אבל הבקשה עושה commit
+// רק אחר כך — מילוי שני (בתהליך אחר, או באותו תהליך ברגע שבין שני
+// commit-ים) רואה לוח בלי מה שהראשון כתב. לכן כל מילוי בתוך בקשה לוקח גם
+// lockEngine — נעילת advisory של Postgres לכל ארגון, עד סוף הטרנזקציה.
+// השרשרת נשארת: היא מסדרת את העבודה בתוך התהליך (גם בלי טרנזקציה, כמו
+// respace מהשורה), ובקשה לא תופסת חיבור מה-pool רק כדי לחכות לנעילה.
 let applyChain = Promise.resolve();
+/** המפתח הראשון של נעילת המנוע ב-pg_advisory_xact_lock; השני — הארגון */
+export const ENGINE_LOCK_KEY = 7301;
+
+/**
+ * נעילת המנוע של הארגון עד סוף הטרנזקציה של הבקשה (pg_advisory_xact_lock),
+ * כך ששני מילויים — גם משני תהליכים — לא חושבים את אותה משבצת כפנויה. ממתינה
+ * עד lock_timeout (ברירת מחדל 5 שניות, ENGINE_LOCK_TIMEOUT לבדיקות) ואז זורקת
+ * 55P03 ושוברת את הטרנזקציה — הקורא אחראי ל-savepoint (guardedFill) או
+ * לתשובה מסודרת (/engine/apply). רק בתוך טרנזקציה של ארגון.
+ */
+export async function lockEngine(timeout = process.env.ENGINE_LOCK_TIMEOUT || '5s') {
+  const { prev } = await one("select current_setting('lock_timeout') as prev");
+  await query("select set_config('lock_timeout', $1, true)", [timeout]);
+  await query('select pg_advisory_xact_lock($1, $2)', [ENGINE_LOCK_KEY, currentOrg() ?? 0]);
+  await query("select set_config('lock_timeout', $1, true)", [prev]);
+}
+
 export function withEngineLock(fn) {
   const run = applyChain.then(fn, fn);
   applyChain = run.catch(() => {});

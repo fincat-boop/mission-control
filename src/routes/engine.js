@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
 import { bad, parseIdList, wrap } from './_shared.js';
-import { applyWeek, planWeek, recordDismissals, withEngineLock } from '../engine.js';
+import { applyWeek, lockEngine, planWeek, recordDismissals, withEngineLock } from '../engine.js';
 import { planUrgent } from '../urgent.js';
 import { one, query, rows } from '../db.js';
 import { weekMeta } from '../board.js';
@@ -27,6 +27,14 @@ r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
   const selected = raw == null ? null : raw.map(String).slice(0, 500);
   if (selected && selected.length === 0) return bad(res, 'לא סומן אף פריט לשיבוץ');
 
+  // נעילת המנוע של הארגון עד סוף הבקשה (ראו lockEngine) — מילוי אוטומטי
+  // שרץ במקביל לא יכתוב לאותן משבצות
+  try {
+    await lockEngine();
+  } catch (e) {
+    if (e?.code !== '55P03') throw e;
+    return bad(res, 'המנוע ממלא כרגע את הלוח בבקשה אחרת — נסו שוב בעוד רגע', 409);
+  }
   const result = await withEngineLock(() => applyWeek(req.body?.week, { selected }));
   if (result.placed === 0 && result.attached === 0 && result.holes === 0) {
     const why = result.dropped.length

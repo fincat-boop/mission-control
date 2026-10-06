@@ -1,6 +1,6 @@
 import multer from 'multer';
 import { currentOrg, one, query } from '../db.js';
-import { applyWeek, withEngineLock } from '../engine.js';
+import { applyWeek, lockEngine, withEngineLock } from '../engine.js';
 import { weekMeta, ymd } from '../board.js';
 import { relocateBlocked } from '../respace.js';
 
@@ -36,17 +36,30 @@ export function autoFill(week) {
     () => withEngineLock(() => applyWeek(week, { holes: false })));
 }
 
-/** savepoint + fail-soft משותפים ל-autoFill ול-autoFillCampaign (ראו למעלה) */
+/**
+ * savepoint + fail-soft משותפים ל-autoFill ול-autoFillCampaign (ראו למעלה).
+ * בתוך ה-savepoint — נעילת המנוע של הארגון (lockEngine) עד ה-commit של
+ * הבקשה. מילוי אחר שמחזיק אותה יותר מ-5 שניות: המילוי הזה מוותר (תשובה
+ * ריקה + לוג), והשינוי של המשתמש נשמר כרגיל. לפני withEngineLock, כדי
+ * שבקשה שמחכה לנעילה של ארגון אחד לא תעכב בשרשרת מילויים של ארגונים אחרים.
+ */
 async function guardedFill(label, run) {
   const inTx = currentOrg() != null;
   try {
-    if (inTx) await query('savepoint auto_fill');
+    if (inTx) {
+      await query('savepoint auto_fill');
+      await lockEngine();
+    }
     const out = await run();
     if (inTx) await query('release savepoint auto_fill');
     return out;
   } catch (e) {
     if (inTx) await query('rollback to savepoint auto_fill').catch(() => {});
-    console.error(`${label} נכשל:`, e);
+    if (e?.code === '55P03') {
+      console.error(`${label}: מילוי אחר של הארגון מחזיק את המנוע — המילוי הזה דולג`);
+    } else {
+      console.error(`${label} נכשל:`, e);
+    }
     return EMPTY_FILL;
   }
 }

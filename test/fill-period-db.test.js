@@ -537,3 +537,43 @@ test('ותק: פוסט שנכשל או שהמועד שלו עבר ולא יצא 
   });
   await cleanup(a);
 });
+
+test('נעילת המנוע: מילוי אחר מחזיק אותה — המילוי מוותר בלי להפיל את הבקשה, וחלון המילוי מקבל 409', { skip }, async () => {
+  const { EMPTY_FILL } = await import('../src/routes/_shared.js');
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let locked;
+  const gotLock = new Promise((r) => { locked = r; });
+  // "בקשה אחרת" של אותו ארגון, באמצע מילוי — מחזיקה את הנעילה עד ה-commit שלה
+  const holder = db.withOrg(org, async () => {
+    await db.query('select pg_advisory_xact_lock($1, $2)', [engine.ENGINE_LOCK_KEY, org]);
+    locked();
+    await held;
+  });
+  await gotLock;
+  process.env.ENGINE_LOCK_TIMEOUT = '200ms';
+  const errors = console.error;
+  console.error = () => {};
+  try {
+    const out = await inOrg(async () => {
+      const fill = await autoFillCampaign(null, inDays(0));
+      // הטרנזקציה של הבקשה ממשיכה, וה-lock_timeout חזר לקודם
+      const after = await db.one("select 1 as n, current_setting('lock_timeout') as t");
+      return { fill, after };
+    });
+    assert.equal(out.fill, EMPTY_FILL);
+    assert.equal(out.after.n, 1);
+    assert.notEqual(out.after.t, '200ms');
+    const apply = await call('POST', '/engine/apply', { week: inDays(0) });
+    assert.equal(apply.status, 409, JSON.stringify(apply.json));
+    assert.match(apply.json.error, /נסו שוב/);
+  } finally {
+    console.error = errors;
+    delete process.env.ENGINE_LOCK_TIMEOUT;
+    release();
+    await holder;
+  }
+  // אחרי השחרור — המילוי עובר כרגיל
+  const fill = await inOrg(() => autoFillCampaign(null, inDays(0)));
+  assert.notEqual(fill, EMPTY_FILL);
+});
