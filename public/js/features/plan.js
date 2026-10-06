@@ -974,15 +974,10 @@ function boardInner(c) {
 
   const head = cols.map((col) => `<th${col.blocked ? ' class="blocked"' : ''}>${esc(col.channel_name)}
     <div class="need">${col.blocked ? esc(col.blocked) : `${col.ready} מתוך ${col.required} מוכנים`}</div>
-    ${can('content') && !linking ? `<button type="button" class="hbulk" data-gbulk="${col.channel_id}"
-      data-tt="העלאה מרוכזת: כל קובץ ממלא את הפוסט הפנוי הבא בערוץ">העלאה מרוכזת</button>` : ''}
   </th>`).join('');
 
   const body = indexes.map((i) => {
     const row = cols.map((col) => col.byIndex.get(i));
-    const dates = [...new Set(row.filter(Boolean).map((s) => s.date ?? ''))];
-    // כשלכל הערוצים אותו מועד הוא מוצג פעם אחת בתחילת השורה, אחרת בכל תא
-    const rowDate = dates.length === 1 ? dates[0] : null;
     const cells = cols.map((col, ci) => {
       const s = row[ci];
       if (!s) return '<td class="cell na"><span>—</span></td>';
@@ -990,7 +985,7 @@ function boardInner(c) {
       const item = s.content;
       const linked = item && (item.linked_to_id || c.content.some((x) => x.linked_to_id === item.id));
       const when = s.date ? fmtDate(s.date) : 'נוסף';
-      const meta = [rowDate == null && when, item?.title].filter(Boolean).map(esc).join(' · ');
+      const meta = [when, item?.title].filter(Boolean).map(esc).join(' · ');
       return `<td class="cell ${st.cls}${s.warn ? ' warn' : ''}${s.past ? ' past' : ''}${
           can('content') ? '' : ' ro'}${linking ? pickClass(c, item, col.blocked) : ''}"
         ${item ? `data-cid="${item.id}"` : ''}
@@ -1004,15 +999,13 @@ function boardInner(c) {
     }).join('');
     const past = row.every((s) => !s || s.past);
     const week = row.some((s) => s && inWeek(s.date));
-    return `<tr class="${past ? 'past' : ''}${week ? ' inweek' : ''}">
-      <td class="angle gidx"><div class="anum">${i}<span>${rowDate ? fmtDate(rowDate) : ''}</span></div></td>
-      ${cells}</tr>`;
+    return `<tr class="${past ? 'past' : ''}${week ? ' inweek' : ''}">${cells}</tr>`;
   }).join('');
 
   return `${linkTools(c, linking)}
-    <div class="board panel"><div class="gboard${linking ? ' linking' : ''}">
+    <div class="board panel gfull"><div class="gboard${linking ? ' linking' : ''}">
       <table class="grid cgrid gtable">
-        <thead><tr><th class="angle gidx">#</th>${head}</tr></thead>
+        <thead><tr>${head}</tr></thead>
         <tbody>${body}</tbody>
       </table>
     </div></div>`;
@@ -1057,11 +1050,6 @@ function wireGeneralBoard(selected, reload) {
   $('#plan [data-link-toggle]')?.addEventListener('click', () => toggleLinkMode(selected, repaint));
   drawLinkArrows(selected);
 
-  $$('#plan [data-gbulk]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const channel = selected.channels.find((x) => x.id === Number(b.dataset.gbulk));
-      openChannelBulk(selected, channel, reload);
-    }));
 }
 
 /**
@@ -1258,19 +1246,23 @@ function linkInfo(item, partners) {
   </div>`;
 }
 
-/** העלאה מרוכזת לעמודה של מדיה אחת: כל קובץ ממלא את הפוסט הפנוי הבא שלה */
-function openChannelBulk(campaign, channel, reload) {
+/** העלאה מרוכזת בקמפיין כללי (תפריט ⋮): בוחרים עמודה, וכל קובץ ממלא את הפוסט הפנוי הבא בה */
+function openChannelBulk(campaign, reload) {
   openGeneric({
     guardDirty: true,
-    title: `העלאה מרוכזת · ${channel.name}`,
+    title: `העלאה מרוכזת · ${campaign.name}`,
     saveLabel: 'העלה',
     fields: [
+      { name: 'channel_id', label: 'לאיזו עמודה (ערוץ)', type: 'select',
+        options: campaign.channels.map((ch) => [ch.id, ch.name]) },
       { name: 'kind', label: 'סוג הפוסטים', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']], value: 'value' },
-      { name: '__files', label: `קבצים — כל קובץ ממלא את הפוסט הפנוי הבא ב${channel.name}, כטיוטה`,
+      { name: '__files', label: 'קבצים — כל קובץ ממלא את הפוסט הפנוי הבא בעמודה, כטיוטה',
         type: 'files' },
     ],
     onSave: async (v) => {
+      const channel = campaign.channels.find((ch) => ch.id === v.channel_id);
+      if (!channel) throw new Error('צריך לבחור עמודה');
       const files = [...($('#gen___files')?.files ?? [])];
       if (!files.length) throw new Error('צריך לבחור לפחות קובץ אחד');
       const data = await uploadBulk(campaign.id, files, {
@@ -1302,7 +1294,9 @@ function wireCampaignGrid(selected, reload) {
     edit: () => openCampaignForm(selected, reload),
     share: () => openShareForm(selected, reload),
     'to-general': run(() => convertToGeneral(selected, reload)),
-    bulk: () => openBulkUpload(selected, reload),
+    // בכללי ההעלאה היא לעמודה אחת — הערוץ נבחר בחלון
+    bulk: () => (selected.structure === 'general'
+      ? openChannelBulk(selected, reload) : openBulkUpload(selected, reload)),
     import: () => openImport(selected, reload),
     complete: run(() => completeCampaign(selected, reload)),
     reopen: run(() => reopenCampaign(selected, reload)),
@@ -1348,13 +1342,13 @@ function wireCampaignGrid(selected, reload) {
 
 /** תפריט שלוש הנקודות בכותרת הקמפיין — כל הפעולות על הקמפיין עצמו */
 function campaignMenu(c) {
-  // בקמפיין כללי ההעלאה המרוכזת היא לכל מדיה (בראש העמודה), וייבוא מטבלה לא נתמך
+  // ייבוא מטבלה — רק בזוויות. העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
   const angles = c.structure !== 'general';
   const items = [
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
     can('settings') && `<button type="button" data-act="share">${c.share_pct != null
       ? `נתח קבוע: ${c.share_pct}%` : 'נתח קבוע…'}</button>`,
-    angles && can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
+    can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
     can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
