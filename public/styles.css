@@ -1350,17 +1350,24 @@ button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 .stalebox .sb-head b { color: var(--st-warn); font-size: 12.5px; }
 .stalebox textarea { min-height: 70px; opacity: .85; }
 
-/* עורך הגרסאות: לשונית לכל ערוץ של הזווית */
-.vtabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+/* עורך הגרסאות: הערוץ שבעריכה בשורה מקופלת, רשימת כל הערוצים נפתחת ממנה */
+.vtabs { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.vpick { flex: 0 1 300px; min-width: 220px; }
+.vcur { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.vcur > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vsum { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; min-height: 37px; }
+.vsum .vsep { color: var(--muted); }
+.vtabs-pop { display: grid; gap: 2px; }
 .vtab {
-  font: inherit; font-size: 12.5px; display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--ink-2); cursor: pointer;
+  font: inherit; font-size: 13px; display: flex; align-items: center; gap: 10px; text-align: start;
+  padding: 8px 10px; border-radius: 6px; border: 0; background: none; color: var(--ink-1); cursor: pointer;
 }
-.vtab:hover { background: var(--panel-2); }
-.vtab.on { color: var(--ink-1); border-color: var(--accent); background: var(--panel-2); }
-.vtab .gst { font-size: 11px; }
-.vtab .vdirty { color: var(--accent); font-size: 16px; line-height: 1; }
+.vtab:hover, .vtab:focus-visible { background: var(--page); outline: none; }
+.vtab.on { background: var(--page); font-weight: 600; }
+.vtab > span:first-child { flex: 1 1 0; min-width: 0; }
+.vtab .gst, .vcur .gst { font-size: 11.5px; }
+.vtab .vdirty, .vcur .vdirty { color: var(--accent); font-size: 16px; line-height: 1; }
 .vcopy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); }
 .frow .vcopy label { display: inline; margin: 0; font-size: 12.5px; }
 .frow .vcopy select { width: auto; min-width: 140px; padding: 4px 10px; font-size: 12.5px; }

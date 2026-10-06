@@ -1659,8 +1659,17 @@ function mergeFills(list) {
   } };
 }
 
+// לחיצה מחוץ לרשימת הערוצים של עורך הגרסאות סוגרת אותה
+document.addEventListener('click', () => {
+  const pop = document.getElementById('vtabsPop');
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  document.getElementById('vtabsBtn')?.setAttribute('aria-expanded', 'false');
+});
+
 /**
- * עורך אחד לכל הערוצים של זווית. כל ערוץ — לשונית עם המצב שלו; מעבר בין
+ * עורך אחד לכל הערוצים של זווית. הערוץ שבעריכה בשורה מקופלת, וממנה נפתחת
+ * רשימת כל הערוצים עם המצב של כל אחד (לצידה סיכום המצבים); מעבר בין
  * לשוניות שומר את מה שנכתב (לא נשמר עדיין — מסומן בנקודה); "העתק מ־"
  * ממלא את הלשונית מטקסט של ערוץ אחר; "הבא ›" שומר את הלשונית ועובר לבאה;
  * "שמור" שומר את כל הלשוניות ששונו. אחרי שמירה מתעדכן רק התא ברשת.
@@ -1692,16 +1701,35 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     cur.files = [...($('#gen___files')?.files ?? [])];
   };
 
-  const tabsHtml = () => tabs.map((t) => {
-    const st = t.v || t.status !== 'draft' ? CELL[t.status] : CELL.empty;
-    return `<button type="button" class="vtab${t === cur ? ' on' : ''}" role="tab"
-      aria-selected="${t === cur}" data-vtab="${t.ch.id}">
-      <span>${esc(t.ch.name)}</span>
+  const tabState = (t) => (t.v || t.status !== 'draft' ? CELL[t.status] : CELL.empty);
+  const tabLabel = (t) => {
+    const st = tabState(t);
+    return `<span>${esc(t.ch.name)}</span>
       <span class="gst ${st.cls}"><i></i>${esc(st.label)}</span>
-      ${dirty(t) ? '<b class="vdirty" title="שינוי שלא נשמר">•</b>' : ''}
-    </button>`;
-  }).join('');
-  const paintTabs = () => { $('#vtabs').innerHTML = tabsHtml(); };
+      ${dirty(t) ? '<b class="vdirty" title="שינוי שלא נשמר">•</b>' : ''}`;
+  };
+  /** "1 מוכן · 8 טיוטה · 4 חסר" — כל הערוצים במבט אחד, גם כשהרשימה סגורה */
+  const tabsSummary = () => {
+    const n = new Map();
+    for (const t of tabs) {
+      const st = tabState(t);
+      n.set(st.cls, { label: st.label, count: (n.get(st.cls)?.count ?? 0) + 1 });
+    }
+    return ['ok', 'draft', 'gap', 'na'].filter((c) => n.has(c))
+      .map((c) => `<span class="gst ${c}">${n.get(c).count} ${esc(n.get(c).label)}</span>`)
+      .join('<span class="vsep">·</span>');
+  };
+  /** הערוץ שבעריכה בשורה מקופלת; הרשימה של כולם נפתחת מתחתיו */
+  const paintTabs = () => {
+    $('#vtabsCur').innerHTML = tabLabel(cur);
+    $('#vtabsSum').innerHTML = tabs.length > 1 ? tabsSummary() : '';
+    $('#vtabsPop').innerHTML = tabs.map((t) => `<button type="button" class="vtab${t === cur ? ' on' : ''}"
+      role="option" aria-selected="${t === cur}" data-vtab="${t.ch.id}">${tabLabel(t)}</button>`).join('');
+  };
+  const pickerOpen = (open) => {
+    $('#vtabsPop').hidden = !open;
+    $('#vtabsBtn').setAttribute('aria-expanded', String(open));
+  };
 
   /** הלשונית t → הטופס */
   const load = (t) => {
@@ -1821,7 +1849,18 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     guardDirty: () => { sync(); return tabs.some(dirty); },
     fields: [
       { name: '__tabs', type: 'html',
-        html: `<div class="vtabs" id="vtabs" role="tablist" aria-label="ערוצים">${tabsHtml()}</div>` },
+        html: `<div class="vtabs" id="vtabs">
+          <div class="msel vpick">
+            <button type="button" class="msel-btn" id="vtabsBtn" aria-haspopup="listbox"
+              aria-expanded="false" aria-label="ערוץ">
+              <span class="vcur" id="vtabsCur"></span>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="msel-pop vtabs-pop" id="vtabsPop" role="listbox" aria-label="ערוצים" hidden></div>
+          </div>
+          <div class="vsum" id="vtabsSum"></div>
+        </div>` },
       { name: '__copy', type: 'html', html: `<div class="vcopy">
           <label for="vcopyFrom">העתק מ־</label>
           <select id="vcopyFrom"></select>
@@ -1855,12 +1894,37 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
       if (filesChanged) paintAngleInPlace(item);
     },
     onOpen: () => {
-      $('#vtabs').addEventListener('click', (e) => {
+      paintTabs();
+      $('#vtabsBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        pickerOpen($('#vtabsPop').hidden);
+        if (!$('#vtabsPop').hidden) $('#vtabsPop .vtab.on')?.focus();
+      });
+      $('#vtabsPop').addEventListener('click', (e) => {
+        e.stopPropagation();
         const b = e.target.closest('[data-vtab]');
         if (!b) return;
+        pickerOpen(false);
         sync();
         load(tabs.find((t) => t.ch.id === Number(b.dataset.vtab)));
+        $('#vtabsBtn').focus();
       });
+      $('#vtabs').addEventListener('keydown', (e) => {
+        if ($('#vtabsPop').hidden) return;
+        const opts = $$('#vtabsPop .vtab');
+        const i = opts.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          opts[(i + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length]?.focus();
+        } else if (e.key === 'Escape') {
+          // Esc סוגר רק את הרשימה, לא את החלון
+          e.preventDefault();
+          e.stopPropagation();
+          pickerOpen(false);
+          $('#vtabsBtn').focus();
+        }
+      });
+
       // נקודת "לא נשמר" על הלשונית מתעדכנת תוך כדי
       ['#gen_body', '#gen_status', '#gen___files'].forEach((sel) =>
         $(sel).addEventListener(sel === '#gen_body' ? 'input' : 'change', () => { sync(); paintTabs(); }));
