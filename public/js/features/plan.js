@@ -534,7 +534,7 @@ function campaignHead(c) {
   const range = c.starts_on && c.ends_on
     ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
   return `
-    <div class="cbhead">
+    <div class="cbhead${c.required ? ' with-fill' : ''}">
       <div>
         <div class="ctitle">
           <h2>${esc(c.name)}</h2>

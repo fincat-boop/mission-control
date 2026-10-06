@@ -920,6 +920,15 @@ button.btn.linktoggle.on {
 
 /* מצב המילוי בכותרת הקמפיין — נקודה + טקסט לכל מצב */
 .cbhead .hstats { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+/* כותרת קמפיין: שם מימין, מצב המילוי באמצע, ⋮ בקצה השמאלי */
+.cbhead.with-fill { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; }
+.cbhead.with-fill > .spacer { display: none; }
+.cbhead.with-fill > .pmore { justify-self: end; }
+@media (max-width: 760px) {
+  .cbhead.with-fill { grid-template-columns: 1fr auto; }
+  .cbhead.with-fill > .hstats { grid-row: 2; grid-column: 1 / -1; }
+  .cbhead.with-fill > .pmore { grid-row: 1; grid-column: 2; }
+}
 .cbhead .hstats .gst { font-size: 12.5px; }
 .cbhead .hstats .of { color: var(--muted); }
 
