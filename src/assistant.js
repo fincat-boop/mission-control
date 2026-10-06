@@ -17,7 +17,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { one, rows } from './db.js';
 import { buildAlerts } from './alerts.js';
-import { campaignsWithHealth, currentAllocation, shareTimeline } from './campaigns.js';
+import { campaignsWithHealth, currentAllocation, gapDaysError, shareTimeline } from './campaigns.js';
 import { buildBoard, ymd } from './board.js';
 import { planWeek } from './engine.js';
 import { VIA_HEADER } from './audit.js';
@@ -347,8 +347,11 @@ async function readPost(id) {
  * `check` רץ לפני שההצעה מוצגת, ומחזיר אזהרות או שגיאה מוקדמת —
  * כדי שהעוזר יתקן את עצמו במקום להציע משהו שייפול.
  */
-const MIN_GAP_HINT = 'מרווח בין פוסטים לקמפיין: ימים לפחות (1–30) בין שני פוסטים של ' +
-  'נקודת הקצה באותו ערוץ. בלעדיו — ברירת המחדל הכללית. רק כשהמשתמש ביקש במפורש.';
+const MIN_GAP_SCHEMA = {
+  type: ['integer', 'null'], minimum: 1, maximum: 30,
+  description: 'מרווח בין פוסטים לקמפיין: ימים לפחות (1–30) בין שני פוסטים של נקודת הקצה ' +
+    'באותו ערוץ. null = חזרה לברירת המחדל הכללית. רק כשהמשתמש ביקש במפורש.',
+};
 
 const WRITE_TOOLS = {
   create_campaign: {
@@ -362,7 +365,7 @@ const WRITE_TOOLS = {
         starts_on: { type: 'string', description: 'YYYY-MM-DD' },
         ends_on: { type: 'string', description: 'YYYY-MM-DD' },
         share_pct: { type: 'integer', description: 'נתח קבוע באחוזים — רק כשהובטח נתח מסוים. בלעדיו הנתח נגזר מחשיבות נקודת הקצה.' },
-        min_gap_days: { type: 'integer', description: MIN_GAP_HINT },
+        min_gap_days: MIN_GAP_SCHEMA,
         goal: { type: 'string' },
         channel_ids: { type: 'array', items: { type: 'integer' }, description: 'הערוצים שהקמפיין יושב עליהם' },
       },
@@ -384,7 +387,7 @@ const WRITE_TOOLS = {
         starts_on: { type: 'string' },
         ends_on: { type: 'string' },
         share_pct: { type: 'integer', description: 'נתח קבוע באחוזים' },
-        min_gap_days: { type: 'integer', description: MIN_GAP_HINT },
+        min_gap_days: MIN_GAP_SCHEMA,
         goal: { type: 'string' },
         active: { type: 'boolean' },
         channel_ids: { type: 'array', items: { type: 'integer' } },
@@ -653,6 +656,9 @@ const WRITE_TOOLS = {
 /* ========================= בדיקות מוקדמות ========================= */
 
 async function checkCampaignWindow(a) {
+  // אותה בדיקה ואותה הודעה כמו בנתיב (gapDaysError) — על עותק, לא על ההצעה
+  const gapErr = gapDaysError({ ...a });
+  if (gapErr) return { error: gapErr };
   const e = await one('select name, active from endpoints where id = $1', [a.endpoint_id]);
   if (!e) return { error: 'לא נמצאה נקודת קצה עם המזהה הזה' };
 
@@ -687,6 +693,8 @@ async function checkCampaignWindow(a) {
 }
 
 async function checkCampaignUpdate(a) {
+  const gapErr = gapDaysError({ ...a });
+  if (gapErr) return { error: gapErr };
   const c = await one('select * from campaigns where id = $1', [a.campaign_id]);
   if (!c) return { error: 'לא נמצא קמפיין עם המזהה הזה' };
 

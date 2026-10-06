@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import { EMPTY_FILL, autoFill, bad, updateById, wrap } from './_shared.js';
 import {
-  campaignsWithHealth, completionSummary, currentAllocation, loadCapacityPreview, resolvePeriod,
-  structureChangeError,
+  campaignsWithHealth, completionSummary, currentAllocation, gapDaysError, loadCapacityPreview,
+  resolvePeriod, structureChangeError,
 } from '../campaigns.js';
+
+// האימות של המרווח יושב ב-campaigns.js (גם העוזר בודק דרכו); מיוצא גם מכאן
+export { gapDaysError };
 import { currentOrg, one, rows, tx } from '../db.js';
 import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
@@ -97,23 +100,6 @@ function datesError(b) {
   return null;
 }
 
-/**
- * המרווח בין פוסטים של הקמפיין: מספר שלם 1–30, או null/ריק = ברירת המחדל
- * הכללית. מנרמל את b.min_gap_days במקום (מחרוזת מהטופס → מספר, '' → null),
- * כדי שהשמירה והתצוגה המקדימה יקבלו אותו ערך. אותו טווח כמו האילוץ במסד.
- * @returns {string|null} הודעת שגיאה, או null
- */
-export function gapDaysError(b) {
-  if (!('min_gap_days' in b) || b.min_gap_days === undefined) return null;
-  const v = b.min_gap_days;
-  if (v === null || v === '') { b.min_gap_days = null; return null; }
-  const n = Number(v);
-  if (!Number.isInteger(n) || n < 1 || n > 30) {
-    return 'המרווח בין פוסטים צריך להיות מספר שלם של ימים, בין 1 ל-30';
-  }
-  b.min_gap_days = n;
-  return null;
-}
 
 /**
  * נתח קבוע: מספר שלם 1–100, או null/ריק = אוטומטי לפי חשיבות נקודת הקצה.

@@ -58,6 +58,24 @@ export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_impo
   from campaigns c join endpoints e on e.id = c.endpoint_id`;
 
 /**
+ * המרווח בין פוסטים של הקמפיין: מספר שלם 1–30, או null/ריק = ברירת המחדל
+ * הכללית. מנרמל את b.min_gap_days במקום (מחרוזת מהטופס → מספר, '' → null),
+ * כדי שהשמירה, התצוגה המקדימה והעוזר יקבלו אותו ערך. אותו טווח כמו האילוץ במסד.
+ * @returns {string|null} הודעת שגיאה, או null
+ */
+export function gapDaysError(b) {
+  if (!('min_gap_days' in b) || b.min_gap_days === undefined) return null;
+  const v = b.min_gap_days;
+  if (v === null || v === '') { b.min_gap_days = null; return null; }
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 30) {
+    return 'המרווח בין פוסטים צריך להיות מספר שלם של ימים, בין 1 ל-30';
+  }
+  b.min_gap_days = n;
+  return null;
+}
+
+/**
  * הקיבולת של הקמפיין בכל אחת מהמדיות שלו, עם הפירוט: כמה הקצב רוצה
  * (wanted), כמה נכנס (capacity), ומה מגביל (limitedBy). הנתח נמדד על חלון
  * הקמפיין מול הקמפיינים החופפים (shareOf).

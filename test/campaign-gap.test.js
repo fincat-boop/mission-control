@@ -49,3 +49,21 @@ test('shareError — 0, 101, שבר וטקסט נדחים בעברית', () => {
     assert.match(shareError({ share_pct: v }), /בין 1 ל-100/);
   }
 });
+
+/* ========================= העוזר — אותו אימות כמו הנתיב ========================= */
+
+test('העוזר: min_gap_days בסכימה 1–30 או null, ונבדק בהצעה עם אותה הודעה כמו בנתיב', async () => {
+  const { _internals } = await import('../src/assistant.js');
+  for (const name of ['create_campaign', 'update_campaign']) {
+    const tool = _internals.WRITE_TOOLS[name];
+    assert.deepEqual(
+      (({ type, minimum, maximum }) => ({ type, minimum, maximum }))(tool.input_schema.properties.min_gap_days),
+      { type: ['integer', 'null'], minimum: 1, maximum: 30 });
+    // הבדיקה נכשלת לפני כל גישה למסד
+    for (const v of [0, 31, 2.5]) {
+      const r = await tool.check({ endpoint_id: 1, campaign_id: 1, min_gap_days: v });
+      assert.equal(r.error, gapDaysError({ min_gap_days: v }));
+      assert.match(r.error, /בין 1 ל-30/);
+    }
+  }
+});
