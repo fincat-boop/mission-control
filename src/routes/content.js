@@ -14,7 +14,8 @@ import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
 import {
-  LinkError, assetOwnerId, itemAssetsSql, linkGroup, linkSlots, lockLinkScope, mediaOwner,
+  LinkError, applyLinkPlan, assetOwnerId, autoLinkNew, itemAssetsSql, linkGroup, linkRulesError,
+  linkRulesPlan, linkSlots, linkedBetween, lockLinkScope, mediaOwner, normalizeLinkRules,
   releaseLinks, syncFrom, unlink,
 } from '../links.js';
 import { contentBlocker, readyRejection } from '../publish/readiness.js';
@@ -417,9 +418,11 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     return bad(res, 'מספר המשבצת חייב להיות מספר שלם בין 1 ל-1000');
   }
   if (b.campaign_id) {
-    // זווית (לא משבצת): נעילת הקמפיין לפני שבודקים מקום — גם במקום מפורש, כמו
-    // בהעלאה המרוכזת. שתי יצירות במקביל לא יקבלו אותו מקום
-    if (!slotChannel) await one('select id from campaigns where id = $1 for update', [b.campaign_id]);
+    // נעילת הקמפיין לפני שבודקים מקום — גם במקום מפורש, כמו בהעלאה המרוכזת.
+    // שתי יצירות במקביל לא יקבלו אותו מקום. גם במשבצת של קמפיין כללי: קישור
+    // העמודות (autoLinkNew) נועל את הקמפיין אחרי היצירה, ובלי הנעילה כאן
+    // יצירה מול העלאה מרוכזת לאותה עמודה נתקעות זו בזו (deadlock)
+    await one('select id from campaigns where id = $1 for update', [b.campaign_id]);
     if (b.sort_order != null) {
       const taken = await one(
         `select 1 from content_items
@@ -471,9 +474,11 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
        values ($1,$2,coalesce($3,''),$4) returning *`,
       [c.id, slotChannel, b.body ?? null, b.status === 'ready' ? 'ready' : 'draft']
     );
+    // קישור עמודות של הקמפיין: הפוסט מועתק למשבצת הפנויה הבאה בעמודות היעד
+    const copied = await autoLinkNew(c.id);
     const engine = await fillFor(c, b.week);
     // variant — לנעילה האופטימית של השמירה הבאה מאותו טופס (updated_at)
-    return res.status(201).json({ content: c, variant, engine });
+    return res.status(201).json({ content: c, variant, copied, engine });
   }
 
   // זווית חדשה נפתחת עם גרסת טיוטה לכל מדיה שביקשו — הניסוח נכתב לכל אחת בנפרד
@@ -624,6 +629,50 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
   const engine = await fillFor(out.source, req.body?.week);
   res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, engine });
+}));
+
+/**
+ * קישור עמודות בקמפיין כללי: {rules: [{from, to}], links_apart?, dry_run}. links_apart — פוסטים
+ * מקושרים לא יוצאים באותו יום (נאכף במנוע). dry_run מחזיר כמה
+ * פוסטים קיימים יועתקו (להצגה לפני אישור); בלעדיו — החוקים נשמרים והפוסטים
+ * הקיימים בעמודות המקור של קישור חדש מועתקים עכשיו. הסרת חוק עוצרת העתקה של פוסטים חדשים
+ * ומנתקת את הפוסטים שמקושרים בין שתי העמודות (dry_run מחזיר גם unlinks).
+ */
+r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res) => {
+  const c = await one('select id, structure, link_rules from campaigns where id = $1 for update',
+    [req.params.id]);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  if (c.structure !== 'general') return bad(res, 'קישור עמודות זמין רק בקמפיין כללי');
+  const channels = await rows(
+    `select ch.id, ch.name, ch.platform from campaign_channels cc
+       join channels ch on ch.id = cc.channel_id where cc.campaign_id = $1`, [c.id]);
+  const rules = req.body?.rules;
+  const err = linkRulesError(rules, channels);
+  if (err) return bad(res, err);
+  const clean = normalizeLinkRules(rules);
+  // רק קישור חדש מעתיק את מה שכבר קיים. קישור שכבר היה — שמירה חוזרת לא
+  // מעתיקה שוב פוסט שהמשתמש ניתק או שהעותק שלו נמחק
+  const key = (x) => `${Number(x.from)}>${Number(x.to)}`;
+  const had = new Set((c.link_rules ?? []).map(key));
+  const plan = await linkRulesPlan(c.id, clean.filter((x) => !had.has(key(x))));
+  // קישור עמודות שהוסר — גם הפוסטים שמקושרים בין שתי העמודות מתנתקים (כל
+  // אחד נשאר עם עותק משלו), כדי שסימן הקישור לא יישאר בלי קישור
+  const now = new Set(clean.map(key));
+  const removed = normalizeLinkRules((c.link_rules ?? []).filter((x) => !now.has(key(x))));
+  const followers = await linkedBetween(c.id, removed);
+  if (req.body?.dry_run) return res.json({ copies: plan.length, unlinks: followers.length });
+
+  const apart = typeof req.body?.links_apart === 'boolean' ? req.body.links_apart : null;
+  await query(
+    `update campaigns set link_rules = $2::jsonb, links_apart = coalesce($3, links_apart)
+      where id = $1`, [c.id, JSON.stringify(clean), apart]);
+  let unlinked = 0;
+  for (const id of followers) {
+    try { await unlink(id); unlinked += 1; } catch (e) { if (!(e instanceof LinkError)) throw e; }
+  }
+  const out = await applyLinkPlan(plan);
+  const engine = await autoFill(req.body?.week);
+  res.json({ rules: clean, ...out, unlinked, engine });
 }));
 
 /**
@@ -1017,8 +1066,13 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   }));
   if (!ok) return bad(res, SLOT_RACE, 409);
 
+  // קישור עמודות: כל פוסט שנוצר מועתק לעמודות היעד, לפי הסדר
+  let copied = 0;
+  for (const c of created) copied += (await autoLinkNew(c.id)).linked;
+
   res.status(201).json({
     created,
+    copied,
     filled_slots: created.filter((c) => need === null || c.slot <= need).length,
     overflow: created.filter((c) => need !== null && c.slot > need).length,
   });

@@ -2,7 +2,7 @@ import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { describeMailVariant, openNewsletterEditor } from '../ui/hubFill.js';
-import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb, ymd } from '../core/format.js';
+import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { closeGeneric, markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
@@ -250,8 +250,6 @@ function wireKebabs() {
 }
 
 function wirePlan(campaign, endpointId, content) {
-  // הסינון "7 הימים הקרובים" שייך לרשת של קמפיין בלבד
-  $('#plan').classList.remove('week-only');
   const reload = run(async () => {
     await Promise.all([renderPlan(), refreshBoard(), refreshAlerts()]);
   });
@@ -716,7 +714,7 @@ function campaignHead(c) {
   const range = c.starts_on && c.ends_on
     ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
   return `
-    <div class="cbhead${c.required ? ' with-fill' : ''}">
+    <div class="cbhead">
       <div>
         <div class="ctitle">
           <h2>${esc(c.name)}</h2>
@@ -731,44 +729,8 @@ function campaignHead(c) {
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
-      ${c.required ? fillLine(c) : ''}
       ${campaignMenu(c)}
-    </div>
-    ${c.required ? weekToggle(c) : ''}`;
-}
-
-/* ---------- "7 הימים הקרובים": רק השורות שמתוכננות לשבוע הקרוב ---------- */
-
-// נשמר לאורך הביקור (בין קמפיינים), לא בכתובת
-let weekOnly = false;
-
-const todayYmd = () => ymd(new Date());
-const weekEnd = () => { const d = new Date(); d.setDate(d.getDate() + 7); return ymd(d); };
-/** תאריך מתוכנן בתוך שבעת הימים הקרובים (היום כלול) */
-const inWeek = (date) => !!date && date >= todayYmd() && date < weekEnd();
-
-function weekToggle(c) {
-  const n = c.missing_week ?? 0;
-  return `<div class="weekbar">
-    <button type="button" class="btn small${weekOnly ? ' on' : ''}" data-week-only
-      aria-pressed="${weekOnly}">7 הימים הקרובים</button>
-    <span class="d">${n ? `חסרים ${n} לפוסטים שמתוכננים לשבוע הקרוב`
-      : 'אין חוסר בפוסטים שמתוכננים לשבוע הקרוב'}</span>
-  </div>`;
-}
-
-/**
- * מצב המילוי בכותרת: מוכנים · טיוטות · לא נכתבו, מתוך הנדרש. אותן הגדרות
- * בשני המבנים — טיוטה היא עוד לא מוכנה, ו"לא נכתבו" הם תאים/משבצות ריקים.
- */
-function fillLine(c) {
-  const empty = c.missing_content - (c.drafts ?? 0);
-  return `<div class="fill hstats">
-    <span class="gst ok"><i></i>${c.ready} מוכנים</span>
-    ${c.drafts ? `<span class="gst draft"><i></i>${c.drafts} טיוטות</span>` : ''}
-    ${empty > 0 ? `<span class="gst gap"><i></i>${empty} לא נכתבו</span>` : ''}
-    <span class="of">מתוך ${c.required}</span>
-  </div>`;
+    </div>`;
 }
 
 function campaignGrid(c) {
@@ -841,7 +803,7 @@ function angleRow(c, row) {
       <span>${esc(cellLabel(cell))}</span></td>`;
   }).join('');
 
-  return `<tr class="${row.past ? 'past' : ''}${inWeek(row.date) ? ' inweek' : ''}">
+  return `<tr class="${row.past ? 'past' : ''}">
     <td class="angle" ${item ? `data-item="${item.id}"` : ''}
       ${can('content') ? `data-angle="${row.index}"` : ''}>
       <div class="anum">${row.index}<span>${row.date ? fmtDate(row.date) : ''}</span></div>
@@ -916,348 +878,245 @@ const channelName = (id) => state.channels.find((ch) => ch.id === id)?.name ?? '
 const slotLabel = (x) => `${channelName(x.slot_channel_id)} #${x.sort_order}`;
 
 
+/* ---------- קישור עמודות: "כל פוסט באינסטגרם רילס מועתק ליוטיוב שורטס" ---------- */
+
+/** אפשר לקשר: קמפיין כללי עם שני ערוצים לפחות שאינם ניוזלטר */
+const canLinkIn = (c) => c.structure === 'general' && can('content') &&
+  c.channels.filter((ch) => ch.platform !== 'newsletter').length > 1;
+
+/** החוקים של הקמפיין: [{from, to}] — רק בין ערוצים שעדיין בקמפיין */
+const linkRules = (c) => (c.link_rules ?? []).filter((r) =>
+  c.channels.some((ch) => ch.id === r.from) && c.channels.some((ch) => ch.id === r.to));
+
+/** "אינסטגרם רילס ← יוטיוב שורטס · …" — שורה מעל הטבלה, כשיש חוקים */
+function linkRulesLine(c) {
+  const rules = linkRules(c);
+  if (!rules.length) return '';
+  const names = rules.map((r) => `${channelName(r.from)} ← ${channelName(r.to)}`).join(' · ');
+  return `<div class="glinks">${LINK_ICON}<span>מועתק אוטומטית: ${esc(names)}</span>
+    ${canLinkIn(c) ? '<button type="button" class="btn small" data-link-rules>שינוי</button>' : ''}</div>`;
+}
+
 /**
- * מצב "קשר תוכן" על הלוח של קמפיין כללי, או null. נדלק בכפתור שמעל הלוח
- * ונשאר דלוק עד שמכבים אותו (או Esc). שני שלבים, שוב ושוב:
- *   1. source = null — לוחצים על פוסט מקור (משבצת שיש בה תוכן)
- *   2. source = {itemId, rootId, rootChannelId, title, label} — לוחצים על
- *      משבצת יעד בערוץ אחר; הקישור נוצר והמצב חוזר לשלב 1
- * {campaignId, source}
+ * חלון "קשר תוכן": שורה לכל חוק — מעמודה ← לעמודה. בשמירה השרת אומר קודם
+ * כמה פוסטים קיימים יועתקו, ורק אחרי אישור החוקים נשמרים וההעתקה רצה.
  */
-let linkMode = null;
-let linkReload = null;
-
-/**
- * האם אפשר לבחור משבצות בעמודה הזו, ואם לא — למה (לעמודה). ניוזלטר לא
- * מתקשר בכלל. בשלב 2 סגורות גם המדיה של המקור ומדיה שכבר יש בה משבצת
- * מקושרת למקור.
- */
-function columnBlock(c, channelId) {
-  const ch = state.channels.find((x) => x.id === channelId);
-  if (ch?.platform === 'newsletter') return 'ניוזלטר לא מתקשר';
-  const src = linkMode.source;
-  if (!src) return null;
-  if (channelId === src.rootChannelId) return 'הערוץ של המקור';
-  const sibling = c.content.find((x) =>
-    x.linked_to_id === src.rootId && x.slot_channel_id === channelId);
-  return sibling ? `כבר מקושר: #${sibling.sort_order}` : null;
-}
-/** יעד אפשרי: משבצת ריקה, או משבצת עם תוכן שלא מקושרת לשום דבר */
-const slotPickable = (c, item) => !item ||
-  (!item.linked_to_id && !c.content.some((x) => x.linked_to_id === item.id));
-
-/** המקור של הקבוצה שהמשבצת שייכת לה (או המשבצת עצמה) */
-const rootOf = (c, item) =>
-  c.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
-
-function exitLinkMode() {
-  linkMode = null;
-  linkReload = null;
-  document.removeEventListener('keydown', onLinkKey);
-}
-
-/** יציאה ממסך התוכן (מעבר טאב) — מצב הקישור לא נשאר תלוי ברקע */
-export function leavePlanView() {
-  if (linkMode) exitLinkMode();
-  arrowObserver?.disconnect();
-  arrowObserver = null;
-}
-
-/** מצב הקישור, רק כשעדיין עומדים על הקמפיין שבו התחיל; אחרת הוא מתבטל */
-function activeLinkMode() {
-  if (linkMode && (state.tab !== 'plan' || state.planCampaign !== linkMode.campaignId)) {
-    exitLinkMode();
-  }
-  return linkMode;
-}
-
-/** Esc: בשלב 2 מבטל את בחירת המקור, בשלב 1 מכבה את המצב */
-function onLinkKey(e) {
-  if (!activeLinkMode()) return;
-  if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
-  const reload = linkReload;
-  if (linkMode.source) linkMode.source = null;
-  else exitLinkMode();
-  reload?.();
-}
-
-/** repaint — ציור הלוח מחדש מהנתונים שכבר יש (repaintBoard) */
-function toggleLinkMode(campaign, repaint) {
-  if (activeLinkMode()) {
-    exitLinkMode();
-  } else {
-    linkMode = { campaignId: campaign.id, source: null };
-    linkReload = repaint;
-    document.addEventListener('keydown', onLinkKey);
-  }
-  repaint();
-}
-
-/** שלב 1: הפוסט שנלחץ הופך למקור (במשבצת מקושרת — המקור של הקבוצה שלה) */
-function pickSource(campaign, item, repaint) {
-  if (!item) {
-    toast('בוחרים פוסט שכבר יש בו תוכן — ממנו התוכן יועתק.');
-    return;
-  }
-  const root = rootOf(campaign, item);
-  const free = campaign.channels.some((ch) => ch.platform !== 'newsletter' &&
-    ch.id !== root.slot_channel_id &&
-    !campaign.content.some((x) => x.linked_to_id === root.id && x.slot_channel_id === ch.id));
-  if (!free) {
-    toast(`${slotLabel(root)} כבר מקושר בכל הערוצים של הקמפיין.`);
-    return;
-  }
-  linkMode.source = {
-    itemId: item.id, rootId: root.id, rootChannelId: root.slot_channel_id,
-    title: root.title, label: slotLabel(root),
-  };
-  repaint();
-}
-
-/** שלב 2: הקישור עצמו, אחרי לחיצה על משבצת יעד בלוח */
-async function linkTo(campaign, channelId, index, item, reload) {
-  const src = linkMode.source;
-  const body = { target_campaign_slot: { channel_id: channelId, sort_order: index }, week: state.week };
-  // משבצת חד-פעמית שכבר פורסמה לא תשובץ שוב — התוכן המקושר לא ייצא בה
-  const published = item && !item.evergreen && item.posts?.some((p) => p.status === 'published');
-  const replaceQuestion = `התוכן הקיים במשבצת יוחלף בתוכן של "${src.title}" ` +
-    `(${src.label}) — הטקסט, הקבצים והמצב.` +
-    (published ? ' המשבצת הזו כבר פורסמה — התוכן המקושר לא ישובץ בה שוב.' : '') + ' להמשיך?';
-  if (item) {
-    if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
-    body.replace = true;
-  }
-  const path = `/content/${src.itemId}/link`;
-  let res;
-  try {
-    res = await api(path, { method: 'POST', body });
-  } catch (e) {
-    // מישהו מילא את המשבצת בינתיים — אותה שאלה, ושוב עם אישור
-    if (e.status !== 409 || !e.payload?.needs_confirm) throw e;
-    if (!(await confirmDialog(replaceQuestion, { okLabel: 'קשר והחלף', danger: true }))) return;
-    res = await api(path, { method: 'POST', body: { ...body, replace: true } });
-  }
-  const done = `${src.label} ו${channelName(channelId)} #${index} מקושרות — תוכן אחד, כל אחת במועד של הערוץ שלה.`;
-  // המצב נשאר דלוק — הלחיצה הבאה בוחרת מקור חדש
-  if (activeLinkMode()) linkMode.source = null;
-  engineToast(res, done + downgradeNote(res.downgraded));
-  await reload();
-}
-
-/** הכפתור שמעל הלוח, ולידו — מה עושים עכשיו */
-function linkTools(c, linking) {
-  if (!can('content')) return '';
-  if (c.channels.filter((ch) => ch.platform !== 'newsletter').length < 2) return '';
-  const src = linking ? linkMode.source : null;
-  const hint = !linking
-    ? 'מחבר פוסט לפוסט בערוץ דומה (למשל רילס באינסטגרם ובפייסבוק): תוכן אחד, מועד לכל ערוץ.'
-    : src
-      ? `<b>עכשיו פוסט יעד</b> בערוץ אחר — הוא יקבל את התוכן של ${esc(src.label)}.
-         Esc לבחירת מקור אחר.`
-      : '<b>לוחצים על פוסט מקור</b> — ממנו התוכן יועתק. Esc לסיום.';
-  return `<div class="gtools${linking ? ' on' : ''}" role="status">
-    <button type="button" class="btn small linktoggle${linking ? ' on' : ''}" data-link-toggle
-      aria-pressed="${linking}">${LINK_ICON} קשר תוכן</button>
-    <span class="d">${hint}</span>
+function openLinkRules(campaign, reload) {
+  const opts = campaign.channels.filter((ch) => ch.platform !== 'newsletter');
+  const select = (name, value) => `<select data-rule="${name}">${opts.map((ch) =>
+    `<option value="${ch.id}"${ch.id === value ? ' selected' : ''}>${esc(ch.name)}</option>`).join('')}</select>`;
+  const row = (r) => `<div class="lrule">
+    ${select('from', r.from)}<span class="arr">←</span>${select('to', r.to)}
+    <button type="button" class="btn small" data-rule-del aria-label="הסרת הקישור">✕</button>
   </div>`;
+  const blank = () => ({ from: opts[0].id, to: opts[1].id });
+  const start = linkRules(campaign);
+  // בלי קישורים החלון נפתח עם שורה ריקה אחת — היא נקודת ההשוואה, לא []
+  const initial = start.length ? start : [blank()];
+  const apartStart = campaign.links_apart !== false;
+
+  openGeneric({
+    guardDirty: () => JSON.stringify(readRules()) !== JSON.stringify(initial) ||
+      $('#gen_links_apart').checked !== apartStart,
+    title: `קשר תוכן · ${campaign.name}`,
+    saveLabel: 'שמור והעתק',
+    fields: [{ name: '__rules', type: 'html', html: `
+      <p class="fhint" style="margin:0 0 12px">כל פוסט בעמודה הימנית מועתק למשבצת הפנויה הבאה
+        בעמודה השמאלית — גם הפוסטים שכבר קיימים, וגם כל פוסט חדש. התוכן נשאר זהה בשתיהן
+        (טקסט, קבצים ומצב), וכל אחת יוצאת במועד של הערוץ שלה. מתאים לערוצים דומים,
+        כמו רילס באינסטגרם ושורטס ביוטיוב.</p>
+      <div id="lrules">${initial.map(row).join('')}</div>
+      <button type="button" class="btn small" id="lruleAdd">＋ עוד קישור</button>
+      <p class="fhint" style="margin-top:12px">הסרת קישור מנתקת גם את הפוסטים שכבר מקושרים בין
+        שתי העמודות — כל אחד נשאר עם עותק משלו. קישור של פוסט בודד: מתוך הפוסט.</p>` },
+    { name: 'links_apart', type: 'checkbox', value: apartStart,
+      // נשמר כבר עכשיו; האכיפה במנוע עולה בשלב הבא (שיחת התזמון) — אז יורד "בקרוב"
+      label: 'פוסטים מקושרים לא יוצאים באותו יום (בקרוב — עוד לא נאכף בשיבוץ)' }],
+    onOpen: () => {
+      $('#lruleAdd').addEventListener('click', () => {
+        $('#lrules').insertAdjacentHTML('beforeend', row(blank()));
+      });
+      $('#lrules').addEventListener('click', (e) => {
+        if (e.target.closest('[data-rule-del]')) e.target.closest('.lrule').remove();
+      });
+    },
+    onSave: async (v) => {
+      const rules = readRules();
+      const path = `/campaigns/${campaign.id}/link-rules`;
+      const { copies, unlinks } = await api(path, { method: 'POST', body: { rules, dry_run: true } });
+      const what = [
+        copies && `${copies === 1 ? 'פוסט קיים אחד יועתק' : `${copies} פוסטים קיימים יועתקו`} ` +
+          'למשבצות הפנויות הבאות בעמודות היעד',
+        unlinks && `${unlinks === 1 ? 'פוסט מקושר אחד ינותק' : `${unlinks} פוסטים מקושרים ינותקו`} ` +
+          '(כל אחד נשאר עם עותק משלו)',
+      ].filter(Boolean);
+      if (what.length && !(await confirmDialog(`${what.join('. ')}. להמשיך?`,
+        { okLabel: 'אישור' }))) return { keepOpen: true };
+      const res = await api(path, { method: 'POST',
+        body: { rules, links_apart: v.links_apart, week: state.week } });
+      engineToast(res, (rules.length
+        ? `נשמר. ${res.linked ? `${res.linked} פוסטים הועתקו. ` : ''}פוסט חדש בעמודת מקור יועתק לבד.`
+        : 'הקישור בין העמודות הוסר.') +
+        (res.unlinked ? ` ${res.unlinked} פוסטים נותקו.` : '') +
+        (res.skipped?.length ? ` ${res.skipped.length} לא הועתקו: ${res.skipped[0]}` : '') +
+        downgradeNote(res.downgraded));
+      await reload();
+      return false;
+    },
+  });
+
+  function readRules() {
+    return $$('#lrules .lrule').map((el) => ({
+      from: Number(el.querySelector('[data-rule="from"]').value),
+      to: Number(el.querySelector('[data-rule="to"]').value),
+    }));
+  }
 }
 
-/* ---------- חיצים בין משבצות מקושרות ---------- */
-
-let arrowObserver = null;
-const SVG_NS = 'http://www.w3.org/2000/svg';
+/* ---------- קישור של פוסט בודד (מתוך הפוסט) ---------- */
 
 /**
- * חץ מכל מקור לכל עוקבת שלו, מעל הטבלה. מחושב מהמיקום של התאים על המסך,
- * ולכן מצויר מחדש בכל שינוי גודל וב"7 הימים הקרובים".
+ * לאילו ערוצים אפשר לקשר את הפוסט: לא ניוזלטר, ולא ערוץ שכבר יש בו פוסט
+ * מאותה קבוצה (המקור או עוקבת). קישור שרשרת אין — הקישור הוא תמיד מהמקור.
  */
-function drawLinkArrows(c) {
-  arrowObserver?.disconnect();
-  arrowObserver = null;
-  const board = $('#plan .gboard');
-  if (!board) return;
-  const pairs = c.content.filter((x) => x.linked_to_id && x.slot_channel_id)
-    .map((x) => [c.content.find((r) => r.id === x.linked_to_id), x])
-    .filter(([root]) => root?.slot_channel_id);
-  if (!pairs.length) return;
-
-  const paint = () => {
-    board.querySelector(':scope > svg.garrows')?.remove();
-    const box = board.getBoundingClientRect();
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('class', 'garrows');
-    svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('width', board.scrollWidth);
-    svg.setAttribute('height', board.scrollHeight);
-    svg.innerHTML = `<defs><marker id="garrowHead" viewBox="0 0 10 10" refX="8" refY="5"
-      markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>`;
-    for (const [root, follower] of pairs) {
-      const a = board.querySelector(`[data-cid="${root.id}"]`);
-      const b = board.querySelector(`[data-cid="${follower.id}"]`);
-      // שורה מוסתרת (סינון השבוע) — אין לאן לצייר
-      if (!a?.getClientRects().length || !b?.getClientRects().length) continue;
-      const ra = a.getBoundingClientRect();
-      const rb = b.getBoundingClientRect();
-      const rel = (x, y) => [x - box.left, y - box.top];
-      // תאים בטבלה (תמיד זה לצד זה): בשוליים העליונים של התא, מעל הטקסט שבמרכז —
-      // מתוך המקור אל תוך היעד, כך שגם לתאים שכנים יש חץ שרואים
-      const toRight = (rb.left + rb.right) / 2 > (ra.left + ra.right) / 2;
-      const dir = toRight ? 1 : -1;
-      const [x1, y1] = rel((ra.left + ra.right) / 2 + dir * ra.width * 0.3, ra.top + 8);
-      const [x2, y2] = rel((rb.left + rb.right) / 2 - dir * rb.width * 0.3, rb.top + 8);
-      const dx = Math.max(16, Math.abs(x2 - x1) / 2) * dir;
-      const d = Math.abs(y2 - y1) < 4
-        // אותה שורה: קשת נמוכה שעוברת מעל התאים שבדרך
-        ? `M${x1} ${y1}C${x1 + dx} ${y1 - 6} ${x2 - dx} ${y2 - 6} ${x2} ${y2}`
-        : `M${x1} ${y1}C${x1 + dx} ${y1} ${x2 - dx} ${y2} ${x2} ${y2}`;
-      const path = document.createElementNS(SVG_NS, 'path');
-      path.setAttribute('d', d);
-      path.setAttribute('marker-end', 'url(#garrowHead)');
-      svg.appendChild(path);
-    }
-    board.appendChild(svg);
-  };
-  paint();
-  arrowObserver = new ResizeObserver(() => paint());
-  arrowObserver.observe(board);
+function linkTargets(c, item) {
+  if (!can('content') || c.structure !== 'general') return [];
+  const root = c.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
+  const busy = new Set([root, ...c.content.filter((x) => x.linked_to_id === root.id)]
+    .map((x) => x.slot_channel_id));
+  return c.channels.filter((ch) => ch.platform !== 'newsletter' && !busy.has(ch.id));
 }
 
 /**
- * קמפיין כללי: אותה טבלה כמו בזוויות — שורה לכל מספר פוסט, עמודה לכל ערוץ —
+ * חלון קטן: ערוץ, ואז משבצת — "הפנויה הבאה" או משבצת מסוימת (ריקה, או עם
+ * תוכן שלא מקושר — הוא יוחלף). התוכן של הפוסט (או המקור שלו) הופך למשותף.
+ */
+function openLinkOne(campaign, item, reload) {
+  const root = campaign.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
+  const targets = linkTargets(campaign, item);
+  const slotOptions = (channelId) => {
+    const col = campaign.slots.find((x) => x.channel_id === channelId);
+    const list = (col?.slots ?? []).filter((s) => !s.extra || s.content);
+    const free = list.find((s) => !s.content)?.index ?? Math.max(0, ...list.map((s) => s.index)) + 1;
+    const pickable = list.filter((s) => !s.content || (!s.content.linked_to_id &&
+      !campaign.content.some((x) => x.linked_to_id === s.content.id)));
+    return [[`next:${free}`, `המשבצת הפנויה הבאה (#${free})`],
+      ...pickable.map((s) => [String(s.index), `#${s.index}${s.date ? ` · ${fmtDate(s.date)}` : ''}${
+        s.content ? ` · ${s.content.title} — יוחלף` : ' · ריקה'}`])];
+  };
+
+  openGeneric({
+    title: `קישור "${root.title}" לערוץ אחר`,
+    saveLabel: 'קשר',
+    fields: [
+      { name: '__h', type: 'html', html: `<p class="fhint" style="margin:0">התוכן של ${
+        esc(slotLabel(root))} (טקסט, קבצים ומצב) יהיה משותף לשני הפוסטים, וכל אחד ייצא במועד
+        של הערוץ שלו.</p>` },
+      { name: 'channel_id', label: 'לאיזה ערוץ', type: 'select',
+        options: targets.map((ch) => [ch.id, ch.name]) },
+      { name: 'slot', label: 'לאיזו משבצת', type: 'select', options: slotOptions(targets[0].id) },
+    ],
+    onOpen: () => {
+      $('#gen_channel_id').addEventListener('change', (e) => {
+        $('#gen_slot').innerHTML = slotOptions(Number(e.target.value)).map(([v, l]) =>
+          `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+      });
+    },
+    onSave: async (v) => {
+      const raw = String(v.slot);
+      const index = Number(raw.replace('next:', ''));
+      const occupied = campaign.content.find((x) =>
+        x.slot_channel_id === v.channel_id && x.sort_order === index);
+      if (occupied && !(await confirmDialog(
+        `התוכן של "${occupied.title}" יוחלף בתוכן של "${root.title}" — הטקסט, הקבצים והמצב. להמשיך?`,
+        { okLabel: 'קשר והחלף', danger: true }))) return { keepOpen: true };
+      const res = await api(`/content/${root.id}/link`, { method: 'POST', body: {
+        target_campaign_slot: { channel_id: v.channel_id, sort_order: index },
+        replace: !!occupied, week: state.week,
+      } });
+      engineToast(res, `${slotLabel(root)} ו${channelName(v.channel_id)} #${index} מקושרים — ` +
+        'תוכן אחד, כל אחד במועד של הערוץ שלו.' + downgradeNote(res.downgraded));
+      await reload();
+      return false;
+    },
+  });
+}
+
+/**
+ * קמפיין כללי: אותה טבלה כמו בזוויות — עמודה לכל ערוץ, שורה לכל מספר פוסט —
  * בלי זווית משותפת. כל תא עומד בפני עצמו, עם הניסוח והמועד של הערוץ שלו.
  */
-/** במצב קישור: מה אפשר ללחוץ בשורה הזו (src = המקור שנבחר, מסומן) */
-function pickClass(c, item, blocked) {
-  const src = linkMode.source;
-  if (!src) return !blocked && item ? ' pick' : ' nopick';
-  if (item?.id === src.itemId) return ' src';
-  return !blocked && slotPickable(c, item) ? ' pick' : ' nopick';
-}
-
 function generalBoard(c, notice = '') {
   return `
     ${campaignHead(c)}
     ${notice}
-    <div id="gboardWrap">${boardInner(c)}</div>
+    ${linkRulesLine(c)}
+    ${boardTable(c)}
     ${completeLine(c)}
     ${c.orphaned ? `<div class="sumline">
       <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} בערוצים שהוסרו מהקמפיין</span> —
       נשמרים ולא משובצים. החזרת הערוץ לקמפיין מחזירה אותם.</div>` : ''}
     <div class="sumline">
       כל עמודה היא ערוץ, וכל תא הוא פוסט שעומד בפני עצמו, במועד של הערוץ שלו. לחיצה על תא
-      פותחת את התוכן שלו. חץ בין שני פוסטים = תוכן אחד משותף.
+      פותחת את התוכן שלו. ${LINK_ICON} = תוכן משותף עם פוסט בעמודה אחרת.
     </div>`;
 }
 
-/**
- * הכפתור "קשר תוכן" והעמודות. מצויר לבד (repaintBoard) כשרק מצב הקישור
- * משתנה — בלי לטעון שוב מהשרת, כדי שהלחיצה תגיב מיד.
- */
-function boardInner(c) {
-  // מצב קישור שייך לקמפיין שבו התחיל; מעבר לקמפיין או לטאב אחר מבטל אותו
-  const linking = !!activeLinkMode() && linkMode.campaignId === c.id && can('content');
-
-  // אותה טבלה כמו בקמפיין לפי זוויות: שורה לכל מספר פוסט, עמודה לכל ערוץ.
-  // אין זווית משותפת — כל תא הוא פוסט שעומד בפני עצמו, עם המועד של הערוץ שלו.
-  // משבצת מעבר לצורך מוצגת רק כשיש בה פוסט — ריקה כזו לא חסרה לאף אחד.
+function boardTable(c) {
+  // משבצת מעבר לצורך מוצגת רק כשיש בה פוסט — ריקה כזו לא חסרה לאף אחד
   const cols = c.slots.map((col) => ({
     ...col,
-    blocked: linking ? columnBlock(c, col.channel_id) : null,
     byIndex: new Map(col.slots.filter((s) => !s.extra || s.content).map((s) => [s.index, s])),
   }));
   const indexes = [...new Set(cols.flatMap((col) => [...col.byIndex.keys()]))].sort((x, y) => x - y);
 
-  const head = cols.map((col) => `<th${col.blocked ? ' class="blocked"' : ''}>${esc(col.channel_name)}
-    <div class="need">${col.blocked ? esc(col.blocked) : `${col.ready} מתוך ${col.required} מוכנים`}</div>
-    ${can('content') && !linking ? `<button type="button" class="hbulk" data-gbulk="${col.channel_id}"
-      data-tt="העלאה מרוכזת: כל קובץ ממלא את הפוסט הפנוי הבא בערוץ">העלאה מרוכזת</button>` : ''}
-  </th>`).join('');
+  const head = cols.map((col) => `<th>${esc(col.channel_name)}
+    <div class="need">${col.ready} מתוך ${col.required} מוכנים</div></th>`).join('');
 
   const body = indexes.map((i) => {
     const row = cols.map((col) => col.byIndex.get(i));
-    const dates = [...new Set(row.filter(Boolean).map((s) => s.date ?? ''))];
-    // כשלכל הערוצים אותו מועד הוא מוצג פעם אחת בתחילת השורה, אחרת בכל תא
-    const rowDate = dates.length === 1 ? dates[0] : null;
     const cells = cols.map((col, ci) => {
       const s = row[ci];
       if (!s) return '<td class="cell na"><span>—</span></td>';
       const st = CELL[s.state];
       const item = s.content;
-      const linked = item && (item.linked_to_id || c.content.some((x) => x.linked_to_id === item.id));
+      // התוכן משותף עם: המקור והעוקבות שלו (בלי התא עצמו)
+      const partners = linkPartners(c, item).map(slotLabel);
       const when = s.date ? fmtDate(s.date) : 'נוסף';
-      const meta = [rowDate == null && when, item?.title].filter(Boolean).map(esc).join(' · ');
+      const meta = [when, item?.title].filter(Boolean).map(esc).join(' · ');
       return `<td class="cell ${st.cls}${s.warn ? ' warn' : ''}${s.past ? ' past' : ''}${
-          can('content') ? '' : ' ro'}${linking ? pickClass(c, item, col.blocked) : ''}"
-        ${item ? `data-cid="${item.id}"` : ''}
+          can('content') ? '' : ' ro'}"
         ${can('content') ? `data-gslot="${s.index}" data-ch="${col.channel_id}"` : ''}
         data-tt="${esc(`${col.channel_name} #${s.index} · ${when}${item ? ` · ${item.title}` : ''}${
+          partners.length ? ` · תוכן משותף עם ${partners.join(', ')}` : ''}${
           s.warn ? ` · ${s.warn}` : ''}`)}">
-        <span>${linked ? LINK_ICON : ''}${esc(cellLabel(s))}${
+        <span>${partners.length ? LINK_ICON : ''}${esc(cellLabel(s))}${
           item?.assets.length ? ` <span class="gclip">📎${item.assets.length}</span>` : ''}</span>
         ${meta ? `<span class="cmeta">${meta}</span>` : ''}
       </td>`;
     }).join('');
     const past = row.every((s) => !s || s.past);
-    const week = row.some((s) => s && inWeek(s.date));
-    return `<tr class="${past ? 'past' : ''}${week ? ' inweek' : ''}">
-      <td class="angle gidx"><div class="anum">${i}<span>${rowDate ? fmtDate(rowDate) : ''}</span></div></td>
-      ${cells}</tr>`;
+    return `<tr class="${past ? 'past' : ''}">${cells}</tr>`;
   }).join('');
 
-  return `${linkTools(c, linking)}
-    <div class="board panel"><div class="gboard${linking ? ' linking' : ''}">
+  return `<div class="board panel gfull">
       <table class="grid cgrid gtable">
-        <thead><tr><th class="angle gidx">#</th>${head}</tr></thead>
+        <thead><tr>${head}</tr></thead>
         <tbody>${body}</tbody>
       </table>
-    </div></div>`;
-}
-
-/** מצב הקישור השתנה (לא הנתונים) — רק הלוח מצויר מחדש */
-function repaintBoard(selected, reload) {
-  const wrap = $('#gboardWrap');
-  if (!wrap) return;
-  wrap.innerHTML = boardInner(selected);
-  wireGeneralBoard(selected, reload);
+    </div>`;
 }
 
 function wireGeneralBoard(selected, reload) {
-  const repaint = () => repaintBoard(selected, reload);
-  // Esc מצייר מחדש מהנתונים העדכניים (אחרי קישור הלוח נטען מחדש מהשרת)
-  if (activeLinkMode()) linkReload = repaint;
   $$('#plan [data-gslot]').forEach((b) =>
     b.addEventListener('click', () => {
       const channelId = Number(b.dataset.ch);
       const index = Number(b.dataset.gslot);
       const item = selected.content.find((x) =>
         x.slot_channel_id === channelId && x.sort_order === index) ?? null;
-      // במצב קישור הלחיצה בוחרת מקור, ואחריו יעד; משבצת שלא אפשרית — רק הסבר
-      if (activeLinkMode()) {
-        if (!linkMode.source) {
-          if (b.classList.contains('pick')) pickSource(selected, item, repaint);
-          else toast('בוחרים פוסט מקור — משבצת שיש בה תוכן, לא בניוזלטר.');
-        } else if (b.classList.contains('src')) {
-          linkMode.source = null;
-          repaint();
-        } else if (b.classList.contains('pick')) {
-          run(() => linkTo(selected, channelId, index, item, reload))();
-        } else {
-          toast('בוחרים אחת מהמשבצות המסומנות — בערוץ אחר, ריקה או לא מקושרת.');
-        }
-        return;
-      }
       openSlotForm({ campaign: selected, channelId, index, item }, reload);
     }));
-
-  $('#plan [data-link-toggle]')?.addEventListener('click', () => toggleLinkMode(selected, repaint));
-  drawLinkArrows(selected);
-
-  $$('#plan [data-gbulk]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const channel = selected.channels.find((x) => x.id === Number(b.dataset.gbulk));
-      openChannelBulk(selected, channel, reload);
-    }));
+  $('#plan [data-link-rules]')?.addEventListener('click', () => openLinkRules(selected, reload));
 }
 
 /**
@@ -1303,7 +1162,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     ],
     extraActions: (item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
-      : ''),
+      : '') + (item && !mail && linkTargets(campaign, item).length
+      ? '<button class="btn" id="genLinkOne">קשר לערוץ אחר</button>' : ''),
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
       const input = $('#gen___files');
@@ -1375,6 +1235,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         b.addEventListener('click', run(async () => {
           if (await deleteAssetAsk(b)) filesChanged = true;
         })));
+      $('#genLinkOne')?.addEventListener('click', run(async () => {
+        if (await closeGeneric()) openLinkOne(campaign, saved ?? item, reload);
+      }));
       $('#genDelete')?.addEventListener('click', run(async () => {
         const names = partners.map(slotLabel).join(', ');
         const question = !partners.length ? 'למחוק את הפוסט הזה?'
@@ -1446,27 +1309,32 @@ function linkInfo(item, partners) {
       ${can('content') ? `<button type="button" class="btn small"
         data-unlink="${p.linked_to_id ? p.id : item.id}">נתק קישור</button>` : ''}
     </div>`).join('');
-  return `<div class="linkinfo">
-    <div class="li-head">${LINK_ICON}<b>מקושר ל: ${esc(names)}</b></div>
-    <p class="d">הטקסט, הקבצים והמצב משותפים — שמירה כאן מעדכנת גם את ${esc(names)}.
-      כל משבצת יוצאת במועד של הערוץ שלה.</p>
+  // אזהרה בראש הטופס: עריכה כאן משנה גם את הפוסטים המקושרים
+  return `<div class="linkinfo" role="note">
+    <div class="li-head">${LINK_ICON}<b>שים לב: תוכן מקושר ל${esc(names)}</b></div>
+    <p class="d">כל שינוי כאן — טקסט, קבצים ומצב — עובר גם ל${esc(names)}.
+      כל פוסט יוצא במועד של הערוץ שלו. לעריכה נפרדת — מנתקים את הקישור.</p>
     ${rows}
   </div>`;
 }
 
-/** העלאה מרוכזת לעמודה של מדיה אחת: כל קובץ ממלא את הפוסט הפנוי הבא שלה */
-function openChannelBulk(campaign, channel, reload) {
+/** העלאה מרוכזת בקמפיין כללי (תפריט ⋮): בוחרים עמודה, וכל קובץ ממלא את הפוסט הפנוי הבא בה */
+function openChannelBulk(campaign, reload) {
   openGeneric({
     guardDirty: true,
-    title: `העלאה מרוכזת · ${channel.name}`,
+    title: `העלאה מרוכזת · ${campaign.name}`,
     saveLabel: 'העלה',
     fields: [
+      { name: 'channel_id', label: 'לאיזו עמודה (ערוץ)', type: 'select',
+        options: campaign.channels.map((ch) => [ch.id, ch.name]) },
       { name: 'kind', label: 'סוג הפוסטים', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']], value: 'value' },
-      { name: '__files', label: `קבצים — כל קובץ ממלא את הפוסט הפנוי הבא ב${channel.name}, כטיוטה`,
+      { name: '__files', label: 'קבצים — כל קובץ ממלא את הפוסט הפנוי הבא בעמודה, כטיוטה',
         type: 'files' },
     ],
     onSave: async (v) => {
+      const channel = campaign.channels.find((ch) => ch.id === v.channel_id);
+      if (!channel) throw new Error('צריך לבחור עמודה');
       const files = [...($('#gen___files')?.files ?? [])];
       if (!files.length) throw new Error('צריך לבחור לפחות קובץ אחד');
       const data = await uploadBulk(campaign.id, files, {
@@ -1482,24 +1350,17 @@ function openChannelBulk(campaign, channel, reload) {
 }
 
 function wireCampaignGrid(selected, reload) {
-  // "7 הימים הקרובים" — מסנן את השורות במקום, בלי לצייר מחדש
-  $('#plan').classList.toggle('week-only', weekOnly);
-  $('#plan [data-week-only]')?.addEventListener('click', (e) => {
-    weekOnly = !weekOnly;
-    $('#plan').classList.toggle('week-only', weekOnly);
-    e.currentTarget.classList.toggle('on', weekOnly);
-    e.currentTarget.setAttribute('aria-pressed', String(weekOnly));
-    // שורות הוסתרו/חזרו — הלוח לא תמיד משנה גובה, ולכן החיצים מצוירים מחדש כאן
-    if (selected.structure === 'general') drawLinkArrows(selected);
-  });
-
   // תפריט הכותרת משותף לשני המבנים — מחווטים לפני הפיצול
   const actions = {
     edit: () => openCampaignForm(selected, reload),
     share: () => openShareForm(selected, reload),
     gap: run(() => openGapForm(selected, reload)),
     'to-general': run(() => convertToGeneral(selected, reload)),
-    bulk: () => openBulkUpload(selected, reload),
+    // בכללי ההעלאה היא לעמודה אחת — הערוץ נבחר בחלון
+    bulk: () => (selected.structure === 'general'
+      ? openChannelBulk(selected, reload) : openBulkUpload(selected, reload)),
+    // קישור עמודות: איזו עמודה מועתקת לאיזו
+    link: () => openLinkRules(selected, reload),
     import: () => openImport(selected, reload),
     complete: run(() => completeCampaign(selected, reload)),
     reopen: run(() => reopenCampaign(selected, reload)),
@@ -1545,18 +1406,19 @@ function wireCampaignGrid(selected, reload) {
 
 /** תפריט שלוש הנקודות בכותרת הקמפיין — כל הפעולות על הקמפיין עצמו */
 function campaignMenu(c) {
-  // בקמפיין כללי ההעלאה המרוכזת היא לכל מדיה (בראש העמודה), וייבוא מטבלה לא נתמך
+  // ייבוא מטבלה — רק בזוויות. העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
   const angles = c.structure !== 'general';
   const items = [
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
     can('settings') && `<button type="button" data-act="share">${c.share_pct != null
       ? `נתח קבוע: ${c.share_pct}%` : 'נתח קבוע…'}</button>`,
     can('settings') && '<button type="button" data-act="gap">מרווח בין פוסטים</button>',
-    angles && can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
+    can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
+    canLinkIn(c) && '<button type="button" data-act="link">קשר תוכן</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
     can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
-      '<button type="button" data-act="complete">קמפיין מוכן</button>',
+      '<button type="button" data-act="complete" class="ok">קמפיין מוכן</button>',
     can('settings') && c.content_complete_at &&
       '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     // קמפיין חדש תמיד כללי; קמפיין ישן לפי זוויות עובר בהמרה (כל ניסוח = פוסט)
@@ -2289,8 +2151,6 @@ function paintCellInPlace(campaign, item, channelId, status, warn = null) {
   };
   step(old, -1);
   step(status, 1);
-  const fill = $('#plan .cbhead .fill');
-  if (fill && c.required) fill.outerHTML = fillLine(c);
 }
 
 /** אחרי הסרת קובץ: תאים "מוכן" שאיבדו את המדיה שלהם הופכים ל"מוכן ⚠" (ולהפך) */

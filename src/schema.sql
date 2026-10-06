@@ -241,6 +241,15 @@ exception when duplicate_object then null; end $$;
 create unique index if not exists content_link_channel_idx
   on content_items (linked_to_id, slot_channel_id) where linked_to_id is not null;
 
+-- קישור עמודות בקמפיין כללי: [{from, to}] — כל פוסט בעמודת from מועתק (מקושר)
+-- למשבצת הפנויה הבאה בעמודת to, גם פוסטים חדשים. ראו linkRulesPlan ב-src/links.js.
+alter table campaigns
+  add column if not exists link_rules jsonb not null default '[]'::jsonb;
+-- פוסטים מקושרים (אותו תוכן — המקור והעוקבות שלו) לא יוצאים באותו יום. נאכף
+-- במנוע, בהזזה ובשיבוץ ידני (אזהרה).
+alter table campaigns
+  add column if not exists links_apart boolean not null default true;
+
 -- קבצים מצורפים לתוכן: תמונה, מסמך, כל דבר.
 -- נשמרים במסד ולא בדיסק, כדי שסקריפט הגיבוי יכסה אותם כמו כל השאר.
 create table if not exists content_assets (
