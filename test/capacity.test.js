@@ -198,3 +198,19 @@ test('channelCapacity — תקציב 0 (תקרה 0 או 100% לדחופים): 0,
     assert.equal(r.limitedBy, 'budget');
   }
 });
+
+test('channelCapacity — איזה יום חסום: 0 = ראשון, כמו getDay במנוע', () => {
+  // 1.11–8.11.2026: ראשון עד ראשון (8 ימים). מרווח 7 → ראשון וראשון = 2
+  const at = (blocked) => channelCapacity({ from: '2026-11-01', to: '2026-11-08',
+    channel: { max_per_week: 7, urgent_reserve_pct: 0, blocked_days: blocked },
+    share: 1, gapDays: 7 });
+  assert.equal(at([]).gapCap, 2);
+  // ראשון חסום: שני הקצוות נופלים, נשארים שני–שבת (6 ימים) → אחד בלבד
+  assert.equal(at([0]).availableDays, 6);
+  assert.equal(at([0]).gapCap, 1);
+  // שני חסום: שני הראשונים נשארים → עדיין 2. היסט של יום במיפוי היה הופך את שתי התוצאות
+  assert.equal(at([1]).availableDays, 7);
+  assert.equal(at([1]).gapCap, 2);
+  // שבת חסומה: גם אז 2 (ראשון–ראשון), ו-7 ימים פנויים
+  assert.equal(at([6]).gapCap, 2);
+});

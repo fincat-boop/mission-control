@@ -549,3 +549,14 @@ test('noRoomReason — כל הערוצים בתקציב 0: הסיבה היא ה�
   assert.equal(caps.get(6).limitedBy, 'budget');
   assert.match(noRoomReason(q4, caps), /תקרה 0/);
 });
+
+test('gridFor — במרווח 7 של המנוע (ברירת מחדל): זווית לשבוע, תאים לפי הקיבולת', () => {
+  const camp = { ...twoWeeks, structure: 'angles' };
+  const g = gridFor(camp, [], [chA, chB], '2026-10-01', [camp]);
+  assert.deepEqual(g.needs, { 1: 2, 2: 2 });       // קצב 6 ו-2, אבל מרווח 7 בשבועיים = 2
+  assert.equal(g.angles.length, 2);
+  assert.equal(g.total_cells, 4);
+  assert.equal(g.missing, 4);
+  assert.deepEqual(g.angles.map((r) => r.date), ['2026-11-01', '2026-11-08']);
+  assert.ok(g.angles.every((r) => r.cells.every((x) => x.state === 'empty')));
+});
