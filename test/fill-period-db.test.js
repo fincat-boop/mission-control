@@ -140,3 +140,83 @@ test('המנוע לא מציע משבצת לפני עכשיו — לא ימים 
   for (const p of created) assert.ok(new Date(p.scheduled_at) > startedAt, String(p.scheduled_at));
   await cleanup(x);
 });
+
+/* ========================= 2. ותק ביחס לשבוע המתוכנן ========================= */
+
+const { ymd, weekMeta } = await import('../src/board.js');
+/** YYYY-MM-DD בעוד n ימים (זמן מקומי) */
+const inDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
+
+test('בלאק פריידי: שבוע עתידי של הקמפיין — הנקודה שפורסמה לאחרונה מקבלת משבצות מול נקודות שמעולם לא פורסמו', { skip }, async () => {
+  const week = weekMeta(inDays(42));
+  const bf = await fresh('בלאק פריידי', { importance: 9, maxPerWeek: 4 });
+  const ch = bf.ch;
+  const others = await inOrg(async () => {
+    const out = [];
+    for (const imp of [8, 7, 6]) {
+      out.push((await db.one(
+        'insert into endpoints (name, importance) values ($1, $2) returning id',
+        [`שוטפת ${imp}`, imp])).id);
+    }
+    return out;
+  });
+  const camp = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct)
+     values ($1, 'בלאק פריידי', $2, $3, 40) returning id`,
+    [bf.ep, week.days[0].date, week.days[6].date]);
+  await q('insert into campaign_channels values ($1, $2)', [camp.id, ch]);
+  await items(bf.ep, ch, 6, { campaignId: camp.id, prefix: 'מבצע' });
+  for (const ep of others) await items(ep, ch, 6, { prefix: `שוטף ${ep}` });
+  // הנקודה של הקמפיין פורסמה לפני 3 ימים; האחרות — אף פעם
+  await q(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, published_at, status)
+     values ($1, $2, 'פורסם', 'value', now() - interval '3 days', now() - interval '3 days', 'published')`,
+    [ch, bf.ep]);
+
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const mine = plan.placements.filter((p) => p.channel_id === ch);
+  const per = (ep) => mine.filter((p) => p.endpoint_id === ep).length;
+  assert.equal(mine.length, 4, JSON.stringify(mine.map((p) => p.endpoint_name)));
+  // קודם: 0/4 — הוותק נמדד מהיום (3 ימים) מול 2 קבוע לנקודות שלא פורסמו
+  assert.ok(per(bf.ep) >= 1, `בלאק פריידי קיבל ${per(bf.ep)}/4`);
+
+  await inOrg(async () => {
+    await db.query('delete from posts where endpoint_id = any($1::int[])', [others]);
+    await db.query('delete from content_items where endpoint_id = any($1::int[])', [others]);
+    await db.query('delete from endpoints where id = any($1::int[])', [others]);
+  });
+  await cleanup(bf);
+});
+
+test('פוסט שמשובץ יומיים לפני השבוע המתוכנן — פחות ותק מנקודה בלי כלום 30 יום', { skip }, async () => {
+  const week = weekMeta(inDays(7));
+  const start = new Date(`${week.days[0].date}T10:00:00`);
+  const a = await fresh('יומיים לפני', { maxPerWeek: 1 });
+  const b = await inOrg(async () => (await db.one(
+    "insert into endpoints (name, importance) values ('חודש בלי', 5) returning id")).id);
+  await items(a.ep, a.ch, 2, { prefix: 'א' });
+  await items(b, a.ch, 2, { prefix: 'ב' });
+  // א: משובץ (לא פורסם) יומיים לפני השבוע. ב: פורסם 30 יום לפני השבוע.
+  // הקוד הקודם התעלם מהשיבוץ של א ("עוד לא פורסמה" = 2) — ו-א זכה במשבצת
+  const twoBefore = new Date(start.getTime() - 2 * 86400000);
+  const monthBefore = new Date(start.getTime() - 30 * 86400000);
+  await q(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status)
+     values ($1, $2, 'משובץ', 'value', $3, 'scheduled')`, [a.ch, a.ep, twoBefore]);
+  await q(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, published_at, status)
+     values ($1, $2, 'פורסם', 'value', $3, $3, 'published')`, [a.ch, b, monthBefore]);
+
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const mine = plan.placements.filter((p) => p.channel_id === a.ch);
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].endpoint_id, b, `זכתה ${mine[0].endpoint_name} (${mine[0].reason})`);
+  assert.match(mine[0].reason, /(29|30) ימים בלי פרסום/);
+
+  await inOrg(async () => {
+    await db.query('delete from posts where endpoint_id = $1', [b]);
+    await db.query('delete from content_items where endpoint_id = $1', [b]);
+    await db.query('delete from endpoints where id = $1', [b]);
+  });
+  await cleanup(a);
+});

@@ -650,13 +650,50 @@ export function strategyDeficits(targetPct, counts) {
   return out;
 }
 
-async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date())) {
-  const lastPublished = await rows(
-    `select endpoint_id, max(published_at) as last_at
-       from posts where status = 'published' and endpoint_id is not null
-      group by endpoint_id`
+/**
+ * נקודת הייחוס של הוותק: תחילת השבוע המתוכנן, או עכשיו אם השבוע כבר התחיל.
+ * תכנון שבוע עתידי שואל "כמה זמן הנקודה תחכה עד השבוע הזה", לא "כמה זמן
+ * עבר עד היום".
+ */
+export function stalenessReference(week, now = new Date()) {
+  const start = new Date(`${week.days[0].date}T00:00:00`);
+  return start > now ? start : now;
+}
+
+/**
+ * הוותק של נקודה: הימים מהפוסט החי האחרון שלה לפני נקודת הייחוס ועד אליה,
+ * ביחס לקצב שלה. null בימים = אין לה אף פוסט חי לפני הייחוס ("עוד לא
+ * פורסמה"), ואז הוותק הקבוע 2.
+ */
+export function stalenessOf(lastAt, reference, endpoint) {
+  const daysSince = lastAt ? (reference - new Date(lastAt)) / 86400000 : null;
+  const staleness = daysSince === null
+    ? 2
+    : daysSince / Math.max(1, effectiveCadenceDays(endpoint));
+  return { daysSince, staleness };
+}
+
+async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {
+  // הפוסט החי האחרון של כל נקודה לפני נקודת הייחוס — לא רק מה שפורסם: מה
+  // שכבר משובץ לפני השבוע המתוכנן (גם בשבועות עתידיים שמולאו קודם) נספר.
+  // קודם נמדד מהיום לפי הפרסום האחרון, ושבוע עתידי התעלם ממה שכבר שובץ
+  // לפניו — בלאק פריידי קיבל 0/12 משבצות מול נקודות שמעולם לא פורסמו (2).
+  // התאריך: מתי שפורסם, ואם לא — מתי שמתוכנן. שיבוץ של קמפיין מושהה לא
+  // נספר (הוא לא על הלוח), אלא אם כבר פורסם — כמו existing ב-planWeek.
+  const reference = stalenessReference(week, now);
+  const lastLive = await rows(
+    `select p.endpoint_id, max(coalesce(p.published_at, p.scheduled_at)) as last_at
+       from posts p
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.endpoint_id is not null
+        and p.status = any($2::text[])
+        and (ca.paused_at is null or p.status = 'published')
+        and (p.published_at < $1 or (p.published_at is null and p.scheduled_at < $1))
+      group by p.endpoint_id`,
+    [reference, LIVE_STATUSES]
   );
-  const lastMap = new Map(lastPublished.map((r) => [r.endpoint_id, r.last_at]));
+  const lastMap = new Map(lastLive.map((r) => [r.endpoint_id, r.last_at]));
 
   // פער מהנתח של הקמפיינים שרצים בשבוע המתוכנן. קמפיין מושהה לא מתחרה על
   // שטח (normalizeShares מסנן אותו), בדיוק כמו שהוא לא מוצג בלוח.
@@ -685,17 +722,12 @@ async function computeDebts(endpoints, settings, perf = null, week = weekMeta(ne
   );
   const deficits = strategyDeficits(targetPct, counts);
 
-  const now = new Date();
   const scheduledBoost = new Map(); // כמה כבר הצענו לה בריצה הזו
 
   const parts = new Map();
   for (const e of endpoints) {
-    const lastAt = lastMap.get(e.id) ?? null;
-    const daysSince = lastAt ? (now - new Date(lastAt)) / 86400000 : null;
-    // נקודה שמעולם לא פורסמה מקבלת את החוב הגבוה ביותר
-    const staleness = daysSince === null
-      ? 2
-      : daysSince / Math.max(1, effectiveCadenceDays(e));
+    // נקודה בלי שום פוסט לפני הייחוס מקבלת את החוב הקבוע 2
+    const { daysSince, staleness } = stalenessOf(lastMap.get(e.id) ?? null, reference, e);
 
     const deficit = deficits.get(e.id) ?? 0;
 

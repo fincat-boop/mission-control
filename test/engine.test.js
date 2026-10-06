@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   blockedContent, buildSlots, buildUsage, chooseForSlot, chooseHoleFills, holeReason, nextSlot,
   openHoles, outsideCampaignWindow, planItemKey, recheckSelection, selectPlanItems,
+  stalenessOf, stalenessReference,
 } from '../src/engine.js';
 import { weekMeta } from '../src/board.js';
 
@@ -694,4 +695,24 @@ test('buildSlots עם today: ימים לפני היום לא נכנסים; הי�
   // שבוע שכולו עבר — אין משבצות בכלל; בלי today — כל השבוע, כמו קודם
   assert.equal(buildSlots(week, [channel()], null, { today: '2026-09-01' }).length, 0);
   assert.equal(buildSlots(week, [channel()], null).length, 7);
+});
+
+/* ========================= ותק ביחס לשבוע המתוכנן ========================= */
+
+test('stalenessReference: שבוע עתידי — תחילתו; השבוע הנוכחי — עכשיו', () => {
+  const now = new Date('2026-10-06T15:00:00');
+  assert.equal(stalenessReference(weekMeta('2026-11-24'), now).getTime(),
+    new Date('2026-11-22T00:00:00').getTime());
+  assert.equal(stalenessReference(weekMeta('2026-10-08'), now), now);
+});
+
+test('stalenessOf: ימים עד הייחוס חלקי הקצב; בלי פוסט — 2 קבוע', () => {
+  const ref = new Date('2026-11-22T00:00:00');
+  const ep = { importance: 5 }; // קצב 12 ימים
+  const twoDays = stalenessOf(new Date('2026-11-20T00:00:00'), ref, ep);
+  const month = stalenessOf(new Date('2026-10-23T00:00:00'), ref, ep);
+  assert.equal(Math.round(twoDays.daysSince), 2);
+  assert.equal(Math.round(month.daysSince), 30);
+  assert.ok(twoDays.staleness < month.staleness);
+  assert.deepEqual(stalenessOf(null, ref, ep), { daysSince: null, staleness: 2 });
 });
