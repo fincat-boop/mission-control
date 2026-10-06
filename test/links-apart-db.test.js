@@ -390,3 +390,49 @@ test('העוזר (move_post): ההצעה מציגה פוסט מקושר ומכס
     await capCleanup(c);
   }
 });
+
+test('אותה נקודה באותו יום — יום לפי ישראל (01:00), ופוסט מוסתר של קמפיין מושהה לא חוסם', { skip }, async () => {
+  const s = await capSetup('יום ישראל');
+  try {
+    // 19.11 01:00 בישראל = 18.11 23:00 UTC
+    await insertPost({ channel: s.ch, ep: s.ep, title: 'לילה', at: '2030-11-19T01:00:00+02:00' });
+    const prev = await call('POST', '/posts', { channel_id: s.ch, endpoint_id: s.ep, title: 'יום קודם',
+      kind: 'value', scheduled_at: at(18, 12), confirm_warnings: true });
+    assert.equal(prev.status, 201, JSON.stringify(prev.json));
+    const same = await call('POST', '/posts', { channel_id: s.ch, endpoint_id: s.ep, title: 'אותו יום',
+      kind: 'value', scheduled_at: at(19, 12), confirm_warnings: true });
+    assert.equal(same.status, 400);
+    assert.match(same.json.error, /לילה/);
+    // מועד שנשלח ב-UTC (18.11 22:30Z = 19.11 00:30 בישראל) — אותו יום בישראל, נחסם
+    const utc = await call('POST', '/posts', { channel_id: s.ch, endpoint_id: s.ep, title: 'UTC',
+      kind: 'value', scheduled_at: '2030-11-18T22:30:00Z', confirm_warnings: true });
+    assert.equal(utc.status, 400, JSON.stringify(utc.json));
+    assert.match(utc.json.error, /לילה/, 'מול הפוסט של 19.11, לא של 18.11');
+    // הזזה (PATCH) של הפוסט מ-18.11 ל-19.11 — אותה חסימה
+    const moved = await call('PATCH', `/posts/${prev.json.post.id}`,
+      { scheduled_at: at(19, 15), confirm_warnings: true });
+    assert.equal(moved.status, 400);
+
+    // פוסט של קמפיין מושהה ב-20.11 — ירד מהלוח ולא חוסם
+    const camp = await inOrg(async () => {
+      const c = (await db.one(
+        `insert into campaigns (endpoint_id, name, paused_at) values ($1, 'מושהה', now()) returning id`,
+        [s.ep])).id;
+      const it = (await db.one(
+        `insert into content_items (endpoint_id, campaign_id, kind, title) values ($1,$2,'value','x')
+         returning id`, [s.ep, c])).id;
+      return { c, it };
+    });
+    await insertPost({ channel: s.ch, ep: s.ep, content: camp.it, title: 'מוסתר', at: at(20) });
+    const hidden = await call('POST', '/posts', { channel_id: s.ch, endpoint_id: s.ep, title: 'מעל מוסתר',
+      kind: 'value', scheduled_at: at(20, 15), confirm_warnings: true });
+    assert.equal(hidden.status, 201, JSON.stringify(hidden.json));
+    await inOrg(async () => {
+      await db.query('delete from posts where channel_id = $1', [s.ch]);
+      await db.query('delete from content_items where campaign_id = $1', [camp.c]);
+      await db.query('delete from campaigns where id = $1', [camp.c]);
+    });
+  } finally {
+    await capCleanup(s);
+  }
+});
