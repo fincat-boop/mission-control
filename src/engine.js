@@ -68,10 +68,13 @@ export async function planWeek(anchorDate, {
   // המנוע ממשיך להעדיף מוכן על פני טיוטה כשיש ברירה (ראו chooseForSlot).
   // תאריכי הקמפיין נשלפים עם התוכן: תוכן של קמפיין לא יוצא לפני
   // starts_on ולא אחרי ends_on (ראו outsideCampaignWindow).
-  // campaign_min_gap_days — המרווח של הקמפיין של התוכן (contentGap)
+  // campaign_min_gap_days — המרווח של הקמפיין של התוכן (contentGap).
+  // linked_to_id (ב-ci.*) ו-campaign_links_apart — פוסטים מקושרים לא באותו
+  // יום (linkedSameDay)
   const content = await rows(`select ci.*,
                ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
                ca.min_gap_days as campaign_min_gap_days,
+               ca.links_apart as campaign_links_apart,
                ${COMPLETE_SPREAD_COLUMNS},
                coalesce(
                  array_agg(v.channel_id) filter (where v.status = 'ready'),
@@ -142,6 +145,10 @@ export async function planWeek(anchorDate, {
   // לפוסטים חסרי תוכן וגם בשיבוץ חדש
   const pairDates = await postDatesPerEndpointChannel(from, to, settings);
 
+  // הימים שבהם כבר יוצא פוסט של כל קבוצת קישור (מקור + עוקבות), בכל ערוץ —
+  // פוסט מקושר לא יוצא באותו יום כשהקמפיין מבקש (links_apart)
+  const groupDays = await linkGroupDays(from, to);
+
   // המועמדים לשיבוץ ולשיוך — כל התוכן, או רק של הקמפיין (onlyCampaignId)
   const candidates = onlyCampaignId == null
     ? content
@@ -153,7 +160,7 @@ export async function planWeek(anchorDate, {
     // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
     // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
     holes: openHoles(existing, channels, endpoints, now, { autoOnly: !withHoles }),
-    content: candidates, usedContent, history, settings, usage, pairDates,
+    content: candidates, usedContent, history, settings, usage, pairDates, groupDays,
   }).map((a) => ({
     ...a,
     channel_name: channels.find((ch) => ch.id === a.channel_id)?.name ?? '',
@@ -202,7 +209,7 @@ export async function planWeek(anchorDate, {
 
     const pick = chooseForSlot({
       slot, endpoints, content: candidates, campaigns, debts, usage,
-      usedContent, pairDates, settings, placements, history, sameDay,
+      usedContent, pairDates, settings, placements, history, sameDay, groupDays,
     });
     if (!pick) continue;
 
@@ -237,6 +244,7 @@ export async function planWeek(anchorDate, {
     usedContent.add(`${slot.channel_id}:${pick.content.id}`);
     sameDay.add(`${pick.endpoint.id}:${slot.channel_id}:${slot.dateKey}`);
     addPairDate(pairDates, `${pick.endpoint.id}:${slot.channel_id}`, slot.dateKey);
+    addGroupDay(groupDays, linkRoot(pick.content), pick.content.id, slot.dateKey);
     debts.markScheduled(pick.endpoint.id);
     campaignUsed.set(slot.channel_id, (campaignUsed.get(slot.channel_id) ?? 0) + 1);
   }
@@ -607,10 +615,14 @@ export function openHoles(existing, channels, endpoints, now = new Date(), { aut
  * הקמפיין שלו מול השכן הקרוב — פוסט שהיה תקין כחסר תוכן יכול להיות צמוד
  * מדי לתוכן של קמפיין עם מרווח ארוך. הפוסט עצמו ברשימה, ולכן התאריך שלו
  * יורד ממנה פעם אחת לפני המדידה.
+ *
+ * groupDays (linkGroupDays): תוכן מקושר לא נכנס ליום שבו כבר יוצא פוסט
+ * אחר מהקבוצה שלו (linkedSameDay). לפוסט חסר תוכן אין קבוצה, ולכן אין מה
+ * להוציא. אחרי השיוך — היום נרשם לקבוצה, כמו בשיבוץ.
  */
 export function chooseHoleFills({
   holes, content, usedContent, history = new Map(), settings = null, usage = null,
-  pairDates = new Map(),
+  pairDates = new Map(), groupDays = new Map(),
 }) {
   const out = [];
   for (const h of holes) {
@@ -628,6 +640,7 @@ export function chooseHoleFills({
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
       !outsideCampaignWindow(c, dateKey) &&
       nearest >= contentGap(c, settings) &&
+      !linkedSameDay(c, groupDays, dateKey) &&
       reusable(c, slot, history, settings)
     );
     if (fits.length === 0) continue;
@@ -640,6 +653,7 @@ export function chooseHoleFills({
     if (!c) continue;
     usedContent.add(`${h.channel_id}:${c.id}`);
     usage?.retag(h.channel_id, dateKey, h.kind, c.kind);
+    addGroupDay(groupDays, linkRoot(c), c.id, dateKey);
 
     out.push({
       post_id: h.id,
@@ -1233,9 +1247,79 @@ export function addPairDate(map, key, dateKey) {
   map.set(key, list);
 }
 
+/* ========================= פוסטים מקושרים ========================= */
+
+/**
+ * הסטטוסים של פוסט שנספר ביום של קבוצת קישור: כל מה שעוד יוצא או כבר יצא.
+ * נכשל לא נספר — הוא לא יצא, והמשתמש יקבע לו מועד חדש.
+ */
+export const LINK_LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'published', 'pending_approval'];
+
+/** שורש קבוצת הקישור של פריט תוכן: המקור, או הפריט עצמו (רמה אחת — links.js) */
+export const linkRoot = (c) => c.linked_to_id ?? c.id;
+
+/**
+ * רושם שפריט התוכן contentId (מהקבוצה rootId) יוצא ביום dateKey.
+ * groupDays: rootId → (YYYY-MM-DD → מזהי תוכן, עם כפילויות — אותו פריט
+ * בשני ערוצים נרשם פעמיים, כדי שהסרה של אחד תשאיר את השני).
+ */
+export function addGroupDay(groupDays, rootId, contentId, dateKey) {
+  if (rootId == null || contentId == null) return;
+  if (!groupDays.has(rootId)) groupDays.set(rootId, new Map());
+  const days = groupDays.get(rootId);
+  days.set(dateKey, [...(days.get(dateKey) ?? []), contentId]);
+}
+
+/** מוריד רישום אחד (פוסט שזז) — ההפך של addGroupDay */
+export function removeGroupDay(groupDays, rootId, contentId, dateKey) {
+  const list = groupDays.get(rootId)?.get(dateKey);
+  const i = list ? list.indexOf(contentId) : -1;
+  if (i >= 0) list.splice(i, 1);
+}
+
+/**
+ * האם ביום הזה כבר יוצא פוסט של פריט *אחר* מאותה קבוצה. אותו פריט בערוץ
+ * אחר לא נחשב — זה לא פוסט מקושר, זה אותו תוכן (והמנוע מאפשר אותו כמו קודם).
+ */
+export function linkDayTaken(groupDays, rootId, contentId, dateKey) {
+  const list = groupDays.get(rootId)?.get(dateKey);
+  return !!list && list.some((id) => id !== contentId);
+}
+
+/**
+ * תוכן c לא נכנס ליום dateKey: הקמפיין שלו מבקש שפוסטים מקושרים לא ייצאו
+ * באותו יום (links_apart, ברירת מחדל כן) ופריט אחר מהקבוצה כבר יוצא בו —
+ * בכל ערוץ. c — שורת תוכן עם id, linked_to_id, campaign_links_apart.
+ */
+export function linkedSameDay(c, groupDays, dateKey) {
+  return c.campaign_links_apart !== false && linkDayTaken(groupDays, linkRoot(c), c.id, dateKey);
+}
+
+/**
+ * הימים של כל קבוצת קישור סביב השבוע המתוכנן, מהפוסטים החיים
+ * (LINK_LIVE_STATUSES) — רק פריטים שבאמת בקבוצה (עוקבת, או מקור שיש לו
+ * עוקבות). יומיים לכל צד מספיקים: הכלל הוא "לא באותו יום".
+ */
+async function linkGroupDays(from, to) {
+  const r = await rows(
+    `select p.content_id, coalesce(ci.linked_to_id, ci.id) as root, p.scheduled_at
+       from posts p join content_items ci on ci.id = p.content_id
+      where p.status = any($3)
+        and (ci.linked_to_id is not null
+             or exists (select 1 from content_items f where f.linked_to_id = ci.id))
+        and p.scheduled_at >= $1::timestamptz - interval '2 days'
+        and p.scheduled_at <= $2::timestamptz + interval '2 days'`,
+    [from, to, LINK_LIVE_STATUSES]
+  );
+  const map = new Map();
+  for (const x of r) addGroupDay(map, x.root, x.content_id, ymd(new Date(x.scheduled_at)));
+  return map;
+}
+
 export function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
-          usedContent, pairDates = new Map(), settings, history, sameDay } = ctx;
+          usedContent, pairDates = new Map(), settings, history, sameDay,
+          groupDays = new Map() } = ctx;
 
   const candidates = [];
 
@@ -1255,6 +1339,7 @@ export function chooseForSlot(ctx) {
       fitsSlotChannel(c, slot.channel_id) &&
       !outsideCampaignWindow(c, slot.dateKey) &&
       nearest >= contentGap(c, settings) &&
+      !linkedSameDay(c, groupDays, slot.dateKey) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&
       usage.allows(slot.channel_id, slot.dateKey, c.kind, c.id)

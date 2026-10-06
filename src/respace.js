@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { pool, rows, one, query } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import {
-  buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, nearestDays, nextSlot,
-  outsideCampaignWindow, withEngineLock,
+  addGroupDay, buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES,
+  linkDayTaken, nearestDays, nextSlot, outsideCampaignWindow, withEngineLock,
 } from './engine.js';
 import { effectiveGap } from './capacity.js';
 
@@ -29,7 +29,9 @@ import { effectiveGap } from './capacity.js';
  * כללים שנאכפים על היעד: יום חסום בערוץ · אותה נקודת קצה לא מקבלת שני
  * פוסטים באותה מדיה באותו יום · max_promo_per_day · המרווח מול פוסטים
  * בשבועות הסמוכים ומול הקבועים באותו שבוע — המרווח של הקמפיין של הפוסט
- * שזז (contentGap), לשני הכיוונים. פוסט שאין לו יום חוקי נשאר במקום ומדווח.
+ * שזז (contentGap), לשני הכיוונים · פוסט מקושר לא ליום שבו כבר יוצא פוסט
+ * אחר מהקבוצה שלו, בכל ערוץ (links_apart של הקמפיין). פוסט שאין לו יום חוקי
+ * נשאר במקום ומדווח.
  */
 
 const ON_BOARD = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
@@ -58,10 +60,12 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   const channels = await rows('select * from channels where active = true order by sort_order, id');
   const posts = await rows(
     `select p.id, p.title, p.kind, p.status, p.scheduled_at,
-            p.channel_id, p.endpoint_id,
+            p.channel_id, p.endpoint_id, p.content_id,
             c.name as channel_name, e.name as endpoint_name,
             ci.campaign_id, ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
             ca.min_gap_days as campaign_min_gap_days,
+            -- פוסטים מקושרים לא באותו יום (groupDays ב-respaceMoves)
+            ci.linked_to_id, ca.links_apart as campaign_links_apart,
             -- קמפיין מוכן: פוסט לא זז לפני התאריך המתוכנן שלו (outsideCampaignWindow)
             ${COMPLETE_SPREAD_COLUMNS}
        from posts p
@@ -111,6 +115,13 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
 
   // מצב הלוח שנשאר קבוע — ממנו נמדד המרווח, ואליו נבדקות ההתנגשויות
   const usage = buildUsage(channels, anchored, settings);
+  // הימים של כל קבוצת קישור — מהקבועים, ומכל פוסט שזז (בתוך השבוע בלבד:
+  // הכלל הוא אותו יום, ויום מחוץ לשבוע הוא לא יום בתוכו)
+  const groupDays = new Map();
+  const groupRoot = (p) => p.linked_to_id ?? p.content_id;
+  for (const p of anchored.filter((x) => x.content_id && LINK_LIVE_STATUSES.includes(x.status))) {
+    addGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
+  }
   const sameDay = new Set(
     anchored.filter((p) => p.endpoint_id)
       .map((p) => `${p.endpoint_id}:${p.channel_id}:${ymd(new Date(p.scheduled_at))}`)
@@ -164,6 +175,7 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
     if (post.kind === 'promo') {
       promoPerDay.set(slot.dateKey, (promoPerDay.get(slot.dateKey) ?? 0) + 1);
     }
+    if (post.content_id) addGroupDay(groupDays, groupRoot(post), post.content_id, slot.dateKey);
 
     result.moves.push({
       post,
@@ -194,6 +206,8 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
       if (nearestDays(others, dateKey) < contentGap(post, settings)) return false;
     }
     if (post.kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
+    if (post.content_id && post.campaign_links_apart !== false &&
+        linkDayTaken(groupDays, groupRoot(post), post.content_id, dateKey)) return false;
     return windowAllows(post, dateKey);
   }
 }

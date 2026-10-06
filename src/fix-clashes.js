@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool, query, rows, one } from './db.js';
 import { ymd } from './board.js';
-import { COMPLETE_SPREAD_COLUMNS, contentGap, nearestDays } from './engine.js';
+import {
+  addGroupDay, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES, linkDayTaken, nearestDays,
+  removeGroupDay,
+} from './engine.js';
 import { windowAllows } from './respace.js';
 
 /**
@@ -14,8 +17,9 @@ import { windowAllows } from './respace.js';
  * (עד שבועיים קדימה): לא יום חסום בערוץ, לא יום שכבר יש בו פוסט של הנקודה
  * בערוץ, במרווח של הקמפיין של הפוסט (contentGap) מהשכן הקרוב לשני הכיוונים,
  * בתוך חלון הקמפיין ולא לפני התאריך המתוכנן בקמפיין מוכן (windowAllows, כמו
- * ב-respace), ולא מעבר ל-max_promo_per_day. השעה נשמרת; תפוסה בערוץ — השעה
- * הפנויה הבאה עד 22:00, ובלעדיה היום לא מתאים.
+ * ב-respace), לא מעבר ל-max_promo_per_day, ולא ליום שבו כבר יוצא פוסט מקושר
+ * מאותה קבוצה (links_apart של הקמפיין, בכל ערוץ). השעה נשמרת; תפוסה בערוץ —
+ * השעה הפנויה הבאה עד 22:00, ובלעדיה היום לא מתאים.
  *
  * רק התנגשויות מהיום והלאה. זז רק מתוכנן / מאושר — מה שפורסם, בפרסום, נכשל
  * או ממתין לאישור נשאר במקום (כמו ב-respace) ונספר כתפוס. הכול בארגון אחד.
@@ -31,8 +35,9 @@ const LOOKAHEAD_DAYS = 14;
 
 /**
  * מתכנן את התיקון (טהורה). posts — הפוסטים החיים של הארגון סביב היום (עם
- * campaign_id / campaign_min_gap_days למרווח, ועמודות החלון וקמפיין מוכן
- * ל-windowAllows), channels — עם blocked_days, settings — engine_settings.
+ * campaign_id / campaign_min_gap_days למרווח, עמודות החלון וקמפיין מוכן
+ * ל-windowAllows, ו-content_id / linked_to_id / campaign_links_apart לפוסטים
+ * מקושרים), channels — עם blocked_days, settings — engine_settings.
  * @returns {{groups: {endpoint_name, channel_name, day, kinds:string[], stay:object[],
  *            moves:{post:object, to:Date}[], stuck:object[]}[], moves:{id:number, at:Date}[]}}
  */
@@ -49,6 +54,14 @@ export function planClashFixes(posts, { channels = [], settings = null, today = 
   const promo = new Map();
   const addPromo = (day, n) => promo.set(day, (promo.get(day) ?? 0) + n);
   for (const p of onBoard.filter((x) => x.kind === 'promo')) addPromo(dayOf(p), 1);
+
+  // הימים של כל קבוצת קישור (מקור + עוקבות) — פוסט מקושר לא ליום של אחר
+  const groupDays = new Map();
+  const groupRoot = (p) => p.linked_to_id ?? p.content_id;
+  const linked = (p) => p.content_id && LINK_LIVE_STATUSES.includes(p.status);
+  for (const p of posts.filter(linked)) addGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
+  const linkClash = (p, key) => linked(p) && p.campaign_links_apart !== false &&
+    linkDayTaken(groupDays, groupRoot(p), p.content_id, key);
 
   // כל הימים התפוסים לכל נקודה+ערוץ — מולם נבדקים אותו יום והמרווח
   const pairs = new Map();
@@ -79,6 +92,7 @@ export function planClashFixes(posts, { channels = [], settings = null, today = 
       list.splice(list.indexOf(dayOf(p)), 1);
       hours.delete(`${p.channel_id}:${dayOf(p)}:${hourOf(p)}`);
       if (p.kind === 'promo') addPromo(dayOf(p), -1);
+      if (linked(p)) removeGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
       const gap = contentGap(p, settings);
       let to = null;
       for (let d = 1; d <= LOOKAHEAD_DAYS && !to; d += 1) {
@@ -89,6 +103,7 @@ export function planClashFixes(posts, { channels = [], settings = null, today = 
         if (list.includes(key) || nearestDays(list, key) < gap) continue;
         if (!windowAllows(p, key)) continue;
         if (p.kind === 'promo' && (promo.get(key) ?? 0) >= maxPromoPerDay) continue;
+        if (linkClash(p, key)) continue;
         let hour = at.getHours();
         while (hours.has(`${p.channel_id}:${key}:${hour}`) && hour < 22) hour += 1;
         if (hours.has(`${p.channel_id}:${key}:${hour}`)) continue;
@@ -99,12 +114,14 @@ export function planClashFixes(posts, { channels = [], settings = null, today = 
         list.push(dayOf(p));
         hours.add(`${p.channel_id}:${dayOf(p)}:${hourOf(p)}`);
         if (p.kind === 'promo') addPromo(dayOf(p), 1);
+        if (linked(p)) addGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
         g.stuck.push(p);
         continue;
       }
       list.push(ymd(to));
       hours.add(`${p.channel_id}:${ymd(to)}:${to.getHours()}`);
       if (p.kind === 'promo') addPromo(ymd(to), 1);
+      if (linked(p)) addGroupDay(groupDays, groupRoot(p), p.content_id, ymd(to));
       g.moves.push({ post: p, to });
       moves.push({ id: p.id, at: to });
     }
@@ -120,6 +137,7 @@ async function loadClashData() {
   // חודש אחורה — שכנים למרווח של התנגשות של היום
   const posts = await rows(
     `select p.id, p.endpoint_id, p.channel_id, p.scheduled_at, p.status, p.kind, p.title,
+            p.content_id, ci.linked_to_id, ca.links_apart as campaign_links_apart,
             e.name as endpoint_name, c.name as channel_name,
             ci.campaign_id, ca.min_gap_days as campaign_min_gap_days,
             ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
@@ -164,7 +182,7 @@ export async function runFixClashes({ apply = false, orgId = null, log = console
     for (const p of g.stay) log(`     נשאר: ${p.title} [${p.status}]`);
     for (const m of g.moves) log(`     זז:   ${m.post.title} → ${ymd(m.to)} ${m.to.getHours()}:00`);
     for (const p of g.stuck) {
-      log(`     ✗ ${p.title} — אין יום חוקי בשבועיים הקרובים (יום חסום / מרווח / קמפיין / שעה)`);
+      log(`     ✗ ${p.title} — אין יום חוקי בשבועיים הקרובים (יום חסום / מרווח / קמפיין / פוסט מקושר / שעה)`);
     }
   }
 
