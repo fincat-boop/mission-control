@@ -728,3 +728,36 @@ test('stalenessOf: לא פורסמה — מאז שנוצרה באותו קצב, 
   // פוסט קיים גובר על תאריך היצירה
   assert.equal(stalenessOf(new Date('2026-11-10T00:00:00'), ref, created('2026-01-01')).staleness, 1);
 });
+
+/* ========================= שער היחס בשבוע מרוסן ========================= */
+
+test('buildUsage projectedPromoCap — מכירתי עד floor(תקציבים / (1+יחס)), גם בלי ערך על הלוח', () => {
+  // שני ערוצים × 7 = 14; יחס 3 → 3 מכירתיים בשבוע
+  const chans = [channel({ id: 1, max_per_week: 7 }), channel({ id: 2, max_per_week: 7 })];
+  const settings = { ...SETTINGS, max_promo_per_day: 5 };
+  const usage = buildUsage(chans, [], settings, { projectedPromoCap: true });
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal(usage.allows(1, '2026-10-08', 'promo', 100 + i), true, `מכירתי ${i + 1}`);
+    usage.take(1, '2026-10-08', 'promo', 10 + i);
+  }
+  assert.equal(usage.allows(2, '2026-10-08', 'promo', 200), false, 'הרביעי חורג מהתקרה');
+  assert.deepEqual(usage.ratioReport().blockedPairs, ['2:200']);
+
+  // מכירתי שכבר על הלוח באותו שבוע נספר בתקרה
+  const busy = buildUsage(chans, [
+    { channel_id: 1, kind: 'promo', scheduled_at: new Date('2026-10-05T10:00:00') },
+    { channel_id: 2, kind: 'promo', scheduled_at: new Date('2026-10-06T10:00:00') },
+  ], settings, { projectedPromoCap: true });
+  assert.equal(busy.allows(1, '2026-10-08', 'promo'), true);
+  busy.take(1, '2026-10-08', 'promo', 10);
+  assert.equal(busy.allows(1, '2026-10-09', 'promo'), false);
+
+  // השער הרגיל (שבוע מלא) — בלי ערך על הלוח אין מכירתי בכלל, כמו קודם
+  assert.equal(buildUsage(chans, [], settings).allows(1, '2026-10-08', 'promo'), false);
+  // יחס 0 = שער כבוי
+  const off = buildUsage(chans, [], { ...settings, min_value_per_promo: 0 }, { projectedPromoCap: true });
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(off.allows(1, `2026-10-0${4 + i}`, 'promo'), true);
+    off.take(1, `2026-10-0${4 + i}`, 'promo', 10);
+  }
+});

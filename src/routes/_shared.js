@@ -78,14 +78,15 @@ export function campaignFillWeeks(c, today = ymd(new Date())) {
 
 /**
  * מאחד תוצאות applyWeek של כמה שבועות לתשובה אחת באותה צורה, כדי שההודעה
- * ו"בטל" של הלקוח יכסו את כולם. weeks — בכמה שבועות נכתב משהו.
+ * ו"בטל" של הלקוח יכסו את כולם. weeks — בכמה שבועות נכתב משהו;
+ * promo_blocked — מכירתיים שלא שובצו בשער היחס, בכל השבועות.
  */
 export function mergeFillResults(list) {
   const sum = (k) => list.reduce((s, r) => s + (r[k] ?? 0), 0);
   const cat = (k) => list.flatMap((r) => r[k] ?? []);
   return {
     placed: sum('placed'), attached: sum('attached'), holes: sum('holes'),
-    skipped: sum('skipped'), dropped: cat('dropped'),
+    skipped: sum('skipped'), dropped: cat('dropped'), promo_blocked: sum('promo_blocked'),
     created_ids: cat('created_ids'), created_items: cat('created_items'),
     attached_items: cat('attached_items'), summary: cat('summary'),
     weeks: list.filter((r) => r.placed || r.attached || r.holes).length,

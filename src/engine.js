@@ -125,8 +125,10 @@ export async function planWeek(anchorDate, {
 
   const debts = await computeDebts(endpoints, settings, perf, week, now);
 
-  // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון.
-  const usage = buildUsage(channels, existing, settings);
+  // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון. שבוע מרוסן — שער יחס
+  // לפי תקרה צפויה (ראו buildUsage)
+  const usage = buildUsage(channels, existing, settings,
+    { projectedPromoCap: onlyCampaignId != null });
 
   // תוכן שכבר משובץ השבוע — או שהמשתמש הוריד מהשבוע — לא יוצע שוב לאותו ערוץ
   const usedContent = blockedContent(existing, dismissals);
@@ -224,7 +226,10 @@ export async function planWeek(anchorDate, {
         .map((h) => ({ ...h, key: planItemKey('hole', h) }))
     : [];
 
-  const ratio = usage.ratioReport();
+  const { blockedPairs, ...ratio } = usage.ratioReport();
+  // פוסטים מכירתיים שנחסמו בשער היחס ולא נכנסו בסוף לאותו ערוץ
+  const landed = new Set([...placements, ...attachments].map((x) => `${x.channel_id}:${x.content_id}`));
+  ratio.promo_blocked_posts = blockedPairs.filter((k) => !landed.has(k)).length;
   if (ratio.promoBlocked > 0) {
     notes.push(
       `נחסמו פוסטים מכירתיים כדי לשמור על יחס של ${ratio.minRatio} ערך לכל מכירתי. ` +
@@ -348,6 +353,8 @@ export async function applyWeek(anchorDate, {
     placed: plan.placements.length,
     attached: attached.length,
     holes: holeCount,
+    // מכירתיים שלא שובצו כי חסר ערך שיאזן אותם (ראו buildUsage)
+    promo_blocked: fresh.ratio.promo_blocked_posts,
     skipped,
     dropped: dropped.map(({ title, reason }) => ({ title, reason })),
     created_ids: createdIds,
@@ -573,7 +580,8 @@ export function chooseHoleFills({
     const isReady = (c) => (c.ready_channel_ids ?? []).includes(h.channel_id);
     fits.sort((a, b) => (isReady(b) - isReady(a)) ||
                         ((b.kind === h.kind) - (a.kind === h.kind)));
-    const c = fits.find((x) => !usage || usage.allowsRetag(h.channel_id, dateKey, h.kind, x.kind));
+    const c = fits.find((x) => !usage ||
+      usage.allowsRetag(h.channel_id, dateKey, h.kind, x.kind, x.id));
     if (!c) continue;
     usedContent.add(`${h.channel_id}:${c.id}`);
     usage?.retag(h.channel_id, dateKey, h.kind, c.kind);
@@ -797,7 +805,21 @@ export function valuePerPromo(kinds, hybridWeight) {
   return w.promo > 0 ? Number((w.value / w.promo).toFixed(1)) : null;
 }
 
-export function buildUsage(channels, existing, settings) {
+/**
+ * מצב הקיבולת של שבוע: תקציב לכל ערוץ, מונים לפי סוג/יום/שעה, ושער היחס
+ * בין ערך למכירתי.
+ *
+ * projectedPromoCap — שבוע מרוסן של מילוי קמפיין (onlyCampaignId): הלוח
+ * של השבוע עוד לא מלא (שבועות רחוקים מתמלאים בתוכן הקמפיין בלבד), ולכן
+ * "כמה ערך כבר יש" לא אומר כלום — קמפיין שכולו מכירתי (בלאק פריידי) היה
+ * מקבל 0 בשקט. במקומו תקרה צפויה: מכירתיים לשבוע = floor(סך התקציבים של
+ * הערוצים / (1 + min_value_per_promo)), פחות המכירתי שכבר על הלוח באותו
+ * שבוע (משולב נספר חלקית, כמו בשער הרגיל — kindWeights). 0 = שער כבוי.
+ *
+ * blocked — זוגות `${channel}:${content}` שנחסמו בשער היחס (כשהקורא מעביר
+ * contentId), כדי לומר למשתמש כמה פוסטים מכירתיים לא שובצו בגללו.
+ */
+export function buildUsage(channels, existing, settings, { projectedPromoCap = false } = {}) {
   const byChannel = new Map();
   for (const ch of channels) {
     // חלק מהקיבולת נשמר לדברים דחופים ולכן המנוע לא נוגע בו. אותו חשבון
@@ -816,6 +838,7 @@ export function buildUsage(channels, existing, settings) {
   const allPerDay = new Map();   // dateKey -> count בכל הערוצים, לפיזור בין ערוצים
   const weekKind = { promo: 0, value: 0, hybrid: 0 }; // סך השבוע בכל הערוצים
   let promoBlocked = 0; // כמה פעמים שער היחס חסם מכירתי
+  const blockedPairs = new Set(); // `${channel}:${content}` שנחסמו בשער היחס
 
   for (const p of existing) {
     const u = byChannel.get(p.channel_id);
@@ -841,6 +864,18 @@ export function buildUsage(channels, existing, settings) {
   const promoWeight = () => kindWeights(weekKind, hybridWeight).promo;
   const valueWeight = () => kindWeights(weekKind, hybridWeight).value;
 
+  // שער היחס מול המשקלים של השבוע: האם עוד מכירתי אחד חורג
+  const totalBudget = [...byChannel.values()].reduce((sum, u) => sum + u.budget, 0);
+  const promoCap = Math.floor(totalBudget / (1 + minRatio));
+  const ratioBlocks = (w) => (projectedPromoCap
+    ? minRatio > 0 && w.promo + 1 > promoCap
+    : w.value < minRatio * (w.promo + 1));
+  const block = (channelId, contentId) => {
+    promoBlocked += 1;
+    if (contentId != null) blockedPairs.add(`${channelId}:${contentId}`);
+    return false;
+  };
+
   return {
     channelHasRoom: (channelId) => {
       const u = byChannel.get(channelId);
@@ -851,8 +886,8 @@ export function buildUsage(channels, existing, settings) {
     hourTaken: (channelId, dateKey, hour) =>
       byChannel.get(channelId)?.hours.has(`${channelId}:${dateKey}:${hour}`) ?? false,
 
-    /** האם מותר להכניס פוסט מסוג kind לערוץ ביום הזה */
-    allows(channelId, dateKey, kind) {
+    /** האם מותר להכניס פוסט מסוג kind לערוץ ביום הזה (contentId — לספירת חסומים) */
+    allows(channelId, dateKey, kind, contentId = null) {
       const u = byChannel.get(channelId);
       if (!u || u.used >= u.budget) return false;
 
@@ -868,10 +903,8 @@ export function buildUsage(channels, existing, settings) {
       if (kind === 'promo') {
         if ((promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
         // שער היחס: מכירתי נוסף מותר רק אם יש מספיק ערך בשבוע שיאזן אותו
-        if (valueWeight() < minRatio * (promoWeight() + 1)) {
-          promoBlocked += 1;
-          return false;
-        }
+        // (או, בשבוע מרוסן, רק עד התקרה הצפויה)
+        if (ratioBlocks(kindWeights(weekKind, hybridWeight))) return block(channelId, contentId);
       }
 
       return true;
@@ -893,7 +926,7 @@ export function buildUsage(channels, existing, settings) {
      * האם פוסט שכבר נספר יכול להחליף סוג (שיוך תוכן לפוסט חסר תוכן). בלי
      * בדיקת תקציב — הפוסט כבר תופס את מקומו. אותו סוג — תמיד מותר.
      */
-    allowsRetag(channelId, dateKey, fromKind, toKind) {
+    allowsRetag(channelId, dateKey, fromKind, toKind, contentId = null) {
       if (fromKind === toKind) return true;
       const u = byChannel.get(channelId);
       if (!u) return false;
@@ -905,11 +938,7 @@ export function buildUsage(channels, existing, settings) {
         if ((promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
         // שער היחס, כשהפוסט כבר לא נספר בסוג הקודם שלו
         const without = { ...weekKind, [fromKind]: Math.max(0, (weekKind[fromKind] ?? 0) - 1) };
-        const w = kindWeights(without, hybridWeight);
-        if (w.value < minRatio * (w.promo + 1)) {
-          promoBlocked += 1;
-          return false;
-        }
+        if (ratioBlocks(kindWeights(without, hybridWeight))) return block(channelId, contentId);
       }
       return true;
     },
@@ -937,6 +966,7 @@ export function buildUsage(channels, existing, settings) {
 
     ratioReport: () => ({
       promoBlocked,
+      blockedPairs: [...blockedPairs],
       minRatio,
       value_per_promo: promoWeight() > 0
         ? Number((valueWeight() / promoWeight()).toFixed(1)) : null,
@@ -1154,7 +1184,7 @@ export function chooseForSlot(ctx) {
       nearest >= contentGap(c, settings) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&
-      usage.allows(slot.channel_id, slot.dateKey, c.kind)
+      usage.allows(slot.channel_id, slot.dateKey, c.kind, c.id)
     );
     if (ready.length === 0) continue;
 

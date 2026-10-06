@@ -45,8 +45,11 @@ function fillSummary(fill) {
  */
 export function engineToast(res, base = '') {
   const fill = res?.engine;
-  if (!fill || !(fill.placed || fill.attached)) return toast(base || 'נשמר.');
-  toastAction(`${base} ${fillSummary(fill)}`.trim(), 'בטל', () => undoFill(fill));
+  // מכירתיים שלא נכנסו — נאמר גם כשלא שובץ כלום, כדי שזה לא יקרה בשקט
+  const blocked = fill?.promo_blocked > 0
+    ? ` ${fill.promo_blocked} פוסטים מכירתיים לא שובצו — חסר תוכן ערך באותם שבועות.` : '';
+  if (!fill || !(fill.placed || fill.attached)) return toast((base || 'נשמר.') + blocked);
+  toastAction(`${base} ${fillSummary(fill)}${blocked}`.trim(), 'בטל', () => undoFill(fill));
 }
 
 /* ========================= חלון "מלא את השבוע" ========================= */

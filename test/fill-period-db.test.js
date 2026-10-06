@@ -88,17 +88,19 @@ async function fresh(name, { importance = 5, maxPerWeek = 7 } = {}) {
 }
 
 /** פריטי תוכן מוכנים (ערך) לנקודה, בקמפיין או שוטפים */
-async function items(endpointId, channelId, n, { campaignId = null, prefix = 'פריט' } = {}) {
+async function items(endpointId, channelId, n, { campaignId = null, prefix = 'פריט', kind = 'value' } = {}) {
   return inOrg(async () => {
     const out = [];
     for (let i = 1; i <= n; i += 1) {
       const it = await db.one(
         `insert into content_items (endpoint_id, campaign_id, kind, title, sort_order)
-         values ($1,$2,'value',$3,$4) returning id`,
-        [endpointId, campaignId, `${prefix} ${i}`, i]);
-      await db.query(
-        `insert into content_variants (content_id, channel_id, body, status)
-         values ($1,$2,'x','ready')`, [it.id, channelId]);
+         values ($1,$2,$5,$3,$4) returning id`,
+        [endpointId, campaignId, `${prefix} ${i}`, i, kind]);
+      for (const ch of [channelId].flat()) {
+        await db.query(
+          `insert into content_variants (content_id, channel_id, body, status)
+           values ($1,$2,'x','ready')`, [it.id, ch]);
+      }
       out.push(it.id);
     }
     return out;
@@ -420,4 +422,33 @@ test('כשל באמצע המילוי: תשובה ריקה, והטרנזקציה 
   } finally {
     console.error = errors;
   }
+});
+
+/* ========================= ביקורת: שער היחס בשבוע מרוסן ========================= */
+
+test('קמפיין שכולו מכירתי: בשבועות מרוסנים מקבל מכירתיים עד התקרה הצפויה, והחסומים נספרים', { skip }, async () => {
+  const x = await fresh('כולו מכירתי');
+  const ch2 = await q1(
+    `insert into channels (name, platform, max_per_week, urgent_reserve_pct)
+     values ('ערוץ מכירתי ב', 'manual', 7, 0) returning id`);
+  // שני ערוצים × 7 = 14; יחס 3 ערך לכל מכירתי → 3 מכירתיים בשבוע
+  const first = weekMeta(inDays(21));
+  const c = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, min_gap_days)
+     values ($1, 'מבצע', $2, $3, 1) returning id`, [x.ep, first.start, weekMeta(inDays(28)).end]);
+  for (const ch of [x.ch, ch2.id]) await q('insert into campaign_channels values ($1, $2)', [c.id, ch]);
+  await items(x.ep, [x.ch, ch2.id], 10, { campaignId: c.id, kind: 'promo', prefix: 'מבצע' });
+
+  const fill = await inOrg(() => autoFillCampaign(c.id));
+  const posts = await q('select scheduled_at, kind from posts where id = any($1::int[])', [fill.created_ids]);
+  const perWeek = new Map();
+  for (const p of posts) perWeek.set(weekOf(p.scheduled_at), (perWeek.get(weekOf(p.scheduled_at)) ?? 0) + 1);
+  assert.deepEqual([...perWeek.entries()].sort(),
+    [[first.start, 3], [weekMeta(inDays(28)).start, 3]], JSON.stringify(fill.summary));
+  assert.ok(posts.every((p) => p.kind === 'promo'));
+  assert.ok(fill.promo_blocked > 0, 'החסומים נספרים — לא בשקט');
+
+  await q('delete from posts where channel_id = $1', [ch2.id]);
+  await cleanup(x);
+  await q('delete from channels where id = $1', [ch2.id]);
 });
