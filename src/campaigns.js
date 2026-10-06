@@ -703,6 +703,8 @@ const variantFor = (it, ch, statuses) => {
  * בשקט (המנוע לא משבץ תוכן של קמפיין אחרי ends_on).
  *
  * פוסט שנכשל נספר כ"יש פוסט": המנוע לא ישבץ את התוכן שוב, ויש לו התראה משלו.
+ * ערוץ לא פעיל (channels.active) או נקודת קצה לא פעילה (c.endpoint_active)
+ * = אין מקום: המנוע טוען רק פעילים, ולכן התוכן שם לא ייכנס.
  * בלי תאריכים, או אחרי הסוף — אין חלון, הכול 0.
  * @param items הזוויות/המשבצות של הקמפיין, כל אחת עם variants
  * @param myPosts הפוסטים של התוכן של הקמפיין (content_id, channel_id, status, scheduled_at)
@@ -727,7 +729,10 @@ export function unplacedOf(c, items, myChannels, myPosts, concurrent = [],
       !posted.has(`${it.id}:${ch.id}`)).length;
     const taken = myPosts.filter((p) => p.channel_id === ch.id && TAKES_ROOM.includes(p.status) &&
       ymd(new Date(p.scheduled_at)) >= from).length;
-    const free = Math.max(0, (caps.get(ch.id)?.capacity ?? 0) - taken);
+    // ערוץ לא פעיל או נקודת קצה לא פעילה — המנוע לא משבץ שם בכלל
+    const room = ch.active === false || c.endpoint_active === false
+      ? 0 : (caps.get(ch.id)?.capacity ?? 0);
+    const free = Math.max(0, room - taken);
     const fits = Math.min(without, free);
     out.by_channel[ch.id] = { without, free, unplaced: without - fits };
     out.waiting += fits;
@@ -755,6 +760,7 @@ export function unpublishedReady(items, myChannels, myPosts, now = new Date()) {
 /** כל הקמפיינים עם מצב מלא */
 export async function campaignsWithHealth() {
   const list = await rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance,
+               e.active as endpoint_active,
                ${CHANNEL_IDS_SQL}
           from campaigns c join endpoints e on e.id = c.endpoint_id
          order by c.active desc, c.starts_on nulls last, c.id`);

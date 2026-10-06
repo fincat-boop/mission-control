@@ -156,3 +156,16 @@ test('statusOf — תוכן שלא ייכנס: סיבה בתג (tooltip), בלי
   // בלי unplaced — בלי סיבה
   assert.equal(statusOf({ c, today: '2030-01-08', grid, myChannels: [ch] }).reason, undefined);
 });
+
+test('unplacedOf — ערוץ לא פעיל או נקודת קצה לא פעילה: אין מקום, הכול לא ייכנס', () => {
+  const items = [1, 2].map((id) => item(id, { 10: 'ready', 11: 'ready' }));
+  const off = { ...ch2, active: false };
+  const r = unplacedOf(camp, items, [ch, off], [], [camp], { gapDays: 7, today: '2030-01-06' });
+  assert.deepEqual(r.by_channel[10], { without: 2, free: 2, unplaced: 0 });
+  assert.deepEqual(r.by_channel[11], { without: 2, free: 0, unplaced: 2 });
+  assert.equal(r.waiting, 2);
+  const asleep = { ...camp, endpoint_active: false };
+  const e = unplacedOf(asleep, items, [ch, ch2], [], [asleep], { gapDays: 7, today: '2030-01-06' });
+  assert.equal(e.waiting, 0);
+  assert.equal(e.unplaced, 4);
+});
