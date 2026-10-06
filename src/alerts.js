@@ -21,6 +21,9 @@ const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי
 
 const DAY = 86400000;
 const UPCOMING_WINDOW_DAYS = 7; // מתי מתחילים להתריע על קמפיין שעומד להתחיל
+// פוסט שהמנוע פתח כחסר תוכן (auto_hole): מתריעים שבוע לפני, ועד יומיים אחרי המועד
+const HOLE_AHEAD_DAYS = 7;
+const HOLE_PAST_DAYS = 2;
 
 export async function buildAlerts(user = null) {
   const settings = await one('select * from engine_settings limit 1');
@@ -28,23 +31,25 @@ export async function buildAlerts(user = null) {
 
   const campaigns = await campaignsWithHealth();
   const endpoints = await endpointsWithoutAir();
-  const holes = await rows(`select p.id, p.scheduled_at, e.name as endpoint_name, c.name as channel_name
-          from posts p
-          left join endpoints e on e.id = p.endpoint_id
-          left join channels c  on c.id = p.channel_id
-         where p.status = 'hole' and p.scheduled_at >= now() - interval '7 days'
-         order by p.scheduled_at`);
-  const pending = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
-          from posts p left join channels c on c.id = p.channel_id
-         where p.status = 'pending_approval' order by p.scheduled_at`);
-  const soonWithoutContent = await rows(
-    `select p.id, p.title, p.scheduled_at, c.name as channel_name
-       from posts p left join channels c on c.id = p.channel_id
-      where p.status = 'scheduled' and p.content_id is null
-        and p.scheduled_at between now() and now() + ($1 || ' hours')::interval
+  // פוסטים בלי תוכן: כל מה שיוצא בתוך content_alert_hours, ופוסטים שהמנוע
+  // פתח כחסרי תוכן (auto_hole, status='scheduled' — לא 'hole') בשבוע הקרוב
+  // או שהמועד שלהם עבר ביומיים האחרונים (missingContentAlerts)
+  const withoutContent = await rows(
+    `select p.id, p.title, p.scheduled_at, p.auto_hole,
+            e.name as endpoint_name, c.name as channel_name
+       from posts p
+       left join endpoints e on e.id = p.endpoint_id
+       left join channels c  on c.id = p.channel_id
+      where p.status = 'scheduled' and p.content_id is null and p.published_at is null
+        and (p.scheduled_at between now() and now() + ($1 || ' hours')::interval
+             or (p.auto_hole and p.scheduled_at between now() - interval '${HOLE_PAST_DAYS} days'
+                                                    and now() + interval '${HOLE_AHEAD_DAYS} days'))
       order by p.scheduled_at`,
     [alertHours]
   );
+  const pending = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
+          from posts p left join channels c on c.id = p.channel_id
+         where p.status = 'pending_approval' order by p.scheduled_at`);
   // פרסום שנכשל — עד שבועיים אחורה. אחר כך זה כבר היסטוריה, לא מצב.
   const failed = await rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name
           from posts p left join channels c on c.id = p.channel_id
@@ -75,7 +80,12 @@ export async function buildAlerts(user = null) {
 
   alerts.push(...campaignAlerts(campaigns, today));
 
-  alerts.push(...failedPostAlerts(failed), ...missedPostAlerts(missed));
+  // חסר תוכן — התראה אחת לפוסט; פוסט בלי תוכן שהמועד שלו עבר מקבל אותה
+  // במקום "עבר המועד" (אחרי יומיים — "עבר המועד" לבדו, כמו כל פוסט)
+  const noText = missingContentAlerts(withoutContent, { alertHours });
+  const noTextIds = new Set(noText.map((a) => a.post_id));
+  alerts.push(...failedPostAlerts(failed),
+              ...missedPostAlerts(missed.filter((p) => !noTextIds.has(p.id))));
 
   for (const e of endpoints) {
     const cadence = effectiveCadenceDays(e);
@@ -88,17 +98,6 @@ export async function buildAlerts(user = null) {
         : `${e.days_since} ימים בלי פרסום — התדירות לפי החשיבות היא כל ${cadence} ימים`,
       tab: 'plan',
       endpoint_id: e.id,
-    });
-  }
-
-  for (const h of holes) {
-    alerts.push({
-      id: `hole-${h.id}`,
-      level: 'crit',
-      title: `חסר תוכן על הלוח — ${h.endpoint_name ?? 'לא משויך'}`,
-      detail: `${h.channel_name} · ${new Date(h.scheduled_at).toLocaleDateString('he-IL')}`,
-      tab: 'board',
-      post_id: h.id,
     });
   }
 
@@ -142,17 +141,7 @@ export async function buildAlerts(user = null) {
     });
   }
 
-  for (const p of soonWithoutContent) {
-    alerts.push({
-      id: `no-text-${p.id}`,
-      level: 'crit',
-      title: `חסר תוכן לפוסט שמתפרסם בקרוב`,
-      detail: `${p.title} · ${p.channel_name} · ` +
-              `${new Date(p.scheduled_at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}`,
-      tab: 'board',
-      post_id: p.id,
-    });
-  }
+  alerts.push(...noText);
 
   // פוסט שיושב על יום שהערוץ חסם. חסימת יום מפנה אוטומטית את מי שאפשר
   // (relocateBlocked), אבל פוסט שלא נמצא לו יום חוקי נשאר במקום — וזה חייב
@@ -392,6 +381,55 @@ export function missedPostAlerts(list) {
     tab: 'board',
     post_id: p.id,
   }));
+}
+
+/**
+ * "חסר תוכן" — התראה אחת לכל פוסט מתוכנן בלי תוכן (שורות מהשאילתה ב-
+ * buildAlerts). טהורה.
+ *
+ * קודם היו כאן שתי התראות: "חסר תוכן על הלוח" חיפשה status='hole' — מצב
+ * שהמנוע כבר לא כותב (הוא פותח 'scheduled' + auto_hole) — ולכן מעולם לא
+ * עלתה, ו"חסר תוכן לפוסט שמתפרסם בקרוב" (content_alert_hours). עכשיו אחת,
+ * עם id אחד (no-text-<post>), כך שמשימת "לכתוב" פתוחה על הפוסט מכסה אותה
+ * (suppressTaskedAlerts — סימן אחד לכל פוסט):
+ *   המועד עבר (עד יומיים)    — crit, במקום "עבר המועד ולא פורסם"
+ *   בתוך content_alert_hours — crit
+ *   אחרת (auto_hole, עד שבוע) — warn
+ */
+export function missingContentAlerts(list, { alertHours = 48, now = new Date() } = {}) {
+  const soonUntil = now.getTime() + alertHours * 3600000;
+  return list.map((p) => {
+    const at = new Date(p.scheduled_at).getTime();
+    const where = [p.channel_name, shortWhen(p.scheduled_at)].filter(Boolean);
+    if (at <= now.getTime()) {
+      return {
+        id: `no-text-${p.id}`,
+        level: 'crit',
+        title: `חסר תוכן והמועד עבר — ${p.endpoint_name ?? p.title}`,
+        detail: [...where, 'כותבים תוכן ומשבצים מחדש, או מוחקים את הפוסט'].join(' · '),
+        tab: 'board',
+        post_id: p.id,
+      };
+    }
+    if (at <= soonUntil) {
+      return {
+        id: `no-text-${p.id}`,
+        level: 'crit',
+        title: 'חסר תוכן לפוסט שמתפרסם בקרוב',
+        detail: [p.title, ...where].join(' · '),
+        tab: 'board',
+        post_id: p.id,
+      };
+    }
+    return {
+      id: `no-text-${p.id}`,
+      level: 'warn',
+      title: `חסר תוכן על הלוח — ${p.endpoint_name ?? 'לא משויך'}`,
+      detail: where.join(' · '),
+      tab: 'board',
+      post_id: p.id,
+    };
+  });
 }
 
 /**
