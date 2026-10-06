@@ -930,8 +930,7 @@ function openLinkRules(campaign, reload) {
       <p class="fhint" style="margin-top:12px">הסרת קישור מנתקת גם את הפוסטים שכבר מקושרים בין
         שתי העמודות — כל אחד נשאר עם עותק משלו. קישור של פוסט בודד: מתוך הפוסט.</p>` },
     { name: 'links_apart', type: 'checkbox', value: apartStart,
-      // נשמר כבר עכשיו; האכיפה במנוע עולה בשלב הבא (שיחת התזמון) — אז יורד "בקרוב"
-      label: 'פוסטים מקושרים לא יוצאים באותו יום (בקרוב — עוד לא נאכף בשיבוץ)' }],
+      label: 'פוסטים מקושרים לא יוצאים באותו יום' }],
     onOpen: () => {
       $('#lruleAdd').addEventListener('click', () => {
         $('#lrules').insertAdjacentHTML('beforeend', row(blank()));
