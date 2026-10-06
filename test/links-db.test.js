@@ -575,7 +575,9 @@ test('שיוך תוכן לפוסט חסר תוכן: עוקבת מופיעה כמ
   assert.ok(cand.json.candidates.some((c) => c.id === b), 'העוקבת מועמדת בערוץ שלה');
   assert.ok(!cand.json.candidates.some((c) => c.id === a), 'המקור לא מועמד בערוץ אחר');
 
-  const r = await call('POST', `/posts/${post.id}/attach-content`, { content_id: b });
+  // פוסטים אחרים של הנקודה ביוטיוב (מבדיקות קודמות) קרובים בתוך המרווח —
+  // השיוך מזהיר (409) ומאשרים, כמו בממשק. הבדיקה כאן על הקישור, לא על המרווח.
+  const r = await call('POST', `/posts/${post.id}/attach-content`, { content_id: b, confirm_gap: true });
   assert.equal(r.status, 200, JSON.stringify(r.json));
   const preview = await call('GET', `/posts/${post.id}/preview`);
   assert.equal(preview.status, 200, JSON.stringify(preview.json));
