@@ -104,23 +104,44 @@ export function mergeFillResults(list) {
  * השבועות לפי הסדר, באותה טרנזקציה: כל שבוע רואה את מה שנכתב בקודמים
  * (ותק, מרווח, תוכן חד-פעמי שכבר שובץ).
  *
- * קמפיין בלי תקופה למלא (campaignFillWeeks → null) — ממלאים את השבוע
- * שהלקוח הציג, כמו קודם: למשל השהיה/השבתה מפנה מקום שאחרים יכולים לתפוס.
+ * מרוסן לקמפיין (onlyCampaignId): בשבועות שהמשתמש לא מסתכל עליהם משובץ
+ * ומשויך רק התוכן של הקמפיין הזה — שמירת קמפיין לא צורכת תוכן שוטף של
+ * נקודות אחרות לחודשים קדימה. השבוע שהלקוח מציג (viewedWeek) מתמלא במלואו,
+ * כמו autoFill — גם כשהוא מחוץ לתקופת הקמפיין, כדי שלא יאבד שום דבר
+ * ממה שהמילוי של השבוע המוצג עשה עד עכשיו.
+ *
+ * קמפיין בלי תקופה למלא (campaignFillWeeks → null) — רק השבוע שהלקוח
+ * הציג, כמו קודם: למשל השהיה/השבתה מפנה מקום שאחרים יכולים לתפוס.
  */
-export function autoFillCampaign(campaignId, fallbackWeek) {
+export function autoFillCampaign(campaignId, viewedWeek) {
   return guardedFill('autoFillCampaign', async () => {
     const c = campaignId
       ? await one('select id, starts_on, ends_on, active, paused_at from campaigns where id = $1',
         [campaignId])
       : null;
     const weeks = campaignFillWeeks(c);
-    if (!weeks) return withEngineLock(() => applyWeek(fallbackWeek, { holes: false }));
+    if (!weeks) return withEngineLock(() => applyWeek(viewedWeek, { holes: false }));
+    const viewed = viewedWeekStart(viewedWeek);
+    const all = [...new Set([...weeks, ...(viewed ? [viewed] : [])])].sort();
     return withEngineLock(async () => {
       const results = [];
-      for (const w of weeks) results.push(await applyWeek(`${w}T12:00:00`, { holes: false }));
+      for (const w of all) {
+        results.push(await applyWeek(`${w}T12:00:00`,
+          { holes: false, onlyCampaignId: w === viewed ? null : c.id }));
+      }
       return mergeFillResults(results);
     });
   });
+}
+
+/** תחילת השבוע שהלקוח מציג, או null — בלי שבוע, או שבוע שבור (לא מפיל את המילוי) */
+function viewedWeekStart(week) {
+  if (week == null || week === '') return null;
+  try {
+    return weekMeta(week).start;
+  } catch {
+    return null;
+  }
 }
 
 /** תשובת מילוי ריקה — אותה צורה כמו applyWeek, כדי שהלקוח לא יצטרך לבדוק */

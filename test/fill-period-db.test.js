@@ -146,6 +146,9 @@ test('המנוע לא מציע משבצת לפני עכשיו — לא ימים 
 const { ymd, weekMeta } = await import('../src/board.js');
 /** YYYY-MM-DD בעוד n ימים (זמן מקומי) */
 const inDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
+const { autoFillCampaign, campaignFillWeeks } = await import('../src/routes/_shared.js');
+/** תחילת השבוע (YYYY-MM-DD) של פוסט */
+const weekOf = (at) => weekMeta(new Date(at)).start;
 
 test('בלאק פריידי: שבוע עתידי של הקמפיין — הנקודה שפורסמה לאחרונה מקבלת משבצות מול נקודות שמעולם לא פורסמו', { skip }, async () => {
   const week = weekMeta(inDays(42));
@@ -179,6 +182,15 @@ test('בלאק פריידי: שבוע עתידי של הקמפיין — הנק�
   assert.equal(mine.length, 4, JSON.stringify(mine.map((p) => p.endpoint_name)));
   // קודם: 0/4 — הוותק נמדד מהיום (3 ימים) מול 2 קבוע לנקודות שלא פורסמו
   assert.ok(per(bf.ep) >= 1, `בלאק פריידי קיבל ${per(bf.ep)}/4`);
+
+  // מילוי הקמפיין בשמירה, כשהמשתמש מסתכל על שבוע אחר: רק תוכן בלאק פריידי
+  const fill = await inOrg(() => autoFillCampaign(camp.id, inDays(0)));
+  const written = await q(
+    `select p.scheduled_at, ci.campaign_id from posts p join content_items ci on ci.id = p.content_id
+      where p.id = any($1::int[])`, [fill.created_ids]);
+  const inWeek = written.filter((p) => weekOf(p.scheduled_at) === week.start);
+  assert.ok(inWeek.length >= 1, JSON.stringify(fill.summary));
+  assert.ok(inWeek.every((p) => p.campaign_id === camp.id), 'שבוע שלא מוצג — רק תוכן הקמפיין');
 
   await inOrg(async () => {
     await db.query('delete from posts where endpoint_id = any($1::int[])', [others]);
@@ -223,44 +235,61 @@ test('פוסט שמשובץ יומיים לפני השבוע המתוכנן — 
 
 /* ========================= 3. מילוי כל תקופת הקמפיין ========================= */
 
-const { autoFillCampaign, campaignFillWeeks } = await import('../src/routes/_shared.js');
-/** תחילת השבוע (YYYY-MM-DD) של פוסט */
-const weekOf = (at) => weekMeta(new Date(at)).start;
 
-test('יצירת קמפיין ממלאת את כל השבועות שלו, ו"בטל" אחד מוריד את כולם', { skip }, async () => {
-  // ערוץ של פוסט אחד בשבוע — כל שבוע מקבל בדיוק פוסט אחד
+test('קמפיין חדש עם תוכן (שכפול) ממלא את כל השבועות שלו — רק בתוכן שלו — ו"בטל" אחד מוריד הכול', { skip }, async () => {
+  // ערוץ של פוסט אחד בשבוע — כל שבוע מקבל לכל היותר פוסט אחד
   const x = await fresh('שלושה שבועות', { maxPerWeek: 1 });
-  await items(x.ep, x.ch, 5);
+  // מקור שכבר נגמר: התוכן שלו לא משובץ, והשכפול מעתיק אותו
+  const src = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on)
+     values ($1, 'מקור', $2, $3) returning id`, [x.ep, inDays(-60), inDays(-40)]);
+  await q('insert into campaign_channels values ($1, $2)', [src.id, x.ch]);
+  await items(x.ep, x.ch, 5, { campaignId: src.id, prefix: 'מקור' });
+  // תוכן שוטף של נקודה אחרת באותו ערוץ — לא נכנס לשבועות שלא מוצגים
+  const other = await q1("insert into endpoints (name, importance) values ('שוטפת', 9) returning id");
+  await items(other.id, x.ch, 5, { prefix: 'שוטף' });
+
   // ראשון בעוד 3 שבועות, ועד השבת שאחרי שבועיים — בדיוק 3 שבועות
   const first = weekMeta(inDays(21));
   const ends = weekMeta(inDays(35)).end;
-  const r = await call('POST', '/campaigns', {
+  const viewed = weekMeta(inDays(0)).start;
+  const r = await call('POST', `/campaigns/${src.id}/duplicate`, {
     endpoint_id: x.ep, name: 'שלושה שבועות', starts_on: first.start, ends_on: ends,
     period: 'custom', channel_ids: [x.ch], week: inDays(0),
   });
   assert.equal(r.status, 201, JSON.stringify(r.json));
+  const copyId = r.json.campaign.id;
   const fill = r.json.engine;
-  assert.equal(fill.placed, 3, JSON.stringify(fill));
-  assert.equal(fill.weeks, 3);
-  assert.equal(fill.created_items.length, 3);
-  const posts = await q('select id, scheduled_at from posts where id = any($1::int[])', [fill.created_ids]);
-  assert.deepEqual([...new Set(posts.map((p) => weekOf(p.scheduled_at)))].sort(),
-    campaignFillWeeks({ active: true, starts_on: first.start, ends_on: ends }));
+  const posts = await q(
+    `select p.id, p.scheduled_at, ci.campaign_id from posts p
+       join content_items ci on ci.id = p.content_id where p.id = any($1::int[])`, [fill.created_ids]);
+  const campWeeks = campaignFillWeeks({ active: true, starts_on: first.start, ends_on: ends });
+  const inCamp = posts.filter((p) => campWeeks.includes(weekOf(p.scheduled_at)));
+  assert.deepEqual(inCamp.map((p) => weekOf(p.scheduled_at)).sort(), campWeeks, JSON.stringify(fill.summary));
+  assert.ok(inCamp.every((p) => p.campaign_id === copyId), 'בשבועות שלא מוצגים — רק התוכן של הקמפיין');
+  // מחוץ לשבועות של הקמפיין — רק השבוע שמוצג, שמתמלא במלואו כמו קודם
+  assert.ok(posts.every((p) => campWeeks.includes(weekOf(p.scheduled_at)) || weekOf(p.scheduled_at) === viewed));
+  assert.equal(fill.placed, posts.length);
+  assert.ok(fill.weeks >= 3);
 
   const undo = await call('POST', '/engine/undo',
     { created: fill.created_items, attached: fill.attached_items });
   assert.equal(undo.status, 200, JSON.stringify(undo.json));
-  assert.equal(undo.json.removed, 3);
+  assert.equal(undo.json.removed, fill.placed);
   assert.equal((await q('select id from posts where id = any($1::int[])', [fill.created_ids])).length, 0);
   // הוויתור נרשם לכל שבוע בנפרד — המילוי הבא לא מחזיר תוכן לשבוע שממנו בוטל
   const undone = new Set(posts.map((p) =>
     `${fill.created_items.find((c) => c.post_id === p.id).content_id}:${weekOf(p.scheduled_at)}`));
-  const again = await inOrg(() => autoFillCampaign(r.json.campaign.id));
+  const again = await inOrg(() => autoFillCampaign(copyId));
   const back = await q('select content_id, scheduled_at from posts where id = any($1::int[])',
     [again.created_ids]);
   for (const p of back) {
     assert.ok(!undone.has(`${p.content_id}:${weekOf(p.scheduled_at)}`), 'תוכן שבוטל חזר לאותו שבוע');
   }
+  await inOrg(async () => {
+    await db.query('delete from content_items where endpoint_id = $1', [other.id]);
+    await db.query('delete from endpoints where id = $1', [other.id]);
+  });
   await cleanup(x);
 });
 
@@ -290,14 +319,15 @@ test('תוכן חדש בקמפיין ממלא את כל התקופה — לא ר
 
 test('קמפיין שכבר רץ: שום פוסט לא נכתב לפני עכשיו', { skip }, async () => {
   const x = await fresh('רץ');
-  await items(x.ep, x.ch, 10);
+  const c = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on)
+     values ($1, 'רץ', $2, $3) returning id`, [x.ep, inDays(-10), inDays(10)]);
+  await q('insert into campaign_channels values ($1, $2)', [c.id, x.ch]);
+  await items(x.ep, x.ch, 10, { campaignId: c.id });
   const started = new Date();
-  const r = await call('POST', '/campaigns', {
-    endpoint_id: x.ep, name: 'רץ', starts_on: inDays(-10), ends_on: inDays(10),
-    period: 'custom', channel_ids: [x.ch],
-  });
-  assert.equal(r.status, 201, JSON.stringify(r.json));
-  assert.ok(r.json.engine.placed >= 1);
+  const r = await call('PATCH', `/campaigns/${c.id}`, { min_gap_days: 1 });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.ok(r.json.engine.placed >= 1, JSON.stringify(r.json.engine));
   const posts = await q('select scheduled_at from posts where id = any($1::int[])', [r.json.engine.created_ids]);
   for (const p of posts) assert.ok(new Date(p.scheduled_at) > started, String(p.scheduled_at));
   await cleanup(x);

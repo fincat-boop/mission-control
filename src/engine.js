@@ -37,11 +37,18 @@ const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי
  * ימים שעברו לא מקבלים שיבוץ (buildSlots עם today), וגם לא שעה שכבר עברה
  * היום — פוסט "מתוכנן" לעבר לא ייצא לעולם.
  *
+ * onlyCampaignId — מילוי של קמפיין בשבועות שהמשתמש לא מסתכל עליהם
+ * (autoFillCampaign): רק התוכן של הקמפיין הזה משובץ או משויך. כל השאר —
+ * משבצות, קיבולת, מרווח, חוב — כרגיל, כך שהפוסטים הקיימים של נקודות אחרות
+ * עדיין תופסים מקום.
+ *
  * @param {string|Date} [anchorDate] תאריך כלשהו בתוך השבוע המבוקש
- * @param {{holes?:boolean, now?:Date}} [opts] now — לבדיקות; ברירת מחדל: עכשיו
+ * @param {{holes?:boolean, now?:Date, onlyCampaignId?:number|null}} [opts] now — לבדיקות; ברירת מחדל: עכשיו
  * @returns {Promise<{week:object, placements:object[], attachments:object[], holes:object[], notes:string[]}>}
  */
-export async function planWeek(anchorDate, { holes: withHoles = true, now = new Date() } = {}) {
+export async function planWeek(anchorDate, {
+  holes: withHoles = true, now = new Date(), onlyCampaignId = null,
+} = {}) {
   const week = weekMeta(anchorDate);
   const today = ymd(now);
   const from = week.startDate;
@@ -133,13 +140,18 @@ export async function planWeek(anchorDate, { holes: withHoles = true, now = new 
   // לפוסטים חסרי תוכן וגם בשיבוץ חדש
   const pairDates = await postDatesPerEndpointChannel(from, to, settings);
 
+  // המועמדים לשיבוץ ולשיוך — כל התוכן, או רק של הקמפיין (onlyCampaignId)
+  const candidates = onlyCampaignId == null
+    ? content
+    : content.filter((c) => c.campaign_id === Number(onlyCampaignId));
+
   // קודם ממלאים את מה שכבר על הלוח וחסר לו תוכן, ורק אחר כך פותחים פוסטים
   // חדשים — אחרת תוכן שנכתב בדיוק בשביל פוסט ריק נוחת במשבצת אחרת והריק נשאר.
   const attachments = chooseHoleFills({
     // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
     // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
     holes: openHoles(existing, channels, endpoints, now, { autoOnly: !withHoles }),
-    content, usedContent, history, settings, usage, pairDates,
+    content: candidates, usedContent, history, settings, usage, pairDates,
   }).map((a) => ({
     ...a,
     channel_name: channels.find((ch) => ch.id === a.channel_id)?.name ?? '',
@@ -168,7 +180,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true, now = new 
     if (!usage.channelHasRoom(slot.channel_id)) continue;
 
     const pick = chooseForSlot({
-      slot, endpoints, content, campaigns, debts, usage,
+      slot, endpoints, content: candidates, campaigns, debts, usage,
       usedContent, pairDates, settings, placements, history, sameDay,
     });
     if (!pick) continue;
@@ -253,12 +265,15 @@ export function withEngineLock(fn) {
  * מופיע בהצעה הטרייה. מה שנבחר ונעלם בינתיים נספר ב-skipped.
  *
  * @param {string|Date} [anchorDate]
- * @param {{holes?:boolean, selected?:string[]|null}} [opts]
+ * @param {{holes?:boolean, selected?:string[]|null, onlyCampaignId?:number|null}} [opts]
+ *   onlyCampaignId — ראו planWeek
  * @returns {Promise<{placed:number, attached:number, holes:number, skipped:number,
  *   created_ids:number[], created_items:object[], attached_items:object[], summary:object[]}>}
  */
-export async function applyWeek(anchorDate, { holes: withHoles = true, selected = null } = {}) {
-  const fresh = await planWeek(anchorDate, { holes: withHoles });
+export async function applyWeek(anchorDate, {
+  holes: withHoles = true, selected = null, onlyCampaignId = null,
+} = {}) {
+  const fresh = await planWeek(anchorDate, { holes: withHoles, onlyCampaignId });
   const { plan, skipped: stale } = selectPlanItems(fresh, selected);
   // בחירה חלקית: מכירתי שעבר את שער היחס בזכות פריטי ערך שהמשתמש הוריד
   // מהסימון כבר לא מאוזן — יורד, ונאמר למה
