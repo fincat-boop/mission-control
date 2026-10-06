@@ -46,16 +46,48 @@ function applyPeriod(b, before) {
   return null;
 }
 
-/** מעדכן על אילו מדיות הקמפיין יושב */
+/**
+ * מזהה שנשלח בגוף: מספר שלם חיובי (גם כמחרוזת מהטופס). null = לא תקין.
+ */
+const asId = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+/**
+ * מעדכן על אילו מדיות הקמפיין יושב.
+ *
+ * רק ערוצים שהארגון רואה (select דרך RLS): המפתח הזר ל-channels נבדק בלי
+ * RLS, ולכן insert ישיר של מזהה היה מקשר ערוץ של ארגון אחר — וגם חושף אם
+ * מזהה כזה קיים. הנתיבים דוחים מזהה לא מוכר קודם (channelIdsError); כאן
+ * זו שכבת הגנה שנייה.
+ */
 async function setCampaignChannels(client, campaignId, ids) {
   await client.query('delete from campaign_channels where campaign_id = $1', [campaignId]);
-  for (const channelId of ids) {
-    await client.query(
-      `insert into campaign_channels (campaign_id, channel_id) values ($1,$2)
-       on conflict do nothing`,
-      [campaignId, channelId]
-    );
-  }
+  await client.query(
+    `insert into campaign_channels (campaign_id, channel_id)
+     select $1, id from channels where id = any($2::int[])
+     on conflict do nothing`,
+    [campaignId, ids.map(Number)]
+  );
+}
+
+/**
+ * channel_ids שנשלח: מערך של מזהים שלמים, כולם ערוצים של הארגון (RLS).
+ * מנרמל ל-מספרים במקום. לא נשלח — null. מזהה לא מוכר — 400, בלי לומר אם
+ * הוא קיים בארגון אחר.
+ * @returns {Promise<string|null>}
+ */
+async function channelIdsError(b) {
+  if (b.channel_ids === undefined || b.channel_ids === null) return null;
+  if (!Array.isArray(b.channel_ids)) return 'רשימת הערוצים לא תקינה';
+  const ids = b.channel_ids.map(asId);
+  if (ids.some((x) => x == null)) return 'רשימת הערוצים לא תקינה';
+  b.channel_ids = [...new Set(ids)];
+  if (!b.channel_ids.length) return null;
+  const known = await rows('select id from channels where id = any($1::int[])', [b.channel_ids]);
+  if (known.length !== b.channel_ids.length) return 'אחד הערוצים שנבחרו לא קיים';
+  return null;
 }
 
 /** תאריך שנשלח חייב להיות תאריך אמיתי — לפני כל כתיבה (או העתקת קבצים ב-R2) */
@@ -100,14 +132,6 @@ export function shareError(b) {
   return null;
 }
 
-/**
- * מזהה שנשלח בגוף: מספר שלם חיובי (גם כמחרוזת מהטופס). null = לא תקין.
- */
-const asId = (v) => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
-
 /** בדיקות של קמפיין חדש (גם בשכפול). מחזיר הודעת שגיאה או null. */
 function newCampaignError(b) {
   if (!b.endpoint_id || !b.name) return 'צריך נקודת קצה ושם קמפיין';
@@ -143,7 +167,7 @@ async function insertCampaign(b) {
 
 r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   const b = req.body ?? {};
-  const err = shareError(b) ?? newCampaignError(b);
+  const err = shareError(b) ?? newCampaignError(b) ?? await channelIdsError(b);
   if (err) return bad(res, err);
   const c = await insertCampaign(b);
   const engine = await autoFill(b.week);
@@ -174,11 +198,8 @@ r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, 
     b.endpoint_id = asId(b.endpoint_id);
     if (b.endpoint_id == null) return bad(res, 'מזהה נקודת הקצה לא תקין');
   }
-  if (b.channel_ids != null) {
-    if (!Array.isArray(b.channel_ids)) return bad(res, 'רשימת הערוצים לא תקינה');
-    b.channel_ids = b.channel_ids.map(asId);
-    if (b.channel_ids.some((x) => x == null)) return bad(res, 'רשימת הערוצים לא תקינה');
-  }
+  const chErr = await channelIdsError(b);
+  if (chErr) return bad(res, chErr);
   let before = null;
   if (b.id != null) {
     before = await one('select * from campaigns where id = $1', [b.id]);
@@ -309,7 +330,7 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
   // הנתח הקבוע ומספר הזוויות כבר לא בטופס — עוברים מהמקור, כמו ב"שבץ מחדש".
   // המרווח עובר מהמקור, אלא אם הטופס שלח אחר
   const body = { ...(req.body ?? {}) };
-  const shareErr = shareError(body);
+  const shareErr = shareError(body) ?? await channelIdsError(body);
   if (shareErr) return bad(res, shareErr);
   const b = { share_pct: src.share_pct, target_posts: src.target_posts,
               min_gap_days: src.min_gap_days,
@@ -592,7 +613,7 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
   const periodErr = applyPeriod(b, before);
   if (periodErr) return bad(res, periodErr);
-  const gapErr = gapDaysError(b) ?? shareError(b);
+  const gapErr = gapDaysError(b) ?? shareError(b) ?? await channelIdsError(b);
   if (gapErr) return bad(res, gapErr);
 
   // קמפיין מחזורי (תבנית ל"שבץ מחדש" בלוח האסטרטגיה) — דגל בלבד, בלי

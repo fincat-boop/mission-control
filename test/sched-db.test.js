@@ -15,7 +15,7 @@ const DB_URL = process.env.DATABASE_URL ?? '';
 const RUN = process.env.LINKS_TEST_DB === '1' && /@(localhost|127\.0\.0\.1)[:/]/.test(DB_URL);
 const skip = RUN ? false : 'מסד בדיקה מקומי לא הוגדר (LINKS_TEST_DB=1 + DATABASE_URL מקומי)';
 
-let db, server, base, org, ids;
+let db, server, base, org, ids, foreignChannel;
 const pending = new Set();
 
 async function call(method, path, body) {
@@ -52,6 +52,12 @@ before(async () => {
        values ('פייסבוק', 'facebook', 5, 20) returning id`);
     return { endpoint: ep.id, fb: fb.id };
   });
+
+  // ערוץ של ארגון אחר — אסור לקשר אליו קמפיין
+  const other = (await db.pool.query("insert into orgs (name) values ('sched-gap-other') returning id"))
+    .rows[0].id;
+  foreignChannel = await db.withOrg(other, async () => (await db.one(
+    "insert into channels (name, platform, max_per_week) values ('זר', 'manual', 3) returning id")).id);
 
   const app = express();
   app.use(express.json());
@@ -316,4 +322,32 @@ test('המנוע: לא משבץ בתוך המרווח של הקמפיין מול
     await db.query('delete from campaigns where id = any($1::int[])', [[tight.camp, loose.camp]]);
     await db.query('delete from channels where id = $1', [ch.id]);
   });
+});
+
+test('ערוצים: מזהה של ארגון אחר או לא קיים — 400, ושום קישור לא נוצר', { skip }, async () => {
+  const ep = await freshEndpoint('ערוצים');
+  const foreign = await call('POST', '/campaigns', { ...BF_BODY(ep), channel_ids: [ids.fb, foreignChannel] });
+  assert.equal(foreign.status, 400);
+  assert.match(foreign.json.error, /לא קיים/);
+  assert.equal((await call('POST', '/campaigns', { ...BF_BODY(ep), channel_ids: [987654] })).status, 400);
+
+  const c = (await call('POST', '/campaigns', { ...BF_BODY(ep), channel_ids: [String(ids.fb)] })).json.campaign;
+  const patch = await call('PATCH', `/campaigns/${c.id}`, { channel_ids: [foreignChannel] });
+  assert.equal(patch.status, 400);
+  const dup = await call('POST', `/campaigns/${c.id}/duplicate`,
+    { endpoint_id: ep, name: 'עותק', starts_on: '2030-11-20', ends_on: '2030-12-05', period: 'custom',
+      channel_ids: [foreignChannel] });
+  assert.equal(dup.status, 400);
+  const prev = await call('POST', '/campaigns/capacity-preview', { id: c.id, channel_ids: [foreignChannel] });
+  assert.equal(prev.status, 400);
+
+  // הקישור לא השתנה; ובדיקה ישירה בלי RLS שאין קישור לערוץ הזר בכלל
+  const links = await inOrg(() => db.rows(
+    'select channel_id from campaign_channels where campaign_id = $1', [c.id]));
+  assert.deepEqual(links.map((x) => x.channel_id), [ids.fb]);
+  const leaked = await db.pool.query(
+    'select 1 from campaign_channels where channel_id = $1', [foreignChannel]);
+  assert.equal(leaked.rowCount, 0);
+
+  await inOrg(() => db.query('delete from campaigns where id = $1', [c.id]));
 });
