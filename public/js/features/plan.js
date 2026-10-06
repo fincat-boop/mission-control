@@ -12,8 +12,8 @@ import {
 } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
 import {
-  completeFit, compressGap, daysLabel, fitsText, gapReason, postsLabel, sameShortage,
-  shortChannels, totalCapacity,
+  completeFit, compressGap, daysLabel, fitsText, gapReason, postsLabel, rateNoteText,
+  sameShortage, shortChannels, totalCapacity, validGap,
 } from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
 import { goToSetupTarget } from '../ui/setup.js';
@@ -499,6 +499,76 @@ async function askFit(body, { editId = null, okLabel = 'שמור' } = {}) {
 }
 
 /**
+ * המרווח בין פוסטים של הקמפיין: ברירת המחדל הכללית, או מרווח משלו (1–30).
+ * מתחת — כמה ייכנס בכל ערוץ במרווח שנבחר, מתעדכן תוך כדי.
+ */
+async function openGapForm(campaign, reload) {
+  // ברירת המחדל הכללית — מהתצוגה המקדימה בלי מרווח לקמפיין
+  const base = await capacityPreview({ id: campaign.id, min_gap_days: null });
+  const own = campaign.min_gap_days != null;
+  const mode = () => $('[name="gen_gap_mode"]:checked')?.value;
+  let timer = null;
+  let seq = 0;
+
+  const show = (text) => { $('#gapOutcome').textContent = text; };
+  const outcome = (p) => (p.channels.length
+    ? `במרווח הזה ייכנסו: ${fitsText(p)}` : 'לקמפיין אין תאריכים או ערוצים — אין מה לחשב.');
+  const refresh = () => {
+    clearTimeout(timer);
+    const isOwn = mode() === 'own';
+    $('#genBody [data-field="min_gap_days"]').hidden = !isOwn;
+    const n = Number($('#gen_min_gap_days').value);
+    if (isOwn && !(validGap(n))) {
+      show('המרווח צריך להיות מספר שלם של ימים, בין 1 ל-30.');
+      return;
+    }
+    const mine = ++seq;
+    timer = setTimeout(async () => {
+      try {
+        const p = await capacityPreview({ id: campaign.id, min_gap_days: isOwn ? n : null });
+        if (mine === seq) show(outcome(p));
+      } catch (e) {
+        if (mine === seq) show(e.message);
+      }
+    }, 300);
+  };
+
+  openGeneric({
+    guardDirty: true,
+    title: `מרווח בין פוסטים — ${campaign.name}`,
+    fields: [
+      { name: 'gap_mode', label: 'ימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ', type: 'radio',
+        options: [['default', `ברירת המחדל (${daysLabel(base.gap_days)})`],
+          ['own', 'מרווח משלו לקמפיין הזה']],
+        value: own ? 'own' : 'default' },
+      { name: 'min_gap_days', label: 'ימים', type: 'number',
+        value: campaign.min_gap_days ?? base.gap_days, hidden: !own,
+        hint: 'בין 1 ל-30. חל רק על הקמפיין הזה.' },
+      { name: 'gap_outcome', type: 'html',
+        // מרווח משלו — התוצאה שלו נטענת מיד בפתיחה (refresh), לא של ברירת המחדל
+        html: `<div class="fhint" id="gapOutcome" aria-live="polite">${own ? '' : esc(outcome(base))}</div>` },
+    ],
+    onOpen: () => {
+      $$('[name="gen_gap_mode"]').forEach((r) => r.addEventListener('change', refresh));
+      $('#gen_min_gap_days').addEventListener('input', refresh);
+      if (own) refresh();
+    },
+    onClose: () => clearTimeout(timer),
+    onSave: async (v) => {
+      const gap = v.gap_mode === 'own' ? v.min_gap_days : null;
+      if (gap != null && !(validGap(gap))) {
+        throw new Error('המרווח צריך להיות מספר שלם של ימים, בין 1 ל-30');
+      }
+      if (v.gap_mode === 'own' && gap == null) throw new Error('צריך לכתוב כמה ימים');
+      const res = await patchCampaign(campaign.id, { min_gap_days: gap, week: state.week });
+      engineToast(res, gap == null ? 'המרווח חזר לברירת המחדל.' : `נקבע מרווח של ${daysLabel(gap)}.`);
+      await reload();
+      return false;
+    },
+  });
+}
+
+/**
  * duplicate: הטופס נפתח עם ההגדרות של campaign, והשמירה יוצרת קמפיין חדש
  * עם אותו תוכן (זוויות, ניסוחים וקבצים) — משנים רק את מה שצריך.
  */
@@ -620,6 +690,7 @@ function campaignHead(c) {
         </div>
         <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
           ${c.share_pct != null ? `· נתח קבוע ${c.share_pct}%` : ''}
+          ${c.min_gap_days != null ? `· מרווח ${daysLabel(c.min_gap_days)}` : ''}
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
@@ -1389,6 +1460,7 @@ function wireCampaignGrid(selected, reload) {
   const actions = {
     edit: () => openCampaignForm(selected, reload),
     share: () => openShareForm(selected, reload),
+    gap: run(() => openGapForm(selected, reload)),
     'to-general': run(() => convertToGeneral(selected, reload)),
     bulk: () => openBulkUpload(selected, reload),
     import: () => openImport(selected, reload),
@@ -1442,6 +1514,7 @@ function campaignMenu(c) {
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
     can('settings') && `<button type="button" data-act="share">${c.share_pct != null
       ? `נתח קבוע: ${c.share_pct}%` : 'נתח קבוע…'}</button>`,
+    can('settings') && '<button type="button" data-act="gap">מרווח בין פוסטים</button>',
     angles && can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
@@ -1530,8 +1603,7 @@ function completeFitHtml(fit, cap) {
     : `${fit.lost} פוסטים לא ייכנסו ולא יתפרסמו`;
   const opts = [
     fit.gap != null && ['compress', `לדחוס — מרווח של ${daysLabel(fit.gap)}`,
-      fit.rateNotes.map((r) =>
-        `גם בדחיסה, ${r.name} יכניס עד ${r.rate_cap} — הקצב של הערוץ.`).join(' ')],
+      rateNoteText(fit.rateNotes)],
     fit.extendTo && ['extend', `להאריך עד ${fmtDate(fit.extendTo)}`],
     ['keep', `להשאיר — ${lost}`],
   ].filter(Boolean);

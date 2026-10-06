@@ -88,5 +88,23 @@ export function completeFit(preview, names = {}) {
   };
 }
 
+/** "א", "א וב", "א, ב וג" */
+export function joinHe(list) {
+  if (list.length < 2) return list.join('');
+  return `${list.slice(0, -1).join(', ')} ו${list[list.length - 1]}`;
+}
+
+/**
+ * ההערה לאפשרות "לדחוס" בסימון "מוכן": ערוצים שגם בדחיסה הקצב שלהם לבדו
+ * לא מכיל את מה שנכתב — משפט אחד לכל תקרה, לא חזרה לכל ערוץ.
+ */
+export function rateNoteText(rateNotes) {
+  const byCap = new Map();
+  for (const r of rateNotes) byCap.set(r.rate_cap, [...(byCap.get(r.rate_cap) ?? []), r.name]);
+  return [...byCap].map(([cap, names]) => (names.length === 1
+    ? `גם בדחיסה, ${names[0]} יכניס עד ${cap} — הקצב של הערוץ.`
+    : `גם בדחיסה, ${joinHe(names)} יכניסו עד ${cap} כל אחד — הקצב של הערוץ.`)).join(' ');
+}
+
 /** ערך תקין למרווח של קמפיין: שלם 1–30 (אותו טווח כמו בשרת) */
 export const validGap = (n) => Number.isInteger(n) && n >= 1 && n <= 30;

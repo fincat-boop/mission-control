@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  compressGap, completeFit, daysLabel, fitsText, gapReason, postsLabel, sameShortage,
-  shortChannels, totalCapacity, validGap,
+  compressGap, completeFit, daysLabel, fitsText, gapReason, joinHe, postsLabel, rateNoteText,
+  sameShortage, shortChannels, totalCapacity, validGap,
 } from '../public/js/core/fitChoice.js';
 
 const ch = (o) => ({ channel_id: 1, name: 'פייסבוק', wanted: 5, rate_cap: 4, capacity: 3,
@@ -96,4 +96,16 @@ test('תוויות ומרווח תקין', () => {
   assert.equal(daysLabel(5), '5 ימים');
   for (const n of [1, 7, 30]) assert.equal(validGap(n), true);
   for (const n of [0, 31, 2.5, NaN, null]) assert.equal(validGap(n), false);
+});
+
+test('rateNoteText — משפט אחד לכל תקרה, עם חיבור שמות בעברית', () => {
+  assert.equal(joinHe(['א']), 'א');
+  assert.equal(joinHe(['א', 'ב', 'ג']), 'א, ב וג');
+  assert.equal(rateNoteText([{ name: 'פייסבוק', rate_cap: 4 }]),
+    'גם בדחיסה, פייסבוק יכניס עד 4 — הקצב של הערוץ.');
+  assert.equal(rateNoteText([{ name: 'פייסבוק', rate_cap: 4 }, { name: 'אינסטגרם', rate_cap: 4 },
+                             { name: 'וואטסאפ', rate_cap: 2 }]),
+    'גם בדחיסה, פייסבוק ואינסטגרם יכניסו עד 4 כל אחד — הקצב של הערוץ. ' +
+    'גם בדחיסה, וואטסאפ יכניס עד 2 — הקצב של הערוץ.');
+  assert.equal(rateNoteText([]), '');
 });
