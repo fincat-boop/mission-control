@@ -167,11 +167,19 @@ test('קישור עמודות: קיימים מועתקים למשבצת הפנו
   assert.equal((await slots(id, ids.yt)).filter((x) => x.linked_to_id).length, 2);
   assert.equal((await slots(id, ids.li)).length, 3, 'הקישור החדש מעתיק את שלושת הפוסטים');
 
-  // הסרת החוק: פוסט חדש לא מועתק, הקיימים נשארים מקושרים
-  await call('POST', `/campaigns/${id}/link-rules`, { rules: [] });
+  // הסרת קישור פייסבוק ← יוטיוב: dry_run סופר, והקישורים בין שתי העמודות
+  // מתנתקים (סימן הקישור לא נשאר); פייסבוק ← לינקדאין נשאר
+  const keep = [{ from: ids.fb, to: ids.li }];
+  const dry2 = await call('POST', `/campaigns/${id}/link-rules`, { rules: keep, dry_run: true });
+  assert.equal(dry2.json.unlinks, 2);
+  const rm = await call('POST', `/campaigns/${id}/link-rules`, { rules: keep, links_apart: false });
+  assert.equal(rm.json.unlinked, 2);
+  assert.equal(rm.json.rules.length, 1);
+  assert.equal((await slots(id, ids.yt)).filter((x) => x.linked_to_id).length, 0);
+  assert.equal((await slots(id, ids.li)).filter((x) => x.linked_to_id).length, 3);
+  assert.equal((await q1('select links_apart from campaigns where id = $1', [id])).links_apart, false);
   const d = await post(id, ids.fb, 4, 'ד');
-  assert.equal(d.copied.linked, 0);
-  assert.equal((await slots(id, ids.yt)).filter((x) => x.linked_to_id).length, 2);
+  assert.equal(d.copied.linked, 1, 'רק ללינקדאין');
 });
 
 test('קישור עמודות: שכפול הקמפיין שומר את החוקים', { skip }, async () => {

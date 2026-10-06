@@ -13,8 +13,8 @@ import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
 import {
   LinkError, applyLinkPlan, assetOwnerId, autoLinkNew, itemAssetsSql, linkGroup, linkRulesError,
-  linkRulesPlan, linkSlots, lockLinkScope, mediaOwner, normalizeLinkRules, releaseLinks, syncFrom,
-  unlink,
+  linkRulesPlan, linkSlots, linkedBetween, lockLinkScope, mediaOwner, normalizeLinkRules,
+  releaseLinks, syncFrom, unlink,
 } from '../links.js';
 import { contentBlocker, readyRejection } from '../publish/readiness.js';
 import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
@@ -630,10 +630,11 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
 }));
 
 /**
- * קישור עמודות בקמפיין כללי: {rules: [{from, to}], dry_run}. dry_run מחזיר כמה
+ * קישור עמודות בקמפיין כללי: {rules: [{from, to}], links_apart?, dry_run}. links_apart — פוסטים
+ * מקושרים לא יוצאים באותו יום (נאכף במנוע). dry_run מחזיר כמה
  * פוסטים קיימים יועתקו (להצגה לפני אישור); בלעדיו — החוקים נשמרים והפוסטים
- * הקיימים בעמודות המקור של קישור חדש מועתקים עכשיו. הסרת חוק עוצרת העתקה של פוסטים חדשים;
- * פוסטים שכבר מקושרים נשארים (מנתקים מתוך הפוסט).
+ * הקיימים בעמודות המקור של קישור חדש מועתקים עכשיו. הסרת חוק עוצרת העתקה של פוסטים חדשים
+ * ומנתקת את הפוסטים שמקושרים בין שתי העמודות (dry_run מחזיר גם unlinks).
  */
 r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res) => {
   const c = await one('select id, structure, link_rules from campaigns where id = $1 for update',
@@ -649,14 +650,27 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
   const clean = normalizeLinkRules(rules);
   // רק קישור חדש מעתיק את מה שכבר קיים. קישור שכבר היה — שמירה חוזרת לא
   // מעתיקה שוב פוסט שהמשתמש ניתק או שהעותק שלו נמחק
-  const had = new Set((c.link_rules ?? []).map((x) => `${x.from}>${x.to}`));
-  const plan = await linkRulesPlan(c.id, clean.filter((x) => !had.has(`${x.from}>${x.to}`)));
-  if (req.body?.dry_run) return res.json({ copies: plan.length });
+  const key = (x) => `${Number(x.from)}>${Number(x.to)}`;
+  const had = new Set((c.link_rules ?? []).map(key));
+  const plan = await linkRulesPlan(c.id, clean.filter((x) => !had.has(key(x))));
+  // קישור עמודות שהוסר — גם הפוסטים שמקושרים בין שתי העמודות מתנתקים (כל
+  // אחד נשאר עם עותק משלו), כדי שסימן הקישור לא יישאר בלי קישור
+  const now = new Set(clean.map(key));
+  const removed = normalizeLinkRules((c.link_rules ?? []).filter((x) => !now.has(key(x))));
+  const followers = await linkedBetween(c.id, removed);
+  if (req.body?.dry_run) return res.json({ copies: plan.length, unlinks: followers.length });
 
-  await query('update campaigns set link_rules = $2::jsonb where id = $1', [c.id, JSON.stringify(clean)]);
+  const apart = typeof req.body?.links_apart === 'boolean' ? req.body.links_apart : null;
+  await query(
+    `update campaigns set link_rules = $2::jsonb, links_apart = coalesce($3, links_apart)
+      where id = $1`, [c.id, JSON.stringify(clean), apart]);
+  let unlinked = 0;
+  for (const id of followers) {
+    try { await unlink(id); unlinked += 1; } catch (e) { if (!(e instanceof LinkError)) throw e; }
+  }
   const out = await applyLinkPlan(plan);
   const engine = await autoFill(req.body?.week);
-  res.json({ rules: clean, ...out, engine });
+  res.json({ rules: clean, ...out, unlinked, engine });
 }));
 
 /**

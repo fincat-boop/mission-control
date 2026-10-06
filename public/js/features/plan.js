@@ -532,7 +532,7 @@ function campaignHead(c) {
   const range = c.starts_on && c.ends_on
     ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
   return `
-    <div class="cbhead${c.required ? ' with-fill' : ''}">
+    <div class="cbhead">
       <div>
         <div class="ctitle">
           <h2>${esc(c.name)}</h2>
@@ -546,23 +546,8 @@ function campaignHead(c) {
           ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
       </div>
       <div class="spacer"></div>
-      ${c.required ? fillLine(c) : ''}
       ${campaignMenu(c)}
     </div>`;
-}
-
-/**
- * מצב המילוי בכותרת: מוכנים · טיוטות · לא נכתבו, מתוך הנדרש. אותן הגדרות
- * בשני המבנים — טיוטה היא עוד לא מוכנה, ו"לא נכתבו" הם תאים/משבצות ריקים.
- */
-function fillLine(c) {
-  const empty = c.missing_content - (c.drafts ?? 0);
-  return `<div class="fill hstats">
-    <span class="gst ok"><i></i>${c.ready} מוכנים</span>
-    ${c.drafts ? `<span class="gst draft"><i></i>${c.drafts} טיוטות</span>` : ''}
-    ${empty > 0 ? `<span class="gst gap"><i></i>${empty} לא נכתבו</span>` : ''}
-    <span class="of">מתוך ${c.required}</span>
-  </div>`;
 }
 
 function campaignGrid(c) {
@@ -733,9 +718,11 @@ function openLinkRules(campaign, reload) {
   const start = linkRules(campaign);
   // בלי קישורים החלון נפתח עם שורה ריקה אחת — היא נקודת ההשוואה, לא []
   const initial = start.length ? start : [blank()];
+  const apartStart = campaign.links_apart !== false;
 
   openGeneric({
-    guardDirty: () => JSON.stringify(readRules()) !== JSON.stringify(initial),
+    guardDirty: () => JSON.stringify(readRules()) !== JSON.stringify(initial) ||
+      $('#gen_links_apart').checked !== apartStart,
     title: `קשר תוכן · ${campaign.name}`,
     saveLabel: 'שמור והעתק',
     fields: [{ name: '__rules', type: 'html', html: `
@@ -745,8 +732,11 @@ function openLinkRules(campaign, reload) {
         כמו רילס באינסטגרם ושורטס ביוטיוב.</p>
       <div id="lrules">${initial.map(row).join('')}</div>
       <button type="button" class="btn small" id="lruleAdd">＋ עוד קישור</button>
-      <p class="fhint" style="margin-top:12px">הסרת קישור עוצרת העתקה של פוסטים חדשים. פוסטים
-        שכבר מקושרים נשארים — מנתקים אותם מתוך הפוסט.</p>` }],
+      <p class="fhint" style="margin-top:12px">הסרת קישור מנתקת גם את הפוסטים שכבר מקושרים בין
+        שתי העמודות — כל אחד נשאר עם עותק משלו. קישור של פוסט בודד: מתוך הפוסט.</p>` },
+    { name: 'links_apart', type: 'checkbox', value: apartStart,
+      // נשמר כבר עכשיו; האכיפה במנוע עולה בשלב הבא (שיחת התזמון) — אז יורד "בקרוב"
+      label: 'פוסטים מקושרים לא יוצאים באותו יום (בקרוב — עוד לא נאכף בשיבוץ)' }],
     onOpen: () => {
       $('#lruleAdd').addEventListener('click', () => {
         $('#lrules').insertAdjacentHTML('beforeend', row(blank()));
@@ -755,17 +745,24 @@ function openLinkRules(campaign, reload) {
         if (e.target.closest('[data-rule-del]')) e.target.closest('.lrule').remove();
       });
     },
-    onSave: async () => {
+    onSave: async (v) => {
       const rules = readRules();
       const path = `/campaigns/${campaign.id}/link-rules`;
-      const { copies } = await api(path, { method: 'POST', body: { rules, dry_run: true } });
-      if (copies && !(await confirmDialog(
-        `${copies === 1 ? 'פוסט קיים אחד יועתק' : `${copies} פוסטים קיימים יועתקו`} ` +
-        'למשבצות הפנויות הבאות בעמודות היעד. להמשיך?', { okLabel: 'העתק' }))) return { keepOpen: true };
-      const res = await api(path, { method: 'POST', body: { rules, week: state.week } });
+      const { copies, unlinks } = await api(path, { method: 'POST', body: { rules, dry_run: true } });
+      const what = [
+        copies && `${copies === 1 ? 'פוסט קיים אחד יועתק' : `${copies} פוסטים קיימים יועתקו`} ` +
+          'למשבצות הפנויות הבאות בעמודות היעד',
+        unlinks && `${unlinks === 1 ? 'פוסט מקושר אחד ינותק' : `${unlinks} פוסטים מקושרים ינותקו`} ` +
+          '(כל אחד נשאר עם עותק משלו)',
+      ].filter(Boolean);
+      if (what.length && !(await confirmDialog(`${what.join('. ')}. להמשיך?`,
+        { okLabel: 'אישור' }))) return { keepOpen: true };
+      const res = await api(path, { method: 'POST',
+        body: { rules, links_apart: v.links_apart, week: state.week } });
       engineToast(res, (rules.length
         ? `נשמר. ${res.linked ? `${res.linked} פוסטים הועתקו. ` : ''}פוסט חדש בעמודת מקור יועתק לבד.`
-        : 'הקישור בין העמודות הוסר. פוסטים שכבר מקושרים נשארים מקושרים.') +
+        : 'הקישור בין העמודות הוסר.') +
+        (res.unlinked ? ` ${res.unlinked} פוסטים נותקו.` : '') +
         (res.skipped?.length ? ` ${res.skipped.length} לא הועתקו: ${res.skipped[0]}` : '') +
         downgradeNote(res.downgraded));
       await reload();
@@ -779,6 +776,75 @@ function openLinkRules(campaign, reload) {
       to: Number(el.querySelector('[data-rule="to"]').value),
     }));
   }
+}
+
+/* ---------- קישור של פוסט בודד (מתוך הפוסט) ---------- */
+
+/**
+ * לאילו ערוצים אפשר לקשר את הפוסט: לא ניוזלטר, ולא ערוץ שכבר יש בו פוסט
+ * מאותה קבוצה (המקור או עוקבת). קישור שרשרת אין — הקישור הוא תמיד מהמקור.
+ */
+function linkTargets(c, item) {
+  if (!can('content') || c.structure !== 'general') return [];
+  const root = c.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
+  const busy = new Set([root, ...c.content.filter((x) => x.linked_to_id === root.id)]
+    .map((x) => x.slot_channel_id));
+  return c.channels.filter((ch) => ch.platform !== 'newsletter' && !busy.has(ch.id));
+}
+
+/**
+ * חלון קטן: ערוץ, ואז משבצת — "הפנויה הבאה" או משבצת מסוימת (ריקה, או עם
+ * תוכן שלא מקושר — הוא יוחלף). התוכן של הפוסט (או המקור שלו) הופך למשותף.
+ */
+function openLinkOne(campaign, item, reload) {
+  const root = campaign.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
+  const targets = linkTargets(campaign, item);
+  const slotOptions = (channelId) => {
+    const col = campaign.slots.find((x) => x.channel_id === channelId);
+    const list = (col?.slots ?? []).filter((s) => !s.extra || s.content);
+    const free = list.find((s) => !s.content)?.index ?? Math.max(0, ...list.map((s) => s.index)) + 1;
+    const pickable = list.filter((s) => !s.content || (!s.content.linked_to_id &&
+      !campaign.content.some((x) => x.linked_to_id === s.content.id)));
+    return [[`next:${free}`, `המשבצת הפנויה הבאה (#${free})`],
+      ...pickable.map((s) => [String(s.index), `#${s.index}${s.date ? ` · ${fmtDate(s.date)}` : ''}${
+        s.content ? ` · ${s.content.title} — יוחלף` : ' · ריקה'}`])];
+  };
+
+  openGeneric({
+    title: `קישור "${root.title}" לערוץ אחר`,
+    saveLabel: 'קשר',
+    fields: [
+      { name: '__h', type: 'html', html: `<p class="fhint" style="margin:0">התוכן של ${
+        esc(slotLabel(root))} (טקסט, קבצים ומצב) יהיה משותף לשני הפוסטים, וכל אחד ייצא במועד
+        של הערוץ שלו.</p>` },
+      { name: 'channel_id', label: 'לאיזה ערוץ', type: 'select',
+        options: targets.map((ch) => [ch.id, ch.name]) },
+      { name: 'slot', label: 'לאיזו משבצת', type: 'select', options: slotOptions(targets[0].id) },
+    ],
+    onOpen: () => {
+      $('#gen_channel_id').addEventListener('change', (e) => {
+        $('#gen_slot').innerHTML = slotOptions(Number(e.target.value)).map(([v, l]) =>
+          `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+      });
+    },
+    onSave: async (v) => {
+      const raw = String(v.slot);
+      const index = Number(raw.replace('next:', ''));
+      const occupied = campaign.content.find((x) =>
+        x.slot_channel_id === v.channel_id && x.sort_order === index);
+      if (occupied && !(await confirmDialog(
+        `התוכן של "${occupied.title}" יוחלף בתוכן של "${root.title}" — הטקסט, הקבצים והמצב. להמשיך?`,
+        { okLabel: 'קשר והחלף', danger: true }))) return { keepOpen: true };
+      const res = await api(`/content/${root.id}/link`, { method: 'POST', body: {
+        target_campaign_slot: { channel_id: v.channel_id, sort_order: index },
+        replace: !!occupied, week: state.week,
+      } });
+      engineToast(res, `${slotLabel(root)} ו${channelName(v.channel_id)} #${index} מקושרים — ` +
+        'תוכן אחד, כל אחד במועד של הערוץ שלו.' + downgradeNote(res.downgraded));
+      await reload();
+      return false;
+    },
+  });
 }
 
 /**
@@ -900,7 +966,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     ],
     extraActions: (item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
-      : ''),
+      : '') + (item && !mail && linkTargets(campaign, item).length
+      ? '<button class="btn" id="genLinkOne">קשר לערוץ אחר</button>' : ''),
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
       const input = $('#gen___files');
@@ -972,6 +1039,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         b.addEventListener('click', run(async () => {
           if (await deleteAssetAsk(b)) filesChanged = true;
         })));
+      $('#genLinkOne')?.addEventListener('click', run(async () => {
+        if (await closeGeneric()) openLinkOne(campaign, saved ?? item, reload);
+      }));
       $('#genDelete')?.addEventListener('click', run(async () => {
         const names = partners.map(slotLabel).join(', ');
         const question = !partners.length ? 'למחוק את הפוסט הזה?'
@@ -1150,7 +1220,7 @@ function campaignMenu(c) {
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
     can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
-      '<button type="button" data-act="complete">קמפיין מוכן</button>',
+      '<button type="button" data-act="complete" class="ok">קמפיין מוכן</button>',
     can('settings') && c.content_complete_at &&
       '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     // קמפיין חדש תמיד כללי; קמפיין ישן לפי זוויות עובר בהמרה (כל ניסוח = פוסט)
@@ -1844,8 +1914,6 @@ function paintCellInPlace(campaign, item, channelId, status, warn = null) {
   };
   step(old, -1);
   step(status, 1);
-  const fill = $('#plan .cbhead .fill');
-  if (fill && c.required) fill.outerHTML = fillLine(c);
 }
 
 /** אחרי הסרת קובץ: תאים "מוכן" שאיבדו את המדיה שלהם הופכים ל"מוכן ⚠" (ולהפך) */

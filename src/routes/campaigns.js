@@ -137,8 +137,9 @@ async function copyCampaign(src, b, { complete = false, templateId = null } = {}
 
   let c = await insertCampaign(b);
   // קישור עמודות עובר לעותק (הקישורים עצמם מועתקים למטה)
-  c = await one('update campaigns set link_rules = $2::jsonb where id = $1 returning *',
-    [c.id, JSON.stringify(src.link_rules ?? [])]);
+  c = await one(
+    'update campaigns set link_rules = $2::jsonb, links_apart = $3 where id = $1 returning *',
+    [c.id, JSON.stringify(src.link_rules ?? []), src.links_apart ?? true]);
   if (complete || templateId != null) {
     c = await one(
       `update campaigns set content_complete_at = case when $2 then now() end, template_id = $3

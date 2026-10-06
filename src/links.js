@@ -653,3 +653,18 @@ export async function autoLinkNew(contentId) {
   await query('select id from campaigns where id = $1 for update', [it.campaign_id]);
   return applyLinkPlan(await linkRulesPlan(it.campaign_id, normalizeLinkRules(rules), it.id));
 }
+
+/**
+ * הקישורים הקיימים בין שתי עמודות (עוקבת בעמודת to שהמקור שלה בעמודת from) —
+ * מה שמתנתק כשמסירים את קישור העמודות.
+ * @returns {Promise<number[]>} מזהי העוקבות
+ */
+export async function linkedBetween(campaignId, removed) {
+  if (!removed.length) return [];
+  const list = await rows(
+    `select f.id, src.slot_channel_id as from_ch, f.slot_channel_id as to_ch
+       from content_items f join content_items src on src.id = f.linked_to_id
+      where f.campaign_id = $1`, [campaignId]);
+  return list.filter((x) => removed.some((r) => r.from === x.from_ch && r.to === x.to_ch))
+    .map((x) => x.id);
+}
