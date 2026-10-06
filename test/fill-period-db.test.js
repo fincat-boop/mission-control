@@ -130,9 +130,16 @@ test('המנוע לא מציע משבצת לפני עכשיו — לא ימים 
     const mine = plan.placements.filter((p) => p.channel_id === x.ch);
     assert.ok(mine.length >= 1, 'משהו נכנס');
     for (const p of mine) {
-      assert.ok(p.date > '2030-11-20', `${p.date} כבר עבר`);
+      assert.ok(p.date >= '2030-11-20', `${p.date} כבר עבר`);
       assert.ok(new Date(p.scheduled_at) > now);
     }
+    // רביעי עצמו לא אבד: השעה העגולה הבאה (13:00) במקום 10:00 שכבר עברה
+    const wed = mine.find((p) => p.date === '2030-11-20');
+    assert.ok(wed, JSON.stringify(mine.map((p) => p.date)));
+    assert.equal(wed.time, '13:00');
+    // 22:30 — היום נגמר, אין משבצת היום
+    const late = await engine.planWeek('2030-11-20', { holes: false, now: new Date('2030-11-20T22:30:00') });
+    assert.ok(!late.placements.some((p) => p.date === '2030-11-20'));
   });
 
   // ביצוע אמיתי על השבוע הנוכחי: אף פוסט לא נכתב לפני עכשיו
@@ -576,4 +583,47 @@ test('נעילת המנוע: מילוי אחר מחזיק אותה — המיל�
   // אחרי השחרור — המילוי עובר כרגיל
   const fill = await inOrg(() => autoFillCampaign(null, inDays(0)));
   assert.notEqual(fill, EMPTY_FILL);
+});
+
+test('ייבוא מטבלה וקישור משבצות ממלאים את כל תקופת הקמפיין', { skip }, async () => {
+  const x = await fresh('ייבוא', { maxPerWeek: 1 });
+  const first = weekMeta(inDays(21));
+  const ends = weekMeta(inDays(35)).end;
+  const campWeeks = campaignFillWeeks({ active: true, starts_on: first.start, ends_on: ends });
+  const c = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure, min_gap_days)
+     values ($1, 'ייבוא', $2, $3, 'angles', 1) returning id`, [x.ep, first.start, ends]);
+  await q('insert into campaign_channels values ($1, $2)', [c.id, x.ch]);
+  const imp = await call('POST', `/campaigns/${c.id}/import`, {
+    text: 'כותרת\tטקסט\nזווית א\tשלום\nזווית ב\tשלום\nזווית ג\tשלום', mark_ready: true, week: inDays(0),
+  });
+  assert.equal(imp.status, 201, JSON.stringify(imp.json));
+  assert.equal(imp.json.engine.placed, 3, JSON.stringify(imp.json.engine));
+  assert.equal(imp.json.engine.weeks, 3);
+
+  // קישור: משבצת בקמפיין כללי מקושרת למדיה שנייה — העוקבת נכנסת לתקופה, לא רק לשבוע המוצג
+  const ch2 = await q1(
+    `insert into channels (name, platform, max_per_week, urgent_reserve_pct)
+     values ('ערוץ קישור', 'manual', 1, 0) returning id`);
+  const g = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure, period)
+     values ($1, 'כללי', $2, $3, 'general', 'custom') returning id`, [x.ep, first.start, ends]);
+  for (const ch of [x.ch, ch2.id]) await q('insert into campaign_channels values ($1, $2)', [g.id, ch]);
+  const src = await call('POST', '/content', {
+    title: 'למקושר', kind: 'value', campaign_id: g.id, slot_channel_id: x.ch,
+    sort_order: 1, body: 'טקסט', status: 'ready', week: inDays(0),
+  });
+  assert.equal(src.status, 201, JSON.stringify(src.json));
+  const link = await call('POST', `/content/${src.json.content.id}/link`,
+    { target_campaign_slot: { channel_id: ch2.id, sort_order: 1 }, week: inDays(0) });
+  assert.equal(link.status, 200, JSON.stringify(link.json));
+  for (const w of campWeeks) assert.ok(link.json.engine.covered_weeks.includes(w), w);
+  const onCh2 = await q('select scheduled_at from posts where id = any($1::int[]) and channel_id = $2',
+    [link.json.engine.created_ids, ch2.id]);
+  assert.equal(onCh2.length, 1, JSON.stringify(link.json.engine.summary));
+  assert.ok(campWeeks.includes(weekOf(onCh2[0].scheduled_at)));
+
+  await q('delete from posts where channel_id = $1', [ch2.id]);
+  await cleanup(x);
+  await q('delete from channels where id = $1', [ch2.id]);
 });

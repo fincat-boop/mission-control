@@ -1895,7 +1895,9 @@ function mergeFills(list) {
   return { engine: {
     placed: sum('placed'), attached: sum('attached'), holes: sum('holes'),
     created_items: cat('created_items'), attached_items: cat('attached_items'),
-    summary: cat('summary'),
+    summary: cat('summary'), promo_blocked: sum('promo_blocked'),
+    weeks: Math.max(0, ...fills.map((f) => f.weeks ?? 0)),
+    covered_weeks: [...new Set(cat('covered_weeks'))],
   } };
 }
 

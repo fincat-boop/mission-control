@@ -622,7 +622,7 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
 r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
   let out;
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
-  const engine = await autoFill(req.body?.week);
+  const engine = await fillFor(out.source, req.body?.week);
   res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, engine });
 }));
 
@@ -1130,7 +1130,7 @@ r.post('/campaigns/:id/import', requirePerm('content'), wrap(async (req, res) =>
     return bad(res, e.message);
   }
   // כמו כל שינוי בתוכן: המנוע משבץ ממה שנכנס, והתשובה אומרת מה (עם "בטל")
-  const engine = await autoFill(req.body?.week);
+  const engine = await autoFillCampaign(req.params.id, req.body?.week);
   res.status(201).json({ ...out, engine });
 }));
 

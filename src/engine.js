@@ -207,12 +207,12 @@ export async function planWeek(anchorDate, {
     if (!pick) continue;
 
     const at = new Date(slot.date);
-    at.setHours(DEFAULT_HOUR, 0, 0, 0);
+    // היום, אחרי שעת ברירת המחדל — השעה העגולה הבאה, לא ויתור על כל היום
+    let hour = slot.dateKey === today ? Math.max(DEFAULT_HOUR, now.getHours() + 1) : DEFAULT_HOUR;
     // התנגשות שעה באותו ערוץ באותו יום — מזיזים שעה קדימה
-    let hour = DEFAULT_HOUR;
     while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
+    if (hour > 22) continue; // היום כבר נגמר
     at.setHours(hour, 0, 0, 0);
-    // היום, אחרי השעה הזו — המשבצת כבר עברה
     if (at <= now) continue;
 
     const placement = {
