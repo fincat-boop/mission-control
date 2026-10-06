@@ -511,3 +511,54 @@ test('holeReason — קמפיין מוכן שהתוכן שלו מחכה לתאר
   // ביום המתוכנן יש תוכן מתאים — הסיבה הכללית
   assert.match(holeReason(items, '2026-11-06'), /אף גרסה לא מתאימה/);
 });
+
+/* ---------- יעד אסטרטגי לפי השבוע המתוכנן, לא לפי היום ---------- */
+
+import { strategyDeficits, strategyTargets } from '../src/engine.js';
+
+// "היום" = אוקטובר: שוטף של נקודה 1 רץ עכשיו; בלאק פריידי (נקודה 2, 40%)
+// מתחיל רק ב-20.11. עד עכשיו המנוע הסתכל על הקמפיינים של היום, ולכן כשתכנן
+// את שבוע בלאק פריידי היעד של נקודה 2 היה 0 — והיא קיבלה 0 משבצות.
+const routine = { id: 1, endpoint_id: 1, endpoint_importance: 5, share_pct: null,
+                  active: true, paused_at: null, starts_on: '2026-10-01', ends_on: '2026-12-31' };
+const blackFriday = { id: 7, endpoint_id: 2, endpoint_importance: 9, share_pct: 40,
+                      active: true, paused_at: null, starts_on: '2026-11-20', ends_on: '2026-12-05' };
+
+test('strategyTargets — קמפיין עתידי מושך את הנקודה שלו כשמתכננים את השבוע שבו הוא רץ', () => {
+  const bfWeek = weekMeta('2026-11-24');
+  const { targetPct, from, to } = strategyTargets([routine, blackFriday], bfWeek);
+  assert.equal(targetPct.get(2), 40);
+  assert.equal(Math.round(targetPct.get(1)), 60);          // היתרה לאוטומטי
+  assert.equal(from, '2026-10-01');                       // starts_on המוקדם בשבוע
+  assert.equal(to, bfWeek.days[6].date);
+
+  // עד עכשיו לנקודה 1 יש 10 פוסטים חיים בחלון, ולנקודה 2 אף אחד
+  const d = strategyDeficits(targetPct, [{ endpoint_id: 1, n: 10 }]);
+  assert.equal(d.get(2), 0.4);
+  assert.equal(d.get(1), 0);
+});
+
+test('strategyTargets — בשבוע של היום בלאק פריידי עוד לא רץ: אין לו יעד', () => {
+  const now = weekMeta('2026-10-14');
+  const { targetPct } = strategyTargets([routine, blackFriday], now);
+  assert.equal(targetPct.has(2), false);
+  assert.equal(targetPct.get(1), 100);
+  assert.equal(strategyDeficits(targetPct, [{ endpoint_id: 1, n: 3 }]).get(2), undefined);
+});
+
+test('strategyTargets — בלי קמפיינים בשבוע: החלון 90 יום אחורה, בלי יעדים', () => {
+  const w = weekMeta('2027-03-10');
+  const { targetPct, from } = strategyTargets([routine, blackFriday], w);
+  assert.equal(targetPct.size, 0);
+  assert.equal(from, '2026-12-07');                       // 7.3.2027 − 90
+});
+
+test('strategyTargets — מושהה לא מושך; מפורשים מעל 100% מוקטנים', () => {
+  const w = weekMeta('2026-11-24');
+  const paused = { ...blackFriday, paused_at: '2026-11-01T00:00:00Z' };
+  assert.equal(strategyTargets([routine, paused], w).targetPct.has(2), false);
+  const big = { ...routine, share_pct: 90 };
+  const { targetPct } = strategyTargets([big, blackFriday], w);
+  assert.equal(Math.round(targetPct.get(1)), 69);           // 90 / 130
+  assert.equal(Math.round(targetPct.get(2)), 31);           // 40 / 130
+});

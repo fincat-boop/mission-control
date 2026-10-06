@@ -3,7 +3,7 @@ import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
-import { channelBudget } from './capacity.js';
+import { channelBudget, normalizeShares } from './capacity.js';
 
 /**
  * מנוע השיבוץ.
@@ -16,9 +16,9 @@ import { channelBudget } from './capacity.js';
  */
 
 // משקלים של רכיבי החוב. שינוי כאן משנה את אופי המנוע:
-// יותר STALENESS = "אף אחד לא נשכח", יותר STRATEGY = "נצמדים ליעדי הרבעון".
+// יותר STALENESS = "אף אחד לא נשכח", יותר STRATEGY = "נצמדים לנתחים של הקמפיינים".
 const W_STALENESS = 1.0;  // כמה זמן עבר מאז שהנקודה פורסמה, ביחס לקצב שהוגדר לה
-const W_STRATEGY  = 0.8;  // כמה היא מפגרת אחרי יעד האסטרטגיה
+const W_STRATEGY  = 0.8;  // כמה היא מפגרת אחרי הנתח של הקמפיינים שלה (strategyTargets)
 const W_IMPORTANCE = 0.5; // החשיבות הידנית שהוגדרה לה
 // יעילות שנמדדה בפועל. פועל רק כשהמתג use_performance דלוק, ובכוונה
 // נמוך מהוותק — מה שעבד טוב מקבל דחיפה, אבל נקודה חלשה לא נעלמת מהלוח.
@@ -110,7 +110,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   // אין אפילו שאילתה, והמנוע מתנהג בדיוק כמו לפני הפיצ'ר.
   const perf = settings?.use_performance ? await performanceMultipliers() : null;
 
-  const debts = await computeDebts(endpoints, settings, perf);
+  const debts = await computeDebts(endpoints, settings, perf, week);
 
   // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון.
   const usage = buildUsage(channels, existing, settings);
@@ -557,7 +557,60 @@ export function chooseHoleFills({
 
 /* ========================= חוב אוויר ========================= */
 
-async function computeDebts(endpoints, settings, perf = null) {
+/** YYYY-MM-DD + n ימים, בלי מעבר שעון */
+function addDaysKey(dateKey, n) {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/** הסטטוסים של פוסט שתופס שטח — אותם שהמנוע סופר כקיימים על הלוח */
+const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
+
+/**
+ * היעד האסטרטגי של כל נקודת קצה בשבוע המתוכנן — לא היום. קמפיין שמתחיל
+ * בעוד חודש מושך את הנקודה שלו כשמתכננים את השבוע שבו הוא רץ (קודם בלאק
+ * פריידי קיבל 0 משבצות, כי המנוע הסתכל רק על הקמפיינים של היום).
+ *
+ * היעד של נקודה = סכום הנתחים המנורמלים (normalizeShares — אותו חשבון כמו
+ * הרשת וציר האסטרטגיה, כולל נתחים אוטומטיים) של הקמפיינים שלה שחופפים
+ * לשבוע. החלון שבו נמדד "בפועל" מתחיל ב-starts_on המוקדם של אותם קמפיינים,
+ * ובלי תאריך כזה — 90 יום לפני השבוע; ונגמר בסוף השבוע המתוכנן.
+ *
+ * @param campaigns שורות campaigns עם endpoint_importance
+ * @param week {days:[{date}]} — weekMeta
+ * @returns {{targetPct: Map<number, number>, from: string, to: string}}
+ */
+export function strategyTargets(campaigns, week) {
+  const weekFrom = week.days[0].date;
+  const weekTo = week.days[week.days.length - 1].date;
+  const shares = normalizeShares(campaigns, { from: weekFrom, to: weekTo });
+
+  const targetPct = new Map();
+  const starts = [];
+  for (const c of campaigns) {
+    if (!shares.has(c.id)) continue;
+    targetPct.set(c.endpoint_id, (targetPct.get(c.endpoint_id) ?? 0) + shares.get(c.id) * 100);
+    if (c.starts_on) starts.push(String(c.starts_on).slice(0, 10));
+  }
+  const from = starts.sort()[0] ?? addDaysKey(weekFrom, -90);
+  return { targetPct, from, to: weekTo };
+}
+
+/**
+ * כמה כל נקודה מפגרת אחרי היעד שלה (0..1). "בפועל" = החלק שלה מכל הפוסטים
+ * החיים שיש להם נקודת קצה בחלון (counts: [{endpoint_id, n}]).
+ */
+export function strategyDeficits(targetPct, counts) {
+  const total = counts.reduce((s, c) => s + c.n, 0);
+  const actual = new Map(counts.map((c) => [c.endpoint_id, total ? (c.n / total) * 100 : 0]));
+  const out = new Map();
+  for (const [id, target] of targetPct) {
+    out.set(id, Math.max(0, target - (actual.get(id) ?? 0)) / 100);
+  }
+  return out;
+}
+
+async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date())) {
   const lastPublished = await rows(
     `select endpoint_id, max(published_at) as last_at
        from posts where status = 'published' and endpoint_id is not null
@@ -565,36 +618,29 @@ async function computeDebts(endpoints, settings, perf = null) {
   );
   const lastMap = new Map(lastPublished.map((r) => [r.endpoint_id, r.last_at]));
 
-  // פער מהנתח שהוגדר לקמפיינים שרצים עכשיו. קמפיין מושהה לא מתחרה על שטח,
-  // ולכן לא אמור למשוך יעד — בדיוק כמו שהוא לא מוצג בלוח.
-  const today = ymd(new Date());
-  const allocs = await rows(
-    `select endpoint_id, max(share_pct) as target_pct
-       from campaigns
-      where active = true and paused_at is null and share_pct is not null
-        and (starts_on is null or starts_on <= $1)
-        and (ends_on is null or ends_on >= $1)
-      group by endpoint_id`,
-    [today]
-  );
-  const published = await rows(
+  // פער מהנתח של הקמפיינים שרצים בשבוע המתוכנן. קמפיין מושהה לא מתחרה על
+  // שטח (normalizeShares מסנן אותו), בדיוק כמו שהוא לא מוצג בלוח.
+  const campaigns = await rows(
+    `select c.*, e.importance as endpoint_importance
+       from campaigns c join endpoints e on e.id = c.endpoint_id`);
+  const { targetPct, from, to } = strategyTargets(campaigns, week);
+  // "בפועל" נספר מכל מה שתופס שטח — גם מה שמתוכנן לשבוע הזה ולפניו, לא רק
+  // מה שפורסם — כדי שתכנון שבוע עתידי יראה מה כבר שובץ לפניו. שיבוץ של
+  // קמפיין מושהה לא נספר (כמו existing ב-planWeek), אלא אם כבר פורסם.
+  const counts = targetPct.size === 0 ? [] : await rows(
     `select p.endpoint_id, count(*)::int as n
        from posts p
-      where p.status = 'published' and p.endpoint_id is not null
-        and p.published_at >= coalesce(
-              (select min(starts_on) from campaigns
-                where active = true and paused_at is null and share_pct is not null
-                  and (starts_on is null or starts_on <= $1)
-                  and (ends_on is null or ends_on >= $1)),
-              $1::date - 90)
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.endpoint_id is not null
+        and p.status = any($3::text[])
+        and (ca.paused_at is null or p.status = 'published')
+        and coalesce(p.published_at, p.scheduled_at) >= $1::date
+        and coalesce(p.published_at, p.scheduled_at) < ($2::date + 1)
       group by p.endpoint_id`,
-    [today]
+    [from, to, LIVE_STATUSES]
   );
-  const totalPublished = published.reduce((s, p) => s + p.n, 0);
-  const actualPct = new Map(
-    published.map((p) => [p.endpoint_id, totalPublished ? (p.n / totalPublished) * 100 : 0])
-  );
-  const targetPct = new Map(allocs.map((a) => [a.endpoint_id, a.target_pct]));
+  const deficits = strategyDeficits(targetPct, counts);
 
   const now = new Date();
   const scheduledBoost = new Map(); // כמה כבר הצענו לה בריצה הזו
@@ -608,9 +654,7 @@ async function computeDebts(endpoints, settings, perf = null) {
       ? 2
       : daysSince / Math.max(1, effectiveCadenceDays(e));
 
-    const target = targetPct.get(e.id) ?? 0;
-    const actual = actualPct.get(e.id) ?? 0;
-    const deficit = Math.max(0, target - actual) / 100;
+    const deficit = deficits.get(e.id) ?? 0;
 
     // המכפיל מרוכז סביב 1.0 (ניטרלי). מחסרים 1 כדי שנקודה בלי נתונים
     // תתרום בדיוק 0 לציון, נקודה מוצלחת תוסיף, וחלשה תוריד מעט.
@@ -1019,7 +1063,7 @@ export function chooseForSlot(ctx) {
   const bits = [];
   if (p.daysSince === null) bits.push('עוד לא פורסמה מעולם');
   else if (p.staleness >= 1) bits.push(`${Math.floor(p.daysSince)} ימים בלי פרסום`);
-  if (p.deficit > 0.05) bits.push(`מפגרת ${Math.round(p.deficit * 100)} נק' אחרי יעד הרבעון`);
+  if (p.deficit > 0.05) bits.push(`מפגרת ${Math.round(p.deficit * 100)} נק' אחרי הנתח שלה`);
   if (best.inCampaign) bits.push('קמפיין רץ');
   if (best.draft) bits.push('התוכן עוד בטיוטה — צריך לכתוב את הניסוח הסופי');
   // רק כשהיעילות הנמדדת באמת הזיזה משהו — 1.0 הוא ניטרלי ולא מעניין
