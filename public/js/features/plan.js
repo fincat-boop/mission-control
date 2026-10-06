@@ -459,6 +459,33 @@ function fitOptionsHtml(opts) {
 const readFit = (box) => box.querySelector('[name="fitChoice"]:checked')?.value ?? 'keep';
 
 /**
+ * התצוגות המקדימות לחלון ההתאמה (askFit). null = אין מה לשאול: הכול נכנס,
+ * הקמפיין מוכן, המחסור זהה לשמור, או שהתצוגה המקדימה נכשלה.
+ */
+async function fitPreviews(body, editId) {
+  let draft;
+  let saved = null;
+  try {
+    // תקלה בתצוגה של הקמפיין השמור לא מבטלת את הבדיקה של הטיוטה — רק שואלים גם אם לא השתנה
+    [draft, saved] = await Promise.all([
+      capacityPreview(body),
+      editId ? capacityPreview({ id: editId }).catch(() => null) : null]);
+  } catch {
+    return null;
+  }
+  // קמפיין מוכן (fixed): הקצב לא קובע כמה פוסטים יש — השרת לא מדליק short,
+  // וההתאמה שלו נבדקת בסימון "מוכן". כאן לא שואלים.
+  if (draft.fixed || !draft.short || (saved && sameShortage(draft, saved))) return null;
+
+  const rows = shortChannels(draft);
+  const gap = compressGap(rows);
+  // מה ייכנס בדחיסה — אותו חישוב עם המרווח החדש
+  const compressed = gap != null
+    ? await capacityPreview({ ...body, min_gap_days: gap }).catch(() => null) : null;
+  return { draft, rows, gap, compressed };
+}
+
+/**
  * לפני שמירת קמפיין: האם מה שהקצב מבקש נכנס במרווח בין הפוסטים. אם לא —
  * חלון שמציע לדחוס (מרווח קצר יותר לקמפיין הזה בלבד) או להשאיר. להאריך לא
  * מוצע כאן: בקמפיין רגיל הדרישה גדלה עם האורך, ולכן הארכה לא עוזרת.
@@ -469,25 +496,26 @@ const readFit = (box) => box.querySelector('[name="fitChoice"]:checked')?.value 
  * @returns {Promise<null|{min_gap_days?:number}>} null = ביטול; אחרת מה להוסיף לשמירה
  */
 async function askFit(body, { editId = null, okLabel = 'שמור' } = {}) {
-  let draft;
-  let saved = null;
+  // בזמן הבדיקה הטופס לא נסגר (Esc / ביטול) — אחרת החלון היה נפתח על טופס סגור
+  const form = $('#genDlg');
+  const hold = (e) => {
+    if (e.target !== form) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  document.addEventListener('cancel', hold, true);
+  $('#genCancel').disabled = true;
+  let p;
   try {
-    // תקלה בתצוגה של הקמפיין השמור לא מבטלת את הבדיקה של הטיוטה — רק שואלים גם אם לא השתנה
-    [draft, saved] = await Promise.all([
-      capacityPreview(body),
-      editId ? capacityPreview({ id: editId }).catch(() => null) : null]);
-  } catch {
-    return {};
+    p = await fitPreviews(body, editId);
+  } finally {
+    document.removeEventListener('cancel', hold, true);
+    $('#genCancel').disabled = false;
   }
-  // קמפיין מוכן (fixed): הקצב לא קובע כמה פוסטים יש — השרת לא מדליק short,
-  // וההתאמה שלו נבדקת בסימון "מוכן". כאן לא שואלים.
-  if (draft.fixed || !draft.short || (saved && sameShortage(draft, saved))) return {};
-
-  const rows = shortChannels(draft);
-  const gap = compressGap(rows);
-  // מה ייכנס בדחיסה — אותו חישוב עם המרווח החדש
-  const compressed = gap != null
-    ? await capacityPreview({ ...body, min_gap_days: gap }).catch(() => null) : null;
+  // הטופס נסגר בכל זאת (למשל "מחק קמפיין") — לא פותחים חלון ולא שומרים
+  if (!form.open) return null;
+  if (!p) return {};
+  const { draft, rows, gap, compressed } = p;
   const opts = [
     gap != null && ['compress', `לדחוס — מרווח של ${daysLabel(gap)} בקמפיין הזה`,
       compressed ? `כך ייכנסו: ${fitsText(compressed, rows.map((r) => r.channel_id))}` : ''],
