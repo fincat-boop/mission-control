@@ -720,14 +720,6 @@ const channelName = (id) => state.channels.find((ch) => ch.id === id)?.name ?? '
 /** "יוטיוב שורטס #2" — משבצת בקמפיין כללי */
 const slotLabel = (x) => `${channelName(x.slot_channel_id)} #${x.sort_order}`;
 
-/** שורת "מקושר ל:" מתחת לכותרת המשבצת בלוח */
-function linkLine(c, item) {
-  const partners = linkPartners(c, item);
-  if (!partners.length) return '';
-  const names = partners.map(slotLabel).join(', ');
-  return `<span class="glink" data-tt="${esc(`התוכן משותף עם ${names}`)}">${LINK_ICON}
-    <span>מקושר ל: ${esc(names)}</span></span>`;
-}
 
 /**
  * מצב "קשר תוכן" על הלוח של קמפיין כללי, או null. נדלק בכפתור שמעל הלוח
@@ -881,8 +873,8 @@ let arrowObserver = null;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
- * חץ מכל מקור לכל עוקבת שלו, מעל הלוח. מחושב מהמיקום של השורות על המסך,
- * ולכן מצויר מחדש בכל שינוי גודל (חלון צר שבו העמודות נערמות, סינון "7 הימים").
+ * חץ מכל מקור לכל עוקבת שלו, מעל הטבלה. מחושב מהמיקום של התאים על המסך,
+ * ולכן מצויר מחדש בכל שינוי גודל וב"7 הימים הקרובים".
  */
 function drawLinkArrows(c) {
   arrowObserver?.disconnect();
@@ -913,21 +905,17 @@ function drawLinkArrows(c) {
       const ra = a.getBoundingClientRect();
       const rb = b.getBoundingClientRect();
       const rel = (x, y) => [x - box.left, y - box.top];
-      let d;
-      if (ra.right <= rb.left || rb.right <= ra.left) {
-        // עמודות זו לצד זו: מהקצה של המקור שפונה ליעד אל הקצה של היעד שפונה למקור
-        const toRight = rb.left >= ra.right;
-        const [x1, y1] = rel(toRight ? ra.right : ra.left, ra.top + ra.height / 2);
-        const [x2, y2] = rel(toRight ? rb.left : rb.right, rb.top + rb.height / 2);
-        const dx = Math.max(24, Math.abs(x2 - x1) / 2) * (toRight ? 1 : -1);
-        d = `M${x1} ${y1}C${x1 + dx} ${y1} ${x2 - dx} ${y2} ${x2} ${y2}`;
-      } else {
-        // עמודות נערמות: מהקצה הימני, מעוקל החוצה כדי לא לעבור על השורות
-        const [x1, y1] = rel(ra.right, ra.top + ra.height / 2);
-        const [x2, y2] = rel(rb.right, rb.top + rb.height / 2);
-        const bow = Math.min(40, 12 + Math.abs(y2 - y1) / 10);
-        d = `M${x1} ${y1}C${x1 + bow} ${y1} ${x2 + bow} ${y2} ${x2} ${y2}`;
-      }
+      // תאים בטבלה (תמיד זה לצד זה): בשוליים העליונים של התא, מעל הטקסט שבמרכז —
+      // מתוך המקור אל תוך היעד, כך שגם לתאים שכנים יש חץ שרואים
+      const toRight = (rb.left + rb.right) / 2 > (ra.left + ra.right) / 2;
+      const dir = toRight ? 1 : -1;
+      const [x1, y1] = rel((ra.left + ra.right) / 2 + dir * ra.width * 0.3, ra.top + 8);
+      const [x2, y2] = rel((rb.left + rb.right) / 2 - dir * rb.width * 0.3, rb.top + 8);
+      const dx = Math.max(16, Math.abs(x2 - x1) / 2) * dir;
+      const d = Math.abs(y2 - y1) < 4
+        // אותה שורה: קשת נמוכה שעוברת מעל התאים שבדרך
+        ? `M${x1} ${y1}C${x1 + dx} ${y1 - 6} ${x2 - dx} ${y2 - 6} ${x2} ${y2}`
+        : `M${x1} ${y1}C${x1 + dx} ${y1} ${x2 - dx} ${y2} ${x2} ${y2}`;
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('d', d);
       path.setAttribute('marker-end', 'url(#garrowHead)');
@@ -941,8 +929,8 @@ function drawLinkArrows(c) {
 }
 
 /**
- * עמודה לכל מדיה, ובה שורה לכל פוסט שהמדיה צריכה. כל שורה עומדת בפני
- * עצמה: אין זווית משותפת ואין ניסוח למדיה אחרת. במסך צר העמודות נערמות.
+ * קמפיין כללי: אותה טבלה כמו בזוויות — שורה לכל מספר פוסט, עמודה לכל ערוץ —
+ * בלי זווית משותפת. כל תא עומד בפני עצמו, עם הניסוח והמועד של הערוץ שלו.
  */
 /** במצב קישור: מה אפשר ללחוץ בשורה הזו (src = המקור שנבחר, מסומן) */
 function pickClass(c, item, blocked) {
@@ -961,8 +949,8 @@ function generalBoard(c) {
       <span class="off">${c.orphaned === 1 ? 'פוסט אחד' : `${c.orphaned} פוסטים`} בערוצים שהוסרו מהקמפיין</span> —
       נשמרים ולא משובצים. החזרת הערוץ לקמפיין מחזירה אותם.</div>` : ''}
     <div class="sumline">
-      כל עמודה היא ערוץ, וכל שורה בה פוסט אחד שעומד בפני עצמו. לחיצה על שורה פותחת את התוכן שלה.
-      חץ בין שני פוסטים = תוכן אחד משותף; כל אחד יוצא במועד של הערוץ שלו.
+      כל עמודה היא ערוץ, וכל תא הוא פוסט שעומד בפני עצמו, במועד של הערוץ שלו. לחיצה על תא
+      פותחת את התוכן שלו. חץ בין שני פוסטים = תוכן אחד משותף.
     </div>`;
 }
 
@@ -974,43 +962,60 @@ function boardInner(c) {
   // מצב קישור שייך לקמפיין שבו התחיל; מעבר לקמפיין או לטאב אחר מבטל אותו
   const linking = !!activeLinkMode() && linkMode.campaignId === c.id && can('content');
 
-  const cols = c.slots.map((col) => {
-    const blocked = linking ? columnBlock(c, col.channel_id) : null;
-    // משבצת מעבר לצורך מוצגת רק כשיש בה פוסט — ריקה כזו לא חסרה לאף אחד
-    const rows = col.slots.filter((s) => !s.extra || s.content).map((s) => {
+  // אותה טבלה כמו בקמפיין לפי זוויות: שורה לכל מספר פוסט, עמודה לכל ערוץ.
+  // אין זווית משותפת — כל תא הוא פוסט שעומד בפני עצמו, עם המועד של הערוץ שלו.
+  // משבצת מעבר לצורך מוצגת רק כשיש בה פוסט — ריקה כזו לא חסרה לאף אחד.
+  const cols = c.slots.map((col) => ({
+    ...col,
+    blocked: linking ? columnBlock(c, col.channel_id) : null,
+    byIndex: new Map(col.slots.filter((s) => !s.extra || s.content).map((s) => [s.index, s])),
+  }));
+  const indexes = [...new Set(cols.flatMap((col) => [...col.byIndex.keys()]))].sort((x, y) => x - y);
+
+  const head = cols.map((col) => `<th${col.blocked ? ' class="blocked"' : ''}>${esc(col.channel_name)}
+    <div class="need">${col.blocked ? esc(col.blocked) : `${col.ready} מתוך ${col.required} מוכנים`}</div>
+    ${can('content') && !linking ? `<button type="button" class="hbulk" data-gbulk="${col.channel_id}"
+      data-tt="העלאה מרוכזת: כל קובץ ממלא את הפוסט הפנוי הבא בערוץ">העלאה מרוכזת</button>` : ''}
+  </th>`).join('');
+
+  const body = indexes.map((i) => {
+    const row = cols.map((col) => col.byIndex.get(i));
+    const dates = [...new Set(row.filter(Boolean).map((s) => s.date ?? ''))];
+    // כשלכל הערוצים אותו מועד הוא מוצג פעם אחת בתחילת השורה, אחרת בכל תא
+    const rowDate = dates.length === 1 ? dates[0] : null;
+    const cells = cols.map((col, ci) => {
+      const s = row[ci];
+      if (!s) return '<td class="cell na"><span>—</span></td>';
       const st = CELL[s.state];
       const item = s.content;
-      return `<li class="gslot${s.past ? ' past' : ''}${s.extra ? ' extra' : ''}${
-          inWeek(s.date) ? ' inweek' : ''}${
-          can('content') ? '' : ' ro'}${linking ? pickClass(c, item, blocked) : ''}"
+      const linked = item && (item.linked_to_id || c.content.some((x) => x.linked_to_id === item.id));
+      const when = s.date ? fmtDate(s.date) : 'נוסף';
+      const meta = [rowDate == null && when, item?.title].filter(Boolean).map(esc).join(' · ');
+      return `<td class="cell ${st.cls}${s.warn ? ' warn' : ''}${s.past ? ' past' : ''}${
+          can('content') ? '' : ' ro'}${linking ? pickClass(c, item, col.blocked) : ''}"
         ${item ? `data-cid="${item.id}"` : ''}
-        ${can('content') ? `data-gslot="${s.index}" data-ch="${col.channel_id}"` : ''}>
-        <span class="gnum">${s.index}</span>
-        <span class="gdate">${s.date ? fmtDate(s.date) : 'נוסף'}</span>
-        <span class="gttl${item ? '' : ' none'}">${item
-          ? `<span class="gt">${esc(item.title)}${item.assets.length
-              ? ` <span class="gclip">📎${item.assets.length}</span>` : ''}</span>${linkLine(c, item)}`
-          : (s.past ? 'לא נכתב' : 'לכתוב')}</span>
-        <span class="gst ${st.cls}${s.warn ? ' warn' : ''}"${
-          s.warn ? ` data-tt="${esc(s.warn)}"` : ''}><i></i>${esc(cellLabel(s))}</span>
-      </li>`;
+        ${can('content') ? `data-gslot="${s.index}" data-ch="${col.channel_id}"` : ''}
+        data-tt="${esc(`${col.channel_name} #${s.index} · ${when}${item ? ` · ${item.title}` : ''}${
+          s.warn ? ` · ${s.warn}` : ''}`)}">
+        <span>${linked ? LINK_ICON : ''}${esc(cellLabel(s))}${
+          item?.assets.length ? ` <span class="gclip">📎${item.assets.length}</span>` : ''}</span>
+        ${meta ? `<span class="cmeta">${meta}</span>` : ''}
+      </td>`;
     }).join('');
-
-    return `<section class="gcol panel${blocked ? ' blocked' : ''}">
-      <div class="gcol-head">
-        <div>
-          <b>${esc(col.channel_name)}</b>
-          <span class="d">${blocked ? esc(blocked) : `${col.ready} מתוך ${col.required} מוכנים`}</span>
-        </div>
-        ${can('content') && !linking
-          ? `<button class="btn small" data-gbulk="${col.channel_id}">העלאה מרוכזת</button>` : ''}
-      </div>
-      <ol class="gslots">${rows}</ol>
-    </section>`;
+    const past = row.every((s) => !s || s.past);
+    const week = row.some((s) => s && inWeek(s.date));
+    return `<tr class="${past ? 'past' : ''}${week ? ' inweek' : ''}">
+      <td class="angle gidx"><div class="anum">${i}<span>${rowDate ? fmtDate(rowDate) : ''}</span></div></td>
+      ${cells}</tr>`;
   }).join('');
 
   return `${linkTools(c, linking)}
-    <div class="gboard${linking ? ' linking' : ''}">${cols}</div>`;
+    <div class="board panel"><div class="gboard${linking ? ' linking' : ''}">
+      <table class="grid cgrid gtable">
+        <thead><tr><th class="angle gidx">#</th>${head}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div></div>`;
 }
 
 /** מצב הקישור השתנה (לא הנתונים) — רק הלוח מצויר מחדש */

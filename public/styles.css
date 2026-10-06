@@ -839,35 +839,24 @@ button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] { background: tra
 .cgrid td.cell.na    { color: var(--muted); opacity: .45; cursor: default; }
 .cgrid td.cell.na:hover { background: none; }
 
-/* קמפיין כללי: עמודה לכל מדיה, שורה לכל פוסט. העמודות נערמות במסך צר.
-   כל שורה היא אותה רשת, כדי שמספר, תאריך ומצב יעמדו על אותו קו אנכי. */
-.gboard {
-  position: relative; /* החיצים (svg.garrows) מצוירים מעליו */
-  display: grid; gap: 16px; align-items: start;
-  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+/* קמפיין כללי: אותה טבלה כמו בזוויות (.cgrid), עם מספר הפוסט בעמודה הראשונה */
+.gboard { position: relative; /* החיצים (svg.garrows) מצוירים מעליו */ }
+.gtable th.gidx, .gtable td.gidx { width: 64px; }
+.gtable td.cell > span:first-child { display: inline-flex; align-items: center; gap: 4px; }
+.gtable td.cell .cmeta {
+  display: block; margin-top: 3px; font-size: 10.5px; font-weight: 400; color: var(--muted);
+  max-width: 150px; margin-inline: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.gcol { padding: 20px 24px 12px; }
-.gcol-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
-.gcol-head > div { flex: 1; min-width: 0; }
-.gcol-head b { display: block; font-size: 13.5px; font-weight: 650; }
-.gcol-head .d { font-size: 11.5px; color: var(--muted); }
-.gslots { list-style: none; padding: 0; margin: 0 -10px; }
-.gslot {
-  display: grid; grid-template-columns: 22px 44px minmax(0, 1fr) 72px; gap: 10px;
-  align-items: center; padding: 9px 10px; border-radius: 8px; cursor: pointer;
-  font-size: 12.5px; border-top: 1px solid var(--border);
+.gtable td.cell.past { opacity: .65; }
+.gtable td.cell.ro { cursor: default; }
+.gtable .gclip { color: var(--muted); font-size: 10.5px; font-weight: 400; }
+.gtable .lnk { color: var(--neon); }
+.gtable thead th .hbulk {
+  font: inherit; font-size: 10.5px; color: var(--accent); background: none; border: none;
+  padding: 2px 0 0; cursor: pointer;
 }
-.gslot:first-child { border-top: none; }
-.gslot:hover { background: var(--panel-2); }
-.gslot.ro { cursor: default; }
-.gslot.ro:hover { background: none; }
-.gslot.past { opacity: .65; }
-.gslot .gnum { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.gslot .gdate { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.gslot.extra .gdate { color: var(--ink-2); }
-.gslot .gttl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gslot .gttl.none { color: var(--muted); }
-.gslot .gclip { color: var(--muted); font-size: 11px; }
+.gtable thead th .hbulk:hover { text-decoration: underline; }
+.gtable thead th.blocked .need { color: var(--ink-2); }
 /* מצב = נקודה + טקסט, בלי מסגרת */
 .gst { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
 .gst i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
@@ -875,14 +864,7 @@ button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] { background: tra
 .gst.draft { color: var(--st-warn); }
 .gst.gap   { color: var(--st-crit); }
 .gst.na    { color: var(--muted); }
-
-/* משבצות מקושרות: כותרת + שורת "מקושר ל:" מתחתיה, באותה עמודה של הרשת */
-.gslot .gttl { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.gslot .gt, .gslot .glink { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gslot .glink { display: flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 11px; }
-.gslot .glink > span { overflow: hidden; text-overflow: ellipsis; }
 .lnk { flex: none; }
-/* מצב קישור: היעדים האפשריים מודגשים בעדינות, השאר מתעמעמים */
 /* "קשר תוכן": כפתור מעל הלוח, ולידו מה עושים עכשיו */
 .gtools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .gtools .d { font-size: 12px; color: var(--muted); line-height: 1.6; }
@@ -893,21 +875,21 @@ button.btn.linktoggle .lnk { width: 14px; height: 14px; }
 button.btn.linktoggle.on {
   border-color: var(--neon); color: var(--neon); box-shadow: 0 0 10px rgba(34,211,255,.35);
 }
-.gboard.linking .gslot.pick { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
-.gboard.linking .gslot.pick:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.gboard.linking .gslot.nopick { opacity: .38; cursor: default; }
-.gboard.linking .gslot.nopick:hover { background: none; }
-.gboard.linking .gcol.blocked .gcol-head .d { color: var(--ink-2); }
-.gboard.linking .gslot.src {
+/* מצב קישור: התאים האפשריים מודגשים בעדינות, השאר מתעמעמים */
+.gboard.linking td.cell.pick { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.gboard.linking td.cell.pick:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.gboard.linking td.cell.nopick, .gboard.linking td.cell.na { opacity: .3; cursor: default; }
+.gboard.linking td.cell.nopick:hover { background: none; }
+.gboard.linking td.cell.src {
   background: color-mix(in srgb, var(--neon) 14%, transparent);
   box-shadow: inset 0 0 0 1px var(--neon);
 }
-/* חץ בין משבצות מקושרות — מעל העמודות, לא חוסם לחיצות */
+/* חץ בין פוסטים מקושרים — מעל הטבלה, לא חוסם לחיצות */
 .gboard > svg.garrows {
   position: absolute; inset-block-start: 0; left: 0; pointer-events: none; overflow: visible;
   z-index: 2; color: var(--neon);
 }
-.gboard > svg.garrows > path { fill: none; stroke: var(--neon); stroke-width: 1.5; opacity: .75; }
+.gboard > svg.garrows > path { fill: none; stroke: var(--neon); stroke-width: 1.5; opacity: .8; }
 .gboard.linking > svg.garrows > path { opacity: 1; }
 /* ראש טופס המשבצת כשהיא מקושרת */
 .linkinfo { border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; background: var(--panel-2); }
@@ -1400,7 +1382,6 @@ button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 .weekbar .d { color: var(--muted); font-size: 12px; }
 .weekbar .btn.on { border-color: var(--accent); color: var(--accent); }
 #plan.week-only .cgrid tbody tr:not(.inweek),
-#plan.week-only .gslot:not(.inweek) { display: none; }
 
 /* מחיקת קמפיין: מה לעשות עם התוכן */
 .choice-dlg { width: min(440px, 92vw); }
