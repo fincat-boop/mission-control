@@ -147,6 +147,19 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     if (warning && !b.confirm_gap) {
       return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
     }
+  } else if (b.content_id != null && Number(b.content_id) !== current.content_id) {
+    // רק התוכן מתחלף, בלי הזזה: המרווח תלוי בקמפיין של התוכן, ולכן תוכן של
+    // קמפיין עם מרווח ארוך יותר יכול להפוך שיבוץ תקין לצמוד מדי — אותה
+    // אזהרה ואותו אישור כמו בהזזה
+    const warning = softWarning(
+      await gapWarning({ endpointId: b.endpoint_id ?? current.endpoint_id,
+                         channelId: current.channel_id, when: current.scheduled_at,
+                         excludePostId: current.id, contentId: b.content_id }),
+      await campaignWindowWarning({ contentId: b.content_id, when: current.scheduled_at }),
+    );
+    if (warning && !b.confirm_gap) {
+      return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
+    }
   }
 
   if ('title' in b) {
@@ -408,6 +421,17 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     if (clash) {
       return bad(res, `כבר יש פוסט לאותה נקודת קצה בערוץ הזה באותו יום: ${clash.title}`, 409);
     }
+  }
+
+  // המרווח לפי הקמפיין של התוכן שמשויך — פוסט שהיה תקין כחסר תוכן יכול
+  // להיות צמוד מדי לשכן כשהתוכן בא מקמפיין עם מרווח ארוך. אזהרה שאפשר לאשר
+  // (confirm_gap), כמו בהזזה ובפוסט ידני.
+  const gap = await gapWarning({
+    endpointId: post.endpoint_id ?? c.endpoint_id, channelId: post.channel_id,
+    when: post.scheduled_at, excludePostId: post.id, contentId: c.id,
+  });
+  if (gap && !req.body?.confirm_gap) {
+    return res.status(409).json({ error: gap.message, warning: gap, needs_confirm: true });
   }
 
   // פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן" — האישור לא היה על התוכן הזה

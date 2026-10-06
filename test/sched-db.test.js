@@ -36,6 +36,7 @@ before(async () => {
   db = await import('../src/db.js');
   const { default: express } = await import('express');
   const { default: campaigns } = await import('../src/routes/campaigns.js');
+  const { default: board } = await import('../src/routes/board.js');
 
   // migrate רק כשהעמודה עוד לא קיימת: קובצי מסד אחרים רצים במקביל, ו-alter
   // table באמצע הבדיקות שלהם נתקע איתן ב-deadlock
@@ -71,6 +72,7 @@ before(async () => {
     pending.add(p);
   });
   app.use(campaigns);
+  app.use(board);
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => res.status(500).json({ error: err.message }));
   server = app.listen(0);
@@ -350,4 +352,57 @@ test('ערוצים: מזהה של ארגון אחר או לא קיים — 400, 
   assert.equal(leaked.rowCount, 0);
 
   await inOrg(() => db.query('delete from campaigns where id = $1', [c.id]));
+});
+
+test('שיוך תוכן והחלפת תוכן בפוסט: אזהרת מרווח לפי הקמפיין של התוכן החדש', { skip }, async () => {
+  const ep = await freshEndpoint('שיוך');
+  const made = await inOrg(async () => {
+    const mk = async (name, gap) => {
+      const camp = await db.one(
+        `insert into campaigns (endpoint_id, name, starts_on, ends_on, min_gap_days)
+         values ($1,$2,'2030-11-01','2030-11-30',$3) returning id`, [ep, name, gap]);
+      const it = await db.one(
+        `insert into content_items (endpoint_id, campaign_id, kind, title)
+         values ($1,$2,'value',$3) returning id`, [ep, camp.id, name]);
+      await db.query(
+        `insert into content_variants (content_id, channel_id, body, status) values ($1,$2,'x','ready')`,
+        [it.id, ids.fb]);
+      return { camp: camp.id, item: it.id };
+    };
+    const tight = await mk('צפוף', 3);
+    const loose = await mk('מרווח שבוע', 7);
+    // שכן ב-10.11; פוסט חסר תוכן ב-14.11 (4 ימים אחרי)
+    await db.query(
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at)
+       values ($1,$2,'שכן','value','2030-11-10T10:00:00+02:00')`, [ids.fb, ep]);
+    const hole = await db.one(
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at)
+       values ($1,$2,'חסר תוכן','value','2030-11-14T10:00:00+02:00') returning id`, [ids.fb, ep]);
+    return { tight, loose, hole: hole.id };
+  });
+
+  // מרווח 7: צמוד מדי — 409 עם אישור; מרווח 3 — עובר
+  const warn = await call('POST', `/posts/${made.hole}/attach-content`, { content_id: made.loose.item });
+  assert.equal(warn.status, 409, JSON.stringify(warn.json));
+  assert.equal(warn.json.needs_confirm, true);
+  assert.match(warn.json.error, /מרווח שבוע/);
+  const ok = await call('POST', `/posts/${made.hole}/attach-content`, { content_id: made.tight.item });
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+
+  // החלפת התוכן בלבד (PATCH בלי הזזה) לתוכן של קמפיין במרווח 7 — אזהרה, ואז אישור
+  const swap = await call('PATCH', `/posts/${made.hole}`, { content_id: made.loose.item });
+  assert.equal(swap.status, 409, JSON.stringify(swap.json));
+  assert.equal(swap.json.needs_confirm, true);
+  const same = await call('PATCH', `/posts/${made.hole}`, { content_id: made.tight.item, note: 'x' });
+  assert.equal(same.status, 200, 'אותו תוכן — אין אזהרה');
+  const confirmed = await call('PATCH', `/posts/${made.hole}`,
+    { content_id: made.loose.item, confirm_gap: true });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.json));
+  assert.equal(confirmed.json.post.content_id, made.loose.item);
+
+  await inOrg(async () => {
+    await db.query('delete from posts where endpoint_id = $1', [ep]);
+    await db.query('delete from content_items where endpoint_id = $1', [ep]);
+    await db.query('delete from campaigns where endpoint_id = $1', [ep]);
+  });
 });

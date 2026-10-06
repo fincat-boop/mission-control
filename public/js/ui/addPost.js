@@ -1,7 +1,7 @@
 import { $, esc, fillSelect, run, toast } from '../core/dom.js';
 import { state } from '../core/state.js';
 import { fmtDate, numOrNull } from '../core/format.js';
-import { api, postWithGapCheck } from '../core/api.js';
+import { postWithGapCheck } from '../core/api.js';
 import { refreshAfterPostChange } from '../ui/refresh.js';
 import { openEngine } from '../ui/engineDialog.js';
 import { candidateMeta, loadCandidates, variantLabel } from '../ui/contentPicker.js';
@@ -111,10 +111,10 @@ async function submitManualPost(reorganizeAfter) {
   $('#addPostDlg').close();
   if (content) {
     try {
-      await api(`/posts/${created.post.id}/attach-content`, {
-        method: 'POST', body: { content_id: content.id },
-      });
-      toast('הפוסט נוסף ללוח עם התוכן.');
+      const attached = await postWithGapCheck(`/posts/${created.post.id}/attach-content`,
+        { content_id: content.id }, 'POST', 'לשייך בכל זאת?');
+      toast(attached ? 'הפוסט נוסף ללוח עם התוכן.'
+        : 'הפוסט נוסף ללוח בלי התוכן — מסומן "חסר תוכן".');
     } catch (e) {
       toast(`הפוסט נוסף, אבל התוכן לא שויך: ${e.message}`, true);
     }

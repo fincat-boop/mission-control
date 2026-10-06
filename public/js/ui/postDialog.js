@@ -310,13 +310,14 @@ async function showAttachPicker(post) {
       buttons.forEach((x) => { x.disabled = true; });
       let r;
       try {
-        r = await api(`/posts/${post.id}/attach-content`, {
-          method: 'POST', body: { content_id: Number(b.dataset.contentId) },
-        });
+        // תוכן של קמפיין עם מרווח ארוך יכול להיות צמוד מדי לשכן — השרת מזהיר
+        r = await postWithGapCheck(`/posts/${post.id}/attach-content`,
+          { content_id: Number(b.dataset.contentId) }, 'POST', 'לשייך בכל זאת?');
       } catch (e) {
         buttons.forEach((x) => { x.disabled = false; });
         throw e;
       }
+      if (!r) { buttons.forEach((x) => { x.disabled = false; }); return; }
       toast((r.draft
         ? 'התוכן שויך — הניסוח לערוץ הזה עוד בטיוטה; מסמנים "מוכן" לפני פרסום.'
         : 'התוכן שויך לפוסט.') +
