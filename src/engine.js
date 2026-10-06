@@ -645,8 +645,11 @@ async function computeDebts(endpoints, settings, perf = null, week = weekMeta(ne
       where p.endpoint_id is not null
         and p.status = any($3::text[])
         and (ca.paused_at is null or p.status = 'published')
-        and coalesce(p.published_at, p.scheduled_at) >= $1::date
-        and coalesce(p.published_at, p.scheduled_at) < ($2::date + 1)
+        -- פוסט שפורסם נספר לפי מתי שפורסם, אחר — לפי מתי שמתוכנן. שני תנאים
+        -- נפרדים ולא coalesce, כדי שהאינדקסים על published_at ו-scheduled_at ישמשו
+        and ((p.published_at >= $1::date and p.published_at < ($2::date + 1))
+          or (p.published_at is null
+              and p.scheduled_at >= $1::date and p.scheduled_at < ($2::date + 1)))
       group by p.endpoint_id`,
     [from, to, LIVE_STATUSES]
   );
