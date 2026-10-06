@@ -847,12 +847,17 @@ button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] { background: tra
   width: max(100%, calc(100vw - 64px)); max-width: none;
   margin-inline: min(0px, calc((100% - (100vw - 64px)) / 2));
 }
+/* קריא ולא דהוי: המצב בגודל רגיל ובמשקל, הכותרת והמועד באפור בהיר. פוסט שהמועד
+   שלו עבר לא מתעמעם (בקמפיין שהסתיים כל הטבלה הייתה נראית כבויה) — רק המועד */
+.gtable thead th { color: var(--ink-1); font-size: 12.5px; font-weight: 600; }
+.gtable td.cell { font-size: 12.5px; font-weight: 600; padding-block: 10px; }
 .gtable td.cell > span:first-child { display: inline-flex; align-items: center; gap: 4px; }
 .gtable td.cell .cmeta {
-  display: block; margin-top: 3px; font-size: 10.5px; font-weight: 400; color: var(--muted);
-  max-width: 220px; margin-inline: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: block; margin-top: 4px; font-size: 11.5px; font-weight: 400; color: var(--ink-2);
+  max-width: 240px; margin-inline: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.gtable td.cell.past { opacity: .65; }
+.gtable tr.past td { opacity: 1; }
+.gtable td.cell.past .cmeta { color: var(--muted); }
 .gtable td.cell.ro { cursor: default; }
 .gtable .gclip { color: var(--muted); font-size: 10.5px; font-weight: 400; }
 .gtable .lnk { color: var(--neon); }
@@ -866,15 +871,15 @@ button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] { background: tra
 .gst.na    { color: var(--muted); }
 .lnk { flex: none; }
 /* "קשר תוכן": כפתור מעל הלוח, ולידו מה עושים עכשיו */
-.gtools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.gtools .d { font-size: 12px; color: var(--muted); line-height: 1.6; }
-.gtools.on .d { color: var(--ink-2); }
-.gtools .d b { color: var(--ink-1); font-weight: 650; }
-button.btn.linktoggle { display: inline-flex; align-items: center; gap: 6px; }
-button.btn.linktoggle .lnk { width: 14px; height: 14px; }
-button.btn.linktoggle.on {
-  border-color: var(--neon); color: var(--neon); box-shadow: 0 0 10px rgba(34,211,255,.35);
+/* מצב "קשר תוכן" (נדלק מתפריט ⋮): שורת הסבר מעל הטבלה, וכפתור סיום */
+.gtools {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
+  padding: 10px 14px; border: 1px solid var(--neon); border-radius: 10px;
+  background: color-mix(in srgb, var(--neon) 6%, transparent);
 }
+.gtools .lnk { width: 16px; height: 16px; color: var(--neon); }
+.gtools .d { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+.gtools .d b { color: var(--ink-1); font-weight: 650; }
 /* מצב קישור: התאים האפשריים מודגשים בעדינות, השאר מתעמעמים */
 .gboard.linking td.cell.pick { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .gboard.linking td.cell.pick:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
@@ -1376,12 +1381,6 @@ button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 
 /* ייבוא: "לסמן כמוכנים" מעל הכפתורים */
 .imp-ready { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
-
-/* "7 הימים הקרובים" ברשת הקמפיין */
-.weekbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: -4px 0 12px; }
-.weekbar .d { color: var(--muted); font-size: 12px; }
-.weekbar .btn.on { border-color: var(--accent); color: var(--accent); }
-#plan.week-only .cgrid tbody tr:not(.inweek),
 
 /* מחיקת קמפיין: מה לעשות עם התוכן */
 .choice-dlg { width: min(440px, 92vw); }

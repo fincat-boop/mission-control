@@ -2,7 +2,7 @@ import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { describeMailVariant, openNewsletterEditor } from '../ui/hubFill.js';
-import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb, ymd } from '../core/format.js';
+import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { closeGeneric, markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
@@ -245,8 +245,6 @@ function wireKebabs() {
 }
 
 function wirePlan(campaign, endpointId, content) {
-  // הסינון "7 הימים הקרובים" שייך לרשת של קמפיין בלבד
-  $('#plan').classList.remove('week-only');
   const reload = run(async () => {
     await Promise.all([renderPlan(), refreshBoard(), refreshAlerts()]);
   });
@@ -550,28 +548,7 @@ function campaignHead(c) {
       <div class="spacer"></div>
       ${c.required ? fillLine(c) : ''}
       ${campaignMenu(c)}
-    </div>
-    ${c.required ? weekToggle(c) : ''}`;
-}
-
-/* ---------- "7 הימים הקרובים": רק השורות שמתוכננות לשבוע הקרוב ---------- */
-
-// נשמר לאורך הביקור (בין קמפיינים), לא בכתובת
-let weekOnly = false;
-
-const todayYmd = () => ymd(new Date());
-const weekEnd = () => { const d = new Date(); d.setDate(d.getDate() + 7); return ymd(d); };
-/** תאריך מתוכנן בתוך שבעת הימים הקרובים (היום כלול) */
-const inWeek = (date) => !!date && date >= todayYmd() && date < weekEnd();
-
-function weekToggle(c) {
-  const n = c.missing_week ?? 0;
-  return `<div class="weekbar">
-    <button type="button" class="btn small${weekOnly ? ' on' : ''}" data-week-only
-      aria-pressed="${weekOnly}">7 הימים הקרובים</button>
-    <span class="d">${n ? `חסרים ${n} לפוסטים שמתוכננים לשבוע הקרוב`
-      : 'אין חוסר בפוסטים שמתוכננים לשבוע הקרוב'}</span>
-  </div>`;
+    </div>`;
 }
 
 /**
@@ -646,7 +623,7 @@ function angleRow(c, row) {
       <span>${esc(cellLabel(cell))}</span></td>`;
   }).join('');
 
-  return `<tr class="${row.past ? 'past' : ''}${inWeek(row.date) ? ' inweek' : ''}">
+  return `<tr class="${row.past ? 'past' : ''}">
     <td class="angle" ${item ? `data-item="${item.id}"` : ''}
       ${can('content') ? `data-angle="${row.index}"` : ''}>
       <div class="anum">${row.index}<span>${row.date ? fmtDate(row.date) : ''}</span></div>
@@ -849,21 +826,21 @@ async function linkTo(campaign, channelId, index, item, reload) {
   await reload();
 }
 
-/** הכפתור שמעל הלוח, ולידו — מה עושים עכשיו */
+/** אפשר לקשר: קמפיין כללי עם שני ערוצים לפחות שאינם ניוזלטר */
+const canLinkIn = (c) => c.structure === 'general' && can('content') &&
+  c.channels.filter((ch) => ch.platform !== 'newsletter').length > 1;
+
+/** במצב קישור (נדלק מתפריט ⋮): מה עושים עכשיו, וכפתור סיום */
 function linkTools(c, linking) {
-  if (!can('content')) return '';
-  if (c.channels.filter((ch) => ch.platform !== 'newsletter').length < 2) return '';
-  const src = linking ? linkMode.source : null;
-  const hint = !linking
-    ? 'מחבר פוסט לפוסט בערוץ דומה (למשל רילס באינסטגרם ובפייסבוק): תוכן אחד, מועד לכל ערוץ.'
-    : src
-      ? `<b>עכשיו פוסט יעד</b> בערוץ אחר — הוא יקבל את התוכן של ${esc(src.label)}.
-         Esc לבחירת מקור אחר.`
-      : '<b>לוחצים על פוסט מקור</b> — ממנו התוכן יועתק. Esc לסיום.';
-  return `<div class="gtools${linking ? ' on' : ''}" role="status">
-    <button type="button" class="btn small linktoggle${linking ? ' on' : ''}" data-link-toggle
-      aria-pressed="${linking}">${LINK_ICON} קשר תוכן</button>
-    <span class="d">${hint}</span>
+  if (!linking) return '';
+  const src = linkMode.source;
+  const hint = src
+    ? `<b>עכשיו פוסט יעד</b> בערוץ אחר — הוא יקבל את התוכן של ${esc(src.label)}.
+       Esc לבחירת מקור אחר.`
+    : '<b>לוחצים על פוסט מקור</b> — ממנו התוכן יועתק. Esc לסיום.';
+  return `<div class="gtools on" role="status">
+    ${LINK_ICON}<span class="d">${hint}</span>
+    <button type="button" class="btn small" data-link-toggle>סיום קישור</button>
   </div>`;
 }
 
@@ -998,8 +975,7 @@ function boardInner(c) {
       </td>`;
     }).join('');
     const past = row.every((s) => !s || s.past);
-    const week = row.some((s) => s && inWeek(s.date));
-    return `<tr class="${past ? 'past' : ''}${week ? ' inweek' : ''}">${cells}</tr>`;
+    return `<tr class="${past ? 'past' : ''}">${cells}</tr>`;
   }).join('');
 
   return `${linkTools(c, linking)}
@@ -1278,17 +1254,6 @@ function openChannelBulk(campaign, reload) {
 }
 
 function wireCampaignGrid(selected, reload) {
-  // "7 הימים הקרובים" — מסנן את השורות במקום, בלי לצייר מחדש
-  $('#plan').classList.toggle('week-only', weekOnly);
-  $('#plan [data-week-only]')?.addEventListener('click', (e) => {
-    weekOnly = !weekOnly;
-    $('#plan').classList.toggle('week-only', weekOnly);
-    e.currentTarget.classList.toggle('on', weekOnly);
-    e.currentTarget.setAttribute('aria-pressed', String(weekOnly));
-    // שורות הוסתרו/חזרו — הלוח לא תמיד משנה גובה, ולכן החיצים מצוירים מחדש כאן
-    if (selected.structure === 'general') drawLinkArrows(selected);
-  });
-
   // תפריט הכותרת משותף לשני המבנים — מחווטים לפני הפיצול
   const actions = {
     edit: () => openCampaignForm(selected, reload),
@@ -1297,6 +1262,8 @@ function wireCampaignGrid(selected, reload) {
     // בכללי ההעלאה היא לעמודה אחת — הערוץ נבחר בחלון
     bulk: () => (selected.structure === 'general'
       ? openChannelBulk(selected, reload) : openBulkUpload(selected, reload)),
+    // מדליק (או מכבה) את מצב הקישור — רק הלוח מצויר מחדש
+    link: () => toggleLinkMode(selected, () => repaintBoard(selected, reload)),
     import: () => openImport(selected, reload),
     complete: run(() => completeCampaign(selected, reload)),
     reopen: run(() => reopenCampaign(selected, reload)),
@@ -1349,6 +1316,7 @@ function campaignMenu(c) {
     can('settings') && `<button type="button" data-act="share">${c.share_pct != null
       ? `נתח קבוע: ${c.share_pct}%` : 'נתח קבוע…'}</button>`,
     can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
+    canLinkIn(c) && '<button type="button" data-act="link">קשר תוכן</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
     can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
