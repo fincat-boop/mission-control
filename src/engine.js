@@ -34,12 +34,16 @@ const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי
  * קיים, ולא מציע פוסטים חסרי תוכן. אותם (ואת משימות "לכתוב" שלהם) מציע
  * רק חלון "מלא את השבוע", שבו המשתמש רואה ומאשר כל פריט.
  *
+ * ימים שעברו לא מקבלים שיבוץ (buildSlots עם today), וגם לא שעה שכבר עברה
+ * היום — פוסט "מתוכנן" לעבר לא ייצא לעולם.
+ *
  * @param {string|Date} [anchorDate] תאריך כלשהו בתוך השבוע המבוקש
- * @param {{holes?:boolean}} [opts]
+ * @param {{holes?:boolean, now?:Date}} [opts] now — לבדיקות; ברירת מחדל: עכשיו
  * @returns {Promise<{week:object, placements:object[], attachments:object[], holes:object[], notes:string[]}>}
  */
-export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
+export async function planWeek(anchorDate, { holes: withHoles = true, now = new Date() } = {}) {
   const week = weekMeta(anchorDate);
+  const today = ymd(now);
   const from = week.startDate;
   const to = new Date(week.endDate);
   to.setHours(23, 59, 59, 999);
@@ -112,7 +116,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   // אין אפילו שאילתה, והמנוע מתנהג בדיוק כמו לפני הפיצ'ר.
   const perf = settings?.use_performance ? await performanceMultipliers() : null;
 
-  const debts = await computeDebts(endpoints, settings, perf, week);
+  const debts = await computeDebts(endpoints, settings, perf, week, now);
 
   // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון.
   const usage = buildUsage(channels, existing, settings);
@@ -134,7 +138,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   const attachments = chooseHoleFills({
     // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
     // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
-    holes: openHoles(existing, channels, endpoints, new Date(), { autoOnly: !withHoles }),
+    holes: openHoles(existing, channels, endpoints, now, { autoOnly: !withHoles }),
     content, usedContent, history, settings, usage, pairDates,
   }).map((a) => ({
     ...a,
@@ -155,7 +159,8 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   const placements = [];
 
   // כל שילוב (ערוץ, יום) אפשרי. הסדר נקבע תוך כדי, לא מראש — ראו nextSlot.
-  const pending = new Set(buildSlots(week, channels, perf));
+  // ימים שעברו לא נכנסים בכלל — קודם תכנון השבוע של 6.9 הציע פוסטים ל-6–12.9
+  const pending = new Set(buildSlots(week, channels, perf, { today }));
 
   while (pending.size) {
     const slot = nextSlot(pending, usage, week);
@@ -174,6 +179,8 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     let hour = DEFAULT_HOUR;
     while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
     at.setHours(hour, 0, 0, 0);
+    // היום, אחרי השעה הזו — המשבצת כבר עברה
+    if (at <= now) continue;
 
     const placement = {
       channel_id: slot.channel_id,
@@ -201,7 +208,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   }
 
   const holes = withHoles
-    ? findHoles({ endpoints, content, debts, channels, usage, week, existing })
+    ? findHoles({ endpoints, content, debts, channels, usage, week, existing, now })
         .map((h) => ({ ...h, key: planItemKey('hole', h) }))
     : [];
 
@@ -259,7 +266,15 @@ export async function applyWeek(anchorDate, { holes: withHoles = true, selected 
   if (Array.isArray(selected)) {
     ({ placements: plan.placements, dropped } = recheckSelection(plan, fresh.ctx));
   }
-  const skipped = stale + dropped.length;
+  // אף פוסט לא נכתב לעבר. planWeek כבר לא מציע כאלה; זו רשת ביטחון למקרה
+  // שהתכנון והכתיבה חוצים שעה עגולה (משבצת של 10:00 שתוכננה ב-9:59).
+  const now = Date.now();
+  const future = (x) => new Date(x.scheduled_at).getTime() > now;
+  const pastCount = plan.placements.filter((x) => !future(x)).length +
+                    plan.holes.filter((x) => !future(x)).length;
+  plan.placements = plan.placements.filter(future);
+  plan.holes = plan.holes.filter(future);
+  const skipped = stale + dropped.length + pastCount;
 
   const createdIds = [];
   const created = []; // { post_id, content_id } — "בטל" מוחק רק מה שלא השתנה מאז
@@ -889,11 +904,15 @@ export function buildUsage(channels, existing, settings) {
  *
  * efficiency = איכות המשבצת: יעילות שנמדדה בפועל (ערוץ × יום × חלון שעות)
  * כשהמתג דלוק ויש מספיק דגימות; אחרת דירוג ידני channels.efficiency.
+ *
+ * today (YYYY-MM-DD, לא חובה) — ימים לפניו לא נכנסים: המנוע לא מציע פוסט
+ * לתאריך שכבר עבר. בלי today — כל השבוע (בדיקות של הלולאה על שבוע קבוע).
  */
-export function buildSlots(week, channels, perf = null) {
+export function buildSlots(week, channels, perf = null, { today = null } = {}) {
   const slots = [];
   for (const ch of channels) {
     week.days.forEach((day, index) => {
+      if (today && day.date < today) return;
       const date = new Date(`${day.date}T00:00:00`);
       if ((ch.blocked_days ?? []).includes(date.getDay())) return;
 
@@ -1138,7 +1157,7 @@ export function chooseForSlot(ctx) {
  * נקודה שהחוב שלה גבוה אבל אין לה תוכן מוכן — הלוח צריך להראות
  * שהוא מחכה לה, ולא סתם לדלג עליה בשקט.
  */
-function findHoles({ endpoints, content, debts, channels, usage, week, existing }) {
+function findHoles({ endpoints, content, debts, channels, usage, week, existing, now = new Date() }) {
   const holes = [];
 
   for (const e of endpoints) {
@@ -1158,9 +1177,11 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing 
 
     // לא בתחילת השבוע, כדי שיישאר זמן לכתוב; ומתוך מה שנשאר — היום שהכי
     // רחוק ממה שכבר תפוס באותו ערוץ, כדי שהחורים לא ייערמו כולם על יום אחד.
-    const day = pickHoleDay(week, target, usage);
+    const day = pickHoleDay(week, target, usage, ymd(now));
+    if (!day) continue; // לא נשאר בשבוע יום עתידי שמתאים לחור
     let hour = 12;
     while (usage.hourTaken(target.id, day.date, hour) && hour < 22) hour += 1;
+    if (new Date(`${day.date}T${String(hour).padStart(2, '0')}:00:00`) <= now) continue;
     // תופסים בפועל את המקום כדי ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת פנויה.
     usage.take(target.id, day.date, 'value', hour);
 
@@ -1199,16 +1220,23 @@ export function holeReason(endpointContent, dateKey) {
   return 'יש תוכן לנקודה הזו, אבל אף גרסה לא מתאימה לערוץ פנוי כרגע';
 }
 
-/** היום שבו יישב חור: לא בתחילת השבוע, ורחוק ככל האפשר משאר הלוח של הערוץ. */
-function pickHoleDay(week, channel, usage) {
+/**
+ * היום שבו יישב חור: לא בתחילת השבוע, ורחוק ככל האפשר משאר הלוח של הערוץ.
+ * לא לפני today; null כשלא נשאר יום כזה.
+ */
+function pickHoleDay(week, channel, usage, today = null) {
   const usable = week.days
     .map((day, index) => ({ day, index }))
     .filter(({ day, index }) => {
       if (index < 2) return false; // צריך זמן לכתוב
+      if (today && day.date < today) return false;
       const dow = new Date(`${day.date}T00:00:00`).getDay();
       return !(channel.blocked_days ?? []).includes(dow);
     });
-  if (usable.length === 0) return week.days[3] ?? week.days[0];
+  if (usable.length === 0) {
+    const fallback = week.days[3] ?? week.days[0];
+    return today && fallback.date < today ? null : fallback;
+  }
 
   return usable.sort((a, b) => {
     const key = ({ day, index }) => [

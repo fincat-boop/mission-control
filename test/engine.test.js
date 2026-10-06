@@ -683,3 +683,15 @@ test('chooseHoleFills — תוכן של קמפיין שהמרווח שלו לא 
     pairDates: new Map([['7:1', ['2026-10-08']]]),
   }).map((f) => f.content_id), [1]);
 });
+
+/* ========================= ימים שעברו ========================= */
+
+test('buildSlots עם today: ימים לפני היום לא נכנסים; היום עצמו כן', () => {
+  const week = weekMeta('2026-08-12'); // 9–15.8
+  const slots = buildSlots(week, [channel()], null, { today: '2026-08-12' });
+  assert.deepEqual(slots.map((s) => s.dateKey),
+    ['2026-08-12', '2026-08-13', '2026-08-14', '2026-08-15']);
+  // שבוע שכולו עבר — אין משבצות בכלל; בלי today — כל השבוע, כמו קודם
+  assert.equal(buildSlots(week, [channel()], null, { today: '2026-09-01' }).length, 0);
+  assert.equal(buildSlots(week, [channel()], null).length, 7);
+});
