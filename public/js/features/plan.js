@@ -1069,7 +1069,7 @@ function boardTable(c) {
   }));
   const indexes = [...new Set(cols.flatMap((col) => [...col.byIndex.keys()]))].sort((x, y) => x - y);
 
-  const head = cols.map((col) => `<th>${esc(col.channel_name)}
+  const head = cols.map((col) => `<th data-tt="${esc(col.channel_name)}">${esc(col.channel_name)}
     <div class="need">${col.ready} מתוך ${col.required} מוכנים</div></th>`).join('');
 
   const body = indexes.map((i) => {
