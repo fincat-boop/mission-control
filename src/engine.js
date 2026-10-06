@@ -1300,11 +1300,14 @@ export function linkedSameDay(c, groupDays, dateKey) {
  * (LINK_LIVE_STATUSES) — רק פריטים שבאמת בקבוצה (עוקבת, או מקור שיש לו
  * עוקבות). יומיים לכל צד מספיקים: הכלל הוא "לא באותו יום".
  */
-async function linkGroupDays(from, to) {
+export async function linkGroupDays(from, to) {
   const r = await rows(
     `select p.content_id, coalesce(ci.linked_to_id, ci.id) as root, p.scheduled_at
        from posts p join content_items ci on ci.id = p.content_id
+       left join campaigns ca on ca.id = ci.campaign_id
       where p.status = any($3)
+        -- פוסט של קמפיין מושהה ירד מהלוח (אלא אם כבר פורסם), כמו existing
+        and (ca.paused_at is null or p.status = 'published')
         and (ci.linked_to_id is not null
              or exists (select 1 from content_items f where f.linked_to_id = ci.id))
         and p.scheduled_at >= $1::timestamptz - interval '2 days'

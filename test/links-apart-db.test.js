@@ -436,3 +436,53 @@ test('אותה נקודה באותו יום — יום לפי ישראל (01:00)
     await capCleanup(s);
   }
 });
+
+test('פוסט מוסתר של קמפיין מושהה לא נספר — לא במכסה ולא ביום של קבוצת הקישור', { skip }, async () => {
+  const { capWarning } = await import('../src/gap.js');
+  const s = await capSetup('מכסה מושהה');
+  try {
+    const camp = await inOrg(async () => {
+      const c = (await db.one(
+        `insert into campaigns (endpoint_id, name, paused_at) values ($1, 'מושהה', now()) returning id`,
+        [s.ep])).id;
+      const it = (await db.one(
+        `insert into content_items (endpoint_id, campaign_id, kind, title) values ($1,$2,'promo','x')
+         returning id`, [s.ep, c])).id;
+      return { c, it };
+    });
+    // שני פוסטים מוסתרים בשבוע (אחד מכירתי) ופוסט אחד חי — 1 מתוך 2, אין אזהרה
+    await insertPost({ channel: s.ch, ep: s.ep, content: camp.it, kind: 'promo', at: at(18) });
+    await insertPost({ channel: s.ch, ep: s.ep, content: camp.it, at: at(19) });
+    await insertPost({ channel: s.ch, ep: s.ep2, at: at(20) });
+    await inOrg(async () => {
+      assert.equal(await capWarning({ channelId: s.ch, when: at(21), kind: 'promo' }), null);
+      assert.equal(await capWarning({ channelId: s.other, when: at(18, 15), kind: 'promo' }), null);
+      // פורסם — נשאר תפוס גם בקמפיין מושהה
+      await db.query("update posts set status = 'published' where content_id = $1 and kind = 'promo'",
+        [camp.it]);
+      const w = await capWarning({ channelId: s.ch, when: at(21), kind: 'promo' });
+      assert.match(w.message, /2 מתוך 2 פוסטים בשבוע/);
+      await db.query('delete from posts where channel_id = $1', [s.ch]);
+      await db.query('delete from content_items where campaign_id = $1', [camp.c]);
+      await db.query('delete from campaigns where id = $1', [camp.c]);
+    });
+  } finally {
+    await capCleanup(s);
+  }
+
+  // המנוע: המקור משובץ ב-18.11 בקמפיין שהושהה ואז חזר — בזמן ההשהיה הוא לא תופס את היום
+  const l = await linkedSetup({ name: 'קישור מושהה', openA: [1], openB: [1] });
+  try {
+    await insertPost({ channel: l.a, ep: l.ep, content: l.root, title: 'המקור', at: at(18) });
+    await inOrg(() => db.query('update campaigns set paused_at = now() where id = $1', [l.camp]));
+    const days = await inOrg(async () => (await import('../src/engine.js')).linkGroupDays(
+      new Date('2030-11-17T00:00:00'), new Date('2030-11-23T23:59:59')));
+    assert.equal(days.size, 0, 'פוסט מוסתר לא נספר');
+    await inOrg(() => db.query('update campaigns set paused_at = null where id = $1', [l.camp]));
+    const live = await inOrg(async () => (await import('../src/engine.js')).linkGroupDays(
+      new Date('2030-11-17T00:00:00'), new Date('2030-11-23T23:59:59')));
+    assert.deepEqual([...live.get(l.root).keys()], ['2030-11-18']);
+  } finally {
+    await cleanup(l);
+  }
+});
