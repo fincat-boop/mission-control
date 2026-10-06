@@ -4,7 +4,7 @@ import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
-import { channelCapacity, shareOf } from './capacity.js';
+import { channelCapacity, normalizeShares, shareOf } from './capacity.js';
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -697,7 +697,10 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
  * חלוקת השטח בין נקודות הקצה, חודש אחר חודש.
  *
  * זו התמונה האסטרטגית: לא מה קורה בקמפיין מסוים, אלא כמה מקום כל נקודת קצה
- * מקבלת לאורך הזמן. הנתח של כל חודש מנורמל ל-100% מהקמפיינים שרצים בו.
+ * מקבלת לאורך הזמן. הנתח של נקודה בחודש = סכום הנתחים המנורמלים
+ * (normalizeShares — אותו חשבון כמו הרשת והמנוע) של הקמפיינים שלה שנוגעים
+ * בחודש. הסכום לא עובר 100%; כשכל הקמפיינים קבועים ומתחת ל-100%, היתרה
+ * היא של התוכן השוטף ולא מוצגת כאן.
  */
 export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
   const campaigns = await rows(
@@ -714,19 +717,17 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
     const from = ymd(start);
     const to = ymd(end);
 
-    // הקמפיינים שנוגעים בחודש הזה
-    const live = campaigns.filter((c) =>
-      (!c.starts_on || c.starts_on <= to) && (!c.ends_on || c.ends_on >= from));
+    // הקמפיינים שנוגעים בחודש הזה, והנתח המנורמל של כל אחד מהם בחודש
+    const shares = normalizeShares(campaigns, { from, to });
+    const live = campaigns.filter((c) => shares.has(c.id));
 
     const weights = new Map();
     const drivers = new Map(); // אילו קמפיינים מזינים כל נקודה בחודש הזה
     for (const c of live) {
-      const w = c.share_pct != null ? c.share_pct : (c.endpoint_importance ?? 5) * 5;
-      weights.set(c.endpoint_id, (weights.get(c.endpoint_id) ?? 0) + w);
+      weights.set(c.endpoint_id, (weights.get(c.endpoint_id) ?? 0) + shares.get(c.id));
       if (!drivers.has(c.endpoint_id)) drivers.set(c.endpoint_id, []);
       drivers.get(c.endpoint_id).push(c.name);
     }
-    const total = [...weights.values()].reduce((s, v) => s + v, 0);
 
     return {
       key: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`,
@@ -737,7 +738,7 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
         .map((e) => ({
           endpoint_id: e.id,
           name: e.name,
-          pct: total ? Math.round(((weights.get(e.id) ?? 0) / total) * 100) : 0,
+          pct: Math.round((weights.get(e.id) ?? 0) * 100),
           campaigns: drivers.get(e.id) ?? [],
         }))
         .filter((s) => s.pct > 0),
@@ -751,15 +752,17 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
 /**
  * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין.
  *
- * הנתח (target_pct): מה שנקבע ידנית בקמפיין, ובלעדיו החלק היחסי לפי חשיבות
- * נקודת הקצה מול הקמפיינים החופפים (shareOf — אותו חשבון כמו גודל הלוח).
+ * הנתח (target_pct): הנתח המנורמל של הקמפיין היום (normalizeShares — אותו
+ * חשבון כמו הרשת והמנוע): share_pct שנקבע ידנית (מוקטן אם הסכום עובר 100%),
+ * ובלעדיו חלק מהיתרה לפי חשיבות נקודת הקצה. נמדד על היום ולא על החלון של
+ * כל קמפיין, כדי שהשורות יהיו מאותו בסיס והסכום שלהן לא יעבור 100%.
  * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
  * הקמפיין מתוך הפרסומים של כל הקמפיינים בטבלה — אותו בסיס כמו הנתח, שמתחלק
  * בין קמפיינים (תוכן שוטף ופוסטים בלי תוכן לא נספרים בשום צד).
  */
 export async function currentAllocation() {
   const today = ymd(new Date());
-  const all = await rows(CAMPAIGNS_WEIGHTED_SQL);
+  const shares = normalizeShares(await rows(CAMPAIGNS_WEIGHTED_SQL), { from: today, to: today });
   const running = await rows(
     `select c.*, e.name as endpoint_name
        from campaigns c join endpoints e on e.id = c.endpoint_id
@@ -789,7 +792,7 @@ export async function currentAllocation() {
     rows: running.map((c) => {
       const n = countMap.get(c.id) ?? 0;
       const actual = total > 0 ? Math.round((n / total) * 100) : 0;
-      const target = Math.round(shareOf(c, all) * 100);
+      const target = Math.round((shares.get(c.id) ?? 0) * 100);
       return {
         campaign_id: c.id,
         campaign_name: c.name,
