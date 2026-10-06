@@ -110,7 +110,7 @@ function pickAcrossWeek(content, anchor = '2026-11-11') {
       debts: debtsStub,
       usage: buildUsage([ch], [], settings),
       usedContent: new Set(),
-      lastPerPair: new Map(),
+      pairDates: new Map(),
       settings,
       placements: [],
       history: new Map(),
@@ -433,7 +433,7 @@ function runWeeks(content, anchors, chOver = {}) {
       if (!usage.channelHasRoom(slot.channel_id)) continue;
       const pick = chooseForSlot({
         slot, endpoints: [{ id: 1, name: 'נקודה', importance: 5 }], content, campaigns: [],
-        debts: debtsStub, usage, usedContent, lastPerPair: new Map(), settings,
+        debts: debtsStub, usage, usedContent, pairDates: new Map(), settings,
         placements: [], history, sameDay: new Set(),
       });
       if (!pick) continue;
@@ -583,4 +583,84 @@ test('strategyDeficits — יעדים מתחת ל-100% מנורמלים לאות
     [{ endpoint_id: 2, n: 5 }, { endpoint_id: 3, n: 5 }, { endpoint_id: 9, n: 50 }]);
   assert.equal(Math.round(d.get(2) * 100), 17);   // 66.7 − 50
   assert.equal(d.get(3), 0);
+});
+
+/* ========================= מרווח לפי קמפיין, שכן לשני הכיוונים ========================= */
+
+import { addPairDate, contentGap, nearestDays } from '../src/engine.js';
+
+/** בחירה למשבצת אחת בערוץ 1, עם פוסטים קיימים של נקודה 1 בתאריכים dates */
+function pickOn(dateKey, content, dates, settings = { ...SETTINGS, min_gap_days: 7 }) {
+  const ch = channel({ max_per_week: 7 });
+  const pick = chooseForSlot({
+    slot: { channel_id: 1, channel_name: 'ערוץ', dateKey, date: new Date(`${dateKey}T00:00:00`) },
+    endpoints: [{ id: 1, name: 'נקודה', importance: 5 }],
+    content, campaigns: [], debts: debtsStub,
+    usage: buildUsage([ch], [], settings), usedContent: new Set(),
+    pairDates: new Map([['1:1', [...dates]]]), settings,
+    placements: [], history: new Map(), sameDay: new Set(),
+  });
+  return pick?.content.id ?? null;
+}
+
+test('nearestDays — המרחק לשכן הקרוב, לפני או אחרי; בלי פוסטים — אינסוף', () => {
+  assert.equal(nearestDays(['2026-11-01', '2026-11-30'], '2026-11-03'), 2);
+  assert.equal(nearestDays(['2026-11-01', '2026-11-30'], '2026-11-27'), 3);
+  assert.equal(nearestDays([], '2026-11-03'), Infinity);
+  assert.equal(nearestDays(undefined, '2026-11-03'), Infinity);
+  // מעבר שעון (25.10) לא מקצר יום
+  assert.equal(nearestDays(['2026-10-24'], '2026-10-26'), 2);
+});
+
+test('addPairDate — נשמר ממוין גם כשמוסיפים תאריך מוקדם', () => {
+  const m = new Map([['1:1', ['2026-11-10']]]);
+  addPairDate(m, '1:1', '2026-11-03');
+  addPairDate(m, '2:1', '2026-11-05');
+  assert.deepEqual(m.get('1:1'), ['2026-11-03', '2026-11-10']);
+  assert.deepEqual(m.get('2:1'), ['2026-11-05']);
+});
+
+test('contentGap — המרווח של הקמפיין של התוכן; תוכן בלי קמפיין — הכללי', () => {
+  const s = { min_gap_days: 7 };
+  assert.equal(contentGap(item({ campaign_id: 3, campaign_min_gap_days: 2 }), s), 2);
+  assert.equal(contentGap(item({ campaign_id: 3, campaign_min_gap_days: null }), s), 7);
+  assert.equal(contentGap(item({ campaign_id: null }), s), 7);
+  assert.equal(contentGap(item({ campaign_id: null }), {}), 7);
+});
+
+test('רגרסיה: פוסט עתידי לא מסתיר שכן קרוב — המרווח נבדק לשני הכיוונים', () => {
+  // פוסט קיים ב-1.11 ועוד אחד עתידי ב-30.11. קודם נבדק רק המאוחר (max),
+  // ומשבצת ב-3.11 עברה למרות שהיא יומיים אחרי 1.11.
+  const dates = ['2026-11-01', '2026-11-30'];
+  const c = item({ id: 4 });
+  assert.equal(pickOn('2026-11-03', [c], dates), null, 'יומיים אחרי 1.11');
+  assert.equal(pickOn('2026-11-26', [c], dates), null, 'ארבעה ימים לפני 30.11');
+  assert.equal(pickOn('2026-11-08', [c], dates), 4, 'שבוע אחרי 1.11 — מותר');
+  assert.equal(pickOn('2026-11-23', [c], dates), 4, 'שבוע לפני 30.11 — מותר');
+});
+
+test('מרווח לפי מועמד: שני קמפיינים של אותה נקודה עם מרווחים שונים', () => {
+  // פוסט קיים לפני 3 ימים. קמפיין א׳ (מרווח 2) נכנס, קמפיין ב׳ (מרווח 7) לא.
+  const dates = ['2026-11-05'];
+  const tight = item({ id: 21, campaign_id: 1, campaign_min_gap_days: 2 });
+  const loose = item({ id: 22, campaign_id: 2, campaign_min_gap_days: 7 });
+  assert.equal(pickOn('2026-11-08', [loose, tight], dates), 21);
+  assert.equal(pickOn('2026-11-08', [loose], dates), null);
+  // יום אחרי הפוסט — גם מרווח 2 לא מספיק
+  assert.equal(pickOn('2026-11-06', [tight], dates), null);
+  // שבוע אחרי — שניהם מותרים, והראשון בסדר זוכה (שניהם מוכנים, אותו סוג)
+  assert.equal(pickOn('2026-11-12', [loose, tight], dates), 22);
+});
+
+test('מרווח 1 בקמפיין: כל יום מותר, אבל לא אותו יום', () => {
+  const daily = item({ id: 31, campaign_id: 1, campaign_min_gap_days: 1 });
+  assert.equal(pickOn('2026-11-06', [daily], ['2026-11-05']), 31);
+  assert.equal(pickOn('2026-11-05', [daily], ['2026-11-05']), null);
+});
+
+test('תוכן שוטף (בלי קמפיין) נבדק מול ברירת המחדל הכללית', () => {
+  const plain = item({ id: 41, campaign_id: null });
+  const s3 = { ...SETTINGS, min_gap_days: 3 };
+  assert.equal(pickOn('2026-11-07', [plain], ['2026-11-05'], s3), null);
+  assert.equal(pickOn('2026-11-08', [plain], ['2026-11-05'], s3), 41);
 });

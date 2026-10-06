@@ -3,7 +3,7 @@ import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
-import { averageShares, channelBudget } from './capacity.js';
+import { averageShares, channelBudget, effectiveGap } from './capacity.js';
 
 /**
  * מנוע השיבוץ.
@@ -57,8 +57,10 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   // המנוע ממשיך להעדיף מוכן על פני טיוטה כשיש ברירה (ראו chooseForSlot).
   // תאריכי הקמפיין נשלפים עם התוכן: תוכן של קמפיין לא יוצא לפני
   // starts_on ולא אחרי ends_on (ראו outsideCampaignWindow).
+  // campaign_min_gap_days — המרווח של הקמפיין של התוכן (contentGap)
   const content = await rows(`select ci.*,
                ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
+               ca.min_gap_days as campaign_min_gap_days,
                ${COMPLETE_SPREAD_COLUMNS},
                coalesce(
                  array_agg(v.channel_id) filter (where v.status = 'ready'),
@@ -145,8 +147,9 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
       .map((p) => `${p.endpoint_id}:${p.channel_id}:${ymd(new Date(p.scheduled_at))}`)
   );
 
-  // המרווח האחרון של כל נקודה בכל ערוץ, כדי לכבד min_gap_days
-  const lastPerPair = await lastPostPerEndpointChannel();
+  // כל הפוסטים החיים של כל נקודה בכל ערוץ סביב השבוע — לבדיקת המרווח מול
+  // השכן הקרוב לשני הכיוונים (ראו contentGap / nearestDays)
+  const pairDates = await postDatesPerEndpointChannel(from, to, settings);
 
   const placements = [];
 
@@ -160,7 +163,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
 
     const pick = chooseForSlot({
       slot, endpoints, content, campaigns, debts, usage,
-      usedContent, lastPerPair, settings, placements, history, sameDay,
+      usedContent, pairDates, settings, placements, history, sameDay,
     });
     if (!pick) continue;
 
@@ -192,7 +195,7 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
     usage.take(slot.channel_id, slot.dateKey, pick.content.kind, hour);
     usedContent.add(`${slot.channel_id}:${pick.content.id}`);
     sameDay.add(`${pick.endpoint.id}:${slot.channel_id}:${slot.dateKey}`);
-    lastPerPair.set(`${pick.endpoint.id}:${slot.channel_id}`, slot.dateKey);
+    addPairDate(pairDates, `${pick.endpoint.id}:${slot.channel_id}`, slot.dateKey);
     debts.markScheduled(pick.endpoint.id);
   }
 
@@ -1013,24 +1016,50 @@ export function outsideCampaignWindow(c, dateKey) {
   return false;
 }
 
+/**
+ * המרווח שהתוכן הזה דורש בינו לבין פוסט אחר של אותה נקודה באותו ערוץ: של
+ * הקמפיין שלו (campaign_min_gap_days), ותוכן בלי קמפיין — הכללי.
+ */
+export function contentGap(c, settings) {
+  return effectiveGap(c?.campaign_id ? { min_gap_days: c.campaign_min_gap_days } : null, settings);
+}
+
+/**
+ * המרחק בימים מהתאריך dateKey לפוסט הקרוב ביותר ברשימה, לפני או אחרי.
+ * Infinity כשאין אף פוסט. שני הכיוונים: פוסט עתידי שכבר על הלוח קובע
+ * בדיוק כמו פוסט שעבר — קודם נבדק רק האחרון בזמן (max), ופוסט עתידי הסתיר
+ * שכן קרוב שלפניו.
+ */
+export function nearestDays(dates, dateKey) {
+  let best = Infinity;
+  const at = new Date(dateKey).getTime();
+  for (const d of dates ?? []) {
+    const days = Math.abs(Math.round((at - new Date(d).getTime()) / 86400000));
+    if (days < best) best = days;
+  }
+  return best;
+}
+
+/** מוסיף תאריך לרשימה של נקודה×ערוץ, בסדר עולה */
+export function addPairDate(map, key, dateKey) {
+  const list = map.get(key) ?? [];
+  list.push(dateKey);
+  list.sort();
+  map.set(key, list);
+}
+
 export function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
-          usedContent, lastPerPair, settings, history, sameDay } = ctx;
+          usedContent, pairDates = new Map(), settings, history, sameDay } = ctx;
 
-  const minGap = settings?.min_gap_days ?? 7;
   const candidates = [];
 
   for (const e of endpoints) {
     // אותה נקודה, אותה מדיה, אותו יום — לא משנה מאיזה סוג
     if (sameDay.has(`${e.id}:${slot.channel_id}:${slot.dateKey}`)) continue;
-    // מרווח מינימלי לאותה נקודה באותו ערוץ
-    const lastKey = lastPerPair.get(`${e.id}:${slot.channel_id}`);
-    if (lastKey) {
-      const gapDays = Math.abs(
-        (new Date(slot.dateKey) - new Date(lastKey)) / 86400000
-      );
-      if (gapDays < minGap) continue;
-    }
+    // המרחק מהפוסט הקרוב של הנקודה בערוץ הזה. המרווח עצמו תלוי בתוכן — כל
+    // קמפיין קובע את שלו — ולכן נבדק לכל מועמד בנפרד, למטה.
+    const nearest = nearestDays(pairDates.get(`${e.id}:${slot.channel_id}`), slot.dateKey);
 
     // טיוטה נחשבת מועמדת כמו תוכן מוכן — השיבוץ הולך לפי האסטרטגיה,
     // לא לפי אם כבר נכתב טקסט סופי. bool כדי שאפשר יהיה להעדיף מוכן
@@ -1040,6 +1069,7 @@ export function chooseForSlot(ctx) {
       (c.eligible_channel_ids ?? []).includes(slot.channel_id) &&
       fitsSlotChannel(c, slot.channel_id) &&
       !outsideCampaignWindow(c, slot.dateKey) &&
+      nearest >= contentGap(c, settings) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&
       usage.allows(slot.channel_id, slot.dateKey, c.kind)
@@ -1194,7 +1224,8 @@ function reusable(c, slot, history, settings) {
   if (!lastHere) return true; // evergreen שעוד לא היה בערוץ הזה
 
   const gap = Math.abs((new Date(slot.dateKey) - new Date(lastHere)) / 86400000);
-  return gap >= (c.reuse_after_days ?? settings?.min_gap_days ?? 7);
+  // מרווח שימוש חוזר של התוכן — לא המרווח של הקמפיין; ברירת המחדל הכללית
+  return gap >= (c.reuse_after_days ?? effectiveGap(null, settings));
 }
 
 /** מתי כל פריט תוכן פורסם או שובץ, לכל ערוץ */
@@ -1214,13 +1245,31 @@ async function contentHistory() {
   return map;
 }
 
-/** המרווח האחרון בין נקודת קצה לערוץ, לצורך min_gap_days */
-async function lastPostPerEndpointChannel() {
+/**
+ * כל התאריכים שבהם לנקודת קצה יש פוסט חי בערוץ, סביב השבוע המתוכנן —
+ * מפה `${endpoint_id}:${channel_id}` → YYYY-MM-DD ממוינים. המרווח נבדק מול
+ * השכן הקרוב לשני הכיוונים (nearestDays), ולכן צריך את כולם ולא רק את
+ * האחרון. הטווח: השבוע ± המרווח הגדול ביותר שאפשר (30 — התקרה של מרווח
+ * קמפיין — או הכללי אם גדול יותר); פוסט רחוק מזה לא משנה שום החלטה.
+ * אותם מצבים כמו בלוח (LIVE ב-gap.js).
+ */
+async function postDatesPerEndpointChannel(from, to, settings) {
+  const horizon = Math.max(30, effectiveGap(null, settings));
   const r = await rows(
-    `select endpoint_id, channel_id, max(scheduled_at) as last_at
+    `select endpoint_id, channel_id, scheduled_at
        from posts
-      where endpoint_id is not null and status in ('scheduled','approved','publishing','failed','published','pending_approval')
-      group by endpoint_id, channel_id`
+      where endpoint_id is not null
+        and status in ('scheduled','approved','publishing','failed','published','pending_approval')
+        and scheduled_at >= $1::timestamptz - make_interval(days => $3)
+        and scheduled_at <= $2::timestamptz + make_interval(days => $3)
+      order by scheduled_at`,
+    [from, to, horizon]
   );
-  return new Map(r.map((x) => [`${x.endpoint_id}:${x.channel_id}`, ymd(new Date(x.last_at))]));
+  const map = new Map();
+  for (const x of r) {
+    const key = `${x.endpoint_id}:${x.channel_id}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(ymd(new Date(x.scheduled_at)));
+  }
+  return map;
 }
