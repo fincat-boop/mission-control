@@ -362,3 +362,31 @@ test('הלוח: פוסט מקושר באותו יום — הזזה ושיוך ת
     await cleanup(s);
   }
 });
+
+test('העוזר (move_post): ההצעה מציגה פוסט מקושר ומכסה, והאישור שולח confirm_warnings', { skip }, async () => {
+  const { _internals } = await import('../src/assistant.js');
+  const tool = _internals.WRITE_TOOLS.move_post;
+  assert.deepEqual(tool.request({ post_id: 5, scheduled_at: at(18) }),
+    { method: 'PATCH', path: '/posts/5', body: { scheduled_at: at(18), confirm_warnings: true } });
+
+  const s = await linkedSetup({ name: 'עוזר קישור' });
+  const c = await capSetup('עוזר מכסה');
+  try {
+    await insertPost({ channel: s.a, ep: s.ep, content: s.root, title: 'המקור', at: at(18) });
+    const follower = await insertPost({ channel: s.b, ep: s.ep, content: s.follower, at: at(20) });
+    await insertPost({ channel: c.ch, ep: c.ep, at: at(18) });
+    await insertPost({ channel: c.ch, ep: c.ep2, at: at(19) });
+    const mover = await insertPost({ channel: c.ch, at: at(25) });
+    await inOrg(async () => {
+      const linked = await tool.check({ post_id: follower, scheduled_at: at(18, 12) });
+      assert.ok(linked.warnings.some((w) => /פוסט מקושר \("המקור"/.test(w)), linked.warnings.join(' | '));
+      const same = await tool.check({ post_id: follower, scheduled_at: at(20, 12) });
+      assert.ok(!same.warnings.some((w) => /פוסט מקושר/.test(w)));
+      const cap = await tool.check({ post_id: mover, scheduled_at: at(20) });
+      assert.ok(cap.warnings.some((w) => /2 מתוך 2 פוסטים בשבוע/.test(w)), cap.warnings.join(' | '));
+    });
+  } finally {
+    await cleanup(s);
+    await capCleanup(c);
+  }
+});

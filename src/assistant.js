@@ -22,7 +22,7 @@ import { buildBoard, ymd } from './board.js';
 import { planWeek } from './engine.js';
 import { VIA_HEADER } from './audit.js';
 import { buildStats, readActivity } from './stats.js';
-import { gapWarning } from './gap.js';
+import { capWarning, gapWarning, linkDayWarning } from './gap.js';
 import { friendlyAiError } from './ai-errors.js';
 
 const MODEL = 'claude-opus-5';
@@ -524,8 +524,10 @@ const WRITE_TOOLS = {
       },
       required: ['post_id'],
     },
+    // האזהרות הרכות (מרווח, פוסט מקושר, מכסות) מוצגות בהצעה עצמה (checkMove),
+    // ולכן אישור ההצעה הוא גם האישור שלהן — אחרת הנתיב היה מחזיר 409
     request: ({ post_id, ...rest }) => ({
-      method: 'PATCH', path: `/posts/${post_id}`, body: rest,
+      method: 'PATCH', path: `/posts/${post_id}`, body: { ...rest, confirm_warnings: true },
     }),
     check: (a) => checkMove(a),
   },
@@ -785,6 +787,14 @@ async function checkMove({ post_id, scheduled_at, channel_id }) {
     contentId: p.content_id,
   });
   if (gap) warnings.push(gap.message);
+  // פוסט מקושר באותו יום — רק כשהיום משתנה (כמו בנתיב); מכסות — כשהפוסט נכנס
+  // לשבוע / ערוץ / יום שלא נספר בו קודם
+  if (ymd(when_) !== ymd(new Date(p.scheduled_at))) {
+    const linked = await linkDayWarning({ contentId: p.content_id, when, excludePostId: p.id });
+    if (linked) warnings.push(linked.message);
+  }
+  const cap = await capWarning({ channelId: target, when, kind: p.kind, excludePostId: p.id });
+  if (cap) warnings.push(...cap.caps);
   return { warnings };
 }
 
