@@ -113,7 +113,9 @@ export function channelCapacities(campaign, channels, concurrent = [], { gapDays
  * לכל ערוץ: כמה הקצב רוצה (wanted), התקרה של הקצב (rate_cap), כמה נכנס
  * (capacity), כמה המרווח מאפשר (gap_cap, אחרי חלוקה בין אחים — siblings),
  * מה מגביל (limited_by), ו-gap_to_fit — המרווח הגדול ביותר שבו נכנס כל
- * הקצב (null כשהמרווח הוא לא המגביל). short = יש ערוץ שהמרווח מקצץ בו.
+ * הקצב (null כשהמרווח הוא לא המגביל). short = יש ערוץ שהמרווח מקצץ בו —
+ * רק בהקצאה לפי קצב; בקמפיין מוכן (fixed) הקצב לא קובע כמה פוסטים יש,
+ * ולכן short תמיד false והשאלה היא fixed.
  *
  * fixed — רק לקמפיין מוכן (written נשלח): התוכן קבוע, ולכן השאלה הפוכה —
  * לכל ערוץ כמה נכתב (written), התקרה של הקצב (rate_cap) והאם הקצב לבדו לא
@@ -174,7 +176,7 @@ export function capacityPreview(draft, channels, concurrent = [],
 
   return {
     from: draft.starts_on ?? null, to: draft.ends_on ?? null, gap_days: gap, channels: list,
-    short: list.some((x) => x.limited_by === 'gap' && x.capacity < x.rate_cap),
+    short: !fixed && list.some((x) => x.limited_by === 'gap' && x.capacity < x.rate_cap),
     fixed,
   };
 }

@@ -660,6 +660,9 @@ test('capacityPreview — קמפיין מוכן: כמה נכתב, באיזה מ�
   assert.equal(f.rate_short, false);
   assert.equal(f.gap_to_fit, 7);              // 3 ב-16 יום: 20, 27.11, 4.12
   assert.equal(f.end_to_fit, '2026-12-04');   // אפשר אפילו לקצר ביום
+  // בהקצאה לפי קצב BF חסר (3 מתוך 4), אבל בקמפיין מוכן הקצב לא קובע — short לא נדלק
+  assert.equal(capacityPreview(BF, [FB], [], { gapDays: 7 }).short, true);
+  assert.equal(p.short, false);
 
   const more = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 5 } }).fixed.channels[0];
   // המרווח לבדו מכיל 5 במרווח 3 (20, 23, 26, 29.11, 2.12) — אבל הקצב (4) לא

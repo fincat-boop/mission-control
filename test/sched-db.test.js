@@ -230,6 +230,7 @@ test('תצוגה מקדימה: עריכה (id) ויצירה (בלי id) — או
   const assumed = await call('POST', '/campaigns/capacity-preview', { id: c.id, assume_complete: true });
   assert.equal(assumed.status, 200, JSON.stringify(assumed.json));
   assert.deepEqual(assumed.json.fixed, expected);
+  assert.equal(assumed.json.short, false, 'במצב מוכן החלון לפי הקצב לא רלוונטי');
   assert.equal((await q1('select content_complete_at from campaigns where id = $1', [c.id]))
     .content_complete_at, null);
   // בלי id אין תוכן לבדוק
@@ -240,6 +241,11 @@ test('תצוגה מקדימה: עריכה (id) ויצירה (בלי id) — או
     db.query('update campaigns set content_complete_at = now() where id = $1', [c.id]));
   const fixed = await call('POST', '/campaigns/capacity-preview', { id: c.id });
   assert.deepEqual(fixed.json.fixed, expected);
+  // עריכה של קמפיין מוכן (אותו גוף כמו הטופס, עם id) — בלי short לפי הקצב
+  assert.equal(fixed.json.short, false);
+  const edited = await call('POST', '/campaigns/capacity-preview',
+    { id: c.id, starts_on: '2030-11-20', period: 'custom', ends_on: '2030-12-05' });
+  assert.equal(edited.json.short, false);
 
   await inOrg(async () => {
     await db.query('delete from content_items where campaign_id = $1', [c.id]);

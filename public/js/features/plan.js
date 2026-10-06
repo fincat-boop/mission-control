@@ -477,7 +477,9 @@ async function askFit(body, { editId = null, okLabel = 'שמור' } = {}) {
   } catch {
     return {};
   }
-  if (!draft.short || (saved && sameShortage(draft, saved))) return {};
+  // קמפיין מוכן (fixed): הקצב לא קובע כמה פוסטים יש — השרת לא מדליק short,
+  // וההתאמה שלו נבדקת בסימון "מוכן". כאן לא שואלים.
+  if (draft.fixed || !draft.short || (saved && sameShortage(draft, saved))) return {};
 
   const rows = shortChannels(draft);
   const gap = compressGap(rows);
