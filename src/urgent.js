@@ -167,6 +167,7 @@ export async function planUrgent(input) {
     } else {
       // המבצע נכנס לשטח פנוי, אבל הוא עדיין יכול לנחות צמוד לפוסט קיים
       // של אותה נקודה. זו לא סיבה לעצור מבצע דחוף — רק לומר את זה.
+      // למבצע דחוף אין קמפיין — המרווח הכללי.
       const gap = await gapWarning({
         endpointId, channelId: ch.id, when: placed.scheduled_at,
       });

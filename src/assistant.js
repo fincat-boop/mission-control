@@ -772,6 +772,7 @@ async function checkMove({ post_id, scheduled_at, channel_id }) {
   // מרווח צמוד מדי הוא אזהרה למשתמש, לא סיבה לפסול את ההצעה
   const gap = await gapWarning({
     endpointId: p.endpoint_id, channelId: target, when, excludePostId: p.id,
+    contentId: p.content_id,
   });
   if (gap) warnings.push(gap.message);
   return { warnings };

@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { pool, rows, one, query } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import {
-  buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, nextSlot, outsideCampaignWindow, withEngineLock,
+  buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, nearestDays, nextSlot,
+  outsideCampaignWindow, withEngineLock,
 } from './engine.js';
+import { effectiveGap } from './capacity.js';
 
 /**
  * מרווח מחדש שבוע שכבר משובץ.
@@ -25,8 +27,9 @@ import {
  * מה לא זז לעולם: פוסט שפורסם, פוסט שממתין לאישור, ויום שכבר עבר.
  *
  * כללים שנאכפים על היעד: יום חסום בערוץ · אותה נקודת קצה לא מקבלת שני
- * פוסטים באותה מדיה באותו יום · max_promo_per_day · min_gap_days מול
- * פוסטים בשבועות הסמוכים. פוסט שאין לו יום חוקי נשאר במקום ומדווח.
+ * פוסטים באותה מדיה באותו יום · max_promo_per_day · המרווח מול פוסטים
+ * בשבועות הסמוכים — המרווח של הקמפיין של הפוסט שזז (contentGap), לשני
+ * הכיוונים. פוסט שאין לו יום חוקי נשאר במקום ומדווח.
  */
 
 const ON_BOARD = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
@@ -58,6 +61,7 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
             p.channel_id, p.endpoint_id,
             c.name as channel_name, e.name as endpoint_name,
             ci.campaign_id, ca.starts_on as campaign_starts_on, ca.ends_on as campaign_ends_on,
+            ca.min_gap_days as campaign_min_gap_days,
             -- קמפיין מוכן: פוסט לא זז לפני התאריך המתוכנן שלו (outsideCampaignWindow)
             ${COMPLETE_SPREAD_COLUMNS}
        from posts p
@@ -81,7 +85,6 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   const result = { week, moves: [], stuck: [], posts: posts.length };
   if (movable.length === 0) return result;
 
-  const minGap = settings?.min_gap_days ?? 7;
   const maxPromoPerDay = settings?.max_promo_per_day ?? 1;
   const today = ymd(new Date());
 
@@ -97,8 +100,9 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
     promoPerDay.set(d, (promoPerDay.get(d) ?? 0) + 1);
   }
 
-  // פוסטים של אותה נקודה+ערוץ מחוץ לשבוע — הם קובעים את min_gap_days
-  const neighbours = await neighbourDays(from, to, minGap);
+  // פוסטים של אותה נקודה+ערוץ מחוץ לשבוע — מולם נמדד המרווח. הטווח לפי
+  // המרווח הגדול ביותר שאפשר (30 = התקרה של מרווח קמפיין, או הכללי)
+  const neighbours = await neighbourDays(from, to, Math.max(30, effectiveGap(null, settings)));
 
   // תור לכל ערוץ, לפי הסדר הנוכחי על הלוח: מי שהיה ראשון יישאר ראשון
   const queues = new Map();
@@ -161,11 +165,9 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
     if (post.endpoint_id) {
       if (sameDay.has(`${post.endpoint_id}:${post.channel_id}:${dateKey}`)) return false;
 
-      const others = neighbours.get(`${post.endpoint_id}:${post.channel_id}`) ?? [];
-      const tooClose = others.some(
-        (d) => Math.abs((new Date(dateKey) - new Date(d)) / 86400000) < minGap
-      );
-      if (tooClose) return false;
+      // המרווח של הקמפיין של הפוסט שזז; השכן הקרוב לפני או אחרי
+      const others = neighbours.get(`${post.endpoint_id}:${post.channel_id}`);
+      if (nearestDays(others, dateKey) < contentGap(post, settings)) return false;
     }
     if (post.kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
     return windowAllows(post, dateKey);
@@ -244,10 +246,10 @@ export async function postsOnBlockedDays(weeks = HORIZON_WEEKS) {
   return r.filter((p) => onBlockedDay(p, p));
 }
 
-/** ימים תפוסים לכל נקודה+ערוץ מחוץ לשבוע, בטווח שרלוונטי ל-min_gap_days */
-async function neighbourDays(from, to, minGap) {
-  const before = new Date(from); before.setDate(before.getDate() - minGap);
-  const after = new Date(to);    after.setDate(after.getDate() + minGap);
+/** ימים תפוסים לכל נקודה+ערוץ מחוץ לשבוע, עד horizon ימים לפני ואחרי */
+async function neighbourDays(from, to, horizon) {
+  const before = new Date(from); before.setDate(before.getDate() - horizon);
+  const after = new Date(to);    after.setDate(after.getDate() + horizon);
 
   const r = await rows(
     `select endpoint_id, channel_id, scheduled_at

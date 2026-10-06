@@ -27,12 +27,39 @@ export async function loadGapDays() {
 }
 
 /**
+ * המרווח שחל על פוסט: של הקמפיין שהתוכן שלו שייך אליו (campaignId, או
+ * contentId → הקמפיין של התוכן), ובלעדיו ברירת המחדל הכללית. פוסט בלי
+ * קמפיין (מבצע דחוף, פוסט ידני בלי תוכן) — הכללי.
+ * @returns {Promise<{min:number, campaign:{id:number,name:string}|null}>}
+ *          campaign — רק כשהמרווח בא ממנו
+ */
+export async function gapFor({ campaignId = null, contentId = null } = {}) {
+  let c = null;
+  if (campaignId) {
+    c = await one('select id, name, min_gap_days from campaigns where id = $1', [campaignId]);
+  } else if (contentId) {
+    c = await one(
+      `select ca.id, ca.name, ca.min_gap_days
+         from content_items ci join campaigns ca on ca.id = ci.campaign_id
+        where ci.id = $1`, [contentId]);
+  }
+  if (c?.min_gap_days != null) {
+    return { min: effectiveGap(c, null), campaign: { id: c.id, name: c.name } };
+  }
+  return { min: await loadGapDays(), campaign: null };
+}
+
+/**
+ * השכן הקרוב (לפני או אחרי) של אותה נקודה באותו ערוץ, כשהוא בתוך המרווח.
+ * המרווח לפי הקמפיין של הפוסט שזז/נוצר (gapFor) — campaignId או contentId,
+ * מה שבידי הקורא.
  * @returns {null | {days:number, min:number, other:object, channel_name:string, message:string}}
  */
-export async function gapWarning({ endpointId, channelId, when, excludePostId = null }) {
+export async function gapWarning({ endpointId, channelId, when, excludePostId = null,
+                                   campaignId = null, contentId = null }) {
   if (!endpointId || !channelId || !when) return null;
 
-  const min = await loadGapDays();
+  const { min, campaign } = await gapFor({ campaignId, contentId });
   if (min <= 0) return null;
 
   // השכן הקרוב ביותר בזמן, לפני או אחרי — מרווח נמדד לשני הכיוונים
@@ -51,6 +78,9 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
   if (!near) return null;
 
   const days = Number(near.days);
+  const rule = campaign
+    ? `המרווח שהוגדר לקמפיין "${campaign.name}" הוא ${min} ימים.`
+    : `המרווח שהוגדר הוא ${min} ימים.`;
   return {
     days,
     min,
@@ -58,11 +88,9 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
     channel_name: near.channel_name,
     message: days === 1
       ? `יש כבר פוסט לאותה נקודת קצה ב${near.channel_name} יום לפני או אחרי ` +
-        `("${near.title}", ${ymd(new Date(near.scheduled_at))}). ` +
-        `המרווח שהוגדר הוא ${min} ימים.`
+        `("${near.title}", ${ymd(new Date(near.scheduled_at))}). ${rule}`
       : `יש כבר פוסט לאותה נקודת קצה ב${near.channel_name} במרחק ${days} ימים ` +
-        `("${near.title}", ${ymd(new Date(near.scheduled_at))}). ` +
-        `המרווח שהוגדר הוא ${min} ימים.`,
+        `("${near.title}", ${ymd(new Date(near.scheduled_at))}). ${rule}`,
   };
 }
 

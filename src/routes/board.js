@@ -32,7 +32,8 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   // שיבוץ צמוד מדי לפוסט קיים של אותה נקודה, או תוכן של קמפיין מחוץ
   // לחלון שלו — מזהיר, לא חוסם
   const warning = softWarning(
-    await gapWarning({ endpointId: b.endpoint_id, channelId: b.channel_id, when: b.scheduled_at }),
+    await gapWarning({ endpointId: b.endpoint_id, channelId: b.channel_id, when: b.scheduled_at,
+                       contentId: b.content_id ?? null }),
     await campaignWindowWarning({ contentId: b.content_id, when: b.scheduled_at }),
   );
   if (warning && !b.confirm_gap) {
@@ -135,7 +136,9 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     }
 
     const warning = softWarning(
-      await gapWarning({ endpointId: endpoint, channelId: channel, when, excludePostId: current.id }),
+      // המרווח של הקמפיין של התוכן שיישאר על הפוסט אחרי העדכון
+      await gapWarning({ endpointId: endpoint, channelId: channel, when, excludePostId: current.id,
+                         contentId: 'content_id' in b ? b.content_id : current.content_id }),
       // רק כשהתאריך באמת זז — שינוי ערוץ באותו יום לא מעורר אותה שוב
       b.scheduled_at
         ? await campaignWindowWarning({ contentId: b.content_id ?? current.content_id, when })
