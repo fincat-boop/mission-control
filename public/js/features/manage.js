@@ -30,7 +30,7 @@ export async function renderManage() {
   root.innerHTML = `
     <div class="setgroup" data-section="endpoints">
       <h2>נקודות קצה</h2>
-      <p class="sub">ההגדרות של כל נקודה — חשיבות ותדירות. הקמפיינים והתוכן שלה בטאב "קמפיינים ותוכן".</p>
+      <p class="sub">ההגדרות של כל נקודה — חשיבות. הקמפיינים והתוכן שלה בטאב "קמפיינים ותוכן".</p>
       <div class="panel">${endpoints.map((e) => endpointItem(e, channels, ro)).join('')
         || '<div class="empty">אין עדיין נקודות קצה.</div>'}</div>
       ${ro ? '' : '<div class="setadd"><button class="btn" id="addEndpoint">＋ הוסף נקודת קצה</button></div>'}

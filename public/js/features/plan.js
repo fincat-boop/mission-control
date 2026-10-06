@@ -168,7 +168,7 @@ function campaignList(endpoint, campaigns, content) {
       </div>
       <div class="spacer"></div>
       ${can('settings') ? `<button class="btn small" data-ep-settings="${endpoint.id}"
-        data-tt="חשיבות ותדירות של הנקודה — בטאב ניהול">הגדרות נקודה</button>` : ''}
+        data-tt="חשיבות הנקודה — בטאב ניהול">הגדרות נקודה</button>` : ''}
       ${can('settings') ? '<button class="btn primary" id="addCampaign">＋ קמפיין חדש</button>' : ''}
     </div>
     ${mine.length || bg.length ? '' : '<div class="empty">אין קמפיינים לנקודה הזו עדיין.</div>'}

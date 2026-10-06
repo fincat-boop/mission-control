@@ -82,7 +82,7 @@ export function setupSteps({ channels = [], connections = [], endpoints = [],
     detail: activeEndpoints.length === 1 ? 'נקודת קצה פעילה אחת'
       : activeEndpoints.length ? `${activeEndpoints.length} נקודות קצה פעילות`
       : endpoints.length ? 'יש נקודות קצה, אבל כולן מושבתות — מפעילים אחת מהן'
-      : 'מוצר או שירות שמקבל פרסום. לכל אחת חשיבות ותדירות',
+      : 'מוצר או שירות שמקבל פרסום. לכל אחת חשיבות',
     action: endpoints.length ? 'לנקודות הקצה' : 'הוסף נקודת קצה',
     target: { tab: 'manage', section: 'endpoints', add: endpoints.length === 0 },
   });
