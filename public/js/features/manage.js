@@ -99,27 +99,9 @@ function endpointItem(e, channels, ro) {
         <input type="number" min="1" max="10" value="${e.importance}"
                data-ep-field="importance" data-id="${e.id}" ${ro ? 'disabled' : ''}>
       </div>
-      <details class="adv">
-      <summary>מתקדם${e.min_days_between != null ? ` · תדירות קבועה: פעם ב־${e.min_days_between} ימים` : ''}</summary>
-      <div class="prow">
-        <label>תדירות (פעם ב־X ימים)</label>
-        <div class="autofield">
-          <label class="opt"><input type="radio" name="cadence-${e.id}" value="auto"
-                 data-ep-cadence-mode="${e.id}" ${e.min_days_between == null ? 'checked' : ''}
-                 ${ro ? 'disabled' : ''}>
-            אוטומטי<b>${e.effective_min_days}</b></label>
-          <label class="opt"><input type="radio" name="cadence-${e.id}" value="manual"
-                 data-ep-cadence-mode="${e.id}" ${e.min_days_between != null ? 'checked' : ''}
-                 ${ro ? 'disabled' : ''}>
-            קבוע</label>
-          <input type="number" min="1" value="${e.min_days_between ?? ''}"
-                 data-ep-cadence-input="${e.id}" data-id="${e.id}"
-                 ${e.min_days_between == null ? 'disabled' : ''} ${ro ? 'disabled' : ''}>
-        </div>
-        <div class="fhint">אוטומטי מחשב את התדירות לפי החשיבות — חשיבות גבוהה יותר, פוסטים תכופים יותר.
-          קבוע נועד למקרה שיש צורך בתדירות מסוימת, בלי קשר לחשיבות.</div>
-      </div>
-      </details>
+      <!-- התדירות נגזרת מהחשיבות בלבד; המרווח בין פוסטים נקבע בכל קמפיין -->
+      <div class="fhint">תדירות אוטומטית לפי החשיבות: פעם ב־<b data-ep-cadence="${e.id}">${e.effective_min_days}</b> ימים.
+        המרווח בין פוסטים נקבע בכל קמפיין.</div>
 
       <div class="subsec">
         <h4>סיכום</h4>
@@ -348,7 +330,7 @@ function systemGroup(users, settings, backupsRes, ro) {
       <details class="item" data-open-id="engine">
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
-          ${eng('ימים לפחות בין שני פוסטים של אותה נקודת קצה באותו ערוץ', 'min_gap_days', s.min_gap_days)}
+          ${eng('ברירת מחדל: ימים לפחות בין שני פוסטים של אותה נקודת קצה באותו ערוץ — כל קמפיין יכול לשנות', 'min_gap_days', s.min_gap_days)}
           ${eng('פוסטים מכירתיים ביום — לכל היותר, בכל הערוצים יחד', 'max_promo_per_day', s.max_promo_per_day)}
           <div class="prow">
             <label class="cbline">
@@ -504,32 +486,11 @@ function wireManage(ro, connections) {
     inp.addEventListener('change', run(async () => {
       const res = await api(`/endpoints/${inp.dataset.id}`,
         { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value), week: state.week } });
-      engineToast(res, 'נשמר.');
-      await refreshBoard();
-    })));
-
-  // אוטומטי/קבוע לקצב הפרסום — לא שני שדות שיכולים לסתור זה את זה
-  $$('#manage [data-ep-cadence-mode]').forEach((r) =>
-    r.addEventListener('change', run(async () => {
-      const id = r.dataset.epCadenceMode;
-      const input = $(`[data-ep-cadence-input="${id}"]`);
-      if (r.value === 'auto') {
-        input.disabled = true;
-        const res = await api(`/endpoints/${id}`,
-          { method: 'PATCH', body: { min_days_between: null, week: state.week } });
-        engineToast(res, 'נשמר — התדירות תחושב אוטומטית לפי החשיבות.');
-        await refreshBoard();
-      } else {
-        input.disabled = false;
-        input.focus();
+      // התדירות נגזרת מהחשיבות — השורה שמתחת לשדה מתעדכנת מיד
+      const cadence = $(`[data-ep-cadence="${inp.dataset.id}"]`);
+      if (cadence && res?.endpoint?.effective_min_days != null) {
+        cadence.textContent = res.endpoint.effective_min_days;
       }
-    })));
-
-  $$('#manage [data-ep-cadence-input]').forEach((inp) =>
-    inp.addEventListener('change', run(async () => {
-      const val = inp.value.trim() === '' ? null : Number(inp.value);
-      const res = await api(`/endpoints/${inp.dataset.id}`,
-        { method: 'PATCH', body: { min_days_between: val, week: state.week } });
       engineToast(res, 'נשמר.');
       await refreshBoard();
     })));

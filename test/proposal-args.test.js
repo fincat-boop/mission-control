@@ -34,5 +34,5 @@ test('פוסט — כותרת אם ידועה, אחרת #מזהה; מפתח לא
   assert.deepEqual(describeArgs({ post_id: 22 }), [['פוסט', '#22']]);
   assert.deepEqual(describeArgs({ post_id: 22 }, { postTitle: 'השקה' }), [['פוסט', 'השקה (#22)']]);
   assert.deepEqual(describeArgs({ weird: { a: 1 } }), [['weird', '{"a":1}']]);
-  assert.deepEqual(describeArgs({ share_pct: 20, min_days_between: 3 }), [['נתח', '20%'], ['תדירות', 'פעם ב-3 ימים']]);
+  assert.deepEqual(describeArgs({ share_pct: 20, min_gap_days: 3 }), [['נתח', '20%'], ['מרווח בין פוסטים', '3 ימים']]);
 });

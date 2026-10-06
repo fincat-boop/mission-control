@@ -72,13 +72,13 @@ export function takeProposal(id, userId) {
  * הפרטים הכבדים — לוח, תוכן, התראות — מגיעים דרך כלי קריאה לפי הצורך.
  */
 async function snapshot() {
-  const endpoints = await rows('select id, name, importance, min_days_between, active from endpoints order by id');
+  const endpoints = await rows('select id, name, importance, active from endpoints order by id');
   const channels = await rows(`select id, name, max_per_week, max_promo_per_week,
                max_value_per_week, max_hybrid_per_week, urgent_reserve_pct,
                blocked_days, active
           from channels order by sort_order, id`);
   const campaigns = await rows(`select c.id, c.name, c.endpoint_id, c.starts_on, c.ends_on, c.share_pct,
-               c.target_posts, c.active, c.paused_at,
+               c.target_posts, c.active, c.paused_at, c.min_gap_days,
                (select count(*)::int from content_items ci where ci.campaign_id = c.id) as content_count,
                (select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
                   from campaign_channels cc where cc.campaign_id = c.id) as channel_ids
@@ -109,7 +109,7 @@ function systemPrompt(user, snap) {
 
 ## איך המערכת בנויה
 - **נקודת קצה** = מוצר או יעד שיווקי. לכל אחת חשיבות (importance) שקובעת כמה שטח אוויר מגיע לה.
-- **קמפיין** שייך לנקודת קצה אחת, יש לו חלון תאריכים (חובה) ורשימת ערוצים. לקמפיין אין חשיבות משלו: הנתח שלו נגזר מחשיבות נקודת הקצה מול הקמפיינים שרצים במקביל, אלא אם נקבע לו נתח קבוע (share_pct).
+- **קמפיין** שייך לנקודת קצה אחת, יש לו חלון תאריכים (חובה) ורשימת ערוצים. לקמפיין אין חשיבות משלו: הנתח שלו נגזר מחשיבות נקודת הקצה מול הקמפיינים שרצים במקביל, אלא אם נקבע לו נתח קבוע (share_pct). לקמפיין יכול להיות גם מרווח משלו בין פוסטים (min_gap_days — ימים לפחות בין שני פוסטים של נקודת הקצה באותו ערוץ); בלעדיו חל המרווח הכללי של המנוע. לנקודת קצה אין תדירות ידנית — התדירות נגזרת מהחשיבות.
 - **תוכן** (זווית) שייך לקמפיין או רץ ברקע (evergreen). לכל זווית יש **גרסה נפרדת לכל ערוץ** —
   אותו רעיון, ניסוח אחר לפייסבוק ולניוזלטר.
 - **פוסט** = תוכן ששובץ בערוץ בתאריך. פוסט בלי תוכן משויך הוא "חסר תוכן".
@@ -347,6 +347,9 @@ async function readPost(id) {
  * `check` רץ לפני שההצעה מוצגת, ומחזיר אזהרות או שגיאה מוקדמת —
  * כדי שהעוזר יתקן את עצמו במקום להציע משהו שייפול.
  */
+const MIN_GAP_HINT = 'מרווח בין פוסטים לקמפיין: ימים לפחות (1–30) בין שני פוסטים של ' +
+  'נקודת הקצה באותו ערוץ. בלעדיו — ברירת המחדל הכללית. רק כשהמשתמש ביקש במפורש.';
+
 const WRITE_TOOLS = {
   create_campaign: {
     perm: 'settings',
@@ -359,6 +362,7 @@ const WRITE_TOOLS = {
         starts_on: { type: 'string', description: 'YYYY-MM-DD' },
         ends_on: { type: 'string', description: 'YYYY-MM-DD' },
         share_pct: { type: 'integer', description: 'נתח קבוע באחוזים — רק כשהובטח נתח מסוים. בלעדיו הנתח נגזר מחשיבות נקודת הקצה.' },
+        min_gap_days: { type: 'integer', description: MIN_GAP_HINT },
         goal: { type: 'string' },
         channel_ids: { type: 'array', items: { type: 'integer' }, description: 'הערוצים שהקמפיין יושב עליהם' },
       },
@@ -380,6 +384,7 @@ const WRITE_TOOLS = {
         starts_on: { type: 'string' },
         ends_on: { type: 'string' },
         share_pct: { type: 'integer', description: 'נתח קבוע באחוזים' },
+        min_gap_days: { type: 'integer', description: MIN_GAP_HINT },
         goal: { type: 'string' },
         active: { type: 'boolean' },
         channel_ids: { type: 'array', items: { type: 'integer' } },
@@ -547,7 +552,6 @@ const WRITE_TOOLS = {
       properties: {
         name: { type: 'string' },
         importance: { type: 'integer', description: '1–10' },
-        min_days_between: { type: 'integer' },
       },
       required: ['name'],
     },
@@ -563,7 +567,6 @@ const WRITE_TOOLS = {
         endpoint_id: { type: 'integer' },
         name: { type: 'string' },
         importance: { type: 'integer' },
-        min_days_between: { type: 'integer' },
         active: { type: 'boolean' },
       },
       required: ['endpoint_id'],

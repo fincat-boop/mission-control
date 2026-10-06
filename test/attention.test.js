@@ -48,7 +48,8 @@ test('missedPostAlerts — דורש טיפול, id יציב, קישור לפוס
 
 test('endpointAirStatus — נקודה חדשה בלי פוסטים לא מתריעה לפני שעבר הקצב שלה', () => {
   const now = new Date('2026-10-10T12:00:00Z');
-  const ep = { min_days_between: 7, importance: 5, last_at: null };
+  // חשיבות 9 → round(60/9) = 7 ימים
+  const ep = { importance: 9, last_at: null };
   assert.equal(endpointAirStatus({ ...ep, created_at: '2026-10-09T12:00:00Z' }, now), null);
   assert.equal(endpointAirStatus({ ...ep, created_at: '2026-10-03T12:00:00Z' }, now), null); // בדיוק 7
   assert.deepEqual(endpointAirStatus({ ...ep, created_at: '2026-10-01T12:00:00Z' }, now),
@@ -57,7 +58,7 @@ test('endpointAirStatus — נקודה חדשה בלי פוסטים לא מתר�
 
 test('endpointAirStatus — נקודה שפרסמה נמדדת מהפרסום האחרון, לא מהיצירה', () => {
   const now = new Date('2026-10-10T12:00:00Z');
-  const ep = { min_days_between: 7, importance: 5, created_at: '2025-01-01T00:00:00Z' };
+  const ep = { importance: 9, created_at: '2025-01-01T00:00:00Z' };
   assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-08T12:00:00Z' }, now), null);
   assert.deepEqual(endpointAirStatus({ ...ep, last_at: '2026-09-30T12:00:00Z' }, now),
     { days_since: 10, days_over: 10 });

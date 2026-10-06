@@ -22,15 +22,15 @@ r.get('/endpoints', wrap(async (_req, res) => {
   });
 }));
 
-const ENDPOINT_FIELDS = ['name', 'importance', 'min_days_between', 'active', 'sort_order'];
+// min_days_between לא כאן בכוונה: התדירות נגזרת מהחשיבות (effectiveCadenceDays),
+// והמרווח בין פוסטים יושב על הקמפיין. ערך שנשלח (עוזר ישן, לקוח ישן) — מתעלמים.
+const ENDPOINT_FIELDS = ['name', 'importance', 'active', 'sort_order'];
 
 r.post('/endpoints', requirePerm('settings'), wrap(async (req, res) => {
   if (!req.body?.name) return bad(res, 'צריך שם לנקודת הקצה');
-  // min_days_between ריק = אוטומטי לפי החשיבות, לא ברירת מחדל שרירותית
   const e = await one(
-    `insert into endpoints (name, importance, min_days_between)
-     values ($1, coalesce($2,5), $3) returning *`,
-    [req.body.name, req.body.importance ?? null, req.body.min_days_between ?? null]
+    `insert into endpoints (name, importance) values ($1, coalesce($2,5)) returning *`,
+    [req.body.name, req.body.importance ?? null]
   );
   const engine = await autoFill(req.body?.week);
   res.status(201).json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine });
@@ -40,7 +40,7 @@ r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
   const e = await updateById('endpoints', ENDPOINT_FIELDS, req.params.id, req.body);
   if (!e) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
   const engine = await autoFill(req.body?.week);
-  res.json({ endpoint: e, engine });
+  res.json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine });
 }));
 
 /**

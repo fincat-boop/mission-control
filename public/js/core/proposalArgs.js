@@ -33,7 +33,7 @@ const LABELS = {
   importance: 'חשיבות',
   share_pct: 'נתח',
   target_posts: 'יעד פוסטים',
-  min_days_between: 'תדירות',
+  min_gap_days: 'מרווח בין פוסטים',
   target_per_week: 'פוסטים בשבוע (יעד)',
   max_per_week: 'פוסטים בשבוע (תקרה)',
   max_promo_per_week: 'מכירתי בשבוע (תקרה)',
@@ -88,7 +88,7 @@ function valueText(key, v, lookup) {
     case 'kind': return KIND_HE[v] ?? String(v);
     case 'status': return STATUS_HE[v] ?? String(v);
     case 'share_pct': return `${v}%`;
-    case 'min_days_between': return `פעם ב-${v} ימים`;
+    case 'min_gap_days': return `${v} ימים`;
     case 'reuse_after_days': return `${v} ימים`;
     case 'blocked_days': return Array.isArray(v) && v.length
       ? v.map((d) => HE_DAYS[d] ?? d).join(', ') : 'אין';

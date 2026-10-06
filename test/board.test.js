@@ -13,8 +13,8 @@ test('effectiveCadenceDays — נחסם בין 2 ל-30', () => {
   assert.equal(effectiveCadenceDays({ importance: 40 }), 2);   // 1.5 → רצפה 2
 });
 
-test('effectiveCadenceDays — min_days_between הוא override מפורש', () => {
-  assert.equal(effectiveCadenceDays({ importance: 10, min_days_between: 14 }), 14);
+test('effectiveCadenceDays — לפי החשיבות בלבד; min_days_between הישן לא נקרא יותר', () => {
+  assert.equal(effectiveCadenceDays({ importance: 10, min_days_between: 14 }), 6);
 });
 
 test('shapePost — has_results: פוסט בלי שורת תוצאות מסומן "לא נמדד"', async () => {

@@ -121,8 +121,8 @@ export async function buildAlerts(user = null) {
       level: e.days_over >= cadence ? 'crit' : 'warn',
       title: `${e.name} לא מפרסמת`,
       detail: e.days_since === null
-        ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, התדירות היא כל ${cadence}`
-        : `${e.days_since} ימים בלי פרסום — התדירות ${e.min_days_between == null ? 'האוטומטית' : 'שהוגדרה'} היא כל ${cadence}`,
+        ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, התדירות לפי החשיבות היא כל ${cadence} ימים`
+        : `${e.days_since} ימים בלי פרסום — התדירות לפי החשיבות היא כל ${cadence} ימים`,
       tab: 'plan',
       endpoint_id: e.id,
     });
@@ -370,12 +370,12 @@ export function endpointAirStatus(e, now = new Date()) {
 /** נקודות קצה שעברו את הקצב שהוגדר להן בלי פרסום */
 async function endpointsWithoutAir() {
   const list = await rows(
-    `select e.id, e.name, e.min_days_between, e.importance, e.created_at,
+    `select e.id, e.name, e.importance, e.created_at,
             max(p.published_at) as last_at
        from endpoints e
        left join posts p on p.endpoint_id = e.id and p.status = 'published'
       where e.active = true
-      group by e.id, e.name, e.min_days_between, e.importance, e.created_at`
+      group by e.id, e.name, e.importance, e.created_at`
   );
   const now = new Date();
   return list
