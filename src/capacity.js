@@ -287,3 +287,36 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
   return { wanted, capacity, rateCap, gapCap, siblings: k, availableDays: available.length,
            limitedBy };
 }
+
+/** התקרה של מרווח לקמפיין — כמו האילוץ campaigns_min_gap_days_range */
+export const MAX_GAP_DAYS = 30;
+
+/**
+ * המרווח הגדול ביותר (1..30) שבו הקיבולת בערוץ מגיעה ל-target — "לדחוס":
+ * כמה אפשר להשאיר מרווח ועדיין להכניס את מה שרוצים. null כשגם מרווח 1 לא
+ * מספיק (הקצב, ימים חסומים או אחים מגבילים — לא המרווח).
+ * @param params כמו channelCapacity בלי gapDays: {from, to, channel, share, siblings}
+ * @param target כמה פוסטים צריכים להיכנס
+ */
+export function gapToFit(params, target) {
+  for (let g = MAX_GAP_DAYS; g >= 1; g -= 1) {
+    if (channelCapacity({ ...params, gapDays: g }).capacity >= target) return g;
+  }
+  return null;
+}
+
+/**
+ * תאריך הסיום המוקדם ביותר (YYYY-MM-DD, מ-from ועד maxDays ימים אחריו)
+ * שבו הקיבולת מגיעה ל-target — "להאריך". capacityAt(to) מחשב את הקיבולת
+ * לחלון from..to; הקורא בונה אותו, כי הנתח והאחים משתנים עם החלון.
+ * null כשאין תאריך כזה בטווח.
+ */
+export function endToFit(from, capacityAt, target, maxDays = 365) {
+  const start = ymdOf(from);
+  if (!start) return null;
+  for (let n = 0; n <= maxDays; n += 1) {
+    const to = addDays(start, n);
+    if (capacityAt(to) >= target) return to;
+  }
+  return null;
+}

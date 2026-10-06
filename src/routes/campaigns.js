@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { EMPTY_FILL, autoFill, bad, updateById, wrap } from './_shared.js';
 import {
-  campaignsWithHealth, completionSummary, currentAllocation, resolvePeriod, structureChangeError,
+  campaignsWithHealth, completionSummary, currentAllocation, loadCapacityPreview, resolvePeriod,
+  structureChangeError,
 } from '../campaigns.js';
 import { currentOrg, one, rows, tx } from '../db.js';
 import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from '../media.js';
@@ -122,6 +123,42 @@ r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   const c = await insertCampaign(b);
   const engine = await autoFill(b.week);
   res.status(201).json({ campaign: c, engine });
+}));
+
+/** השדות של הטופס שמשנים את הקיבולת — מה שהתצוגה המקדימה לוקחת מהגוף */
+const PREVIEW_FIELDS = ['endpoint_id', 'starts_on', 'ends_on', 'period', 'share_pct',
+                        'min_gap_days', 'structure'];
+
+/**
+ * כמה נכנס לקמפיין שבטופס, לפני שמירה — לחלון ההתאמה (לדחוס / להאריך /
+ * להסתפק). גוף = השדות כמו שהטופס שולח בשמירה (id בעריכה, endpoint_id,
+ * starts_on, period ו/או ends_on, channel_ids, share_pct, min_gap_days).
+ * אותן בדיקות כמו בשמירה (תאריכים, מרווח, תקופה), בלי לכתוב כלום. בעריכה
+ * הטיוטה מחליפה את השורה השמורה; ערוצים שלא נשלחו — של הקמפיין השמור.
+ * החישוב: loadCapacityPreview (src/campaigns.js).
+ */
+r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, res) => {
+  const b = { ...(req.body ?? {}) };
+  let before = null;
+  if (b.id != null) {
+    before = await one('select * from campaigns where id = $1', [b.id]);
+    if (!before) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  } else if (!b.endpoint_id) {
+    return bad(res, 'צריך נקודת קצה');
+  }
+  const err = datesError(b) ?? gapDaysError(b) ?? applyPeriod(b, before);
+  if (err) return bad(res, err);
+
+  const draft = { ...(before ?? {}) };
+  for (const k of PREVIEW_FIELDS) if (b[k] !== undefined) draft[k] = b[k];
+  const endpoint = await one('select id from endpoints where id = $1', [draft.endpoint_id]);
+  if (!endpoint) return bad(res, 'לא נמצאה נקודת קצה כזו');
+
+  const channelIds = Array.isArray(b.channel_ids) ? b.channel_ids
+    : before ? (await rows('select channel_id from campaign_channels where campaign_id = $1',
+                           [before.id])).map((x) => x.channel_id)
+    : [];
+  res.json(await loadCapacityPreview(draft, channelIds));
 }));
 
 /**

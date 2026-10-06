@@ -229,3 +229,44 @@ test('effectiveGap — של הקמפיין קודם, אחריו הכללי, וב
   // מחרוזת מהמסד/מהטופס → מספר
   assert.equal(effectiveGap({ min_gap_days: '2' }, null), 2);
 });
+
+/* ========================= התאמה: לדחוס / להאריך ========================= */
+
+import { endToFit, gapToFit } from '../src/capacity.js';
+
+test('gapToFit — המרווח הגדול ביותר שבו הקיבולת מגיעה ליעד', () => {
+  // 16 יום (20.11–5.12), קצב 4 בשבוע אחרי שמורה, נתח 40% → rateCap 4
+  const params = { from: '2026-11-20', to: '2026-12-05',
+                   channel: { max_per_week: 5, urgent_reserve_pct: 20 }, share: 0.4, siblings: 1 };
+  assert.equal(channelCapacity({ ...params, gapDays: 7 }).capacity, 3);
+  // 4 פוסטים ב-16 יום: מרווח 5 (20, 25, 30.11, 5.12) — 6 כבר נותן 3
+  assert.equal(gapToFit(params, 4), 5);
+  assert.equal(channelCapacity({ ...params, gapDays: 5 }).capacity, 4);
+  assert.equal(channelCapacity({ ...params, gapDays: 6 }).capacity, 3);
+  // יעד שהקצב לא מגיע אליו בשום מרווח
+  assert.equal(gapToFit(params, 9), null);
+  // יעד קטן — המרווח המקסימלי
+  assert.equal(gapToFit(params, 1), 30);
+});
+
+test('gapToFit — אחים חולקים את הימים, ולכן צריך מרווח קצר יותר', () => {
+  const params = { from: '2026-11-01', to: '2026-11-28',
+                   channel: { max_per_week: 7, urgent_reserve_pct: 0 }, share: 1, siblings: 2 };
+  // 28 יום, שני אחים: 4 פוסטים לקמפיין דורשים 8 ימים בפועל → מרווח 3
+  // (מרווח 4 נותן 7 ימים, 3 לכל אח)
+  assert.equal(gapToFit(params, 4), 3);
+  // לבד: 1, 10, 19, 28.11 — מרווח 9
+  assert.equal(gapToFit({ ...params, siblings: 1 }, 4), 9);
+});
+
+test('endToFit — תאריך הסיום המוקדם ביותר שבו נכנס היעד', () => {
+  const channel = { max_per_week: 7, urgent_reserve_pct: 0 };
+  const at = (to) => channelCapacity({ from: '2026-11-01', to, channel, share: 1, gapDays: 7 })
+    .capacity;
+  // 3 פוסטים במרווח 7: 1, 8, 15.11
+  assert.equal(endToFit('2026-11-01', at, 3), '2026-11-15');
+  assert.equal(endToFit('2026-11-01', at, 1), '2026-11-01');
+  // מעבר לטווח — null
+  assert.equal(endToFit('2026-11-01', at, 60, 365), null);
+  assert.equal(endToFit(null, at, 1), null);
+});

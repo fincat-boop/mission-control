@@ -1,11 +1,12 @@
-import { rows } from './db.js';
+import { one, rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 import {
-  averageShares, channelCapacity, effectiveGap, normalizeShares, shareOf, siblingCount,
+  averageShares, channelCapacity, effectiveGap, endToFit, gapToFit, normalizeShares, shareOf,
+  siblingCount,
 } from './capacity.js';
 import { loadGapDays } from './gap.js';
 
@@ -84,6 +85,109 @@ export function channelCapacities(campaign, channels, concurrent = [], { gapDays
     });
   }
   return out;
+}
+
+/**
+ * תצוגה מקדימה של הקיבולת לקמפיין שבטופס — לחלון ההתאמה (לדחוס / להאריך /
+ * להסתפק). אותו חשבון בדיוק כמו הרשת (channelCapacities), בלי לשמור כלום.
+ *
+ * לכל ערוץ: כמה הקצב רוצה (wanted), התקרה של הקצב (rate_cap), כמה נכנס
+ * (capacity), כמה המרווח מאפשר (gap_cap, אחרי חלוקה בין אחים — siblings),
+ * מה מגביל (limited_by), ו-gap_to_fit — המרווח הגדול ביותר שבו נכנס כל
+ * הקצב (null כשהמרווח הוא לא המגביל). short = יש ערוץ שהמרווח מקצץ בו.
+ *
+ * fixed — רק לקמפיין מוכן (written נשלח): התוכן קבוע, ולכן השאלה הפוכה —
+ * לכל ערוץ כמה נכתב (written), באיזה מרווח הכול נכנס (gap_to_fit, הגדול
+ * ביותר; null אם אין) ומה תאריך הסיום המוקדם ביותר שבו הכול נכנס במרווח
+ * הנוכחי (end_to_fit, עד שנה מההתחלה; null אם אין). שניהם מחושבים גם כשכבר
+ * נכנס — כדי שהחלון יוכל להראות גם כמה מקום נשאר.
+ *
+ * @param draft הקמפיין מהטופס (בעריכה — ממוזג על השורה השמורה), עם endpoint_importance
+ * @param channels שורות channels של הערוצים שנבחרו
+ * @param concurrent CAMPAIGNS_WEIGHTED_SQL — בלי השורה השמורה של draft
+ * @param opts.gapDays ברירת המחדל הכללית (loadGapDays)
+ * @param opts.written null, או {channel_id: כמה נכתב} בקמפיין מוכן
+ */
+export function capacityPreview(draft, channels, concurrent = [],
+                                { gapDays = 7, written = null } = {}) {
+  const gap = effectiveGap(draft, { min_gap_days: gapDays });
+  const caps = channelCapacities(draft, channels, concurrent, { gapDays });
+  const params = (ch, c) => ({ from: draft.starts_on, to: draft.ends_on, channel: ch,
+                               share: c.share, siblings: c.siblings });
+
+  const list = [];
+  for (const ch of channels) {
+    const c = caps.get(ch.id);
+    if (!c) continue;   // בלי תאריכים אין קיבולת
+    list.push({
+      channel_id: ch.id, name: ch.name, wanted: c.wanted, rate_cap: c.rateCap,
+      capacity: c.capacity, gap_cap: c.gapCap, siblings: c.siblings, limited_by: c.limitedBy,
+      gap_to_fit: c.limitedBy === 'gap' ? gapToFit(params(ch, c), c.rateCap) : null,
+    });
+  }
+
+  let fixed = null;
+  if (written) {
+    fixed = {
+      channels: channels.map((ch) => {
+        const w = Number(written[ch.id] ?? 0);
+        const c = caps.get(ch.id);
+        // הנתח והאחים תלויים בחלון — מחושבים מחדש לכל תאריך סיום
+        const capacityAt = (to) => {
+          const d = { ...draft, ends_on: to };
+          return channelCapacity({ from: draft.starts_on, to, channel: ch,
+                                   share: shareOf(d, concurrent), gapDays: gap,
+                                   siblings: siblingCount(d, concurrent, ch.id) }).capacity;
+        };
+        return {
+          channel_id: ch.id, written: w, capacity: c?.capacity ?? 0,
+          gap_to_fit: w > 0 && c ? gapToFit(params(ch, c), w) : null,
+          end_to_fit: w > 0 && draft.starts_on ? endToFit(draft.starts_on, capacityAt, w) : null,
+        };
+      }),
+    };
+  }
+
+  return {
+    from: draft.starts_on ?? null, to: draft.ends_on ?? null, gap_days: gap, channels: list,
+    short: list.some((x) => x.limited_by === 'gap' && x.capacity < x.rate_cap),
+    fixed,
+  };
+}
+
+/**
+ * capacityPreview מול המסד: הערוצים, הקמפיינים החופפים (בלי השורה השמורה
+ * של הקמפיין — הטיוטה מחליפה אותה), ברירת המחדל של המרווח, וכשהקמפיין
+ * מוכן — כמה נכתב לכל ערוץ, מאותה רשת שהמסך מציג (grid.needs).
+ */
+export async function loadCapacityPreview(draft, channelIds) {
+  const ids = [...new Set((channelIds ?? []).map(Number))].filter(Number.isInteger);
+  const channels = ids.length
+    ? await rows('select * from channels where id = any($1::int[]) order by sort_order, id', [ids])
+    : [];
+  const ep = await one('select importance from endpoints where id = $1', [draft.endpoint_id]);
+  const self = draft.id != null ? Number(draft.id) : null;
+  const concurrent = (await rows(CAMPAIGNS_WEIGHTED_SQL)).filter((x) => x.id !== self);
+  const gapDays = await loadGapDays();
+
+  let written = null;
+  if (self != null && draft.content_complete_at) {
+    const items = await rows(
+      'select id, sort_order, slot_channel_id from content_items where campaign_id = $1', [self]);
+    const variants = await rows(
+      `select v.content_id, v.channel_id, v.status from content_variants v
+         join content_items ci on ci.id = v.content_id where ci.campaign_id = $1`, [self]);
+    const content = items.map((it) => ({
+      ...it, variants: variants.filter((v) => v.content_id === it.id) }));
+    if (isCompleteMode(draft, content)) {
+      const grid = draft.structure === 'general'
+        ? completeGeneralGrid(draft, content, channels, ymd(new Date()))
+        : completeAnglesGrid(draft, content, channels, ymd(new Date()));
+      written = grid.needs;
+    }
+  }
+  return capacityPreview({ ...draft, endpoint_importance: ep?.importance ?? 5 },
+    channels, concurrent, { gapDays, written });
 }
 
 /**

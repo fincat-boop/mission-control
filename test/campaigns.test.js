@@ -615,3 +615,65 @@ test('channelCapacities — חלוקה בין אחים מעגלת למטה, אב
   assert.equal(d.siblings, 3);
   assert.equal(d.gapCap, 1);     // floor(1/3) = 0 → לפחות 1
 });
+
+/* ========================= תצוגה מקדימה של קיבולת ========================= */
+
+import { capacityPreview } from '../src/campaigns.js';
+
+const BF = { id: 7, endpoint_id: 4, share_pct: 40, active: true, endpoint_importance: 5,
+             starts_on: '2026-11-20', ends_on: '2026-12-05' };
+const FB = { id: 6, name: 'פייסבוק', max_per_week: 5, urgent_reserve_pct: 20 };
+
+test('capacityPreview — בלאק פריידי במרווח 7: המרווח מקצץ, ובמרווח 5 הכול נכנס', () => {
+  const p = capacityPreview(BF, [FB], [], { gapDays: 7 });
+  assert.equal(p.from, '2026-11-20');
+  assert.equal(p.to, '2026-12-05');
+  assert.equal(p.gap_days, 7);
+  assert.deepEqual(p.channels, [{
+    channel_id: 6, name: 'פייסבוק', wanted: 5, rate_cap: 4, capacity: 3, gap_cap: 3,
+    siblings: 1, limited_by: 'gap', gap_to_fit: 5,
+  }]);
+  assert.equal(p.short, true);
+  assert.equal(p.fixed, null);
+
+  // הטיוטה עם מרווח 5 — כבר לא קצר
+  const tight = capacityPreview({ ...BF, min_gap_days: 5 }, [FB], [], { gapDays: 7 });
+  assert.equal(tight.gap_days, 5);
+  assert.equal(tight.channels[0].capacity, 4);
+  assert.equal(tight.channels[0].limited_by, 'rate');
+  assert.equal(tight.channels[0].gap_to_fit, null);
+  assert.equal(tight.short, false);
+});
+
+test('capacityPreview — קמפיין מוכן: כמה נכתב, באיזה מרווח נכנס, ועד מתי להאריך', () => {
+  const p = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 3 } });
+  const [f] = p.fixed.channels;
+  assert.equal(f.written, 3);
+  assert.equal(f.capacity, 3);
+  assert.equal(f.gap_to_fit, 7);              // 3 ב-16 יום: 20, 27.11, 4.12
+  assert.equal(f.end_to_fit, '2026-12-04');   // אפשר אפילו לקצר ביום
+
+  const more = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 5 } }).fixed.channels[0];
+  assert.equal(more.gap_to_fit, null);        // הקצב (4) לא מגיע ל-5 בשום מרווח
+  // 5 במרווח 7 = 29 יום, והקצב 4×שבועות×40% מגיע ל-5 כבר אחרי 22
+  assert.equal(more.end_to_fit, '2026-12-18');
+});
+
+test('capacityPreview — ערוץ בלי תוכן במצב מוכן, ובלי תאריכים אין ערוצים', () => {
+  const p = capacityPreview(BF, [FB], [], { gapDays: 7, written: {} });
+  assert.deepEqual(p.fixed.channels[0], { channel_id: 6, written: 0, capacity: 3,
+                                          gap_to_fit: null, end_to_fit: null });
+  const open = capacityPreview({ ...BF, ends_on: null }, [FB], [], { gapDays: 7 });
+  assert.deepEqual(open.channels, []);
+  assert.equal(open.short, false);
+});
+
+test('capacityPreview — אח באותה נקודה ובאותו ערוץ מחלק את המרווח', () => {
+  const sib = { ...BF, id: 8, share_pct: 20, channel_ids: [6] };
+  const p = capacityPreview({ ...BF, min_gap_days: 3 }, [FB], [sib], { gapDays: 7 });
+  const [c] = p.channels;
+  assert.equal(c.siblings, 2);
+  assert.equal(c.gap_cap, 3);                 // 6 ימים במרווח 3, חלקי 2
+  assert.equal(c.limited_by, 'gap');
+  assert.equal(c.gap_to_fit, 2);              // 8 ימים במרווח 2 → 4 לכל אח
+});
