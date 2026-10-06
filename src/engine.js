@@ -597,15 +597,25 @@ export function strategyTargets(campaigns, week) {
 }
 
 /**
- * כמה כל נקודה מפגרת אחרי היעד שלה (0..1). "בפועל" = החלק שלה מכל הפוסטים
- * החיים שיש להם נקודת קצה בחלון (counts: [{endpoint_id, n}]).
+ * כמה כל נקודה מפגרת אחרי היעד שלה (0..1).
+ *
+ * בסיס אחד לשני הצדדים, כמו currentAllocation: "בפועל" = החלק של הנקודה
+ * מהפוסטים החיים בחלון של הנקודות שיש להן יעד בלבד (counts: [{endpoint_id, n}]),
+ * והיעדים מנורמלים לאותו בסיס (חלקי סכום היעדים). אחרת נקודה שוטפת בלי
+ * קמפיין, שמתפרסמת הרבה, הייתה משאירה את נקודות הקמפיינים בפיגור קבוע —
+ * ולהפך, יעדים שסכומם מתחת ל-100% היו נמדדים מול בפועל שסכומו 100%.
+ * מכאן שקמפיין יחיד בשבוע לא מפגר אחרי אף אחד: הדחיפה שלו היא "קמפיין רץ"
+ * והוותק, לא הנתח.
  */
 export function strategyDeficits(targetPct, counts) {
-  const total = counts.reduce((s, c) => s + c.n, 0);
-  const actual = new Map(counts.map((c) => [c.endpoint_id, total ? (c.n / total) * 100 : 0]));
+  const targetSum = [...targetPct.values()].reduce((s, v) => s + v, 0);
+  const mine = counts.filter((c) => targetPct.has(c.endpoint_id));
+  const total = mine.reduce((s, c) => s + c.n, 0);
+  const actual = new Map(mine.map((c) => [c.endpoint_id, total ? (c.n / total) * 100 : 0]));
   const out = new Map();
   for (const [id, target] of targetPct) {
-    out.set(id, Math.max(0, target - (actual.get(id) ?? 0)) / 100);
+    const want = targetSum > 0 ? (target / targetSum) * 100 : 0;
+    out.set(id, Math.max(0, want - (actual.get(id) ?? 0)) / 100);
   }
   return out;
 }

@@ -562,3 +562,25 @@ test('strategyTargets — מושהה לא מושך; מפורשים מעל 100% �
   assert.equal(Math.round(targetPct.get(1)), 69);           // 90 / 130
   assert.equal(Math.round(targetPct.get(2)), 31);           // 40 / 130
 });
+
+test('strategyDeficits — נקודה שוטפת בלי יעד לא נכנסת לבסיס ולא יוצרת פיגור קבוע', () => {
+  const targets = new Map([[1, 60], [2, 40]]);
+  // נקודה 3 (שוטף, בלי קמפיין) פרסמה 100 — לפני התיקון נקודות 1 ו-2 פיגרו תמיד
+  const d = strategyDeficits(targets, [
+    { endpoint_id: 1, n: 6 }, { endpoint_id: 2, n: 4 }, { endpoint_id: 3, n: 100 }]);
+  assert.equal(d.get(1), 0);
+  assert.equal(d.get(2), 0);
+  assert.equal(d.has(3), false);
+  // מפגרת באמת ביחס לשותפות ליעד: 1 מול 9 כשהיעד 40% מול 60%
+  const lag = strategyDeficits(targets, [{ endpoint_id: 1, n: 9 }, { endpoint_id: 2, n: 1 },
+                                         { endpoint_id: 3, n: 100 }]);
+  assert.equal(Math.round(lag.get(2) * 100), 30);
+});
+
+test('strategyDeficits — יעדים מתחת ל-100% מנורמלים לאותו בסיס', () => {
+  // שני קבועים: 40% ו-20% (סכום 60) → 2/3 מול 1/3 מהפוסטים שלהם
+  const d = strategyDeficits(new Map([[2, 40], [3, 20]]),
+    [{ endpoint_id: 2, n: 5 }, { endpoint_id: 3, n: 5 }, { endpoint_id: 9, n: 50 }]);
+  assert.equal(Math.round(d.get(2) * 100), 17);   // 66.7 − 50
+  assert.equal(d.get(3), 0);
+});
