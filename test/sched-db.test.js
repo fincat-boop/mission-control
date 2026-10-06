@@ -224,7 +224,8 @@ test('תצוגה מקדימה: עריכה (id) ויצירה (בלי id) — או
   });
   const fixed = await call('POST', '/campaigns/capacity-preview', { id: c.id });
   assert.deepEqual(fixed.json.fixed, { channels: [{
-    channel_id: ids.fb, written: 5, capacity: 3, gap_to_fit: null, end_to_fit: '2030-12-18',
+    channel_id: ids.fb, written: 5, capacity: 3, rate_cap: 4, rate_short: true, gap_to_fit: 3,
+    end_to_fit: '2030-12-18',
   }] });
 
   await inOrg(async () => {

@@ -245,6 +245,10 @@ test('gapToFit — המרווח הגדול ביותר שבו הקיבולת מג
   assert.equal(channelCapacity({ ...params, gapDays: 6 }).capacity, 3);
   // יעד שהקצב לא מגיע אליו בשום מרווח
   assert.equal(gapToFit(params, 9), null);
+  // gapOnly — רק הימים: 9 ב-16 יום במרווח 1
+  assert.equal(gapToFit(params, 9, { gapOnly: true }), 1);
+  assert.equal(gapToFit(params, 5, { gapOnly: true }), 3);
+  assert.equal(gapToFit(params, 17, { gapOnly: true }), null);
   // יעד קטן — המרווח המקסימלי
   assert.equal(gapToFit(params, 1), 30);
 });

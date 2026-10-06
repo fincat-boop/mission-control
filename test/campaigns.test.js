@@ -656,19 +656,25 @@ test('capacityPreview — קמפיין מוכן: כמה נכתב, באיזה מ�
   const [f] = p.fixed.channels;
   assert.equal(f.written, 3);
   assert.equal(f.capacity, 3);
+  assert.equal(f.rate_cap, 4);
+  assert.equal(f.rate_short, false);
   assert.equal(f.gap_to_fit, 7);              // 3 ב-16 יום: 20, 27.11, 4.12
   assert.equal(f.end_to_fit, '2026-12-04');   // אפשר אפילו לקצר ביום
 
   const more = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 5 } }).fixed.channels[0];
-  assert.equal(more.gap_to_fit, null);        // הקצב (4) לא מגיע ל-5 בשום מרווח
+  // המרווח לבדו מכיל 5 במרווח 3 (20, 23, 26, 29.11, 2.12) — אבל הקצב (4) לא
+  // מגיע ל-5, ולכן rate_short: דחיסה לבד לא תספיק, רק הארכה
+  assert.equal(more.gap_to_fit, 3);
+  assert.equal(more.rate_cap, 4);
+  assert.equal(more.rate_short, true);
   // 5 במרווח 7 = 29 יום, והקצב 4×שבועות×40% מגיע ל-5 כבר אחרי 22
   assert.equal(more.end_to_fit, '2026-12-18');
 });
 
 test('capacityPreview — ערוץ בלי תוכן במצב מוכן, ובלי תאריכים אין ערוצים', () => {
   const p = capacityPreview(BF, [FB], [], { gapDays: 7, written: {} });
-  assert.deepEqual(p.fixed.channels[0], { channel_id: 6, written: 0, capacity: 3,
-                                          gap_to_fit: null, end_to_fit: null });
+  assert.deepEqual(p.fixed.channels[0], { channel_id: 6, written: 0, capacity: 3, rate_cap: 4,
+                                          rate_short: false, gap_to_fit: null, end_to_fit: null });
   const open = capacityPreview({ ...BF, ends_on: null }, [FB], [], { gapDays: 7 });
   assert.deepEqual(open.channels, []);
   assert.equal(open.short, false);

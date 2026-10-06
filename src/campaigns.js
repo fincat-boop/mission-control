@@ -98,10 +98,12 @@ export function channelCapacities(campaign, channels, concurrent = [], { gapDays
  * הקצב (null כשהמרווח הוא לא המגביל). short = יש ערוץ שהמרווח מקצץ בו.
  *
  * fixed — רק לקמפיין מוכן (written נשלח): התוכן קבוע, ולכן השאלה הפוכה —
- * לכל ערוץ כמה נכתב (written), באיזה מרווח הכול נכנס (gap_to_fit, הגדול
- * ביותר; null אם אין) ומה תאריך הסיום המוקדם ביותר שבו הכול נכנס במרווח
- * הנוכחי (end_to_fit, עד שנה מההתחלה; null אם אין). שניהם מחושבים גם כשכבר
- * נכנס — כדי שהחלון יוכל להראות גם כמה מקום נשאר.
+ * לכל ערוץ כמה נכתב (written), התקרה של הקצב (rate_cap) והאם הקצב לבדו לא
+ * מספיק (rate_short = written > rate_cap — אז דחיסה לא תעזור, רק הארכה),
+ * באיזה מרווח התוכן נכנס בימים (gap_to_fit — הגדול ביותר שבו המרווח לבדו
+ * מכיל את written, בלי קשר לקצב; null אם אין), ומה תאריך הסיום המוקדם
+ * ביותר שבו הכול נכנס במרווח הנוכחי (end_to_fit, עד שנה מההתחלה; null אם
+ * אין). מחושבים גם כשכבר נכנס — כדי שהחלון יוכל להראות כמה מקום נשאר.
  *
  * @param draft הקמפיין מהטופס (בעריכה — ממוזג על השורה השמורה), עם endpoint_importance
  * @param channels שורות channels של הערוצים שנבחרו
@@ -144,7 +146,8 @@ export function capacityPreview(draft, channels, concurrent = [],
         };
         return {
           channel_id: ch.id, written: w, capacity: c?.capacity ?? 0,
-          gap_to_fit: w > 0 && c ? gapToFit(params(ch, c), w) : null,
+          rate_cap: c?.rateCap ?? 0, rate_short: !!c && w > c.rateCap,
+          gap_to_fit: w > 0 && c ? gapToFit(params(ch, c), w, { gapOnly: true }) : null,
           end_to_fit: w > 0 && draft.starts_on ? endToFit(draft.starts_on, capacityAt, w) : null,
         };
       }),

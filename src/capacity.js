@@ -309,12 +309,17 @@ export const MAX_GAP_DAYS = 30;
  * המרווח הגדול ביותר (1..30) שבו הקיבולת בערוץ מגיעה ל-target — "לדחוס":
  * כמה אפשר להשאיר מרווח ועדיין להכניס את מה שרוצים. null כשגם מרווח 1 לא
  * מספיק (הקצב, ימים חסומים או אחים מגבילים — לא המרווח).
- * @param params כמו channelCapacity בלי gapDays: {from, to, channel, share, siblings}
+ *
+ * gapOnly: נמדד רק מה שהמרווח מאפשר (gapCap), בלי הקצב — לקמפיין מוכן,
+ * שבו השאלה היא "באיזה מרווח התוכן שנכתב נכנס בימים", והקצב נבדק בנפרד
+ * (rate_short בתצוגה המקדימה).
+ * @param params כמו channelCapacity בלי gapDays: {from, to, channel, share, siblings, siblingRank}
  * @param target כמה פוסטים צריכים להיכנס
  */
-export function gapToFit(params, target) {
+export function gapToFit(params, target, { gapOnly = false } = {}) {
   for (let g = MAX_GAP_DAYS; g >= 1; g -= 1) {
-    if (channelCapacity({ ...params, gapDays: g }).capacity >= target) return g;
+    const r = channelCapacity({ ...params, gapDays: g });
+    if ((gapOnly ? r.gapCap : r.capacity) >= target) return g;
   }
   return null;
 }
