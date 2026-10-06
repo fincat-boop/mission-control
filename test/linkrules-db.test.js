@@ -3,15 +3,12 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 /**
- * קישור עמודות (POST /campaigns/:id/link-rules) מול Postgres אמיתי.
- *
- * (הסביבה זהה ל-convert-db.test.js.) המרת קמפיין לפי זוויות לכללי (POST /campaigns/:id/to-general) מול Postgres
- * אמיתי: כל ניסוח הופך לפוסט בערוץ שלו, עם הטקסט, המצב, ה-meta, הקבצים
- * והפוסטים שכבר שובצו; "לא רלוונטי" לא הופך לפוסט; שתי זוויות באותו מקום
- * מקבלות משבצות שונות.
+ * קישור עמודות (POST /campaigns/:id/link-rules) מול Postgres אמיתי: בדיקת
+ * החוקים, העתקת הקיימים למשבצת הפנויה הבאה, העתקה אוטומטית של פוסט חדש,
+ * שמירה חוזרת שלא מעתיקה שוב, הסרה, ושכפול שמעביר את החוקים.
  *
  * רץ רק במפורש, ורק מול מסד מקומי זמני:
- *   LINKRULES_TEST_DB=1 DATABASE_URL=postgres://postgres@localhost:5434/<עותק> node --test test/convert-db.test.js
+ *   LINKRULES_TEST_DB=1 DATABASE_URL=postgres://postgres@localhost:5434/<עותק> node --test test/linkrules-db.test.js
  */
 const DB_URL = process.env.DATABASE_URL ?? '';
 const RUN = process.env.LINKRULES_TEST_DB === '1' && /@(localhost|127\.0\.0\.1)[:/]/.test(DB_URL);
@@ -162,11 +159,19 @@ test('קישור עמודות: קיימים מועתקים למשבצת הפנו
   const y = await post(id, ids.yt, 5, 'שורט');
   assert.equal(y.copied.linked, 0);
 
+  // ניתוק של עותק ושמירה מחדש עם קישור נוסף — העותק שנותק לא מועתק שוב
+  await call('POST', `/content/${yt[1].id}/unlink`, {});
+  const resave = await call('POST', `/campaigns/${id}/link-rules`,
+    { rules: [...rules, { from: ids.fb, to: ids.li }] });
+  assert.equal(resave.status, 200, JSON.stringify(resave.json));
+  assert.equal((await slots(id, ids.yt)).filter((x) => x.linked_to_id).length, 2);
+  assert.equal((await slots(id, ids.li)).length, 3, 'הקישור החדש מעתיק את שלושת הפוסטים');
+
   // הסרת החוק: פוסט חדש לא מועתק, הקיימים נשארים מקושרים
   await call('POST', `/campaigns/${id}/link-rules`, { rules: [] });
   const d = await post(id, ids.fb, 4, 'ד');
   assert.equal(d.copied.linked, 0);
-  assert.equal((await slots(id, ids.yt)).filter((x) => x.linked_to_id).length, 3);
+  assert.equal((await slots(id, ids.yt)).filter((x) => x.linked_to_id).length, 2);
 });
 
 test('קישור עמודות: שכפול הקמפיין שומר את החוקים', { skip }, async () => {

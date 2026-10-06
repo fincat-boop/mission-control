@@ -416,9 +416,11 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     return bad(res, 'מספר המשבצת חייב להיות מספר שלם בין 1 ל-1000');
   }
   if (b.campaign_id) {
-    // זווית (לא משבצת): נעילת הקמפיין לפני שבודקים מקום — גם במקום מפורש, כמו
-    // בהעלאה המרוכזת. שתי יצירות במקביל לא יקבלו אותו מקום
-    if (!slotChannel) await one('select id from campaigns where id = $1 for update', [b.campaign_id]);
+    // נעילת הקמפיין לפני שבודקים מקום — גם במקום מפורש, כמו בהעלאה המרוכזת.
+    // שתי יצירות במקביל לא יקבלו אותו מקום. גם במשבצת של קמפיין כללי: קישור
+    // העמודות (autoLinkNew) נועל את הקמפיין אחרי היצירה, ובלי הנעילה כאן
+    // יצירה מול העלאה מרוכזת לאותה עמודה נתקעות זו בזו (deadlock)
+    await one('select id from campaigns where id = $1 for update', [b.campaign_id]);
     if (b.sort_order != null) {
       const taken = await one(
         `select 1 from content_items
@@ -630,11 +632,12 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
 /**
  * קישור עמודות בקמפיין כללי: {rules: [{from, to}], dry_run}. dry_run מחזיר כמה
  * פוסטים קיימים יועתקו (להצגה לפני אישור); בלעדיו — החוקים נשמרים והפוסטים
- * הקיימים בעמודות המקור מועתקים עכשיו. הסרת חוק עוצרת העתקה של פוסטים חדשים;
+ * הקיימים בעמודות המקור של קישור חדש מועתקים עכשיו. הסרת חוק עוצרת העתקה של פוסטים חדשים;
  * פוסטים שכבר מקושרים נשארים (מנתקים מתוך הפוסט).
  */
 r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res) => {
-  const c = await one('select id, structure from campaigns where id = $1 for update', [req.params.id]);
+  const c = await one('select id, structure, link_rules from campaigns where id = $1 for update',
+    [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
   if (c.structure !== 'general') return bad(res, 'קישור עמודות זמין רק בקמפיין כללי');
   const channels = await rows(
@@ -644,7 +647,10 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
   const err = linkRulesError(rules, channels);
   if (err) return bad(res, err);
   const clean = normalizeLinkRules(rules);
-  const plan = await linkRulesPlan(c.id, clean);
+  // רק קישור חדש מעתיק את מה שכבר קיים. קישור שכבר היה — שמירה חוזרת לא
+  // מעתיקה שוב פוסט שהמשתמש ניתק או שהעותק שלו נמחק
+  const had = new Set((c.link_rules ?? []).map((x) => `${x.from}>${x.to}`));
+  const plan = await linkRulesPlan(c.id, clean.filter((x) => !had.has(`${x.from}>${x.to}`)));
   if (req.body?.dry_run) return res.json({ copies: plan.length });
 
   await query('update campaigns set link_rules = $2::jsonb where id = $1', [c.id, JSON.stringify(clean)]);

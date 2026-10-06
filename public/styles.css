@@ -860,7 +860,6 @@ button.btn.kebab:hover, button.btn.kebab[aria-expanded="true"] { background: tra
 .gtable td.cell.ro { cursor: default; }
 .gtable .gclip { color: var(--muted); font-size: 10.5px; font-weight: 400; }
 .gtable .lnk { color: var(--accent); }
-.gtable thead th.blocked .need { color: var(--ink-2); }
 /* מצב = נקודה + טקסט, בלי מסגרת */
 .gst { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
 .gst i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }

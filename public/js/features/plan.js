@@ -731,9 +731,11 @@ function openLinkRules(campaign, reload) {
   </div>`;
   const blank = () => ({ from: opts[0].id, to: opts[1].id });
   const start = linkRules(campaign);
+  // בלי קישורים החלון נפתח עם שורה ריקה אחת — היא נקודת ההשוואה, לא []
+  const initial = start.length ? start : [blank()];
 
   openGeneric({
-    guardDirty: () => JSON.stringify(readRules()) !== JSON.stringify(start),
+    guardDirty: () => JSON.stringify(readRules()) !== JSON.stringify(initial),
     title: `קשר תוכן · ${campaign.name}`,
     saveLabel: 'שמור והעתק',
     fields: [{ name: '__rules', type: 'html', html: `
@@ -741,7 +743,7 @@ function openLinkRules(campaign, reload) {
         בעמודה השמאלית — גם הפוסטים שכבר קיימים, וגם כל פוסט חדש. התוכן נשאר זהה בשתיהן
         (טקסט, קבצים ומצב), וכל אחת יוצאת במועד של הערוץ שלה. מתאים לערוצים דומים,
         כמו רילס באינסטגרם ושורטס ביוטיוב.</p>
-      <div id="lrules">${(start.length ? start : [blank()]).map(row).join('')}</div>
+      <div id="lrules">${initial.map(row).join('')}</div>
       <button type="button" class="btn small" id="lruleAdd">＋ עוד קישור</button>
       <p class="fhint" style="margin-top:12px">הסרת קישור עוצרת העתקה של פוסטים חדשים. פוסטים
         שכבר מקושרים נשארים — מנתקים אותם מתוך הפוסט.</p>` }],
