@@ -188,13 +188,16 @@ export function channelBudget(channel) {
  *   gapCap    = כמה ימים פנויים אפשר לבחור עם מרווח gapDays לפחות ביניהם
  *               (המנוע לא שם שני פוסטים של אותה נקודה באותו ערוץ בתוך המרווח)
  *   capacity  = הקטן מביניהם; לפחות 1 כשיש יום פנוי ונתח, 0 כשאין יום פנוי
- *   limitedBy = 'blocked' (כל הימים חסומים) / 'gap' (המרווח הוא המגביל) / 'rate'
+ *               או כשהתקציב של הערוץ 0 (תקרה 0, או 100% שמורים לדחופים) —
+ *               המנוע לעולם לא ישבץ שם, ולכן גם לא דורשים בשבילו תוכן
+ *   limitedBy = 'blocked' (כל הימים חסומים) / 'budget' (תקציב 0) /
+ *               'gap' (המרווח הוא המגביל) / 'rate'
  *
  * ימים חסומים: blocked_days הם מספרי ימים בשבוע (0 = ראשון), כמו
  * Date.getDay() במנוע (buildSlots / allows).
  *
  * @returns {{wanted:number, capacity:number, rateCap:number, gapCap:number,
- *            availableDays:number, limitedBy:'blocked'|'gap'|'rate'}}
+ *            availableDays:number, limitedBy:'blocked'|'budget'|'gap'|'rate'}}
  *          availableDays = מספר הימים הפנויים בטווח
  */
 export function channelCapacity({ from, to, channel, share, gapDays = 7 }) {
@@ -211,7 +214,8 @@ export function channelCapacity({ from, to, channel, share, gapDays = 7 }) {
 
   const max = Number(channel.max_per_week ?? 1);
   const wanted = Math.max(1, Math.round(max * weeks * share));
-  const rateCap = Math.round(channelBudget(channel) * weeks * share);
+  const budget = channelBudget(channel);
+  const rateCap = Math.round(budget * weeks * share);
 
   // חמדני מהיום הראשון: בוחרים כל יום פנוי שרחוק מספיק מהקודם — זה המקסימום
   const step = Math.max(1, Number(gapDays ?? 7));
@@ -222,8 +226,11 @@ export function channelCapacity({ from, to, channel, share, gapDays = 7 }) {
   }
 
   let capacity = 0;
-  if (available.length && share > 0) capacity = Math.max(1, Math.min(rateCap, gapCap));
-  const limitedBy = !available.length ? 'blocked' : (gapCap < rateCap ? 'gap' : 'rate');
+  if (available.length && share > 0 && budget > 0) capacity = Math.max(1, Math.min(rateCap, gapCap));
+  let limitedBy = 'rate';
+  if (!available.length) limitedBy = 'blocked';
+  else if (budget <= 0) limitedBy = 'budget';
+  else if (gapCap < rateCap) limitedBy = 'gap';
 
   return { wanted, capacity, rateCap, gapCap, availableDays: available.length, limitedBy };
 }

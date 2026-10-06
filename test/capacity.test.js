@@ -190,3 +190,11 @@ test('channelCapacity — נתח קטן: לפחות 1 כשיש יום פנוי; 
   const zero = channelCapacity({ from: '2026-11-01', to: '2026-11-07', channel: ch, share: 0 });
   assert.equal(zero.capacity, 0);
 });
+
+test('channelCapacity — תקציב 0 (תקרה 0 או 100% לדחופים): 0, לא דורשים פוסט', () => {
+  for (const channel of [{ max_per_week: 0 }, { max_per_week: 3, urgent_reserve_pct: 100 }]) {
+    const r = channelCapacity({ from: '2026-11-01', to: '2026-11-14', channel, share: 1 });
+    assert.equal(r.capacity, 0);
+    assert.equal(r.limitedBy, 'budget');
+  }
+});

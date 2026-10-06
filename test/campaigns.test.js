@@ -542,3 +542,10 @@ test('noRoomReason + statusOf — קבוע של 100% לאורך כל התקופ�
   assert.match(noRoomReason(zero, channelCapacities(zero, [fb5], [zero], { gapDays: 7 })),
     /נתח 0%/);
 });
+
+test('noRoomReason — כל הערוצים בתקציב 0: הסיבה היא התקרה', () => {
+  const reserved = { ...fb5, urgent_reserve_pct: 100 };
+  const caps = channelCapacities(q4, [reserved], [q4], { gapDays: 7 });
+  assert.equal(caps.get(6).limitedBy, 'budget');
+  assert.match(noRoomReason(q4, caps), /תקרה 0/);
+});
