@@ -948,8 +948,12 @@ function baseStatus({ c, today, grid, myChannels, ahead, noRoom }) {
   return { key: 'full', label: `מלא — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
 }
 
-/** האם הקמפיין עומד בקצב, ביחס לזמן שכבר עבר ממנו */
-function paceOf(c, today, published, grid) {
+/**
+ * האם הקמפיין עומד בקצב, ביחס לזמן שכבר עבר ממנו. היעד = הנדרש ברשת
+ * (grid.total_cells), כלומר הקיבולת שהמנוע באמת יכול לשבץ (channelCapacity),
+ * או מה שנכתב בקמפיין מוכן — לא תדירות שמוגדרת על הקמפיין.
+ */
+export function paceOf(c, today, published, grid) {
   if (!c.starts_on || !c.ends_on || c.starts_on > today || grid.total_cells === 0) return null;
   const end = c.ends_on < today ? c.ends_on : today;
   const elapsed = daysBetween(c.starts_on, end);

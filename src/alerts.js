@@ -255,8 +255,11 @@ const heDate = (d) => new Date(d).toLocaleDateString('he-IL');
 /**
  * ההתראות של הקמפיינים (שורות campaignsWithHealth). טהורה.
  *
- *   חסר תוכן      — רץ, או מתחיל בתוך שבוע.
- *   מפגר אחרי הקצב — רץ, ויצא פחות מהצפוי עד היום.
+ *   חסר תוכן      — רץ, או מתחיל בתוך שבוע. החסר נספר מהיום והלאה
+ *                    (missing_ahead): שורה שהתאריך שלה עבר כבר לא תשובץ, ואין
+ *                    טעם לבקש לכתוב לה. קמפיין מוכן — הטיוטות (כולן עוד יכולות
+ *                    לצאת עד הסוף).
+ *   מפגר אחרי הקצב — רץ, ויצא פחות ממה שהקיבולת שלו (הנדרש) מצפה עד היום.
  *   תוכן שלא ייכנס — רץ או מתוכנן, ויש תוכן בלי פוסט שאין לו מקום עד הסוף
  *                    (unplaced). warn — בלי החלטה הוא פשוט לא יצא.
  *   הסתיים         — עד שבועיים אחרי הסוף, כשנשארו גרסאות מוכנות שלא פורסמו
@@ -289,7 +292,9 @@ export function campaignAlerts(campaigns, today) {
     const daysToStart = c.starts_on
       ? Math.round((new Date(c.starts_on) - new Date(today)) / DAY) : null;
 
-    if (c.missing_content > 0) {
+    // קמפיין מוכן: כל הטיוטות; אחרת — מה שחסר מהיום והלאה
+    const missing = c.complete ? c.missing_content : (c.missing_ahead ?? c.missing_content);
+    if (missing > 0) {
       const starting = c.phase === 'upcoming' && daysToStart !== null &&
                        daysToStart <= UPCOMING_WINDOW_DAYS;
       if (c.phase === 'running' || starting) {
@@ -302,8 +307,8 @@ export function campaignAlerts(campaigns, today) {
         id: `campaign-pace-${c.id}`,
         level: 'warn',
         title: `מפגר אחרי הקצב: ${c.name}`,
-        detail: `לפי התדירות שהוגדרה היו אמורים לצאת ${c.pace.expected_by_now} פוסטים, ` +
-                `יצאו ${c.pace.published}`,
+        detail: `לפי המקום שיש לקמפיין בערוצים היו אמורים לצאת עד היום ${c.pace.expected_by_now} ` +
+                `פוסטים, יצאו ${c.pace.published}`,
         tab: 'plan',
         campaign_id: c.id,
       });
@@ -343,13 +348,16 @@ export function campaignContentAlert(c, daysToStart) {
       campaign_id: c.id,
     };
   }
+  // לא מוכן: מה שחסר מהיום והלאה, מתוך מה שנשאר (שורות שעברו לא נספרות)
+  const ahead = c.missing_ahead ?? n;
+  const total = c.total_ahead ?? c.required;
   return {
     id: `campaign-content-${c.id}`,
     level: running ? 'crit' : 'warn',
     title: `חסר תוכן: ${c.name}`,
     detail: running
-      ? `הקמפיין רץ וחסרים לו ${n} פוסטים מתוך ${c.required}`
-      : `מתחיל בעוד ${daysToStart} ימים וחסרים לו ${n} מתוך ${c.required}`,
+      ? `הקמפיין רץ וחסרים לו ${ahead} פוסטים מתוך ${total} שנשארו עד הסוף`
+      : `מתחיל בעוד ${daysToStart} ימים וחסרים לו ${ahead} מתוך ${total}`,
     tab: 'plan',
     campaign_id: c.id,
   };
