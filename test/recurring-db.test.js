@@ -145,7 +145,7 @@ after(async () => {
 async function template(name, { start = '2027-01-31' } = {}) {
   const r = await call('POST', '/campaigns', {
     name, endpoint_id: ids.endpoint, starts_on: start, period: '1m', structure: 'general',
-    goal: 'הרשמות', importance: 7, share_pct: 40, channel_ids: [ids.ig, ids.yt, ids.nl],
+    goal: 'הרשמות', share_pct: 40, channel_ids: [ids.ig, ids.yt, ids.nl],
   });
   assert.equal(r.status, 201, JSON.stringify(r.json));
   const id = r.json.campaign.id;
@@ -195,7 +195,7 @@ test('סימון קמפיין מחזורי: PATCH recurring, ערך לא בול�
   const after = await campaign(id);
   assert.equal(after.recurring, true);
   // שום דבר אחר לא זז
-  for (const k of ['name', 'starts_on', 'ends_on', 'period', 'content_complete_at', 'importance']) {
+  for (const k of ['name', 'starts_on', 'ends_on', 'period', 'content_complete_at']) {
     assert.deepEqual(after[k], before[k], k);
   }
 
@@ -245,7 +245,7 @@ test('שבץ מחדש: עותק מלא — הגדרות, תוכן עם המצב�
   assert.equal(tplBefore.ends_on, '2027-02-28');
   assert.equal(c.starts_on, '2027-03-31');
   assert.equal(c.ends_on, '2027-04-30');
-  for (const k of ['endpoint_id', 'structure', 'goal', 'importance', 'share_pct', 'urgent', 'target_posts']) {
+  for (const k of ['endpoint_id', 'structure', 'goal', 'share_pct', 'target_posts']) {
     assert.deepEqual(c[k], tplBefore[k], k);
   }
   assert.equal(c.recurring, false, 'עותק אינו מחזורי');

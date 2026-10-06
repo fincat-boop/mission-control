@@ -87,8 +87,7 @@ async function snapshot() {
   const counts = await one(`select
          (select count(*)::int from content_items) as content,
          (select count(*)::int from posts where status in ('scheduled','approved','publishing','failed','pending_approval')) as scheduled,
-         -- "חסר תוכן": פוסטים עתידיים בלי תוכן משויך. המנוע כבר לא יוצר
-         -- status='hole' — משבצת בלי תוכן היא scheduled עם content_id ריק
+         -- "חסר תוכן": פוסטים עתידיים בלי תוכן משויך (scheduled עם content_id ריק)
          (select count(*)::int from posts
            where content_id is null and scheduled_at >= now()
              and status in ('scheduled','approved','pending_approval')) as missing_content,
@@ -415,7 +414,7 @@ const WRITE_TOOLS = {
       if (c.paused_at) return { error: `הקמפיין "${c.name}" כבר מושהה` };
       const held = await one(
         `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
-          where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
+          where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval')
             and p.scheduled_at >= now()`, [a.campaign_id]);
       return { warnings: held.n ? [`${held.n} פוסטים עתידיים ייעלמו מהלוח עד להפעלה מחדש`] : [] };
     },
@@ -708,7 +707,7 @@ async function checkCampaignUpdate(a) {
   if (a.starts_on && c.starts_on && String(a.starts_on).slice(0, 10) !== String(c.starts_on).slice(0, 10)) {
     const moving = await one(
       `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
-        where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval','hole')
+        where ci.campaign_id = $1 and p.status in ('scheduled','approved','failed','pending_approval')
           and p.scheduled_at >= now()`, [c.id]);
     if (moving.n) warnings.push(`${moving.n} פוסטים עתידיים יזוזו יחד עם הקמפיין`);
   }
@@ -730,7 +729,7 @@ async function checkChannelUpdate(a) {
     if (added.length) {
       const clash = await rows(
         `select id, title, scheduled_at from posts
-          where channel_id = $1 and status in ('scheduled','approved','failed','pending_approval','hole')
+          where channel_id = $1 and status in ('scheduled','approved','failed','pending_approval')
             and scheduled_at >= now()
             and extract(dow from scheduled_at)::int = any($2::int[])`,
         [a.channel_id, added]);

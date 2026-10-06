@@ -12,7 +12,9 @@ r.get('/channels', wrap(async (_req, res) => {
   res.json({ channels: await rows('select * from channels order by sort_order, id') });
 }));
 
-const CHANNEL_FIELDS = ['name', 'max_per_week', 'target_per_week', 'max_promo_per_week',
+// target_per_week לא כאן: "פוסטים בשבוע" הוא max_per_week בלבד. העמודה נשארת
+// בסכימה (שורות ישנות), אבל אף אחד כבר לא קורא או כותב אותה.
+const CHANNEL_FIELDS = ['name', 'max_per_week', 'max_promo_per_week',
                         'max_hybrid_per_week', 'max_value_per_week', 'urgent_reserve_pct',
                         'blocked_days', 'active', 'sort_order', 'efficiency', 'platform'];
 

@@ -28,8 +28,10 @@ r.get('/campaigns', wrap(async (_req, res) => {
   res.json({ campaigns, allocation, milestones });
 }));
 
+// importance ו-urgent לא כאן: חשיבות היא של נקודת הקצה (הנתח נגזר ממנה), ו"דחוף"
+// הוא של פוסט / מבצע דחוף. העמודות נשארות בסכימה, אבל אף אחד לא קורא אותן.
 const CAMPAIGN_FIELDS = ['name', 'endpoint_id', 'starts_on', 'ends_on', 'share_pct',
-                         'importance', 'target_posts', 'goal', 'urgent', 'active',
+                         'target_posts', 'goal', 'active',
                          'period', 'structure', 'recurring', 'min_gap_days'];
 
 /** שדות בעריכה שמשנים מה הקמפיין צריך או מתי — אחריהם ממלאים את כל התקופה */
@@ -139,14 +141,11 @@ function newCampaignError(b) {
 async function insertCampaign(b) {
   const c = await one(
     `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
-                            importance, target_posts, goal, urgent, period, structure,
-                            min_gap_days)
-     values ($1,$2,$3,$4,$5,
-             coalesce($6,(select importance from endpoints where id = $1)),
-             $7,$8,coalesce($9,false),$10,coalesce($11,'general'),$12)
+                            target_posts, goal, period, structure, min_gap_days)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,coalesce($9,'general'),$10)
      returning *`,
     [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null, b.share_pct ?? null,
-     b.importance ?? null, b.target_posts ?? null, b.goal ?? null, b.urgent ?? false,
+     b.target_posts ?? null, b.goal ?? null,
      b.period ?? null, b.structure ?? null, b.min_gap_days ?? null]
   );
   if (Array.isArray(b.channel_ids)) {
@@ -381,8 +380,8 @@ r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) 
     ? body.name.trim() : runName(src.name, body.starts_on);
   const b = {
     endpoint_id: src.endpoint_id, name, goal: src.goal, starts_on: body.starts_on, ...period,
-    share_pct: src.share_pct, importance: src.importance, target_posts: src.target_posts,
-    urgent: src.urgent, structure: src.structure, min_gap_days: src.min_gap_days,
+    share_pct: src.share_pct, target_posts: src.target_posts,
+    structure: src.structure, min_gap_days: src.min_gap_days,
     channel_ids: channels.map((x) => x.channel_id),
   };
   const err = newCampaignError(b);

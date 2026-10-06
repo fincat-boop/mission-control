@@ -34,7 +34,6 @@ const LABELS = {
   share_pct: 'נתח',
   target_posts: 'יעד פוסטים',
   min_gap_days: 'מרווח בין פוסטים',
-  target_per_week: 'פוסטים בשבוע (יעד)',
   max_per_week: 'פוסטים בשבוע (תקרה)',
   max_promo_per_week: 'מכירתי בשבוע (תקרה)',
   max_value_per_week: 'ערך בשבוע (תקרה)',

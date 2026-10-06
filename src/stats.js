@@ -64,7 +64,7 @@ export async function buildStats(from, to) {
        from posts p where ${inLocalDays(POST_AT)} and status = 'published'
       group by kind`, args);
   const byChannel = await rows(
-    `select c.id, c.name, c.target_per_week, c.max_per_week,
+    `select c.id, c.name, c.max_per_week,
             count(p.id) filter (where p.status = 'published')::int as published,
             count(p.id) filter (where p.status <> 'hole')::int     as placed
        from channels c
@@ -113,7 +113,8 @@ export async function buildStats(from, to) {
   const channels = byChannel.map((c) => ({
     ...c,
     per_week_actual: +(c.placed / period.weeks).toFixed(1),
-    // מול מספר הפוסטים בשבוע שהוגדר לערוץ
+    // מול מספר הפוסטים בשבוע שהוגדר לערוץ (max_per_week). השם נשאר כי מסך
+    // הנתונים קורא אותו; channels.target_per_week עצמו כבר לא נקרא
     target_per_week: c.max_per_week,
   }));
 
