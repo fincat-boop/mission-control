@@ -472,8 +472,10 @@ async function askFit(body, { editId = null, okLabel = 'שמור' } = {}) {
   let draft;
   let saved = null;
   try {
+    // תקלה בתצוגה של הקמפיין השמור לא מבטלת את הבדיקה של הטיוטה — רק שואלים גם אם לא השתנה
     [draft, saved] = await Promise.all([
-      capacityPreview(body), editId ? capacityPreview({ id: editId }) : null]);
+      capacityPreview(body),
+      editId ? capacityPreview({ id: editId }).catch(() => null) : null]);
   } catch {
     return {};
   }
