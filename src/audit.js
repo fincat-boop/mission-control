@@ -21,6 +21,9 @@ const SKIP = [
   /^\/assistant\/(chat|status)$/,   // שיחה עם העוזר — הפעולה עצמה נרשמת באישור
   /^\/engine\/plan$/,               // תכנון בלבד, לא כותב כלום
   /^\/urgent\/preview$/,
+  // תצוגה מקדימה של קיבולת בטופס הקמפיין — לא כותבת כלום. בלעדיה כל שינוי
+  // בטופס היה נרשם כ"יצר קמפיין"
+  /^\/campaigns\/capacity-preview$/,
   // חתימה להעלאה ל-R2 — לא כותבת כלום; הקובץ נרשם ב-complete / bulk/media
   /^\/content\/\d+\/uploads\/sign$/,
   /^\/campaigns\/\d+\/bulk\/sign$/,
