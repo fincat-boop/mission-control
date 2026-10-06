@@ -433,6 +433,19 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .confirm-dlg { width: min(380px, 92vw); }
 .confirm-dlg #confirmMsg { font-size: 13.5px; line-height: 1.6; white-space: pre-line; margin: 0 0 16px; }
 .confirm-dlg .btn.crit { color: var(--st-crit); }
+/* חלון ההתאמה (לא כל הפוסטים נכנסים בזמן) — חלק נוסף בתוך חלון האישור */
+.confirm-dlg.wide { width: min(480px, 92vw); }
+#confirmExtra h3 { margin-bottom: 16px; }
+.fitrows {
+  display: grid; grid-template-columns: minmax(0, 1fr) max-content max-content;
+  gap: 8px 20px; padding: 12px 0; border-block: 1px solid var(--border); font-size: 13px;
+}
+.fitrows .v { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.fitwhy { margin: 10px 0 18px; }
+.fitopts { flex-direction: column; flex-wrap: nowrap; margin-bottom: 20px; }
+.fitopts label { align-items: flex-start; line-height: 1.5; }
+.fitopts input { margin-top: 2px; }
+.fitopts small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .frow { margin-bottom: 10px; font-size: 13px; }
 .frow label { display: block; color: var(--ink-2); margin-bottom: 4px; font-size: 12px; }

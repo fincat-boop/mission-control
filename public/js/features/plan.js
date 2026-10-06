@@ -11,6 +11,10 @@ import {
   progressList, setPickedFiles, uploadBulk, uploadEach, uploadFailedMessage,
 } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
+import {
+  compressGap, daysLabel, fitsText, gapReason, postsLabel, sameShortage, shortChannels,
+  totalCapacity,
+} from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
 import { goToSetupTarget } from '../ui/setup.js';
 
@@ -432,6 +436,68 @@ function openShareForm(campaign, reload) {
   });
 }
 
+/* ---------- חלון ההתאמה: לא כל הפוסטים נכנסים בזמן ---------- */
+
+/** כמה נכנס לקמפיין לפי הגוף — בלי לשמור (src/campaigns.js, capacityPreview) */
+const capacityPreview = (body) =>
+  api('/campaigns/capacity-preview', { method: 'POST', body });
+
+/** שורות "ערוץ | מספר | מספר" — רשת אחת, כדי שהמספרים יעמדו על אותו קו בכל השורות */
+function fitRowsHtml(rows) {
+  return `<div class="fitrows">${rows.map(([name, ...cells]) =>
+    `<span class="n">${esc(name)}</span>${cells.map((x) => `<span class="v">${esc(x)}</span>`).join('')}`
+  ).join('')}</div>`;
+}
+
+/** בחירה אחת מתוך האפשרויות [ערך, תווית, שורת משנה?]; הראשונה מסומנת */
+function fitOptionsHtml(opts) {
+  return `<div class="checks fitopts" role="radiogroup" aria-label="מה לעשות">${opts.map(([v, l, sub], i) =>
+    `<label><input type="radio" name="fitChoice" value="${esc(v)}"${i === 0 ? ' checked' : ''}>
+      <span>${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ''}</span></label>`).join('')}</div>`;
+}
+
+const readFit = (box) => box.querySelector('[name="fitChoice"]:checked')?.value ?? 'keep';
+
+/**
+ * לפני שמירת קמפיין: האם מה שהקצב מבקש נכנס במרווח בין הפוסטים. אם לא —
+ * חלון שמציע לדחוס (מרווח קצר יותר לקמפיין הזה בלבד) או להשאיר. להאריך לא
+ * מוצע כאן: בקמפיין רגיל הדרישה גדלה עם האורך, ולכן הארכה לא עוזרת.
+ * תקלה בתצוגה המקדימה לא חוסמת שמירה — השמירה עצמה תחזיר שגיאה אמיתית, אם יש.
+ * @param body הגוף של השמירה (בעריכה עם id)
+ * @param editId בעריכה: מחסור זהה לזה של הקמפיין השמור לא נשאל שוב — כבר
+ *        הוחלט להשאיר אותו כך, או שלא שונה שום דבר שמשפיע על הקיבולת
+ * @returns {Promise<null|{min_gap_days?:number}>} null = ביטול; אחרת מה להוסיף לשמירה
+ */
+async function askFit(body, { editId = null, okLabel = 'שמור' } = {}) {
+  let draft;
+  let saved = null;
+  try {
+    [draft, saved] = await Promise.all([
+      capacityPreview(body), editId ? capacityPreview({ id: editId }) : null]);
+  } catch {
+    return {};
+  }
+  if (!draft.short || (saved && sameShortage(draft, saved))) return {};
+
+  const rows = shortChannels(draft);
+  const gap = compressGap(rows);
+  // מה ייכנס בדחיסה — אותו חישוב עם המרווח החדש
+  const compressed = gap != null
+    ? await capacityPreview({ ...body, min_gap_days: gap }).catch(() => null) : null;
+  const opts = [
+    gap != null && ['compress', `לדחוס — מרווח של ${daysLabel(gap)} בקמפיין הזה`,
+      compressed ? `כך ייכנסו: ${fitsText(compressed, rows.map((r) => r.channel_id))}` : ''],
+    ['keep', `להשאיר — הקמפיין ידרוש ${postsLabel(totalCapacity(draft))}`],
+  ].filter(Boolean);
+  const html = `<h3>לא כל הפוסטים נכנסים בזמן</h3>
+    ${fitRowsHtml(rows.map((r) => [r.name, `הקצב מבקש ${r.rate_cap}`, `נכנסים ${r.capacity}`]))}
+    <p class="fhint fitwhy">${esc(gapReason(draft, rows))}</p>
+    ${fitOptionsHtml(opts)}`;
+  const choice = await confirmDialog('', { okLabel, html, read: readFit });
+  if (!choice) return null;
+  return choice === 'compress' ? { min_gap_days: gap } : {};
+}
+
 /**
  * duplicate: הטופס נפתח עם ההגדרות של campaign, והשמירה יוצרת קמפיין חדש
  * עם אותו תוכן (זוויות, ניסוחים וקבצים) — משנים רק את מה שצריך.
@@ -495,6 +561,14 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       if (!v.starts_on && v.period !== 'custom') delete v.period;
       if (v.period !== 'custom') delete v.ends_on;
       v.week = state.week;
+      // לפני השמירה: האם הפוסטים נכנסים בזמן. בשכפול הנתח והמרווח עוברים מהמקור
+      const fit = await askFit(
+        duplicate ? { ...v, share_pct: source.share_pct, min_gap_days: source.min_gap_days }
+          : campaign ? { ...v, id: campaign.id } : v,
+        { editId: campaign && !duplicate ? campaign.id : null,
+          okLabel: duplicate ? 'שכפל' : 'שמור' });
+      if (!fit) return { keepOpen: true };   // ביטול — חוזרים לטופס, שום דבר לא נשמר
+      Object.assign(v, fit);
       if (duplicate) {
         const res = await api(`/campaigns/${source.id}/duplicate`, { method: 'POST', body: v });
         state.planCampaign = res.campaign.id;

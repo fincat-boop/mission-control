@@ -8,12 +8,22 @@ import { $ } from './dom.js';
  * יושב ב-core ולא ב-ui/ יחד עם openGeneric: זו פרימיטיבה קטנה מעל אלמנט
  * סטטי, ו-core/api.js נשען עליה לאזהרת המרווח. openGeneric, לעומת זאת,
  * הוא בונה טפסים שלם ומקומו בשכבה שמעל.
+ *
+ * html — חלק נוסף מתחת להודעה (למשל בחירה בין אפשרויות), ו-read(container)
+ * מחזיר את מה שנבחר בו כשלוחצים על האישור. כך החלון נפתח מעל טופס פתוח
+ * (genDlg) בלי לסגור אותו.
  */
-export function confirmDialog(message, { okLabel = 'אישור', danger = false } = {}) {
+export function confirmDialog(message, { okLabel = 'אישור', danger = false, html = '', read = null } = {}) {
   return new Promise((resolve) => {
     const dlg = $('#confirmDlg');
     const okBtn = $('#confirmOk');
     $('#confirmMsg').textContent = message;
+    $('#confirmMsg').hidden = !message;
+    // חלק נוסף (רשימה, בחירה) מתחת להודעה — html כבר מוסלש בידי הקורא
+    const extra = $('#confirmExtra');
+    extra.innerHTML = html;
+    extra.hidden = !html;
+    dlg.classList.toggle('wide', !!html);
     okBtn.textContent = okLabel;
     okBtn.classList.toggle('primary', !danger);
     okBtn.classList.toggle('danger', danger);
@@ -25,7 +35,8 @@ export function confirmDialog(message, { okLabel = 'אישור', danger = false 
       dlg.removeEventListener('close', onClose);
       resolve(result);
     };
-    const onOk = () => { finish(true); dlg.close(); };
+    // read: מה שנבחר בחלק הנוסף, במקום true (ביטול נשאר false)
+    const onOk = () => { finish(read ? read(extra) : true); dlg.close(); };
     const onCancel = () => { finish(false); dlg.close(); };
     const onClose = () => finish(false);
 
