@@ -12,8 +12,9 @@ import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
 import {
-  LinkError, assetOwnerId, itemAssetsSql, linkGroup, linkSlots, lockLinkScope, mediaOwner,
-  releaseLinks, syncFrom, unlink,
+  LinkError, applyLinkPlan, assetOwnerId, autoLinkNew, itemAssetsSql, linkGroup, linkRulesError,
+  linkRulesPlan, linkSlots, lockLinkScope, mediaOwner, normalizeLinkRules, releaseLinks, syncFrom,
+  unlink,
 } from '../links.js';
 import { contentBlocker, readyRejection } from '../publish/readiness.js';
 import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
@@ -469,9 +470,11 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
        values ($1,$2,coalesce($3,''),$4) returning *`,
       [c.id, slotChannel, b.body ?? null, b.status === 'ready' ? 'ready' : 'draft']
     );
+    // קישור עמודות של הקמפיין: הפוסט מועתק למשבצת הפנויה הבאה בעמודות היעד
+    const copied = await autoLinkNew(c.id);
     const engine = await autoFill(b.week);
     // variant — לנעילה האופטימית של השמירה הבאה מאותו טופס (updated_at)
-    return res.status(201).json({ content: c, variant, engine });
+    return res.status(201).json({ content: c, variant, copied, engine });
   }
 
   // זווית חדשה נפתחת עם גרסת טיוטה לכל מדיה שביקשו — הניסוח נכתב לכל אחת בנפרד
@@ -622,6 +625,32 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
   const engine = await autoFill(req.body?.week);
   res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, engine });
+}));
+
+/**
+ * קישור עמודות בקמפיין כללי: {rules: [{from, to}], dry_run}. dry_run מחזיר כמה
+ * פוסטים קיימים יועתקו (להצגה לפני אישור); בלעדיו — החוקים נשמרים והפוסטים
+ * הקיימים בעמודות המקור מועתקים עכשיו. הסרת חוק עוצרת העתקה של פוסטים חדשים;
+ * פוסטים שכבר מקושרים נשארים (מנתקים מתוך הפוסט).
+ */
+r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res) => {
+  const c = await one('select id, structure from campaigns where id = $1 for update', [req.params.id]);
+  if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  if (c.structure !== 'general') return bad(res, 'קישור עמודות זמין רק בקמפיין כללי');
+  const channels = await rows(
+    `select ch.id, ch.name, ch.platform from campaign_channels cc
+       join channels ch on ch.id = cc.channel_id where cc.campaign_id = $1`, [c.id]);
+  const rules = req.body?.rules;
+  const err = linkRulesError(rules, channels);
+  if (err) return bad(res, err);
+  const clean = normalizeLinkRules(rules);
+  const plan = await linkRulesPlan(c.id, clean);
+  if (req.body?.dry_run) return res.json({ copies: plan.length });
+
+  await query('update campaigns set link_rules = $2::jsonb where id = $1', [c.id, JSON.stringify(clean)]);
+  const out = await applyLinkPlan(plan);
+  const engine = await autoFill(req.body?.week);
+  res.json({ rules: clean, ...out, engine });
 }));
 
 /**
@@ -1009,8 +1038,13 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   }));
   if (!ok) return bad(res, SLOT_RACE, 409);
 
+  // קישור עמודות: כל פוסט שנוצר מועתק לעמודות היעד, לפי הסדר
+  let copied = 0;
+  for (const c of created) copied += (await autoLinkNew(c.id)).linked;
+
   res.status(201).json({
     created,
+    copied,
     filled_slots: created.filter((c) => need === null || c.slot <= need).length,
     overflow: created.filter((c) => need !== null && c.slot > need).length,
   });

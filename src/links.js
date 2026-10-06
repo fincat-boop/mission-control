@@ -529,3 +529,127 @@ export async function linkSlots(clickedId, body = {}) {
   const follower = await one('select * from content_items where id = $1', [followerId]);
   return { source, follower, downgraded };
 }
+
+/* ===================== קישור עמודות (חוקים לקמפיין) ===================== */
+
+/*
+ * במקום לקשר פוסט לפוסט ביד, המשתמש מגדיר בקמפיין "עמודה ← עמודה" (למשל
+ * אינסטגרם רילס ← יוטיוב שורטס): כל פוסט בעמודת המקור מקבל עוקבת במשבצת
+ * הפנויה הבאה בעמודת היעד — עכשיו, לפוסטים שכבר קיימים, ובכל פוסט חדש
+ * (applyLinkRules / autoLinkNew). הקישור עצמו הוא אותו קישור (linkSlots):
+ * תוכן אחד, כל משבצת במועד של הערוץ שלה.
+ * החוקים נשמרים ב-campaigns.link_rules: [{from, to}] (מזהי ערוצים).
+ */
+
+const MAX_RULES = 20;
+
+/**
+ * חוקים תקינים מול ערוצי הקמפיין. רמה אחת, כמו בקישור: עמודת יעד לא יכולה
+ * להיות גם מקור (עוקבת לא מקושרת הלאה).
+ * @param channels ערוצי הקמפיין [{id, name, platform}]
+ * @returns {string|null} הודעת שגיאה
+ */
+export function linkRulesError(rules, channels) {
+  if (!Array.isArray(rules)) return 'רשימת הקישורים לא תקינה';
+  if (rules.length > MAX_RULES) return `עד ${MAX_RULES} קישורים בקמפיין`;
+  const byId = new Map(channels.map((ch) => [ch.id, ch]));
+  const seen = new Set();
+  for (const r of rules) {
+    const from = byId.get(Number(r?.from));
+    const to = byId.get(Number(r?.to));
+    if (!from || !to) return 'אפשר לקשר רק עמודות של ערוצים שבקמפיין';
+    if (from.id === to.id) return `${from.name} מקושר לעצמו — בוחרים עמודה אחרת`;
+    if (from.platform === 'newsletter' || to.platform === 'newsletter') {
+      return 'ניוזלטר לא מתקשר — התוכן שלו (נושא, תבנית, גוף המייל) שונה מפוסט רגיל';
+    }
+    const key = `${from.id}>${to.id}`;
+    if (seen.has(key)) return `${from.name} ← ${to.name} מופיע פעמיים`;
+    seen.add(key);
+  }
+  const froms = new Set(rules.map((r) => Number(r.from)));
+  const chained = rules.find((r) => froms.has(Number(r.to)));
+  if (chained) {
+    return `${byId.get(Number(chained.to)).name} מקבל תוכן מעמודה אחרת, ולכן לא יכול להעתיק הלאה — ` +
+      'מקשרים את שתי העמודות ישירות לאותו מקור';
+  }
+  return null;
+}
+
+/** [{from, to}] נקיים — מספרים בלבד, בסדר שנשלח */
+export const normalizeLinkRules = (rules) =>
+  rules.map((r) => ({ from: Number(r.from), to: Number(r.to) }));
+
+/**
+ * מה יועתק: לכל חוק — פוסטי המקור (לפי הסדר) שעוד אין להם עוקבת בעמודת
+ * היעד, וכל אחד למשבצת הפנויה הבאה שם. רק פוסט שאינו עוקבת בעצמו.
+ * @param onlySourceId רק הפוסט הזה (אחרי יצירה)
+ * @returns {Promise<{source_id:number, from:number, to:number, sort_order:number}[]>}
+ */
+export async function linkRulesPlan(campaignId, rules, onlySourceId = null) {
+  const items = await rows(
+    `select id, slot_channel_id, sort_order, linked_to_id from content_items
+      where campaign_id = $1 and slot_channel_id is not null order by sort_order, id`,
+    [campaignId]);
+  const taken = new Map();
+  for (const x of items) {
+    if (!taken.has(x.slot_channel_id)) taken.set(x.slot_channel_id, new Set());
+    taken.get(x.slot_channel_id).add(x.sort_order);
+  }
+  const plan = [];
+  for (const { from, to } of rules) {
+    const used = taken.get(to) ?? new Set();
+    taken.set(to, used);
+    for (const s of items) {
+      if (s.slot_channel_id !== from || s.linked_to_id) continue;
+      if (onlySourceId != null && s.id !== onlySourceId) continue;
+      if (items.some((x) => x.linked_to_id === s.id && x.slot_channel_id === to)) continue;
+      let n = 1;
+      while (used.has(n)) n += 1;
+      used.add(n);
+      plan.push({ source_id: s.id, from, to, sort_order: n });
+    }
+  }
+  return plan;
+}
+
+/**
+ * מבצע את התוכנית. משבצת שנתפסה בינתיים (משתמש אחר) — מדלגים עליה ומדווחים,
+ * לא מפילים את כל הבקשה.
+ * @returns {Promise<{linked:number, skipped:string[], downgraded:object[]}>}
+ */
+export async function applyLinkPlan(plan) {
+  const out = { linked: 0, skipped: [], downgraded: [] };
+  for (const p of plan) {
+    try {
+      const r = await linkSlots(p.source_id, {
+        target_campaign_slot: { channel_id: p.to, sort_order: p.sort_order },
+      });
+      out.linked += 1;
+      out.downgraded.push(...r.downgraded);
+    } catch (e) {
+      if (!(e instanceof LinkError)) throw e;
+      out.skipped.push(e.message);
+    }
+  }
+  return out;
+}
+
+/**
+ * אחרי שנוצר פוסט במשבצת של קמפיין כללי: לפי חוקי הקמפיין, הוא מועתק
+ * לעמודות היעד של העמודה שלו. בלי חוקים — כלום.
+ */
+export async function autoLinkNew(contentId) {
+  const it = await one(
+    `select ci.id, ci.campaign_id, ci.slot_channel_id, ci.linked_to_id, ca.structure, ca.link_rules
+       from content_items ci join campaigns ca on ca.id = ci.campaign_id
+      where ci.id = $1`, [contentId]);
+  if (!it || it.structure !== 'general' || !it.slot_channel_id || it.linked_to_id) {
+    return { linked: 0, skipped: [], downgraded: [] };
+  }
+  const rules = (it.link_rules ?? []).filter((r) => Number(r.from) === it.slot_channel_id);
+  if (!rules.length) return { linked: 0, skipped: [], downgraded: [] };
+  // נעילת הקמפיין לפני חישוב המשבצת הפנויה — שני פוסטים חדשים במקביל לא
+  // מכוונים לאותה משבצת יעד
+  await query('select id from campaigns where id = $1 for update', [it.campaign_id]);
+  return applyLinkPlan(await linkRulesPlan(it.campaign_id, normalizeLinkRules(rules), it.id));
+}

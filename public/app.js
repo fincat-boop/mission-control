@@ -16,7 +16,7 @@ import { renderStrategy } from './js/features/strategy.js';
 import { wireAIWidget } from './js/features/assistant.js';
 import { paintTaskBadge, renderTasks } from './js/features/tasks.js';
 import { confirmLeaveData, renderData } from './js/features/data.js';
-import { leavePlanView, renderPlan, wireMailPreview } from './js/features/plan.js';
+import { renderPlan, wireMailPreview } from './js/features/plan.js';
 import { renderManage } from './js/features/manage.js';
 import { renderBoard } from './js/features/board.js';
 
@@ -156,8 +156,6 @@ function paintTabs(tab) {
  * הישנה נשארת מאחור, והחדשה מקבלת את ה-hash של הטאב החדש.
  */
 async function showTab(tab) {
-  // מצב "בחירת משבצת לקישור" שייך למסך הקמפיין — יציאה ממנו מבטלת אותו
-  if (tab !== 'plan') leavePlanView();
   if (tab !== state.tab) {
     history.pushState(null, '', location.href);
     navPos += 1;
@@ -219,8 +217,6 @@ async function onHashChange() {
     state.planEndpoint = null;
     state.planCampaign = null;
   }
-  // כמו showTab: יציאה ממסך הקמפיין מבטלת את מצב הקישור
-  if (target !== 'plan') leavePlanView();
   state.tab = target;
   restoreView();
   paintTabs(state.tab);
