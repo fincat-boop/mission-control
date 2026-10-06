@@ -124,13 +124,18 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
   // בכל שבוע שבו הוא לא במקרה משובץ
   const history = await contentHistory();
 
+  // כל הפוסטים החיים של כל נקודה בכל ערוץ סביב השבוע — לבדיקת המרווח מול
+  // השכן הקרוב לשני הכיוונים (ראו contentGap / nearestDays), גם בשיוך תוכן
+  // לפוסטים חסרי תוכן וגם בשיבוץ חדש
+  const pairDates = await postDatesPerEndpointChannel(from, to, settings);
+
   // קודם ממלאים את מה שכבר על הלוח וחסר לו תוכן, ורק אחר כך פותחים פוסטים
   // חדשים — אחרת תוכן שנכתב בדיוק בשביל פוסט ריק נוחת במשבצת אחרת והריק נשאר.
   const attachments = chooseHoleFills({
     // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
     // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
     holes: openHoles(existing, channels, endpoints, new Date(), { autoOnly: !withHoles }),
-    content, usedContent, history, settings, usage,
+    content, usedContent, history, settings, usage, pairDates,
   }).map((a) => ({
     ...a,
     channel_name: channels.find((ch) => ch.id === a.channel_id)?.name ?? '',
@@ -146,10 +151,6 @@ export async function planWeek(anchorDate, { holes: withHoles = true } = {}) {
       .filter((p) => p.endpoint_id)
       .map((p) => `${p.endpoint_id}:${p.channel_id}:${ymd(new Date(p.scheduled_at))}`)
   );
-
-  // כל הפוסטים החיים של כל נקודה בכל ערוץ סביב השבוע — לבדיקת המרווח מול
-  // השכן הקרוב לשני הכיוונים (ראו contentGap / nearestDays)
-  const pairDates = await postDatesPerEndpointChannel(from, to, settings);
 
   const placements = [];
 
@@ -509,21 +510,32 @@ export function openHoles(existing, channels, endpoints, now = new Date(), { aut
  * מסוג אחר עובר את אותם שערים כמו שיבוץ חדש (מכסה לסוג, מכירתי ליום, יחס
  * ערך/מכירתי) דרך allowsRetag; אם הסוג נחסם — עוברים למועמד הבא, ומועמד
  * מאותו סוג של הפוסט תמיד עובר. אחרי הבחירה — retag, כדי שהבאים יראו אותו.
+ *
+ * pairDates (postDatesPerEndpointChannel): התוכן חייב לכבד את המרווח של
+ * הקמפיין שלו מול השכן הקרוב — פוסט שהיה תקין כחסר תוכן יכול להיות צמוד
+ * מדי לתוכן של קמפיין עם מרווח ארוך. הפוסט עצמו ברשימה, ולכן התאריך שלו
+ * יורד ממנה פעם אחת לפני המדידה.
  */
 export function chooseHoleFills({
   holes, content, usedContent, history = new Map(), settings = null, usage = null,
+  pairDates = new Map(),
 }) {
   const out = [];
   for (const h of holes) {
     const at = new Date(h.scheduled_at);
     const dateKey = ymd(at);
     const slot = { channel_id: h.channel_id, dateKey };
+    const neighbours = [...(pairDates.get(`${h.endpoint_id}:${h.channel_id}`) ?? [])];
+    const self = neighbours.indexOf(dateKey);
+    if (self >= 0) neighbours.splice(self, 1);
+    const nearest = nearestDays(neighbours, dateKey);
     const fits = content.filter((c) =>
       c.endpoint_id === h.endpoint_id &&
       (c.eligible_channel_ids ?? []).includes(h.channel_id) &&
       fitsSlotChannel(c, h.channel_id) &&
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
       !outsideCampaignWindow(c, dateKey) &&
+      nearest >= contentGap(c, settings) &&
       reusable(c, slot, history, settings)
     );
     if (fits.length === 0) continue;

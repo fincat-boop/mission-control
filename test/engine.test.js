@@ -664,3 +664,22 @@ test('תוכן שוטף (בלי קמפיין) נבדק מול ברירת המח�
   assert.equal(pickOn('2026-11-07', [plain], ['2026-11-05'], s3), null);
   assert.equal(pickOn('2026-11-08', [plain], ['2026-11-05'], s3), 41);
 });
+
+test('chooseHoleFills — תוכן של קמפיין שהמרווח שלו לא מתקיים מול השכן לא ממלא את הפוסט', () => {
+  // הפוסט ב-8.10, שכן של אותה נקודה וערוץ ב-5.10 (3 ימים). הפוסט עצמו ברשימה.
+  const pairDates = new Map([['7:1', ['2026-10-05', '2026-10-08']]]);
+  const loose = holeItem({ id: 1, campaign_id: 3, campaign_min_gap_days: 7 });
+  const tight = holeItem({ id: 2, campaign_id: 4, campaign_min_gap_days: 3 });
+  const pick = (content) => chooseHoleFills({
+    holes: [hole()], content, usedContent: new Set(), settings: { min_gap_days: 7 }, pairDates,
+  }).map((f) => f.content_id);
+  assert.deepEqual(pick([loose]), []);
+  assert.deepEqual(pick([loose, tight]), [2]);
+  // תוכן שוטף נבדק מול הכללי (7) — לא נכנס
+  assert.deepEqual(pick([holeItem({ id: 5 })]), []);
+  // בלי השכן — התאריך של הפוסט עצמו לא חוסם אותו
+  assert.deepEqual(chooseHoleFills({
+    holes: [hole()], content: [loose], usedContent: new Set(), settings: { min_gap_days: 7 },
+    pairDates: new Map([['7:1', ['2026-10-08']]]),
+  }).map((f) => f.content_id), [1]);
+});
