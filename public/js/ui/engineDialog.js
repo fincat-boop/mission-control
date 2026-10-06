@@ -16,15 +16,20 @@ const undoFill = run(async (fill) => {
     body: { created: fill.created_items ?? [], attached: fill.attached_items ?? [] },
   });
   toast(r.removed || r.detached
-    ? 'המילוי בוטל — הלוח חזר למה שהיה, והמנוע לא יחזיר את התוכן הזה לשבוע הזה.'
+    ? `המילוי בוטל — הלוח חזר למה שהיה, והמנוע לא יחזיר את התוכן הזה ${
+      fill.weeks > 1 ? 'לשבועות האלה' : 'לשבוע הזה'}.`
     : 'אין מה לבטל — הפוסטים כבר השתנו או יצאו לאוויר.');
   await refreshAfterPostChange();
 });
 
-/** מה המנוע עשה, במשפט אחד: כמה, ושתי דוגמאות עם ערוץ ויום */
+/**
+ * מה המנוע עשה, במשפט אחד: כמה, ושתי דוגמאות עם ערוץ ויום. weeks — מילוי
+ * של כל תקופת קמפיין (autoFillCampaign): בכמה שבועות נכתב משהו.
+ */
 function fillSummary(fill) {
   const parts = [];
-  if (fill.placed) parts.push(`שיבץ ${fill.placed} פוסטים`);
+  const across = fill.weeks > 1 ? ` ב-${fill.weeks} שבועות` : '';
+  if (fill.placed) parts.push(`שיבץ ${fill.placed} פוסטים${across}`);
   if (fill.attached) parts.push(`מילא ${fill.attached} פוסטים חסרי תוכן`);
   if (fill.holes) parts.push(`הוסיף ${fill.holes} פוסטים חסרי תוכן עם משימת "לכתוב"`);
   const items = (fill.summary ?? []).slice(0, 2)
