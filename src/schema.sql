@@ -147,6 +147,16 @@ alter table campaigns
 create index if not exists campaigns_template_idx on campaigns (template_id)
   where template_id is not null;
 
+-- מרווח בין פוסטים לקמפיין: כמה ימים לפחות בין שני פוסטים של אותה נקודת
+-- קצה באותו ערוץ, כשהתוכן שנכנס שייך לקמפיין הזה. null = ברירת המחדל
+-- הכללית (engine_settings.min_gap_days). 1 = מותר כל יום; אותו יום אסור
+-- בכלל נפרד (המנוע, הלוח). ראו effectiveGap ב-src/capacity.js.
+alter table campaigns add column if not exists min_gap_days int;
+do $$ begin
+  alter table campaigns add constraint campaigns_min_gap_days_range
+    check (min_gap_days between 1 and 30);
+exception when duplicate_object then null; end $$;
+
 -- על אילו מדיות הקמפיין יושב
 create table if not exists campaign_channels (
   campaign_id int not null references campaigns(id) on delete cascade,

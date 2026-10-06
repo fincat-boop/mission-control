@@ -26,7 +26,7 @@ r.get('/campaigns', wrap(async (_req, res) => {
 
 const CAMPAIGN_FIELDS = ['name', 'endpoint_id', 'starts_on', 'ends_on', 'share_pct',
                          'importance', 'target_posts', 'goal', 'urgent', 'active',
-                         'period', 'structure', 'recurring'];
+                         'period', 'structure', 'recurring', 'min_gap_days'];
 
 /** מחיל את resolvePeriod על גוף הבקשה. מחזיר הודעת שגיאה או null. */
 function applyPeriod(b, before) {
@@ -64,11 +64,31 @@ function datesError(b) {
   return null;
 }
 
+/**
+ * המרווח בין פוסטים של הקמפיין: מספר שלם 1–30, או null/ריק = ברירת המחדל
+ * הכללית. מנרמל את b.min_gap_days במקום (מחרוזת מהטופס → מספר, '' → null),
+ * כדי שהשמירה והתצוגה המקדימה יקבלו אותו ערך. אותו טווח כמו האילוץ במסד.
+ * @returns {string|null} הודעת שגיאה, או null
+ */
+export function gapDaysError(b) {
+  if (!('min_gap_days' in b) || b.min_gap_days === undefined) return null;
+  const v = b.min_gap_days;
+  if (v === null || v === '') { b.min_gap_days = null; return null; }
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 30) {
+    return 'המרווח בין פוסטים צריך להיות מספר שלם של ימים, בין 1 ל-30';
+  }
+  b.min_gap_days = n;
+  return null;
+}
+
 /** בדיקות של קמפיין חדש (גם בשכפול). מחזיר הודעת שגיאה או null. */
 function newCampaignError(b) {
   if (!b.endpoint_id || !b.name) return 'צריך נקודת קצה ושם קמפיין';
   const dateErr = datesError(b);
   if (dateErr) return dateErr;
+  const gapErr = gapDaysError(b);
+  if (gapErr) return gapErr;
   const periodErr = applyPeriod(b, null);
   if (periodErr) return periodErr;
   // קמפיין חדש הוא כללי. "לפי זוויות" נשאר רק לקמפיינים ישנים (ולשכפול שלהם);
@@ -79,14 +99,15 @@ function newCampaignError(b) {
 async function insertCampaign(b) {
   const c = await one(
     `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct,
-                            importance, target_posts, goal, urgent, period, structure)
+                            importance, target_posts, goal, urgent, period, structure,
+                            min_gap_days)
      values ($1,$2,$3,$4,$5,
              coalesce($6,(select importance from endpoints where id = $1)),
-             $7,$8,coalesce($9,false),$10,coalesce($11,'general'))
+             $7,$8,coalesce($9,false),$10,coalesce($11,'general'),$12)
      returning *`,
     [b.endpoint_id, b.name, b.starts_on ?? null, b.ends_on ?? null, b.share_pct ?? null,
      b.importance ?? null, b.target_posts ?? null, b.goal ?? null, b.urgent ?? false,
-     b.period ?? null, b.structure ?? null]
+     b.period ?? null, b.structure ?? null, b.min_gap_days ?? null]
   );
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
@@ -208,8 +229,10 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
   const src = await one('select * from campaigns where id = $1', [req.params.id]);
   if (!src) return bad(res, 'לא נמצא קמפיין כזה', 404);
 
-  // הנתח הקבוע ומספר הזוויות כבר לא בטופס — עוברים מהמקור, כמו ב"שבץ מחדש"
+  // הנתח הקבוע ומספר הזוויות כבר לא בטופס — עוברים מהמקור, כמו ב"שבץ מחדש".
+  // המרווח עובר מהמקור, אלא אם הטופס שלח אחר
   const b = { share_pct: src.share_pct, target_posts: src.target_posts,
+              min_gap_days: src.min_gap_days,
               ...(req.body ?? {}), structure: src.structure };
   const err = newCampaignError(b);
   if (err) return bad(res, err);
@@ -258,7 +281,7 @@ r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) 
   const b = {
     endpoint_id: src.endpoint_id, name, goal: src.goal, starts_on: body.starts_on, ...period,
     share_pct: src.share_pct, importance: src.importance, target_posts: src.target_posts,
-    urgent: src.urgent, structure: src.structure,
+    urgent: src.urgent, structure: src.structure, min_gap_days: src.min_gap_days,
     channel_ids: channels.map((x) => x.channel_id),
   };
   const err = newCampaignError(b);
@@ -489,6 +512,8 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
   const periodErr = applyPeriod(b, before);
   if (periodErr) return bad(res, periodErr);
+  const gapErr = gapDaysError(b);
+  if (gapErr) return bad(res, gapErr);
 
   // קמפיין מחזורי (תבנית ל"שבץ מחדש" בלוח האסטרטגיה) — דגל בלבד, בלי
   // השפעה על המנוע. עותקים נוצרים לא מחזוריים (insertCampaign).
