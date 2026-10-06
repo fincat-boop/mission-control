@@ -374,3 +374,20 @@ test('ביצועים: מילוי קמפיין של 61 יום (3 ערוצים, 30
   });
   await cleanup(base);
 });
+
+test('כשל באמצע המילוי: תשובה ריקה, והטרנזקציה של הבקשה ממשיכה (savepoint)', { skip }, async () => {
+  const { EMPTY_FILL } = await import('../src/routes/_shared.js');
+  const errors = console.error;
+  console.error = () => {};   // השגיאה הצפויה לא מלכלכת את הפלט
+  try {
+    await inOrg(async () => {
+      // מזהה לא מספרי — שגיאת SQL בתוך המילוי
+      assert.equal(await autoFillCampaign('לא מספר'), EMPTY_FILL);
+      // הטרנזקציה לא נשברה: אפשר להמשיך לכתוב ולקרוא
+      const ok = await db.one('select 1 as n');
+      assert.equal(ok.n, 1);
+    });
+  } finally {
+    console.error = errors;
+  }
+});
