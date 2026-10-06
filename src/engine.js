@@ -242,7 +242,8 @@ export async function planWeek(anchorDate, {
   }
 
   const holes = withHoles
-    ? findHoles({ endpoints, content, debts, channels, usage, week, existing, now })
+    ? findHoles({ endpoints, content, debts, channels, usage, week, existing, now,
+                  pairDates, sameDay, settings })
         .map((h) => ({ ...h, key: planItemKey('hole', h) }))
     : [];
 
@@ -1306,12 +1307,27 @@ export function chooseForSlot(ctx) {
 
 /* ========================= חורים ========================= */
 
+/** השעה של פוסט חסר תוכן (באותו ערוץ ויום תפוסים — השעה הפנויה הבאה) */
+const HOLE_HOUR = 12;
+
 /**
  * נקודה שהחוב שלה גבוה אבל אין לה תוכן מוכן — הלוח צריך להראות
  * שהוא מחכה לה, ולא סתם לדלג עליה בשקט.
+ *
+ * פוסט חסר תוכן הוא פוסט לכל דבר, ולכן עובר את אותם כללים כמו שיבוץ רגיל
+ * (קודם הוא עקף את כולם): usage.allows לסוג 'value' — הסוג שבו הוא נפתח —
+ * כלומר תקציב, יום חסום ותקרת ערך שבועית (מכירתי ליום ושער היחס לא חלים על
+ * ערך); לא באותו יום כמו פוסט אחר של הנקודה באותו ערוץ (sameDay); ומרווח
+ * מהשכן הקרוב לשני הכיוונים (pairDates) — המרווח הכללי, כי אין תוכן ולכן
+ * אין קמפיין. הערוצים נבדקים מהפנוי ביותר; ערוץ בלי יום חוקי — עוברים לבא.
+ * אחרי היצירה הפוסט נכנס ל-sameDay ול-pairDates, כמו שיבוץ.
  */
-function findHoles({ endpoints, content, debts, channels, usage, week, existing, now = new Date() }) {
+export function findHoles({ endpoints, content, debts, channels, usage, week, existing,
+                            now = new Date(), pairDates = new Map(), sameDay = new Set(),
+                            settings = null }) {
   const holes = [];
+  const gap = effectiveGap(null, settings);
+  const at = (date, hour) => new Date(`${date}T${String(hour).padStart(2, '0')}:00:00`);
 
   for (const e of endpoints) {
     const p = debts.parts(e.id);
@@ -1321,22 +1337,30 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing,
 
     const mine = content.filter((c) => c.endpoint_id === e.id);
 
-    // הערוץ הכי פנוי — שם נשבץ בלי תוכן. גם טיוטה כבר נבדקה ונפסלה
-    // למעלה בלולאת ה-slots הרגילה, אז אם הגענו לכאן — באמת אין כלום.
-    const target = channels
-      .filter((ch) => usage.remaining(ch.id) > 0)
-      .sort((a, b) => usage.remaining(b.id) - usage.remaining(a.id))[0];
-    if (!target) continue;
+    // הערוץ הכי פנוי שיש בו יום חוקי — שם נשבץ בלי תוכן. גם טיוטה כבר
+    // נבדקה ונפסלה למעלה בלולאת ה-slots הרגילה, אז אם הגענו לכאן — באמת אין כלום.
+    const legal = (ch) => (dateKey) =>
+      at(dateKey, HOLE_HOUR) > now &&
+      usage.allows(ch.id, dateKey, 'value') &&
+      !sameDay.has(`${e.id}:${ch.id}:${dateKey}`) &&
+      nearestDays(pairDates.get(`${e.id}:${ch.id}`), dateKey) >= gap;
+    let target = null;
+    let day = null;
+    for (const ch of channels.filter((x) => usage.remaining(x.id) > 0)
+      .sort((a, b) => usage.remaining(b.id) - usage.remaining(a.id))) {
+      // לא בתחילת השבוע, כדי שיישאר זמן לכתוב; ומתוך מה שנשאר — היום שהכי
+      // רחוק ממה שכבר תפוס באותו ערוץ, כדי שהחורים לא ייערמו כולם על יום אחד.
+      day = pickHoleDay(week, ch, usage, ymd(now), legal(ch));
+      if (day) { target = ch; break; }
+    }
+    if (!target) continue; // אין ערוץ עם יום עתידי שמותר לשים בו פוסט לנקודה
 
-    // לא בתחילת השבוע, כדי שיישאר זמן לכתוב; ומתוך מה שנשאר — היום שהכי
-    // רחוק ממה שכבר תפוס באותו ערוץ, כדי שהחורים לא ייערמו כולם על יום אחד.
-    const day = pickHoleDay(week, target, usage, ymd(now));
-    if (!day) continue; // לא נשאר בשבוע יום עתידי שמתאים לחור
-    let hour = 12;
+    let hour = HOLE_HOUR;
     while (usage.hourTaken(target.id, day.date, hour) && hour < 22) hour += 1;
-    if (new Date(`${day.date}T${String(hour).padStart(2, '0')}:00:00`) <= now) continue;
     // תופסים בפועל את המקום כדי ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת פנויה.
     usage.take(target.id, day.date, 'value', hour);
+    sameDay.add(`${e.id}:${target.id}:${day.date}`);
+    addPairDate(pairDates, `${e.id}:${target.id}`, day.date);
 
     holes.push({
       channel_id: target.id,
@@ -1346,7 +1370,7 @@ function findHoles({ endpoints, content, debts, channels, usage, week, existing,
       kind: 'value',
       date: day.date,
       day_label: day.label,
-      scheduled_at: new Date(`${day.date}T${String(hour).padStart(2, '0')}:00:00`).toISOString(),
+      scheduled_at: at(day.date, hour).toISOString(),
       reason: holeReason(mine, day.date),
       days_since: p.daysSince === null ? null : Math.floor(p.daysSince),
     });
@@ -1374,22 +1398,21 @@ export function holeReason(endpointContent, dateKey) {
 }
 
 /**
- * היום שבו יישב חור: לא בתחילת השבוע, ורחוק ככל האפשר משאר הלוח של הערוץ.
- * לא לפני today; null כשלא נשאר יום כזה.
+ * היום שבו יישב פוסט חסר תוכן: לא בתחילת השבוע, ורחוק ככל האפשר משאר הלוח
+ * של הערוץ. לא לפני today, ורק יום ש-ok מאשר (findHoles: תקציב, יום חסום,
+ * אותו יום, מרווח). כשאין יום כזה אחרי תחילת השבוע — היום החוקי הראשון
+ * בתחילתו; null כשאין בכלל (קודם נפל ליום הרביעי גם כשהוא חסום).
  */
-function pickHoleDay(week, channel, usage, today = null) {
-  const usable = week.days
+function pickHoleDay(week, channel, usage, today = null, ok = () => true) {
+  const legal = week.days
     .map((day, index) => ({ day, index }))
-    .filter(({ day, index }) => {
-      if (index < 2) return false; // צריך זמן לכתוב
+    .filter(({ day }) => {
       if (today && day.date < today) return false;
       const dow = new Date(`${day.date}T00:00:00`).getDay();
-      return !(channel.blocked_days ?? []).includes(dow);
+      return !(channel.blocked_days ?? []).includes(dow) && ok(day.date);
     });
-  if (usable.length === 0) {
-    const fallback = week.days[3] ?? week.days[0];
-    return today && fallback.date < today ? null : fallback;
-  }
+  const usable = legal.filter(({ index }) => index >= 2); // צריך זמן לכתוב
+  if (usable.length === 0) return legal[0]?.day ?? null;
 
   return usable.sort((a, b) => {
     const key = ({ day, index }) => [
