@@ -34,8 +34,10 @@ const GAP_VERBS = { 'לשבץ בכל זאת?': 'שבץ בכל זאת', 'לשמו
                     'לשייך בכל זאת?': 'שייך בכל זאת' };
 
 /**
- * שיבוץ שהשרת מזהיר עליו כצמוד מדי. האזהרה אינה חסימה: מציגים מה
- * שהשרת יודע ושואלים, ומי שמאשר שולח שוב עם confirm_gap.
+ * שיבוץ שהשרת מזהיר עליו (צמוד מדי, מחוץ לחלון הקמפיין, פוסט מקושר באותו
+ * יום, חריגה ממכסות). האזהרה אינה חסימה: מציגים את כל מה שהשרת יודע
+ * בחלון אחד ושואלים, ומי שמאשר שולח שוב עם confirm_warnings (ו-confirm_gap,
+ * שנתיבי הקמפיין עוד קוראים) — אישור אחד לכל האזהרות.
  */
 export async function postWithGapCheck(path, body, method = 'PATCH', question = 'לשבץ בכל זאת?') {
   try {
@@ -45,6 +47,6 @@ export async function postWithGapCheck(path, body, method = 'PATCH', question = 
     const w = e.payload.warning;
     const okLabel = GAP_VERBS[question] ?? 'המשך בכל זאת';
     if (!(await confirmDialog(`${w.message}\n\n${question}`, { okLabel }))) return null;
-    return api(path, { method, body: { ...body, confirm_gap: true } });
+    return api(path, { method, body: { ...body, confirm_gap: true, confirm_warnings: true } });
   }
 }

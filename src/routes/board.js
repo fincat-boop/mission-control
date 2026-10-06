@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { bad, updateById, wrap } from './_shared.js';
-import { buildBoard } from '../board.js';
+import { buildBoard, ymd } from '../board.js';
 import { requirePerm } from '../auth.js';
-import { campaignWindowWarning, gapWarning, softWarning } from '../gap.js';
+import {
+  campaignWindowWarning, capWarning, gapWarning, linkDayWarning, softWarning, warningsConfirmed,
+} from '../gap.js';
 import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
@@ -29,14 +31,26 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
   }
-  // שיבוץ צמוד מדי לפוסט קיים של אותה נקודה, או תוכן של קמפיין מחוץ
-  // לחלון שלו — מזהיר, לא חוסם
+  // אותם כללים קשיחים כמו בהזזה: יום שהערוץ חסם, ושני פוסטים לאותה נקודת
+  // קצה באותו ערוץ באותו יום
+  const target = await one('select name, blocked_days, active from channels where id = $1', [b.channel_id]);
+  if (!target) return bad(res, 'לא נמצא ערוץ כזה', 404);
+  const blockedDay = blockedDayError(target, b.scheduled_at);
+  if (blockedDay) return bad(res, blockedDay);
+  const clash = await sameDayClash({ endpointId: b.endpoint_id, channelId: b.channel_id,
+                                     when: b.scheduled_at });
+  if (clash) return bad(res, `כבר יש פוסט לאותה נקודת קצה במדיה הזו באותו יום: ${clash.title}`);
+
+  // שיבוץ צמוד מדי לפוסט קיים של אותה נקודה, תוכן של קמפיין מחוץ לחלון
+  // שלו, פוסט מקושר באותו יום, או חריגה ממכסות — מזהיר, לא חוסם
   const warning = softWarning(
     await gapWarning({ endpointId: b.endpoint_id, channelId: b.channel_id, when: b.scheduled_at,
                        contentId: b.content_id ?? null }),
     await campaignWindowWarning({ contentId: b.content_id, when: b.scheduled_at }),
+    await linkDayWarning({ contentId: b.content_id, when: b.scheduled_at }),
+    await capWarning({ channelId: b.channel_id, when: b.scheduled_at, kind: b.kind }),
   );
-  if (warning && !b.confirm_gap) {
+  if (warning && !warningsConfirmed(b)) {
     return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
   }
 
@@ -50,6 +64,25 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   );
   res.status(201).json({ post });
 }));
+
+/** הודעת החסימה של יום שהערוץ לא מקבל בו תוכן, או null. target — שורת הערוץ */
+function blockedDayError(target, when) {
+  const dow = new Date(when).getDay();
+  if (!(target?.blocked_days ?? []).includes(dow)) return null;
+  const names = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  return `${target.name} לא מקבל תוכן בימי ${names[dow]}`;
+}
+
+/** פוסט אחר של אותה נקודת קצה באותו ערוץ באותו יום (postId — לא הוא עצמו), או null */
+function sameDayClash({ postId = null, endpointId, channelId, when }) {
+  if (!endpointId) return null;
+  return one(
+    `select p.id, p.title from posts p
+      where ($1::int is null or p.id <> $1) and p.endpoint_id = $2 and p.channel_id = $3
+        and p.scheduled_at::date = $4::date`,
+    [postId, endpointId, channelId, when]
+  );
+}
 
 /** האם הבקשה מזיזה את הפוסט בפועל (מועד או ערוץ אחר) — לא רק שולחת את הקיים */
 export function isMove(current, b) {
@@ -101,25 +134,15 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     const blocked = moving && moveBlocker(current, when);
     if (blocked) return bad(res, blocked.error, blocked.status);
 
-    if (endpoint) {
-      const clash = await one(
-        `select p.id, p.title from posts p
-          where p.id <> $1 and p.endpoint_id = $2 and p.channel_id = $3
-            and p.scheduled_at::date = $4::date`,
-        [current.id, endpoint, channel, when]
-      );
-      if (clash) {
-        return bad(res, `כבר יש פוסט לאותה נקודת קצה במדיה הזו באותו יום: ${clash.title}`);
-      }
+    const clash = await sameDayClash({ postId: current.id, endpointId: endpoint, channelId: channel, when });
+    if (clash) {
+      return bad(res, `כבר יש פוסט לאותה נקודת קצה במדיה הזו באותו יום: ${clash.title}`);
     }
 
     // יום שהמדיה לא מקבלת בו תוכן
     const target = await one('select name, blocked_days, active from channels where id = $1', [channel]);
-    const dow = new Date(when).getDay();
-    if ((target?.blocked_days ?? []).includes(dow)) {
-      const names = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
-      return bad(res, `${target.name} לא מקבל תוכן בימי ${names[dow]}`);
-    }
+    const blockedDay = blockedDayError(target, when);
+    if (blockedDay) return bad(res, blockedDay);
 
     // מעבר לערוץ אחר — אותם כללים כמו שיוך תוכן (attach-content): ערוץ פעיל,
     // ניסוח לתוכן בערוץ הזה שאינו "לא רלוונטי", ומשבצת-מדיה של קמפיין כללי
@@ -135,16 +158,27 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       if (blocker) return bad(res, blocker.error, blocker.status);
     }
 
+    const contentAfter = 'content_id' in b ? b.content_id : current.content_id;
+    // פוסט מקושר באותו יום — רק כשהיום או התוכן באמת משתנים; הזזת שעה או
+    // ערוץ באותו יום לא מעוררת שוב אזהרה שכבר אושרה
+    const relinked = ymd(new Date(when)) !== ymd(new Date(current.scheduled_at)) ||
+      Number(contentAfter ?? 0) !== Number(current.content_id ?? 0);
     const warning = softWarning(
       // המרווח של הקמפיין של התוכן שיישאר על הפוסט אחרי העדכון
       await gapWarning({ endpointId: endpoint, channelId: channel, when, excludePostId: current.id,
-                         contentId: 'content_id' in b ? b.content_id : current.content_id }),
+                         contentId: contentAfter }),
       // רק כשהתאריך באמת זז — שינוי ערוץ באותו יום לא מעורר אותה שוב
       b.scheduled_at
         ? await campaignWindowWarning({ contentId: b.content_id ?? current.content_id, when })
         : null,
+      relinked
+        ? await linkDayWarning({ contentId: contentAfter, when, excludePostId: current.id })
+        : null,
+      // מכסות — רק כשהפוסט נכנס לשבוע / ערוץ / סוג / יום שלא נספר בו קודם
+      await capWarning({ channelId: channel, when, kind: b.kind ?? current.kind,
+                         excludePostId: current.id }),
     );
-    if (warning && !b.confirm_gap) {
+    if (warning && !warningsConfirmed(b)) {
       return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
     }
   } else if (b.content_id != null && Number(b.content_id) !== current.content_id) {
@@ -156,8 +190,13 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
                          channelId: current.channel_id, when: current.scheduled_at,
                          excludePostId: current.id, contentId: b.content_id }),
       await campaignWindowWarning({ contentId: b.content_id, when: current.scheduled_at }),
+      await linkDayWarning({ contentId: b.content_id, when: current.scheduled_at,
+                             excludePostId: current.id }),
+      // תוכן מסוג אחר יכול לחרוג מהתקרה לסוג (התקציב השבועי כבר נספר)
+      await capWarning({ channelId: current.channel_id, when: current.scheduled_at,
+                         kind: b.kind ?? current.kind, excludePostId: current.id }),
     );
-    if (warning && !b.confirm_gap) {
+    if (warning && !warningsConfirmed(b)) {
       return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
     }
   }
@@ -424,14 +463,20 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
   }
 
   // המרווח לפי הקמפיין של התוכן שמשויך — פוסט שהיה תקין כחסר תוכן יכול
-  // להיות צמוד מדי לשכן כשהתוכן בא מקמפיין עם מרווח ארוך. אזהרה שאפשר לאשר
-  // (confirm_gap), כמו בהזזה ובפוסט ידני.
-  const gap = await gapWarning({
-    endpointId: post.endpoint_id ?? c.endpoint_id, channelId: post.channel_id,
-    when: post.scheduled_at, excludePostId: post.id, contentId: c.id,
-  });
-  if (gap && !req.body?.confirm_gap) {
-    return res.status(409).json({ error: gap.message, warning: gap, needs_confirm: true });
+  // להיות צמוד מדי לשכן כשהתוכן בא מקמפיין עם מרווח ארוך; פוסט מקושר באותו
+  // יום; ותוכן מסוג אחר שחורג מהתקרה לסוג. אזהרה שאפשר לאשר
+  // (confirm_warnings / confirm_gap), כמו בהזזה ובפוסט ידני.
+  const warning = softWarning(
+    await gapWarning({
+      endpointId: post.endpoint_id ?? c.endpoint_id, channelId: post.channel_id,
+      when: post.scheduled_at, excludePostId: post.id, contentId: c.id,
+    }),
+    await linkDayWarning({ contentId: c.id, when: post.scheduled_at, excludePostId: post.id }),
+    await capWarning({ channelId: post.channel_id, when: post.scheduled_at, kind: c.kind,
+                       excludePostId: post.id }),
+  );
+  if (warning && !warningsConfirmed(req.body)) {
+    return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
   }
 
   // פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן" — האישור לא היה על התוכן הזה

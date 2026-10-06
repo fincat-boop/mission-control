@@ -177,3 +177,188 @@ test('המנוע: מול פוסט קיים של המקור, ושיוך לפוס�
     await cleanup(s);
   }
 });
+
+/* ========================= אזהרות ידניות ========================= */
+
+const at = (d, h = 10) => `2030-11-${d}T${String(h).padStart(2, '0')}:00:00+02:00`;
+const insertPost = (x) => inOrg(async () => (await db.one(
+  `insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at, status)
+   values ($1,$2,$3,$4,$5,$6,coalesce($7,'scheduled')) returning id`,
+  [x.channel, x.ep ?? null, x.content ?? null, x.title ?? 'פוסט', x.kind ?? 'value', x.at,
+   x.status ?? null])).id);
+
+test('linkDayWarning — פוסט מקושר באותו יום (בכל ערוץ); יום אחר, links_apart כבוי ואותו פריט — לא', { skip }, async () => {
+  const { linkDayWarning } = await import('../src/gap.js');
+  const s = await linkedSetup({ name: 'אזהרת קישור' });
+  try {
+    const rootPost = await insertPost({ channel: s.a, ep: s.ep, content: s.root, title: 'המקור', at: at(18) });
+    await inOrg(async () => {
+      const w = await linkDayWarning({ contentId: s.follower, when: at(18, 20) });
+      assert.match(w.message, /פוסט מקושר \("המקור", אזהרת קישור A\) כבר יוצא באותו יום/);
+      assert.equal(w.other.id, rootPost);
+      assert.equal(await linkDayWarning({ contentId: s.follower, when: at(19) }), null);
+      // אותו פריט (המקור עצמו בערוץ אחר) — לא "מקושר"
+      assert.equal(await linkDayWarning({ contentId: s.root, when: at(18, 20) }), null);
+      // הפוסט עצמו לא נספר
+      assert.equal(await linkDayWarning({ contentId: s.follower, when: at(18), excludePostId: rootPost }),
+        null);
+      // נכשל לא נספר
+      await db.query("update posts set status = 'failed' where id = $1", [rootPost]);
+      assert.equal(await linkDayWarning({ contentId: s.follower, when: at(18) }), null);
+      await db.query("update posts set status = 'scheduled' where id = $1", [rootPost]);
+      await db.query('update campaigns set links_apart = false where id = $1', [s.camp]);
+      assert.equal(await linkDayWarning({ contentId: s.follower, when: at(18) }), null);
+    });
+  } finally {
+    await cleanup(s);
+  }
+});
+
+/** ערוץ עם מכסות לבדיקות המכסה: 2 בשבוע, מכירתי אחד בשבוע */
+async function capSetup(name) {
+  return inOrg(async () => {
+    const ep = (await db.one("insert into endpoints (name, importance) values ($1, 5) returning id",
+      [name])).id;
+    const ep2 = (await db.one("insert into endpoints (name, importance) values ($1, 5) returning id",
+      [`${name} 2`])).id;
+    const ch = (await db.one(
+      `insert into channels (name, platform, max_per_week, max_promo_per_week, urgent_reserve_pct,
+                             blocked_days)
+       values ($1, 'manual', 2, 1, 0, '{6}') returning id`, [name])).id;
+    const other = (await db.one(
+      `insert into channels (name, platform, max_per_week, urgent_reserve_pct)
+       values ($1, 'manual', 7, 0) returning id`, [`${name} אחר`])).id;
+    return { ep, ep2, ch, other };
+  });
+}
+const capCleanup = (s) => inOrg(async () => {
+  await db.query('delete from posts where channel_id = any($1::int[])', [[s.ch, s.other]]);
+  await db.query('delete from channels where id = any($1::int[])', [[s.ch, s.other]]);
+  await db.query('delete from endpoints where id = any($1::int[])', [[s.ep, s.ep2]]);
+});
+
+test('capWarning — פוסטים בשבוע, תקרה לסוג, מכירתי ליום; הזזה בתוך אותה משבצת — בלי אזהרה', { skip }, async () => {
+  const { capWarning } = await import('../src/gap.js');
+  const s = await capSetup('מכסות');
+  try {
+    const p1 = await insertPost({ channel: s.ch, ep: s.ep, kind: 'promo', at: at(18) });
+    await insertPost({ channel: s.ch, ep: s.ep2, kind: 'value', at: at(19) });
+    // בשבוע אחר (24.11 = ראשון הבא) — לא נספר
+    await insertPost({ channel: s.ch, ep: s.ep, kind: 'value', at: at(24) });
+    await inOrg(async () => {
+      const w = await capWarning({ channelId: s.ch, when: at(20), kind: 'promo' });
+      assert.equal(w.caps.length, 2, w.message);
+      assert.match(w.message, /בשבוע הזה כבר 2 מתוך 2 פוסטים בשבוע במכסות\./);
+      assert.match(w.message, /כבר 1 מתוך 1 פוסטים מסוג מכירתי במכסות/);
+      // value — רק התקציב השבועי
+      const v = await capWarning({ channelId: s.ch, when: at(20), kind: 'value' });
+      assert.equal(v.caps.length, 1);
+      // שבוע הבא — 1 מתוך 2, אין אזהרה
+      assert.equal(await capWarning({ channelId: s.ch, when: at(25), kind: 'value' }), null);
+      // הפוסט עצמו זז בתוך אותו שבוע ואותו ערוץ — לא שואלים שוב
+      assert.equal(await capWarning({ channelId: s.ch, when: at(21), kind: 'promo', excludePostId: p1 }),
+        null);
+      // מכירתי ליום — בכל הערוצים (ברירת מחדל 1)
+      const d = await capWarning({ channelId: s.other, when: at(18, 15), kind: 'promo' });
+      assert.match(d.message, /ביום הזה כבר פוסט מכירתי אחד בכל הערוצים, והמקסימום ליום הוא 1/);
+      assert.equal(await capWarning({ channelId: s.other, when: at(19, 15), kind: 'promo' }), null);
+    });
+  } finally {
+    await capCleanup(s);
+  }
+});
+
+test('POST /posts — יום חסום ואותה נקודה באותו יום נחסמים; מכסה — אזהרה ואישור (confirm_warnings / confirm_gap)', { skip }, async () => {
+  const s = await capSetup('ידני');
+  try {
+    // 23.11.2030 = שבת, חסומה בערוץ
+    const sat = await call('POST', '/posts',
+      { channel_id: s.ch, endpoint_id: s.ep, title: 'שבת', kind: 'value', scheduled_at: at(23) });
+    assert.equal(sat.status, 400);
+    assert.match(sat.json.error, /לא מקבל תוכן בימי שבת/);
+
+    const first = await call('POST', '/posts',
+      { channel_id: s.ch, endpoint_id: s.ep, title: 'ראשון', kind: 'value', scheduled_at: at(18) });
+    assert.equal(first.status, 201, JSON.stringify(first.json));
+    const same = await call('POST', '/posts',
+      { channel_id: s.ch, endpoint_id: s.ep, title: 'שני', kind: 'value', scheduled_at: at(18, 15) });
+    assert.equal(same.status, 400);
+    assert.match(same.json.error, /כבר יש פוסט לאותה נקודת קצה/);
+
+    await call('POST', '/posts',
+      { channel_id: s.ch, endpoint_id: s.ep2, title: 'שני', kind: 'value', scheduled_at: at(19) });
+    const over = { channel_id: s.ch, title: 'שלישי', kind: 'value', scheduled_at: at(20) };
+    const warn = await call('POST', '/posts', over);
+    assert.equal(warn.status, 409, JSON.stringify(warn.json));
+    assert.equal(warn.json.needs_confirm, true);
+    assert.match(warn.json.error, /2 מתוך 2 פוסטים בשבוע/);
+    const ok = await call('POST', '/posts', { ...over, confirm_warnings: true });
+    assert.equal(ok.status, 201);
+    const legacy = await call('POST', '/posts', { ...over, title: 'רביעי', confirm_gap: true });
+    assert.equal(legacy.status, 201);
+  } finally {
+    await capCleanup(s);
+  }
+});
+
+test('PATCH /posts — הזזה לשבוע מלא: אזהרת מכסה; הזזה בתוך אותו שבוע — בלי', { skip }, async () => {
+  const s = await capSetup('הזזה');
+  try {
+    await insertPost({ channel: s.ch, ep: s.ep, at: at(18) });
+    await insertPost({ channel: s.ch, ep: s.ep2, at: at(19) });
+    const mover = await insertPost({ channel: s.ch, at: at(25) });
+    const inWeek = await insertPost({ channel: s.ch, at: at(26) });
+
+    const warn = await call('PATCH', `/posts/${mover}`, { scheduled_at: at(20) });
+    assert.equal(warn.status, 409, JSON.stringify(warn.json));
+    assert.match(warn.json.error, /2 מתוך 2 פוסטים בשבוע/);
+    const ok = await call('PATCH', `/posts/${mover}`, { scheduled_at: at(20), confirm_warnings: true });
+    assert.equal(ok.status, 200, JSON.stringify(ok.json));
+    // עכשיו 3 בשבוע; הזזה של אחד מהם בתוך השבוע — אין אזהרה חוזרת
+    const again = await call('PATCH', `/posts/${mover}`, { scheduled_at: at(21) });
+    assert.equal(again.status, 200, JSON.stringify(again.json));
+    // שבוע 24–30 עם פוסט אחד — הזזה בתוכו בסדר
+    assert.equal((await call('PATCH', `/posts/${inWeek}`, { scheduled_at: at(27) })).status, 200);
+  } finally {
+    await capCleanup(s);
+  }
+});
+
+test('הלוח: פוסט מקושר באותו יום — הזזה ושיוך תוכן מזהירים, ואישור אחד לכל האזהרות', { skip }, async () => {
+  const s = await linkedSetup({ name: 'לוח קישור' });
+  try {
+    await insertPost({ channel: s.a, ep: s.ep, content: s.root, title: 'המקור', at: at(18) });
+    // פוסט חסר תוכן ב-B באותו יום → שיוך העוקבת
+    const hole = await insertPost({ channel: s.b, ep: s.ep, title: 'חסר תוכן', at: at(18, 12) });
+    const attach = await call('POST', `/posts/${hole}/attach-content`, { content_id: s.follower });
+    assert.equal(attach.status, 409, JSON.stringify(attach.json));
+    assert.match(attach.json.error, /פוסט מקושר \("המקור"/);
+    const attached = await call('POST', `/posts/${hole}/attach-content`,
+      { content_id: s.follower, confirm_warnings: true });
+    assert.equal(attached.status, 200, JSON.stringify(attached.json));
+
+    // הזזת העוקבת ליום אחר — בלי אזהרה; וחזרה ליום של המקור — אזהרה
+    assert.equal((await call('PATCH', `/posts/${hole}`, { scheduled_at: at(19, 12) })).status, 200);
+    const back = await call('PATCH', `/posts/${hole}`, { scheduled_at: at(18, 12) });
+    assert.equal(back.status, 409, JSON.stringify(back.json));
+    assert.match(back.json.error, /פוסט מקושר/);
+
+    // שתי אזהרות יחד (קישור + מרווח מול פוסט של הנקודה ב-B ב-17.11): הודעה אחת, אישור אחד
+    await insertPost({ channel: s.b, ep: s.ep, title: 'שכן', at: at(17) });
+    const both = await call('PATCH', `/posts/${hole}`, { scheduled_at: at(18, 12) });
+    assert.equal(both.status, 409);
+    assert.equal(both.json.warning.all.length, 2, both.json.error);
+    assert.match(both.json.error, /פוסט מקושר/);
+    assert.match(both.json.error, /המרווח שהוגדר/);
+    const done = await call('PATCH', `/posts/${hole}`, { scheduled_at: at(18, 12), confirm_warnings: true });
+    assert.equal(done.status, 200, JSON.stringify(done.json));
+
+    // POST /posts עם תוכן מקושר באותו יום
+    const direct = await call('POST', '/posts', { channel_id: s.b, title: 'ידני', kind: 'value',
+      content_id: s.follower, scheduled_at: at(18, 16) });
+    assert.equal(direct.status, 409, JSON.stringify(direct.json));
+    assert.match(direct.json.error, /פוסט מקושר/);
+  } finally {
+    await cleanup(s);
+  }
+});

@@ -10,10 +10,12 @@
  */
 
 import { one } from './db.js';
-import { ymd } from './board.js';
+import { weekMeta, ymd } from './board.js';
 import { effectiveGap } from './capacity.js';
+import { LINK_LIVE_STATUSES } from './engine.js';
 
 const LIVE = "('scheduled','approved','publishing','failed','published','pending_approval')";
+const LIVE_LIST = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
 
 /**
  * ברירת המחדל הכללית למרווח — engine_settings.min_gap_days (ברירת מחדל 7).
@@ -129,11 +131,128 @@ export async function campaignWindowWarning({ contentId, when }) {
 }
 
 /**
- * מאחד אזהרות רכות לתשובת 409 אחת — כך שאישור אחד (confirm_gap) מכסה את
- * כולן, ולא נוצר מצב של אישור, ושוב 409 על אזהרה אחרת.
+ * פוסט מקושר (אותה קבוצת קישור — מקור ועוקבות) שכבר יוצא באותו יום, בכל
+ * ערוץ, כשהקמפיין מבקש שפוסטים מקושרים לא ייצאו יחד (links_apart, ברירת
+ * מחדל כן). המנוע לא משבץ כך; ביד — אזהרה שאפשר לאשר, כמו המרווח.
+ * "יום" = יום בלוח של ישראל, כמו בשאר המנוע. אותו פריט בערוץ אחר לא נחשב.
+ * @returns {null | {other:object, channel_name:string, message:string}}
+ */
+export async function linkDayWarning({ contentId, when, excludePostId = null }) {
+  if (!contentId || !when) return null;
+  const near = await one(
+    `with me as (
+       select ci.id, coalesce(ci.linked_to_id, ci.id) as root, ca.name as campaign_name
+         from content_items ci left join campaigns ca on ca.id = ci.campaign_id
+        where ci.id = $1 and coalesce(ca.links_apart, true))
+     select p.id, p.title, p.scheduled_at, c.name as channel_name, me.campaign_name
+       from me
+       join content_items ci on coalesce(ci.linked_to_id, ci.id) = me.root and ci.id <> me.id
+       join posts p          on p.content_id = ci.id
+       join channels c       on c.id = p.channel_id
+      where p.status = any($4)
+        and ($3::int is null or p.id <> $3)
+        and (p.scheduled_at at time zone 'Asia/Jerusalem')::date
+          = ($2::timestamptz at time zone 'Asia/Jerusalem')::date
+      order by p.scheduled_at, p.id
+      limit 1`,
+    [contentId, when, excludePostId, LINK_LIVE_STATUSES]
+  );
+  if (!near) return null;
+  const rule = near.campaign_name
+    ? ` בקמפיין "${near.campaign_name}" פוסטים מקושרים לא יוצאים באותו יום.`
+    : '';
+  return {
+    other: { id: near.id, title: near.title, scheduled_at: near.scheduled_at },
+    channel_name: near.channel_name,
+    message: `פוסט מקושר ("${near.title}", ${near.channel_name}) כבר יוצא באותו יום.${rule}`,
+  };
+}
+
+const KIND_HE = { promo: 'מכירתי', value: 'ערך', hybrid: 'משולב' };
+const KIND_CAP = { promo: 'max_promo_per_week', value: 'max_value_per_week',
+                   hybrid: 'max_hybrid_per_week' };
+
+/**
+ * פוסט ידני שחורג מהמכסות שהמנוע מכבד: פוסטים בשבוע בערוץ (max_per_week —
+ * התקרה, כולל השטח ששמור לדחופים), תקרה לסוג בערוץ (max_*_per_week) ומכירתי
+ * ליום בכל הערוצים (max_promo_per_day). השבוע — ראשון עד שבת, כמו בלוח.
+ * נספרים הפוסטים החיים (LIVE), בלי הפוסט עצמו (excludePostId).
+ *
+ * פוסט שזז בתוך אותה משבצת (אותו ערוץ ושבוע / אותו סוג / אותו יום) כבר היה
+ * נספר בה — ואז אין אזהרה, גם אם המשבצת כבר מעל המכסה (אושרה קודם). אחרת
+ * כל הזזה בתוך שבוע מלא הייתה שואלת שוב.
+ * @returns {null | {caps:string[], message:string}}
+ */
+export async function capWarning({ channelId, when, kind, excludePostId = null }) {
+  if (!channelId || !when) return null;
+  const ch = await one(
+    `select name, max_per_week, max_promo_per_week, max_value_per_week, max_hybrid_per_week
+       from channels where id = $1`, [channelId]);
+  if (!ch) return null;
+
+  const week = weekMeta(when);
+  const from = week.startDate;
+  const to = new Date(week.endDate);
+  to.setHours(23, 59, 59, 999);
+  const day = ymd(new Date(when));
+
+  const cur = excludePostId
+    ? await one('select channel_id, kind, status, scheduled_at from posts where id = $1', [excludePostId])
+    : null;
+  const curLive = cur && LIVE_LIST.includes(cur.status);
+  const curAt = curLive ? new Date(cur.scheduled_at) : null;
+  const sameWeek = curLive && cur.channel_id === Number(channelId) && curAt >= from && curAt <= to;
+
+  const n = await one(
+    `select count(*)::int as total,
+            count(*) filter (where kind = $5)::int as of_kind
+       from posts
+      where channel_id = $1 and status = any($4)
+        and scheduled_at >= $2 and scheduled_at <= $3
+        and ($6::int is null or id <> $6)`,
+    [channelId, from, to, LIVE_LIST, kind ?? null, excludePostId]
+  );
+
+  const out = [];
+  const max = Number(ch.max_per_week ?? 0);
+  if (!sameWeek && max > 0 && n.total >= max) {
+    out.push(`בשבוע הזה כבר ${n.total} מתוך ${max} פוסטים בשבוע ב${ch.name}.`);
+  }
+  const cap = kind ? ch[KIND_CAP[kind]] : null;
+  if (cap != null && !(sameWeek && cur.kind === kind) && n.of_kind >= cap) {
+    out.push(`בשבוע הזה כבר ${n.of_kind} מתוך ${cap} פוסטים מסוג ${KIND_HE[kind]} ב${ch.name}.`);
+  }
+  if (kind === 'promo') {
+    const s = await one('select max_promo_per_day from engine_settings limit 1');
+    const perDay = s?.max_promo_per_day ?? 1;
+    const sameDay = curLive && cur.kind === 'promo' && ymd(curAt) === day;
+    const d = await one(
+      `select count(*)::int as n from posts
+        where kind = 'promo' and status = any($2)
+          and (scheduled_at at time zone 'Asia/Jerusalem')::date
+            = ($1::timestamptz at time zone 'Asia/Jerusalem')::date
+          and ($3::int is null or id <> $3)`,
+      [when, LIVE_LIST, excludePostId]
+    );
+    if (!sameDay && d.n >= perDay) {
+      out.push(`ביום הזה כבר ${d.n === 1 ? 'פוסט מכירתי אחד' : `${d.n} פוסטים מכירתיים`} ` +
+               `בכל הערוצים, והמקסימום ליום הוא ${perDay}.`);
+    }
+  }
+  if (!out.length) return null;
+  return { caps: out, message: out.join('\n') };
+}
+
+/**
+ * מאחד אזהרות רכות לתשובת 409 אחת — כך שאישור אחד (confirm_warnings, או
+ * confirm_gap הוותיק) מכסה את כולן, ולא נוצר מצב של אישור, ושוב 409 על
+ * אזהרה אחרת.
  */
 export function softWarning(...warnings) {
   const list = warnings.filter(Boolean);
   if (!list.length) return null;
   return { ...list[0], message: list.map((w) => w.message).join('\n\n'), all: list };
 }
+
+/** האם הבקשה מאשרת את האזהרות הרכות (שם חדש, והוותיק שהלקוח עוד שולח) */
+export const warningsConfirmed = (b) => !!(b?.confirm_warnings || b?.confirm_gap);
