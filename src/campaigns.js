@@ -680,6 +680,78 @@ export function missingAhead(rows, today, days = null) {
   return { missing, total };
 }
 
+/** פוסט שתופס את התוכן שלו בערוץ — המנוע לא ישבץ אותו שוב (contentHistory) */
+const HAS_POST = ['scheduled', 'approved', 'publishing', 'published', 'pending_approval', 'failed'];
+/** פוסט שעוד יוצא, או יצא — תופס מקום בקיבולת של החלון שבו הוא יושב */
+const TAKES_ROOM = ['scheduled', 'approved', 'publishing', 'published', 'pending_approval'];
+
+/** הגרסה של פריט לערוץ, כשהיא מועמדת לשיבוץ (מוכן או טיוטה — המנוע משבץ גם טיוטה) */
+const variantFor = (it, ch, statuses) => {
+  if (it.slot_channel_id && it.slot_channel_id !== ch.id) return null;   // fitsSlotChannel
+  const v = it.variants?.find((x) => x.channel_id === ch.id);
+  return v && statuses.includes(v.status) ? v : null;
+};
+
+/**
+ * התוכן של קמפיין שעוד אין לו פוסט, מול המקום שנשאר לו עד הסוף.
+ *
+ * לכל ערוץ של הקמפיין: כמה גרסאות (מוכן או טיוטה) של התוכן שלו אין להן
+ * פוסט בערוץ (without), וכמה מקום נשאר מ-max(היום, תחילת הקמפיין) עד הסוף —
+ * channelCapacity על החלון שנשאר, עם הנתח, המרווח והאחים של אותו חלון,
+ * פחות מה שכבר על הלוח בחלון הזה (free). מה שנכנס במקום שנשאר — waiting
+ * (יחכה לשיבוץ); השאר — unplaced: לא ייכנס עד הסוף, ובלי התראה היה נעלם
+ * בשקט (המנוע לא משבץ תוכן של קמפיין אחרי ends_on).
+ *
+ * פוסט שנכשל נספר כ"יש פוסט": המנוע לא ישבץ את התוכן שוב, ויש לו התראה משלו.
+ * בלי תאריכים, או אחרי הסוף — אין חלון, הכול 0.
+ * @param items הזוויות/המשבצות של הקמפיין, כל אחת עם variants
+ * @param myPosts הפוסטים של התוכן של הקמפיין (content_id, channel_id, status, scheduled_at)
+ * @param concurrent CAMPAIGNS_WEIGHTED_SQL — לנתח ולאחים בחלון שנשאר
+ * @returns {{unplaced:number, waiting:number, by_channel:Object<number,
+ *            {without:number, free:number, unplaced:number}>}}
+ */
+export function unplacedOf(c, items, myChannels, myPosts, concurrent = [],
+                           { gapDays = 7, today = ymd(new Date()) } = {}) {
+  const out = { unplaced: 0, waiting: 0, by_channel: {} };
+  if (!c.starts_on || !c.ends_on) return out;
+  const from = c.starts_on > today ? c.starts_on : today;
+  if (from > c.ends_on) return out;
+
+  const posted = new Set(myPosts.filter((p) => HAS_POST.includes(p.status))
+    .map((p) => `${p.content_id}:${p.channel_id}`));
+  // החלון שנשאר: הנתח והאחים נמדדים עליו, לא על כל הקמפיין
+  const caps = channelCapacities({ ...c, starts_on: from }, myChannels, concurrent, { gapDays });
+
+  for (const ch of myChannels) {
+    const without = items.filter((it) => variantFor(it, ch, ['ready', 'draft']) &&
+      !posted.has(`${it.id}:${ch.id}`)).length;
+    const taken = myPosts.filter((p) => p.channel_id === ch.id && TAKES_ROOM.includes(p.status) &&
+      ymd(new Date(p.scheduled_at)) >= from).length;
+    const free = Math.max(0, (caps.get(ch.id)?.capacity ?? 0) - taken);
+    const fits = Math.min(without, free);
+    out.by_channel[ch.id] = { without, free, unplaced: without - fits };
+    out.waiting += fits;
+    out.unplaced += without - fits;
+  }
+  return out;
+}
+
+/**
+ * קמפיין שהסתיים: כמה גרסאות מוכנות של התוכן שלו לא פורסמו ואין להן פוסט
+ * שעוד יוצא — מה שנשאר על המדף כשהקמפיין נגמר. טיוטות לא נספרות (לא היו
+ * מוכנות לצאת), וגם לא גרסה לערוץ שכבר לא בקמפיין.
+ */
+export function unpublishedReady(items, myChannels, myPosts, now = new Date()) {
+  const out = new Set(myPosts.filter((p) => p.status === 'published' ||
+      (TAKES_ROOM.includes(p.status) && new Date(p.scheduled_at) > now))
+    .map((p) => `${p.content_id}:${p.channel_id}`));
+  let n = 0;
+  for (const ch of myChannels) {
+    n += items.filter((it) => variantFor(it, ch, ['ready']) && !out.has(`${it.id}:${ch.id}`)).length;
+  }
+  return n;
+}
+
 /** כל הקמפיינים עם מצב מלא */
 export async function campaignsWithHealth() {
   const list = await rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance,
@@ -760,6 +832,12 @@ export async function campaignsWithHealth() {
       : grid.angles;
     const ahead = live ? missingAhead(rowsOf, today) : { missing: 0, total: 0 };
     const week = live ? missingAhead(rowsOf, today, 7) : { missing: 0, total: 0 };
+    // תוכן בלי פוסט מול המקום שנשאר עד הסוף (רץ / מתוכנן), ובקמפיין שהסתיים —
+    // מה שמוכן ולא יצא
+    const room = live
+      ? unplacedOf(c, shaped, myChannels, myPosts, list, { gapDays, today })
+      : { unplaced: 0, waiting: 0, by_channel: {} };
+    const leftover = phase === 'ended' ? unpublishedReady(shaped, myChannels, myPosts) : 0;
 
     return {
       ...c,
@@ -783,8 +861,14 @@ export async function campaignsWithHealth() {
       missing_ahead: ahead.missing,
       total_ahead: ahead.total,
       missing_week: week.missing,
+      // תוכן שלא ייכנס עד סוף הקמפיין / שעוד יחכה לשיבוץ (unplacedOf)
+      unplaced: room.unplaced,
+      waiting: room.waiting,
+      unplaced_by_channel: room.by_channel,
+      // קמפיין שהסתיים: גרסאות מוכנות שלא פורסמו (unpublishedReady)
+      unpublished_ready: leftover,
       phase,
-      status: statusOf({ c, today, grid, myChannels, ahead, noRoom }),
+      status: statusOf({ c, today, grid, myChannels, ahead, noRoom, unplaced: room.unplaced }),
       // למה אין לקמפיין משבצות (null = יש) — המסך מסביר את זה במקום "אין תאריכים"
       no_room_reason: noRoom,
       pace: paceOf(c, today, published, grid),
@@ -811,7 +895,22 @@ function phaseOf(c, today) {
   return 'running';
 }
 
-export function statusOf({ c, today, grid, myChannels, ahead = null, noRoom = null }) {
+/**
+ * מצב הקמפיין לתג ברשימה. unplaced > 0 (unplacedOf) לא מקבל מצב משלו — הוא
+ * נוסף כסיבה (reason, ה-tooltip של התג) לכל מצב של קמפיין שרץ או מתוכנן,
+ * כי הוא יכול לבוא יחד עם "חסרים" או "מלא".
+ */
+export function statusOf({ c, today, grid, myChannels, ahead = null, noRoom = null,
+                           unplaced = 0 }) {
+  const st = baseStatus({ c, today, grid, myChannels, ahead, noRoom });
+  if (!(unplaced > 0) || ['paused', 'inactive', 'ended'].includes(st.key)) return st;
+  const note = unplaced === 1
+    ? 'פוסט אחד לא ייכנס עד סוף הקמפיין'
+    : `${unplaced} פוסטים לא ייכנסו עד סוף הקמפיין`;
+  return { ...st, reason: st.reason ? `${st.reason} · ${note}` : note, unplaced };
+}
+
+function baseStatus({ c, today, grid, myChannels, ahead, noRoom }) {
   const phase = phaseOf(c, today);
   if (phase === 'paused') return { key: 'paused', label: 'מושהה', tone: 'warn' };
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };

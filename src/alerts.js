@@ -73,44 +73,7 @@ export async function buildAlerts(user = null) {
   const alerts = [];
   const today = ymd(new Date());
 
-  for (const c of campaigns) {
-    // קמפיין מושהה לא מייצר רעש — ההשהיה היא החלטה, לא בעיה
-    if (['ended','inactive','paused'].includes(c.phase)) continue;
-
-    const daysToStart = c.starts_on
-      ? Math.round((new Date(c.starts_on) - new Date(today)) / DAY) : null;
-
-    if (c.missing_content > 0) {
-      const starting = c.phase === 'upcoming' && daysToStart !== null &&
-                       daysToStart <= UPCOMING_WINDOW_DAYS;
-      if (c.phase === 'running' || starting) {
-        alerts.push(campaignContentAlert(c, daysToStart));
-      }
-    }
-
-    if (c.phase === 'running' && c.pace?.behind > 0) {
-      alerts.push({
-        id: `campaign-pace-${c.id}`,
-        level: 'warn',
-        title: `מפגר אחרי הקצב: ${c.name}`,
-        detail: `לפי התדירות שהוגדרה היו אמורים לצאת ${c.pace.expected_by_now} פוסטים, ` +
-                `יצאו ${c.pace.published}`,
-        tab: 'plan',
-        campaign_id: c.id,
-      });
-    }
-
-    if (c.phase === 'running' && c.missing_content === 0 && c.unplaced > 0) {
-      alerts.push({
-        id: `campaign-unplaced-${c.id}`,
-        level: 'info',
-        title: `תוכן ממתין לשיבוץ: ${c.name}`,
-        detail: `${c.unplaced} פריטי תוכן מוכנים ועוד לא נכנסו ללוח`,
-        tab: 'plan',
-        campaign_id: c.id,
-      });
-    }
-  }
+  alerts.push(...campaignAlerts(campaigns, today));
 
   alerts.push(...failedPostAlerts(failed), ...missedPostAlerts(missed));
 
@@ -293,6 +256,83 @@ export function storageAlert({ usedBytes, assetsBytes = 0, backupsBytes = 0, log
     ].filter(Boolean).join(' · '),
     tab: null,
   };
+}
+
+/** כמה ימים אחרי הסוף קמפיין שהסתיים עוד מתריע על תוכן מוכן שלא יצא */
+const ENDED_WINDOW_DAYS = 14;
+
+const heDate = (d) => new Date(d).toLocaleDateString('he-IL');
+
+/**
+ * ההתראות של הקמפיינים (שורות campaignsWithHealth). טהורה.
+ *
+ *   חסר תוכן      — רץ, או מתחיל בתוך שבוע.
+ *   מפגר אחרי הקצב — רץ, ויצא פחות מהצפוי עד היום.
+ *   תוכן שלא ייכנס — רץ או מתוכנן, ויש תוכן בלי פוסט שאין לו מקום עד הסוף
+ *                    (unplaced). warn — בלי החלטה הוא פשוט לא יצא.
+ *   הסתיים         — עד שבועיים אחרי הסוף, כשנשארו גרסאות מוכנות שלא פורסמו
+ *                    (unpublished_ready). info — לידיעה, נעלם לבד.
+ * מושהה / לא פעיל — בלי רעש: ההשהיה היא החלטה, לא בעיה.
+ */
+export function campaignAlerts(campaigns, today) {
+  const alerts = [];
+  for (const c of campaigns) {
+    if (c.phase === 'ended') {
+      const n = c.unpublished_ready ?? 0;
+      const since = c.ends_on ? Math.round((new Date(today) - new Date(c.ends_on)) / DAY) : null;
+      if (n > 0 && since !== null && since <= ENDED_WINDOW_DAYS) {
+        alerts.push({
+          id: `campaign-leftover-${c.id}`,
+          level: 'info',
+          title: n === 1
+            ? `פוסט מוכן אחד של ${c.name} לא פורסם`
+            : `${n} פוסטים מוכנים של ${c.name} לא פורסמו`,
+          detail: `הקמפיין הסתיים ב-${heDate(c.ends_on)} — אפשר להאריך אותו, ` +
+                  'להעביר את התוכן לקמפיין אחר או להשאיר',
+          tab: 'plan',
+          campaign_id: c.id,
+        });
+      }
+      continue;
+    }
+    if (['inactive', 'paused'].includes(c.phase)) continue;
+
+    const daysToStart = c.starts_on
+      ? Math.round((new Date(c.starts_on) - new Date(today)) / DAY) : null;
+
+    if (c.missing_content > 0) {
+      const starting = c.phase === 'upcoming' && daysToStart !== null &&
+                       daysToStart <= UPCOMING_WINDOW_DAYS;
+      if (c.phase === 'running' || starting) {
+        alerts.push(campaignContentAlert(c, daysToStart));
+      }
+    }
+
+    if (c.phase === 'running' && c.pace?.behind > 0) {
+      alerts.push({
+        id: `campaign-pace-${c.id}`,
+        level: 'warn',
+        title: `מפגר אחרי הקצב: ${c.name}`,
+        detail: `לפי התדירות שהוגדרה היו אמורים לצאת ${c.pace.expected_by_now} פוסטים, ` +
+                `יצאו ${c.pace.published}`,
+        tab: 'plan',
+        campaign_id: c.id,
+      });
+    }
+
+    if (['running', 'upcoming'].includes(c.phase) && c.unplaced > 0) {
+      alerts.push({
+        id: `campaign-unplaced-${c.id}`,
+        level: 'warn',
+        title: `תוכן שלא ייכנס: ${c.name}`,
+        detail: `${c.unplaced === 1 ? 'פוסט אחד לא ייכנס' : `${c.unplaced} פוסטים לא ייכנסו`} ` +
+                `עד סוף הקמפיין (${heDate(c.ends_on)}) — אפשר להאריך, לדחוס את המרווח או להסיר`,
+        tab: 'plan',
+        campaign_id: c.id,
+      });
+    }
+  }
+  return alerts;
 }
 
 /**
