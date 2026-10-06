@@ -506,3 +506,33 @@ test('נקודה ותיקה שלא פורסמה: הוותק שלה נעצר ב-3
   });
   await cleanup(a);
 });
+
+test('ותק: פוסט שנכשל או שהמועד שלו עבר ולא יצא לא נספר — הנקודה עדיין מחכה', { skip }, async () => {
+  const week = weekMeta(inDays(7));
+  const a = await fresh('רק נכשלו', { maxPerWeek: 1 });
+  const b = await q1("insert into endpoints (name, importance) values ('פורסמה לפני 12 יום', 5) returning id");
+  await items(a.ep, a.ch, 2, { prefix: 'א' });
+  await items(b.id, a.ch, 2, { prefix: 'ב' });
+  // א: נכשל שלשום, ומתוכנן שהמועד שלו עבר אתמול ולא יצא. ב: פורסם לפני 12 יום (עד השבוע ≈ 16/12 ≈ 1.3)
+  await q(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status) values
+       ($1, $2, 'נכשל', 'value', now() - interval '2 days', 'failed'),
+       ($1, $2, 'באיחור', 'value', now() - interval '1 day', 'scheduled')`, [a.ch, a.ep]);
+  await q(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, published_at, status)
+     values ($1, $2, 'פורסם', 'value', now() - interval '12 days', now() - interval '12 days', 'published')`,
+    [a.ch, b.id]);
+
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const mine = plan.placements.filter((p) => p.channel_id === a.ch);
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].endpoint_id, a.ep, `זכתה ${mine[0].endpoint_name} (${mine[0].reason})`);
+  assert.match(mine[0].reason, /עוד לא פורסמה מעולם/);
+
+  await inOrg(async () => {
+    await db.query('delete from posts where endpoint_id = $1', [b.id]);
+    await db.query('delete from content_items where endpoint_id = $1', [b.id]);
+    await db.query('delete from endpoints where id = $1', [b.id]);
+  });
+  await cleanup(a);
+});

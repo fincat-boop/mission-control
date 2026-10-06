@@ -638,6 +638,8 @@ function addDaysKey(dateKey, n) {
 
 /** הסטטוסים של פוסט שתופס שטח — אותם שהמנוע סופר כקיימים על הלוח */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
+/** פוסט שעוד עתיד לצאת — נספר בוותק כשהמועד שלו לפני השבוע המתוכנן */
+const UPCOMING_STATUSES = ['scheduled', 'approved', 'publishing', 'pending_approval'];
 
 /**
  * היעד האסטרטגי של כל נקודת קצה בשבוע המתוכנן — לא היום. קמפיין שמתחיל
@@ -723,12 +725,15 @@ export function stalenessOf(lastAt, reference, endpoint) {
 }
 
 async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {
-  // הפוסט החי האחרון של כל נקודה לפני נקודת הייחוס — לא רק מה שפורסם: מה
-  // שכבר משובץ לפני השבוע המתוכנן (גם בשבועות עתידיים שמולאו קודם) נספר.
-  // קודם נמדד מהיום לפי הפרסום האחרון, ושבוע עתידי התעלם ממה שכבר שובץ
-  // לפניו — בלאק פריידי קיבל 0/12 משבצות מול נקודות שמעולם לא פורסמו (2).
-  // התאריך: מתי שפורסם, ואם לא — מתי שמתוכנן. שיבוץ של קמפיין מושהה לא
-  // נספר (הוא לא על הלוח), אלא אם כבר פורסם — כמו existing ב-planWeek.
+  // הפוסט האחרון של כל נקודה לפני נקודת הייחוס, משני סוגים:
+  //  - מה שפורסם (מתי שפורסם), בכל זמן לפני הייחוס;
+  //  - מה שעוד עתיד לצאת (מתוכנן/מאושר/ממתין/בפרסום, scheduled_at >= עכשיו)
+  //    ולפני הייחוס — שבוע עתידי רואה מה כבר שובץ לפניו.
+  // לא נספרים: נכשל, ומה שהמועד שלו עבר ולא יצא — הם לא באמת עלו לאוויר,
+  // והנקודה עדיין מחכה. קודם נמדד מהיום לפי הפרסום האחרון בלבד, ושבוע
+  // עתידי התעלם ממה שכבר שובץ לפניו — בלאק פריידי קיבל 0/12 משבצות.
+  // בשבוע הנוכחי (ייחוס = עכשיו) אין "עתיד לפני הייחוס", ולכן זה בדיוק
+  // הפרסום האחרון, כמו קודם. שיבוץ של קמפיין מושהה לא נספר (לא על הלוח).
   const reference = stalenessReference(week, now);
   const lastLive = await rows(
     `select p.endpoint_id, max(coalesce(p.published_at, p.scheduled_at)) as last_at
@@ -736,11 +741,12 @@ async function computeDebts(endpoints, settings, perf = null, week = weekMeta(ne
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
       where p.endpoint_id is not null
-        and p.status = any($2::text[])
-        and (ca.paused_at is null or p.status = 'published')
-        and (p.published_at < $1 or (p.published_at is null and p.scheduled_at < $1))
+        and ((p.status = 'published' and coalesce(p.published_at, p.scheduled_at) < $1)
+          or (p.status = any($3::text[]) and p.published_at is null
+              and p.scheduled_at >= $2 and p.scheduled_at < $1
+              and ca.paused_at is null))
       group by p.endpoint_id`,
-    [reference, LIVE_STATUSES]
+    [reference, now, UPCOMING_STATUSES]
   );
   const lastMap = new Map(lastLive.map((r) => [r.endpoint_id, r.last_at]));
 
