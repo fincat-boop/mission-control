@@ -1,10 +1,15 @@
-import { one, rows } from './db.js';
+import { rows } from './db.js';
 import { ymd } from './board.js';
 import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 import { averageShares, channelCapacity, normalizeShares, shareOf } from './capacity.js';
+import { loadGapDays } from './gap.js';
+
+// הטעינה של ברירת המחדל יושבת ב-gap.js (מקום אחד); כאן רק מייצאים הלאה
+// לקוראים הקיימים (routes/content.js)
+export { loadGapDays };
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -39,16 +44,6 @@ const daysBetween = (a, b) => {
  */
 export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance
   from campaigns c join endpoints e on e.id = c.endpoint_id`;
-
-/**
- * המרווח המינימלי בימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ —
- * engine_settings.min_gap_days, אותו ערך שהמנוע אוכף (ברירת מחדל 7). כל מי
- * שמחשב צורך של קמפיין טוען אותו כאן, אחרת הרשת דורשת יותר ממה שנכנס.
- */
-export async function loadGapDays() {
-  const s = await one('select min_gap_days from engine_settings limit 1');
-  return Number(s?.min_gap_days ?? 7);
-}
 
 /**
  * הקיבולת של הקמפיין בכל אחת מהמדיות שלו, עם הפירוט: כמה הקצב רוצה

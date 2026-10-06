@@ -12,6 +12,28 @@
 
 const DAY = 86400000;
 
+/** ברירת המחדל של המרווח כשגם להגדרות המנוע אין ערך (engine_settings.min_gap_days) */
+export const DEFAULT_GAP_DAYS = 7;
+
+/**
+ * המרווח בימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ, כשהתוכן שנכנס
+ * שייך לקמפיין campaign: המרווח של הקמפיין (min_gap_days), ובלעדיו ברירת
+ * המחדל הכללית (engine_settings.min_gap_days), ובלעדיה 7.
+ *
+ * מקור אחד לשאלה "כמה ימים בין פוסטים" — המנוע, אזהרות הלוח, ההזזה מחדש
+ * וחשבון הקיבולת קוראים לכאן, כדי שהרשת לא תדרוש מה שהמנוע לא ישבץ. תוכן
+ * בלי קמפיין (שוטף, מבצע דחוף) — campaign = null, ומקבל את הכללי.
+ * 0 בהגדרה הכללית = בלי מרווח (רק אותו יום אסור, בכלל נפרד).
+ * @param {{min_gap_days?:number|null}|null} campaign
+ * @param {{min_gap_days?:number|null}|null} settings שורת engine_settings
+ */
+export function effectiveGap(campaign, settings) {
+  const own = campaign?.min_gap_days;
+  if (own != null) return Number(own);
+  const global = settings?.min_gap_days;
+  return global != null ? Number(global) : DEFAULT_GAP_DAYS;
+}
+
 /**
  * תאריך כ-YYYY-MM-DD — ההשוואות כאן הן השוואות מחרוזת, כמו במנוע. עמודות
  * date מגיעות מהמסד כמחרוזת (db.js); Date נקרא לפי היום המקומי שלו, כמו ymd.

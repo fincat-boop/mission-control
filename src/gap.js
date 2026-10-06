@@ -11,8 +11,20 @@
 
 import { one } from './db.js';
 import { ymd } from './board.js';
+import { effectiveGap } from './capacity.js';
 
 const LIVE = "('scheduled','approved','publishing','failed','published','pending_approval')";
+
+/**
+ * ברירת המחדל הכללית למרווח — engine_settings.min_gap_days (ברירת מחדל 7).
+ * המקום היחיד שקורא אותה מהמסד בשביל מי שאין לו כבר את שורת ההגדרות
+ * (הרשת, ההעלאה המרוכזת, האזהרות); המנוע וההזזה טוענים את כל השורה ממילא
+ * ומעבירים אותה ל-effectiveGap.
+ */
+export async function loadGapDays() {
+  const s = await one('select min_gap_days from engine_settings limit 1');
+  return effectiveGap(null, s);
+}
 
 /**
  * @returns {null | {days:number, min:number, other:object, channel_name:string, message:string}}
@@ -20,8 +32,7 @@ const LIVE = "('scheduled','approved','publishing','failed','published','pending
 export async function gapWarning({ endpointId, channelId, when, excludePostId = null }) {
   if (!endpointId || !channelId || !when) return null;
 
-  const settings = await one('select min_gap_days from engine_settings limit 1');
-  const min = settings?.min_gap_days ?? 7;
+  const min = await loadGapDays();
   if (min <= 0) return null;
 
   // השכן הקרוב ביותר בזמן, לפני או אחרי — מרווח נמדד לשני הכיוונים

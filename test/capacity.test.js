@@ -2,7 +2,7 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  averageShares, channelBudget, channelCapacity, normalizeShares, shareKey, shareOf,
+  averageShares, channelBudget, channelCapacity, effectiveGap, normalizeShares, shareKey, shareOf,
 } from '../src/capacity.js';
 
 const span = { starts_on: '2026-08-01', ends_on: '2026-08-31', active: true, paused_at: null };
@@ -213,4 +213,19 @@ test('channelCapacity — איזה יום חסום: 0 = ראשון, כמו getDa
   assert.equal(at([1]).gapCap, 2);
   // שבת חסומה: גם אז 2 (ראשון–ראשון), ו-7 ימים פנויים
   assert.equal(at([6]).gapCap, 2);
+});
+
+/* ========================= המרווח לפי קמפיין ========================= */
+
+test('effectiveGap — של הקמפיין קודם, אחריו הכללי, ובלי שניהם 7', () => {
+  assert.equal(effectiveGap({ min_gap_days: 3 }, { min_gap_days: 7 }), 3);
+  assert.equal(effectiveGap({ min_gap_days: null }, { min_gap_days: 5 }), 5);
+  assert.equal(effectiveGap({}, { min_gap_days: 5 }), 5);
+  assert.equal(effectiveGap(null, { min_gap_days: 4 }), 4);
+  assert.equal(effectiveGap(null, null), 7);
+  assert.equal(effectiveGap(undefined, {}), 7);
+  // 0 בהגדרה הכללית = בלי מרווח, לא "חסר" — לא נופלים ל-7
+  assert.equal(effectiveGap(null, { min_gap_days: 0 }), 0);
+  // מחרוזת מהמסד/מהטופס → מספר
+  assert.equal(effectiveGap({ min_gap_days: '2' }, null), 2);
 });
