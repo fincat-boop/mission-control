@@ -220,13 +220,26 @@ test('תצוגה מקדימה: עריכה (id) ויצירה (בלי id) — או
         `insert into content_variants (content_id, channel_id, body, status) values ($1,$2,'x','draft')`,
         [it.id, ids.fb]);
     }
-    await db.query('update campaigns set content_complete_at = now() where id = $1', [c.id]);
   });
-  const fixed = await call('POST', '/campaigns/capacity-preview', { id: c.id });
-  assert.deepEqual(fixed.json.fixed, { channels: [{
+  const expected = { channels: [{
     channel_id: ids.fb, written: 5, capacity: 3, rate_cap: 4, rate_short: true, gap_to_fit: 3,
     end_to_fit: '2030-12-18',
-  }] });
+  }] };
+  // לפני הסימון: בלי הדגל אין fixed; עם assume_complete — כאילו כבר סומן, בלי לכתוב
+  assert.equal((await call('POST', '/campaigns/capacity-preview', { id: c.id })).json.fixed, null);
+  const assumed = await call('POST', '/campaigns/capacity-preview', { id: c.id, assume_complete: true });
+  assert.equal(assumed.status, 200, JSON.stringify(assumed.json));
+  assert.deepEqual(assumed.json.fixed, expected);
+  assert.equal((await q1('select content_complete_at from campaigns where id = $1', [c.id]))
+    .content_complete_at, null);
+  // בלי id אין תוכן לבדוק
+  assert.equal((await call('POST', '/campaigns/capacity-preview',
+    { ...BF_BODY(ep), assume_complete: true })).status, 400);
+
+  await inOrg(() =>
+    db.query('update campaigns set content_complete_at = now() where id = $1', [c.id]));
+  const fixed = await call('POST', '/campaigns/capacity-preview', { id: c.id });
+  assert.deepEqual(fixed.json.fixed, expected);
 
   await inOrg(async () => {
     await db.query('delete from content_items where campaign_id = $1', [c.id]);

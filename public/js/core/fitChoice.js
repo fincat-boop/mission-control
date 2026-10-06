@@ -66,7 +66,7 @@ export function sameShortage(a, b) {
  * @param names {channel_id: שם} — ל-fixed אין שמות
  * @returns {null | {rows, gap, rateNotes, extendTo, lost}}
  *   rows — הערוצים שנכתב בהם יותר ממה שנכנס: {channel_id, name, written, capacity, ...}
- *   gap — המרווח לדחיסה (הקטן מבין gap_to_fit), או null
+ *   gap — המרווח לדחיסה (הקטן מבין gap_to_fit), או null — גם כשאינו קצר מהנוכחי
  *   rateNotes — ערוצים שגם בדחיסה הקצב לבדו לא מספיק (rate_short)
  *   extendTo — תאריך הסיום שבו הכול נכנס (המאוחר מבין end_to_fit), או null
  *   lost — כמה פוסטים לא ייכנסו אם משאירים
@@ -77,9 +77,11 @@ export function completeFit(preview, names = {}) {
     .map((c) => ({ ...c, name: names[c.channel_id] ?? '' }));
   if (!rows.length) return null;
   const ends = rows.map((r) => r.end_to_fit).filter(Boolean).sort();
+  // מרווח שאינו קצר מהנוכחי לא דוחס כלום (הקצב הוא שחוסם — rate_short)
+  const gap = compressGap(rows);
   return {
     rows,
-    gap: compressGap(rows),
+    gap: gap != null && !(gap >= preview.gap_days) ? gap : null,
     rateNotes: rows.filter((r) => r.rate_short),
     extendTo: ends.length ? ends[ends.length - 1] : null,
     lost: rows.reduce((s, r) => s + (r.written - r.capacity), 0),

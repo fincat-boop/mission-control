@@ -12,8 +12,8 @@ import {
 } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
 import {
-  compressGap, daysLabel, fitsText, gapReason, postsLabel, sameShortage, shortChannels,
-  totalCapacity,
+  completeFit, compressGap, daysLabel, fitsText, gapReason, postsLabel, sameShortage,
+  shortChannels, totalCapacity,
 } from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
 import { goToSetupTarget } from '../ui/setup.js';
@@ -1490,7 +1490,12 @@ async function convertToGeneral(campaign, reload) {
  * על אותה תקופה. קודם תקציר מהשרת — מה יורד ומה נשאר — ורק אז הסימון.
  */
 async function completeCampaign(campaign, reload) {
-  const { summary: s } = await api(`/campaigns/${campaign.id}/complete-preview`);
+  const [{ summary: s }, cap] = await Promise.all([
+    api(`/campaigns/${campaign.id}/complete-preview`),
+    // התוכן שנכתב מול מה שנכנס בתקופה — תקלה כאן לא חוסמת את הסימון
+    capacityPreview({ id: campaign.id, assume_complete: true }).catch(() => null),
+  ]);
+  const fit = completeFit(cap, Object.fromEntries(campaign.channels.map((ch) => [ch.id, ch.name])));
   const perChannel = campaign.channels
     .filter((ch) => s.kept_by_channel[ch.id])
     .map((ch) => `${ch.name} ${s.kept_by_channel[ch.id]}`).join(' · ');
@@ -1504,12 +1509,35 @@ async function completeCampaign(campaign, reload) {
       : s.drafts > 1 ? `${s.drafts} מהם טיוטות — הם ייצאו רק אחרי שיסומנו מוכנים.` : '',
   ].filter(Boolean);
   const ok = await confirmDialog(`לסמן את "${campaign.name}" כמוכן?\n\n${lines.join('\n')}`,
-    { okLabel: 'קמפיין מוכן' });
+    { okLabel: 'קמפיין מוכן', html: fit ? completeFitHtml(fit, cap) : '', read: fit ? readFit : null });
   if (!ok) return;
+  // הבחירה בחלון ההתאמה נשמרת לפני הסימון — הפריסה כבר על המרווח/התקופה החדשים
+  if (ok === 'compress') await patchCampaign(campaign.id, { min_gap_days: fit.gap, week: state.week });
+  if (ok === 'extend') await patchCampaign(campaign.id, { ends_on: fit.extendTo, week: state.week });
   const res = await api(`/campaigns/${campaign.id}/complete`,
     { method: 'POST', body: { week: state.week } });
   engineToast(res, 'הקמפיין סומן מוכן — הפוסטים נפרסו על התקופה.');
   await reload();
+}
+
+/**
+ * חלק ההתאמה בחלון "קמפיין מוכן": הערוצים שנכתב בהם יותר ממה שנכנס, ובחירה —
+ * לדחוס (מרווח קצר יותר), להאריך (התוכן קבוע, ולכן הארכה עוזרת) או להשאיר.
+ * @param fit completeFit(...)
+ */
+function completeFitHtml(fit, cap) {
+  const lost = fit.lost === 1 ? 'פוסט אחד לא ייכנס ולא יתפרסם'
+    : `${fit.lost} פוסטים לא ייכנסו ולא יתפרסמו`;
+  const opts = [
+    fit.gap != null && ['compress', `לדחוס — מרווח של ${daysLabel(fit.gap)}`,
+      fit.rateNotes.map((r) =>
+        `גם בדחיסה, ${r.name} יכניס עד ${r.rate_cap} — הקצב של הערוץ.`).join(' ')],
+    fit.extendTo && ['extend', `להאריך עד ${fmtDate(fit.extendTo)}`],
+    ['keep', `להשאיר — ${lost}`],
+  ].filter(Boolean);
+  return `<p class="fitlead">לא כל מה שנכתב נכנס בתקופה, במרווח של ${daysLabel(cap.gap_days)}:</p>
+    ${fitRowsHtml(fit.rows.map((r) => [r.name, `נכתבו ${r.written}`, `נכנסים ${r.capacity}`]))}
+    ${fitOptionsHtml(opts)}`;
 }
 
 /** חזרה להקצאה לפי הקצב: המשבצות הריקות חוזרות, התוכן לא משתנה */

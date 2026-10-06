@@ -65,7 +65,7 @@ test('completeFit — רק ערוצים שנכתב בהם יותר ממה שנכ
     { channel_id: 3, written: 2, capacity: 2, rate_cap: 2, rate_short: false, gap_to_fit: 7,
       end_to_fit: '2030-12-01' },
   ] };
-  const fit = completeFit({ fixed }, { 1: 'פייסבוק', 2: 'אינסטגרם', 3: 'לינקדאין' });
+  const fit = completeFit({ gap_days: 7, fixed }, { 1: 'פייסבוק', 2: 'אינסטגרם', 3: 'לינקדאין' });
   assert.deepEqual(fit.rows.map((r) => [r.name, r.written, r.capacity]),
     [['פייסבוק', 5, 3], ['אינסטגרם', 4, 2]]);
   assert.equal(fit.gap, 3);
@@ -74,7 +74,10 @@ test('completeFit — רק ערוצים שנכתב בהם יותר ממה שנכ
   assert.equal(fit.lost, 4);
 
   // אין לאן להאריך ואין מרווח שמכיל — שתי האפשרויות נעלמות
-  const none = completeFit({ fixed: { channels: [
+  // מרווח שאינו קצר מהנוכחי — אין מה לדחוס (הקצב חוסם)
+  assert.equal(completeFit({ gap_days: 3, fixed }).gap, null);
+
+  const none = completeFit({ gap_days: 7, fixed: { channels: [
     { channel_id: 1, written: 50, capacity: 3, rate_cap: 4, rate_short: true, gap_to_fit: null,
       end_to_fit: null }] } });
   assert.equal(none.gap, null);

@@ -442,6 +442,8 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 }
 .fitrows .v { color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .fitwhy { margin: 10px 0 18px; }
+.fitrows + .fitopts { margin-top: 18px; }
+.fitlead { font-size: 13px; margin: 0 0 8px; }
 .fitopts { flex-direction: column; flex-wrap: nowrap; margin-bottom: 20px; }
 .fitopts label { align-items: flex-start; line-height: 1.5; }
 .fitopts input { margin-top: 2px; }

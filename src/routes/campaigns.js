@@ -170,6 +170,8 @@ const PREVIEW_FIELDS = ['endpoint_id', 'starts_on', 'ends_on', 'period', 'share_
  * starts_on, period ו/או ends_on, channel_ids, share_pct, min_gap_days).
  * אותן בדיקות כמו בשמירה (תאריכים, מרווח, תקופה), בלי לכתוב כלום. בעריכה
  * הטיוטה מחליפה את השורה השמורה; ערוצים שלא נשלחו — של הקמפיין השמור.
+ * assume_complete: true (רק עם id) — לפני סימון "מוכן": התוכן שכבר נכתב
+ * נחשב קבוע, ו-fixed מחושב כאילו הקמפיין כבר סומן.
  * החישוב: loadCapacityPreview (src/campaigns.js).
  */
 r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, res) => {
@@ -198,6 +200,10 @@ r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, 
 
   const draft = { ...(before ?? {}) };
   for (const k of PREVIEW_FIELDS) if (b[k] !== undefined) draft[k] = b[k];
+  if (b.assume_complete === true) {
+    if (!before) return bad(res, 'אפשר לבדוק סימון "מוכן" רק לקמפיין שכבר נשמר');
+    draft.content_complete_at = before.content_complete_at ?? new Date().toISOString();
+  }
   const endpoint = await one('select id from endpoints where id = $1', [draft.endpoint_id]);
   if (!endpoint) return bad(res, 'לא נמצאה נקודת קצה כזו');
 
