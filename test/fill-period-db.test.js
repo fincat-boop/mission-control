@@ -452,3 +452,30 @@ test('קמפיין שכולו מכירתי: בשבועות מרוסנים מקב
   await cleanup(x);
   await q('delete from channels where id = $1', [ch2.id]);
 });
+
+test('שבוע מרוסן: הקמפיין לא תופס בערוץ יותר מ-ceil(תקציב × הנתח שלו)', { skip }, async () => {
+  const x = await fresh('נתח 40', { maxPerWeek: 10 });
+  const otherEp = await q1("insert into endpoints (name, importance) values ('קמפיין שכן', 5) returning id");
+  const first = weekMeta(inDays(21));
+  const ends = weekMeta(inDays(28)).end;
+  const c = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct, min_gap_days)
+     values ($1, 'נתח 40', $2, $3, 40, 1) returning id`, [x.ep, first.start, ends]);
+  const sib = await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on)
+     values ($1, 'שכן', $2, $3) returning id`, [otherEp.id, first.start, ends]);
+  for (const id of [c.id, sib.id]) await q('insert into campaign_channels values ($1, $2)', [id, x.ch]);
+  await items(x.ep, x.ch, 20, { campaignId: c.id });
+
+  const fill = await inOrg(() => autoFillCampaign(c.id));
+  const posts = await q('select scheduled_at from posts where id = any($1::int[])', [fill.created_ids]);
+  const perWeek = new Map();
+  for (const p of posts) perWeek.set(weekOf(p.scheduled_at), (perWeek.get(weekOf(p.scheduled_at)) ?? 0) + 1);
+  // 10 × 40% = 4 בכל שבוע (בלי התקרה — 7, יום אחד לכל נקודה בערוץ)
+  assert.deepEqual([...perWeek.entries()].sort(),
+    [[first.start, 4], [weekMeta(inDays(28)).start, 4]], JSON.stringify(fill.summary));
+
+  await q('delete from campaigns where id = $1', [sib.id]);
+  await q('delete from endpoints where id = $1', [otherEp.id]);
+  await cleanup(x);
+});

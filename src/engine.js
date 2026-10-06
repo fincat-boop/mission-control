@@ -172,6 +172,24 @@ export async function planWeek(anchorDate, {
 
   const placements = [];
 
+  // שבוע מרוסן: הקמפיין לא תופס יותר מהנתח שלו בכל ערוץ — אחרת שמירה שלו
+  // ממלאת את כל המשבצות של שבועות רחוקים לפני שלאחרים יש שם תוכן. התקרה =
+  // ceil(תקציב הערוץ × הנתח הממוצע של הקמפיין בשבוע), כולל מה שכבר שלו על
+  // הלוח באותו שבוע.
+  const shareCap = new Map();
+  const campaignUsed = new Map();
+  if (onlyCampaignId != null) {
+    const share = debts.campaignShare(onlyCampaignId);
+    for (const ch of channels) shareCap.set(ch.id, Math.ceil(channelBudget(ch) * share));
+    const mine = new Set(candidates.map((c) => c.id));
+    // פוסטים שלו על הלוח, וגם פוסטים חסרי תוכן שהשיוך שלמעלה ממלא בתוכן שלו
+    for (const p of [...existing.filter((x) => mine.has(x.content_id)), ...attachments]) {
+      campaignUsed.set(p.channel_id, (campaignUsed.get(p.channel_id) ?? 0) + 1);
+    }
+  }
+  const overShare = (channelId) =>
+    onlyCampaignId != null && (campaignUsed.get(channelId) ?? 0) >= (shareCap.get(channelId) ?? 0);
+
   // כל שילוב (ערוץ, יום) אפשרי. הסדר נקבע תוך כדי, לא מראש — ראו nextSlot.
   // ימים שעברו לא נכנסים בכלל — קודם תכנון השבוע של 6.9 הציע פוסטים ל-6–12.9
   const pending = new Set(buildSlots(week, channels, perf, { today }));
@@ -180,6 +198,7 @@ export async function planWeek(anchorDate, {
     const slot = nextSlot(pending, usage, week);
     pending.delete(slot);
     if (!usage.channelHasRoom(slot.channel_id)) continue;
+    if (overShare(slot.channel_id)) continue;
 
     const pick = chooseForSlot({
       slot, endpoints, content: candidates, campaigns, debts, usage,
@@ -219,6 +238,7 @@ export async function planWeek(anchorDate, {
     sameDay.add(`${pick.endpoint.id}:${slot.channel_id}:${slot.dateKey}`);
     addPairDate(pairDates, `${pick.endpoint.id}:${slot.channel_id}`, slot.dateKey);
     debts.markScheduled(pick.endpoint.id);
+    campaignUsed.set(slot.channel_id, (campaignUsed.get(slot.channel_id) ?? 0) + 1);
   }
 
   const holes = withHoles
@@ -631,7 +651,8 @@ const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'publish
  *
  * @param campaigns שורות campaigns עם endpoint_importance
  * @param week {days:[{date}]} — weekMeta
- * @returns {{targetPct: Map<number, number>, from: string, to: string}}
+ * @returns {{targetPct: Map<number, number>, from: string, to: string, shares: Map}}
+ *   shares — הנתח הממוצע של כל קמפיין בשבוע (averageShares)
  */
 export function strategyTargets(campaigns, week) {
   const weekFrom = week.days[0].date;
@@ -646,7 +667,7 @@ export function strategyTargets(campaigns, week) {
     if (c.starts_on) starts.push(String(c.starts_on).slice(0, 10));
   }
   const from = starts.sort()[0] ?? addDaysKey(weekFrom, -90);
-  return { targetPct, from, to: weekTo };
+  return { targetPct, from, to: weekTo, shares };
 }
 
 /**
@@ -727,7 +748,7 @@ async function computeDebts(endpoints, settings, perf = null, week = weekMeta(ne
   const campaigns = await rows(
     `select c.*, e.importance as endpoint_importance
        from campaigns c join endpoints e on e.id = c.endpoint_id`);
-  const { targetPct, from, to } = strategyTargets(campaigns, week);
+  const { targetPct, from, to, shares } = strategyTargets(campaigns, week);
   // "בפועל" נספר מכל מה שתופס שטח — גם מה שמתוכנן לשבוע הזה ולפניו, לא רק
   // מה שפורסם — כדי שתכנון שבוע עתידי יראה מה כבר שובץ לפניו. שיבוץ של
   // קמפיין מושהה לא נספר (כמו existing ב-planWeek), אלא אם כבר פורסם.
@@ -781,6 +802,8 @@ async function computeDebts(endpoints, settings, perf = null, week = weekMeta(ne
            - already * 0.6;
     },
     parts: (id) => parts.get(id),
+    /** הנתח הממוצע של קמפיין בשבוע המתוכנן (0 כשאינו רץ בו) */
+    campaignShare: (campaignId) => shares.get(Number(campaignId)) ?? 0,
     markScheduled(id) {
       scheduledBoost.set(id, (scheduledBoost.get(id) ?? 0) + 1);
     },
