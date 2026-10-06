@@ -743,22 +743,25 @@ export function stalenessReference(week, now = new Date()) {
 /**
  * הוותק של נקודה: הימים מהפוסט החי האחרון שלה לפני נקודת הייחוס ועד אליה,
  * ביחס לקצב שלה. נקודה בלי אף פוסט חי לפני הייחוס (daysSince = null, "עוד
- * לא פורסמה"): הימים מאז שנוצרה, באותו קצב, בין 2 ל-3 — נקודה ותיקה שלא
- * פורסמה לא בולעת את כל הלוח (שנה = 30 בלי התקרה). קודם — 2 קבוע, ובשבוע
- * רחוק נקודה שמעולם לא פורסמה הפסידה לכל נקודה שפורסמה פעם (וובינר ירד ל-0
- * בשבוע של בלאק פריידי). בלי created_at — 2.
+ * לא פורסמה"): max(2, min(הימים מאז שנוצרה / קצב, cap)). cap — הוותק הגבוה
+ * ביותר של נקודה שכן יש לה פוסט לפני הייחוס, באותה ריצה (3 כשאין כזו;
+ * ראו computeDebts). כך היא לא מפסידה רק כי לא פורסמה (בשבוע רחוק היא
+ * שווה לוותיקה ביותר — קודם 2 קבוע, וובינר ירד ל-0 בשבוע של בלאק פריידי),
+ * וגם לא בולעת את הלוח (שנה = 30 בלי התקרה); 0.6- לכל שיבוץ מפזר אותה.
+ * בלי created_at — 2.
  */
-export function stalenessOf(lastAt, reference, endpoint) {
+export function stalenessOf(lastAt, reference, endpoint, cap = 3) {
   const cadence = Math.max(1, effectiveCadenceDays(endpoint));
   if (lastAt) {
     const daysSince = (reference - new Date(lastAt)) / 86400000;
     return { daysSince, staleness: daysSince / cadence };
   }
   const age = endpoint?.created_at ? (reference - new Date(endpoint.created_at)) / 86400000 : null;
-  return { daysSince: null, staleness: age === null ? 2 : Math.min(3, Math.max(2, age / cadence)) };
+  return { daysSince: null, staleness: age === null ? 2 : Math.max(2, Math.min(age / cadence, cap)) };
 }
 
-async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {
+/** חוב האוויר של כל נקודה לשבוע המתוכנן. מיוצא לבדיקות. */
+export async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {
   // הפוסט האחרון של כל נקודה לפני נקודת הייחוס, משני סוגים:
   //  - מה שפורסם (מתי שפורסם), בכל זמן לפני הייחוס;
   //  - מה שעוד עתיד לצאת (מתוכנן/מאושר/ממתין/בפרסום, scheduled_at >= עכשיו)
@@ -813,10 +816,15 @@ async function computeDebts(endpoints, settings, perf = null, week = weekMeta(ne
 
   const scheduledBoost = new Map(); // כמה כבר הצענו לה בריצה הזו
 
+  // התקרה של נקודה שלא פורסמה: הוותיקה ביותר מבין אלה שיש להן פוסט לפני
+  // הייחוס (3 כשאין אף אחת) — ראו stalenessOf
+  const published = endpoints.filter((e) => lastMap.has(e.id))
+    .map((e) => stalenessOf(lastMap.get(e.id), reference, e).staleness);
+  const neverCap = published.length ? Math.max(...published) : 3;
+
   const parts = new Map();
   for (const e of endpoints) {
-    // נקודה בלי שום פוסט לפני הייחוס — לפי הוותק שלה עצמה, לפחות 2
-    const { daysSince, staleness } = stalenessOf(lastMap.get(e.id) ?? null, reference, e);
+    const { daysSince, staleness } = stalenessOf(lastMap.get(e.id) ?? null, reference, e, neverCap);
 
     const deficit = deficits.get(e.id) ?? 0;
 

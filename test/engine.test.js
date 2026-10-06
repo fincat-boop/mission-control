@@ -717,15 +717,19 @@ test('stalenessOf: ימים עד הייחוס חלקי הקצב; בלי פוסט
   assert.deepEqual(stalenessOf(null, ref, ep), { daysSince: null, staleness: 2 });
 });
 
-test('stalenessOf: לא פורסמה — מאז שנוצרה באותו קצב, בין 2 ל-3', () => {
+test('stalenessOf: לא פורסמה — מאז שנוצרה באותו קצב, בין 2 לתקרה', () => {
   const ref = new Date('2026-11-22T00:00:00');
   const created = (d) => ({ importance: 5, created_at: new Date(`${d}T00:00:00`) }); // קצב 12
   // 30 יום (חוצה מעבר שעון — שעה אחת לא משנה) חלקי 12 = 2.5
   const mid = stalenessOf(null, ref, created('2026-10-23'));
   assert.equal(mid.daysSince, null);
   assert.equal(Math.round(mid.staleness * 100) / 100, 2.5);
-  // 60 יום = 5 — התקרה 3
+  // 60 יום = 5 — התקרה (ברירת מחדל 3, או הוותיקה ביותר שפורסמה)
   assert.deepEqual(stalenessOf(null, ref, created('2026-09-23')), { daysSince: null, staleness: 3 });
+  assert.equal(stalenessOf(null, ref, created('2026-09-23'), 4.2).staleness, 4.2);
+  assert.equal(Math.round(stalenessOf(null, ref, created('2026-09-23'), 9).staleness * 100) / 100, 5);
+  // תקרה מתחת ל-2 — עדיין 2
+  assert.equal(stalenessOf(null, ref, created('2026-09-23'), 1.5).staleness, 2);
   assert.deepEqual(stalenessOf(null, ref, created('2026-11-20')), { daysSince: null, staleness: 2 });
   // פוסט קיים גובר על תאריך היצירה
   assert.equal(stalenessOf(new Date('2026-11-10T00:00:00'), ref, created('2026-01-01')).staleness, 1);
