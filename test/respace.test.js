@@ -48,3 +48,59 @@ test('planRespace שולף את עמודות "קמפיין מוכן" — אחר�
   const q = src.slice(src.indexOf('export async function planRespace'), src.indexOf('const byId'));
   assert.match(q, /\$\{COMPLETE_SPREAD_COLUMNS\}/);
 });
+
+/* ---------- שלב 4: מרווח מול פוסטים קבועים באותו שבוע ---------- */
+
+import { respaceMoves } from '../src/respace.js';
+import { weekMeta } from '../src/board.js';
+
+const rWeek = weekMeta('2030-01-09');          // 6.1–12.1.2030
+const rCh = { id: 1, name: 'פייסבוק', max_per_week: 5, urgent_reserve_pct: 0, blocked_days: [] };
+const rSettings = { min_gap_days: 7, max_promo_per_day: 1 };
+const rPost = (id, date, status, x = {}) => ({
+  id, title: `פוסט ${id}`, kind: 'value', status, scheduled_at: `${date}T10:00:00`,
+  channel_id: 1, endpoint_id: 1, campaign_id: null, campaign_min_gap_days: null, ...x,
+});
+
+test('respaceMoves — פוסט קבוע באותו שבוע (פורסם) נכנס לבדיקת המרווח, לא רק לאותו יום', () => {
+  // פורסם ב-9.1; במרווח 7 אין בשבוע יום שרחוק ממנו מספיק
+  const posts = [rPost(1, '2030-01-09', 'published'), rPost(2, '2030-01-07', 'scheduled')];
+  const plan = respaceMoves({ week: rWeek, channels: [rCh], posts, settings: rSettings,
+                              today: '2030-01-06' });
+  assert.equal(plan.moves.length, 0);
+  assert.deepEqual(plan.stuck.map((s) => s.post.id), [2]);
+});
+
+test('respaceMoves — מרווח הקמפיין של הפוסט שזז, לשני הכיוונים, מול קבוע (יום חסום)', () => {
+  // ממוקד: רק הפוסט על שישי החסום זז; הפוסט של 10.1 קבוע. מרווח הקמפיין 3:
+  // 8, 9, 12 קרובים מדי ל-10 — נשארים 6 או 7
+  const ch = { ...rCh, blocked_days: [5] };
+  const posts = [
+    rPost(1, '2030-01-10', 'scheduled'),
+    rPost(2, '2030-01-11', 'scheduled', { campaign_id: 4, campaign_min_gap_days: 3 }),
+  ];
+  const plan = respaceMoves({ week: rWeek, channels: [ch], posts, settings: rSettings,
+                              onlyIllegal: true, today: '2030-01-06' });
+  assert.equal(plan.moves.length, 1);
+  assert.equal(plan.moves[0].post.id, 2);
+  assert.ok(plan.moves[0].dateKey <= '2030-01-07', plan.moves[0].dateKey);
+});
+
+test('respaceMoves — פוסט על יום שעבר לא זז, והוא שכן לבדיקת המרווח', () => {
+  const posts = [
+    rPost(1, '2030-01-07', 'scheduled'),               // עבר (היום 9.1) — קבוע
+    rPost(2, '2030-01-10', 'scheduled', { campaign_id: 4, campaign_min_gap_days: 3 }),
+  ];
+  const plan = respaceMoves({ week: rWeek, channels: [rCh], posts, settings: rSettings,
+                              today: '2030-01-09' });
+  assert.ok(plan.moves.every((m) => m.post.id !== 1));
+  const m = plan.moves.find((x) => x.post.id === 2);
+  assert.ok(m && m.dateKey >= '2030-01-10', m?.dateKey);   // 9.1 — רק יומיים מ-7.1
+});
+
+test('respaceMoves — השכנים מחוץ לשבוע לא משתנים (המפה של הקורא לא נדרסת)', () => {
+  const neighbours = new Map([['1:1', ['2029-12-20']]]);
+  respaceMoves({ week: rWeek, channels: [rCh], posts: [rPost(1, '2030-01-07', 'scheduled')],
+                 settings: rSettings, neighbours, today: '2030-01-06' });
+  assert.deepEqual(neighbours.get('1:1'), ['2029-12-20']);
+});

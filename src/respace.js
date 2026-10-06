@@ -28,8 +28,8 @@ import { effectiveGap } from './capacity.js';
  *
  * כללים שנאכפים על היעד: יום חסום בערוץ · אותה נקודת קצה לא מקבלת שני
  * פוסטים באותה מדיה באותו יום · max_promo_per_day · המרווח מול פוסטים
- * בשבועות הסמוכים — המרווח של הקמפיין של הפוסט שזז (contentGap), לשני
- * הכיוונים. פוסט שאין לו יום חוקי נשאר במקום ומדווח.
+ * בשבועות הסמוכים ומול הקבועים באותו שבוע — המרווח של הקמפיין של הפוסט
+ * שזז (contentGap), לשני הכיוונים. פוסט שאין לו יום חוקי נשאר במקום ומדווח.
  */
 
 const ON_BOARD = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
@@ -75,10 +75,32 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
     [from, to, ON_BOARD]
   );
 
+  // פוסטים של אותה נקודה+ערוץ מחוץ לשבוע — מולם נמדד המרווח. הטווח לפי
+  // המרווח הגדול ביותר שאפשר (30 = התקרה של מרווח קמפיין, או הכללי)
+  const neighbours = await neighbourDays(from, to, Math.max(30, effectiveGap(null, settings)));
+
+  return respaceMoves({ week, channels, posts, settings, neighbours, onlyIllegal,
+                        today: ymd(new Date()) });
+}
+
+/**
+ * החלק הטהור של planRespace: מה זז ולאן, מתוך הלוח של השבוע (posts),
+ * הערוצים, ההגדרות והימים התפוסים מחוץ לשבוע (neighbours — מפה
+ * `${endpoint}:${channel}` → YYYY-MM-DD). לא כותב כלום.
+ *
+ * קבוע (anchored): פורסם / ממתין לאישור / בפרסום, ערוץ לא פעיל, ופוסט על
+ * יום שכבר עבר. הפוסטים הקבועים בתוך השבוע נכנסים גם ל-neighbours ולא רק
+ * ל-sameDay — אחרת פוסט שזז יכול לנחות בתוך המרווח של פוסט קבוע באותו שבוע
+ * (קודם נבדקו מולו רק פוסטים מחוץ לשבוע).
+ */
+export function respaceMoves({ week, channels, posts, settings, neighbours = new Map(),
+                               onlyIllegal = false, today = ymd(new Date()) }) {
   const byId = new Map(channels.map((c) => [c.id, c]));
   const illegal = (p) => onBlockedDay(p, byId.get(p.channel_id));
+  const dayOf = (p) => ymd(new Date(p.scheduled_at));
 
-  const canMove = (p) => MOVABLE.includes(p.status) && byId.has(p.channel_id);
+  const canMove = (p) => MOVABLE.includes(p.status) && byId.has(p.channel_id) &&
+                         dayOf(p) >= today;
   const movable = posts.filter((p) => canMove(p) && (!onlyIllegal || illegal(p)));
   const anchored = posts.filter((p) => !movable.includes(p));
 
@@ -86,7 +108,6 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   if (movable.length === 0) return result;
 
   const maxPromoPerDay = settings?.max_promo_per_day ?? 1;
-  const today = ymd(new Date());
 
   // מצב הלוח שנשאר קבוע — ממנו נמדד המרווח, ואליו נבדקות ההתנגשויות
   const usage = buildUsage(channels, anchored, settings);
@@ -100,9 +121,12 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
     promoPerDay.set(d, (promoPerDay.get(d) ?? 0) + 1);
   }
 
-  // פוסטים של אותה נקודה+ערוץ מחוץ לשבוע — מולם נמדד המרווח. הטווח לפי
-  // המרווח הגדול ביותר שאפשר (30 = התקרה של מרווח קמפיין, או הכללי)
-  const neighbours = await neighbourDays(from, to, Math.max(30, effectiveGap(null, settings)));
+  // המרווח נמדד מול השכנים מחוץ לשבוע וגם מול הקבועים שבתוכו
+  const near = new Map([...neighbours].map(([k, v]) => [k, [...v]]));
+  for (const p of anchored.filter((x) => x.endpoint_id)) {
+    const key = `${p.endpoint_id}:${p.channel_id}`;
+    near.set(key, [...(near.get(key) ?? []), dayOf(p)]);
+  }
 
   // תור לכל ערוץ, לפי הסדר הנוכחי על הלוח: מי שהיה ראשון יישאר ראשון
   const queues = new Map();
@@ -135,7 +159,7 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
     if (post.endpoint_id) {
       sameDay.add(`${post.endpoint_id}:${slot.channel_id}:${slot.dateKey}`);
       const key = `${post.endpoint_id}:${post.channel_id}`;
-      neighbours.set(key, [...(neighbours.get(key) ?? []), slot.dateKey]);
+      near.set(key, [...(near.get(key) ?? []), slot.dateKey]);
     }
     if (post.kind === 'promo') {
       promoPerDay.set(slot.dateKey, (promoPerDay.get(slot.dateKey) ?? 0) + 1);
@@ -166,7 +190,7 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
       if (sameDay.has(`${post.endpoint_id}:${post.channel_id}:${dateKey}`)) return false;
 
       // המרווח של הקמפיין של הפוסט שזז; השכן הקרוב לפני או אחרי
-      const others = neighbours.get(`${post.endpoint_id}:${post.channel_id}`);
+      const others = near.get(`${post.endpoint_id}:${post.channel_id}`);
       if (nearestDays(others, dateKey) < contentGap(post, settings)) return false;
     }
     if (post.kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
