@@ -707,7 +707,8 @@ export function stalenessReference(week, now = new Date()) {
 /**
  * הוותק של נקודה: הימים מהפוסט החי האחרון שלה לפני נקודת הייחוס ועד אליה,
  * ביחס לקצב שלה. נקודה בלי אף פוסט חי לפני הייחוס (daysSince = null, "עוד
- * לא פורסמה"): הימים מאז שנוצרה, באותו קצב, ולפחות 2. קודם — 2 קבוע, ובשבוע
+ * לא פורסמה"): הימים מאז שנוצרה, באותו קצב, בין 2 ל-3 — נקודה ותיקה שלא
+ * פורסמה לא בולעת את כל הלוח (שנה = 30 בלי התקרה). קודם — 2 קבוע, ובשבוע
  * רחוק נקודה שמעולם לא פורסמה הפסידה לכל נקודה שפורסמה פעם (וובינר ירד ל-0
  * בשבוע של בלאק פריידי). בלי created_at — 2.
  */
@@ -718,7 +719,7 @@ export function stalenessOf(lastAt, reference, endpoint) {
     return { daysSince, staleness: daysSince / cadence };
   }
   const age = endpoint?.created_at ? (reference - new Date(endpoint.created_at)) / 86400000 : null;
-  return { daysSince: null, staleness: age === null ? 2 : Math.max(2, age / cadence) };
+  return { daysSince: null, staleness: age === null ? 2 : Math.min(3, Math.max(2, age / cadence)) };
 }
 
 async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {

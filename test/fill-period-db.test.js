@@ -479,3 +479,30 @@ test('שבוע מרוסן: הקמפיין לא תופס בערוץ יותר מ-c
   await q('delete from endpoints where id = $1', [otherEp.id]);
   await cleanup(x);
 });
+
+test('נקודה ותיקה שלא פורסמה: הוותק שלה נעצר ב-3 — לא בולעת נקודה שחיכתה 40 יום', { skip }, async () => {
+  const week = weekMeta(inDays(14));
+  const a = await fresh('ותיקה שלא פורסמה', { maxPerWeek: 1 });
+  const b = await q1("insert into endpoints (name, importance) values ('40 יום בלי', 5) returning id");
+  // א: נוצרה לפני שנה ומעולם לא פורסמה (בלי תקרה — 365/12 ≈ 30). ב: פורסמה 40 יום לפני השבוע (3.3)
+  await q("update endpoints set created_at = now() - interval '365 days' where id = $1", [a.ep]);
+  await items(a.ep, a.ch, 2, { prefix: 'א' });
+  await items(b.id, a.ch, 2, { prefix: 'ב' });
+  const start = new Date(`${week.days[0].date}T10:00:00`);
+  await q(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, published_at, status)
+     values ($1, $2, 'פורסם', 'value', $3, $3, 'published')`,
+    [a.ch, b.id, new Date(start.getTime() - 40 * 86400000)]);
+
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const mine = plan.placements.filter((p) => p.channel_id === a.ch);
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].endpoint_id, b.id, `זכתה ${mine[0].endpoint_name} (${mine[0].reason})`);
+
+  await inOrg(async () => {
+    await db.query('delete from posts where endpoint_id = $1', [b.id]);
+    await db.query('delete from content_items where endpoint_id = $1', [b.id]);
+    await db.query('delete from endpoints where id = $1', [b.id]);
+  });
+  await cleanup(a);
+});
