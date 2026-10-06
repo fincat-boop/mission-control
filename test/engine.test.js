@@ -716,3 +716,15 @@ test('stalenessOf: ימים עד הייחוס חלקי הקצב; בלי פוסט
   assert.ok(twoDays.staleness < month.staleness);
   assert.deepEqual(stalenessOf(null, ref, ep), { daysSince: null, staleness: 2 });
 });
+
+test('stalenessOf: לא פורסמה — מאז שנוצרה באותו קצב, ולפחות 2', () => {
+  const ref = new Date('2026-11-22T00:00:00');
+  const created = (d) => ({ importance: 5, created_at: new Date(`${d}T00:00:00`) }); // קצב 12
+  // 60 יום (חוצה מעבר שעון — שעה אחת לא משנה) חלקי 12
+  const old = stalenessOf(null, ref, created('2026-09-23'));
+  assert.equal(old.daysSince, null);
+  assert.equal(Math.round(old.staleness * 100) / 100, 5);
+  assert.deepEqual(stalenessOf(null, ref, created('2026-11-20')), { daysSince: null, staleness: 2 });
+  // פוסט קיים גובר על תאריך היצירה
+  assert.equal(stalenessOf(new Date('2026-11-10T00:00:00'), ref, created('2026-01-01')).staleness, 1);
+});

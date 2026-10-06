@@ -677,15 +677,19 @@ export function stalenessReference(week, now = new Date()) {
 
 /**
  * הוותק של נקודה: הימים מהפוסט החי האחרון שלה לפני נקודת הייחוס ועד אליה,
- * ביחס לקצב שלה. null בימים = אין לה אף פוסט חי לפני הייחוס ("עוד לא
- * פורסמה"), ואז הוותק הקבוע 2.
+ * ביחס לקצב שלה. נקודה בלי אף פוסט חי לפני הייחוס (daysSince = null, "עוד
+ * לא פורסמה"): הימים מאז שנוצרה, באותו קצב, ולפחות 2. קודם — 2 קבוע, ובשבוע
+ * רחוק נקודה שמעולם לא פורסמה הפסידה לכל נקודה שפורסמה פעם (וובינר ירד ל-0
+ * בשבוע של בלאק פריידי). בלי created_at — 2.
  */
 export function stalenessOf(lastAt, reference, endpoint) {
-  const daysSince = lastAt ? (reference - new Date(lastAt)) / 86400000 : null;
-  const staleness = daysSince === null
-    ? 2
-    : daysSince / Math.max(1, effectiveCadenceDays(endpoint));
-  return { daysSince, staleness };
+  const cadence = Math.max(1, effectiveCadenceDays(endpoint));
+  if (lastAt) {
+    const daysSince = (reference - new Date(lastAt)) / 86400000;
+    return { daysSince, staleness: daysSince / cadence };
+  }
+  const age = endpoint?.created_at ? (reference - new Date(endpoint.created_at)) / 86400000 : null;
+  return { daysSince: null, staleness: age === null ? 2 : Math.max(2, age / cadence) };
 }
 
 async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {
@@ -741,7 +745,7 @@ async function computeDebts(endpoints, settings, perf = null, week = weekMeta(ne
 
   const parts = new Map();
   for (const e of endpoints) {
-    // נקודה בלי שום פוסט לפני הייחוס מקבלת את החוב הקבוע 2
+    // נקודה בלי שום פוסט לפני הייחוס — לפי הוותק שלה עצמה, לפחות 2
     const { daysSince, staleness } = stalenessOf(lastMap.get(e.id) ?? null, reference, e);
 
     const deficit = deficits.get(e.id) ?? 0;
