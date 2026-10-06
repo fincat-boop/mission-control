@@ -430,6 +430,11 @@ test('המנוע: שתי המשבצות המקושרות משובצות, כל א
   const a = await slot(ids.ig, 11, { title: 'למנוע', body: 'מוכן', status: 'ready' });
   const b = (await call('POST', `/content/${a}/link`, {
     target_campaign_slot: { channel_id: ids.yt, sort_order: 11 } })).json.follower.id;
+  // משבצות של בדיקות קודמות כבר שובצו על כל תקופת הקמפיין בשמירה שלהן
+  // (autoFillCampaign) ותופסות את המרווח של הנקודה בכל שבוע — מפנים אותן
+  await q(
+    `delete from posts where channel_id = any($1::int[]) and status = 'scheduled'
+        and content_id <> all($2::int[])`, [[ids.ig, ids.yt], [a, b]]);
   // כמה שבועות קדימה בתוך חלון הקמפיין, עד שהמנוע מגיע אליהם
   for (let w = 0; w < 5; w += 1) {
     await db.withOrg(org, () => applyWeek(new Date(Date.now() + w * 7 * 86400000).toISOString().slice(0, 10)));

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
-import { autoFill, bad, parseIdList, titleFromFilename, updateById, upload, wrap } from './_shared.js';
+import { autoFill, autoFillCampaign, bad, parseIdList, titleFromFilename, updateById, upload, wrap } from './_shared.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
@@ -253,7 +253,7 @@ r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) =
     [c.id]
   );
 
-  const engine = await autoFill(req.body?.week);
+  const engine = await autoFillCampaign(c.id, req.body?.week);
   res.json({ campaign: c, cleared: cleared.length + clashed.length, engine });
 }));
 
@@ -471,7 +471,7 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
        values ($1,$2,coalesce($3,''),$4) returning *`,
       [c.id, slotChannel, b.body ?? null, b.status === 'ready' ? 'ready' : 'draft']
     );
-    const engine = await autoFill(b.week);
+    const engine = await fillFor(c, b.week);
     // variant — לנעילה האופטימית של השמירה הבאה מאותו טופס (updated_at)
     return res.status(201).json({ content: c, variant, engine });
   }
@@ -496,7 +496,7 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
       }
     });
   }
-  const engine = await autoFill(b.week);
+  const engine = await fillFor(c, b.week);
   res.status(201).json({ content: c, engine });
 }));
 
@@ -609,7 +609,7 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
     ? await one('select * from content_variants where content_id = $1 and channel_id = $2',
       [c.id, c.slot_channel_id])
     : null;
-  const engine = await autoFill(b.week);
+  const engine = await fillFor(c, b.week);
   res.json({ content: c, variant, warn, downgraded, engine });
 }));
 
@@ -637,6 +637,10 @@ r.post('/content/:id/unlink', requirePerm('content'), wrap(async (req, res) => {
   const engine = await autoFill(req.body?.week);
   res.json({ content, ...out, engine });
 }));
+
+/** תוכן בקמפיין — כל התקופה של הקמפיין (autoFillCampaign); שוטף — השבוע שמוצג */
+const fillFor = (item, week) =>
+  (item?.campaign_id ? autoFillCampaign(item.campaign_id, week) : autoFill(week));
 
 /** נקודת הקצה של תוכן: מהקמפיין אם יש, אחרת מה שנשלח במפורש */
 async function resolveEndpoint(b) {

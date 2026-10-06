@@ -46,13 +46,16 @@ r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
  *    — חוזר לפוסט חסר תוכן רק אם עדיין מתוכנן, עם אותו תוכן ואותה כותרת
  *    שהשיוך כתב; המשימות שהשיוך סגר (לכתוב/החלפה) נפתחות שוב.
  * מה שבוטל נרשם כוויתור, כדי שהמילוי הבא לא יחזיר אותו.
+ * עד UNDO_MAX מכל סוג — מילוי של קמפיין שלם (autoFillCampaign) עובר על עד
+ * 26 שבועות בבת אחת, ו"בטל" אחד מכסה את כולם.
  */
+const UNDO_MAX = 2000;
 r.post('/engine/undo', requirePerm('content'), wrap(async (req, res) => {
   const created = (Array.isArray(req.body?.created) ? req.body.created : [])
-    .slice(0, 500)
+    .slice(0, UNDO_MAX)
     .map((x) => ({ id: Number(x?.post_id), content: x?.content_id == null ? null : Number(x.content_id) }))
     .filter((x) => x.id && (x.content === null || x.content));
-  const attached = Array.isArray(req.body?.attached) ? req.body.attached.slice(0, 500) : [];
+  const attached = Array.isArray(req.body?.attached) ? req.body.attached.slice(0, UNDO_MAX) : [];
   if (created.length === 0 && attached.length === 0) return bad(res, 'אין מה לבטל');
 
   const removed = created.length

@@ -1,6 +1,7 @@
 import multer from 'multer';
 import { currentOrg, one, query } from '../db.js';
 import { applyWeek, withEngineLock } from '../engine.js';
+import { weekMeta, ymd } from '../board.js';
 import { relocateBlocked } from '../respace.js';
 
 /**
@@ -30,18 +31,96 @@ export const bad = (res, msg, code = 400) => res.status(code).json({ error: msg 
  * המילוי הייתה משאירה את הטרנזקציה שבורה, וה-commit בסוף היה מתגלגל
  * אחורה בשקט — כולל השינוי שהמשתמש ביקש. ה-savepoint תוחם את הנזק למילוי.
  */
-export async function autoFill(week) {
+export function autoFill(week) {
+  return guardedFill('autoFill',
+    () => withEngineLock(() => applyWeek(week, { holes: false })));
+}
+
+/** savepoint + fail-soft משותפים ל-autoFill ול-autoFillCampaign (ראו למעלה) */
+async function guardedFill(label, run) {
   const inTx = currentOrg() != null;
   try {
     if (inTx) await query('savepoint auto_fill');
-    const out = await withEngineLock(() => applyWeek(week, { holes: false }));
+    const out = await run();
     if (inTx) await query('release savepoint auto_fill');
     return out;
   } catch (e) {
     if (inTx) await query('rollback to savepoint auto_fill').catch(() => {});
-    console.error('autoFill נכשל:', e);
+    console.error(`${label} נכשל:`, e);
     return EMPTY_FILL;
   }
+}
+
+/** כמה שבועות לכל היותר ממלאים בשמירת קמפיין — חצי שנה */
+export const CAMPAIGN_FILL_MAX_WEEKS = 26;
+
+/**
+ * השבועות (תחילת שבוע, YYYY-MM-DD) שמילוי של קמפיין עובר עליהם: כל שבוע
+ * שחופף ל-[max(היום, starts_on), ends_on], עד CAMPAIGN_FILL_MAX_WEEKS.
+ * null — אין תקופה למלא: הקמפיין לא קיים, לא פעיל, מושהה, בלי תאריך סיום,
+ * או שהתקופה כבר נגמרה.
+ */
+export function campaignFillWeeks(c, today = ymd(new Date())) {
+  if (!c || !c.active || c.paused_at || !c.ends_on) return null;
+  const end = String(c.ends_on).slice(0, 10);
+  const starts = c.starts_on ? String(c.starts_on).slice(0, 10) : today;
+  const from = starts > today ? starts : today;
+  if (from > end) return null;
+  const weeks = [];
+  // צהריים ולא חצות — שמעבר שעון לא יזיז את היום
+  const d = new Date(`${weekMeta(`${from}T12:00:00`).start}T12:00:00`);
+  while (ymd(d) <= end && weeks.length < CAMPAIGN_FILL_MAX_WEEKS) {
+    weeks.push(ymd(d));
+    d.setDate(d.getDate() + 7);
+  }
+  return weeks;
+}
+
+/**
+ * מאחד תוצאות applyWeek של כמה שבועות לתשובה אחת באותה צורה, כדי שההודעה
+ * ו"בטל" של הלקוח יכסו את כולם. weeks — בכמה שבועות נכתב משהו.
+ */
+export function mergeFillResults(list) {
+  const sum = (k) => list.reduce((s, r) => s + (r[k] ?? 0), 0);
+  const cat = (k) => list.flatMap((r) => r[k] ?? []);
+  return {
+    placed: sum('placed'), attached: sum('attached'), holes: sum('holes'),
+    skipped: sum('skipped'), dropped: cat('dropped'),
+    created_ids: cat('created_ids'), created_items: cat('created_items'),
+    attached_items: cat('attached_items'), summary: cat('summary'),
+    weeks: list.filter((r) => r.placed || r.attached || r.holes).length,
+  };
+}
+
+/**
+ * מילוי אוטומטי של כל התקופה של קמפיין — אחרי שינוי במה שהקמפיין צריך או
+ * מתי (יצירה, עריכה, שכפול, מוכן/פתיחה מחדש, המרה, הרצה מחזורית, חזרה
+ * מהשהיה, תוכן חדש בו). קודם רק השבוע שהלקוח הציג התמלא, וקמפיין של שלושה
+ * שבועות התמלא רק בשבועות שמישהו במקרה פתח.
+ *
+ * אותו ריסון כמו autoFill (holes:false — רק תוכן קיים), אותו savepoint
+ * ואותה התנהגות בכשל. נעילת מנוע אחת לכל השבועות: withEngineLock היא שרשרת
+ * הבטחות, וקריאה מקוננת בתוכה הייתה מחכה לעצמה — ולכן applyWeek ישירות.
+ * השבועות לפי הסדר, באותה טרנזקציה: כל שבוע רואה את מה שנכתב בקודמים
+ * (ותק, מרווח, תוכן חד-פעמי שכבר שובץ).
+ *
+ * קמפיין בלי תקופה למלא (campaignFillWeeks → null) — ממלאים את השבוע
+ * שהלקוח הציג, כמו קודם: למשל השהיה/השבתה מפנה מקום שאחרים יכולים לתפוס.
+ */
+export function autoFillCampaign(campaignId, fallbackWeek) {
+  return guardedFill('autoFillCampaign', async () => {
+    const c = campaignId
+      ? await one('select id, starts_on, ends_on, active, paused_at from campaigns where id = $1',
+        [campaignId])
+      : null;
+    const weeks = campaignFillWeeks(c);
+    if (!weeks) return withEngineLock(() => applyWeek(fallbackWeek, { holes: false }));
+    return withEngineLock(async () => {
+      const results = [];
+      for (const w of weeks) results.push(await applyWeek(`${w}T12:00:00`, { holes: false }));
+      return mergeFillResults(results);
+    });
+  });
 }
 
 /** תשובת מילוי ריקה — אותה צורה כמו applyWeek, כדי שהלקוח לא יצטרך לבדוק */

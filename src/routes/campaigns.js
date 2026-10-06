@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { EMPTY_FILL, autoFill, bad, updateById, wrap } from './_shared.js';
+import { EMPTY_FILL, autoFill, autoFillCampaign, bad, updateById, wrap } from './_shared.js';
 import {
   campaignsWithHealth, completionSummary, currentAllocation, gapDaysError, loadCapacityPreview,
   resolvePeriod, structureChangeError,
@@ -31,6 +31,10 @@ r.get('/campaigns', wrap(async (_req, res) => {
 const CAMPAIGN_FIELDS = ['name', 'endpoint_id', 'starts_on', 'ends_on', 'share_pct',
                          'importance', 'target_posts', 'goal', 'urgent', 'active',
                          'period', 'structure', 'recurring', 'min_gap_days'];
+
+/** שדות בעריכה שמשנים מה הקמפיין צריך או מתי — אחריהם ממלאים את כל התקופה */
+const FILL_FIELDS = ['endpoint_id', 'starts_on', 'ends_on', 'period', 'share_pct', 'active',
+                     'structure', 'min_gap_days', 'channel_ids'];
 
 /** מחיל את resolvePeriod על גוף הבקשה. מחזיר הודעת שגיאה או null. */
 function applyPeriod(b, before) {
@@ -156,7 +160,7 @@ r.post('/campaigns', requirePerm('settings'), wrap(async (req, res) => {
   const err = shareError(b) ?? newCampaignError(b) ?? await channelIdsError(b);
   if (err) return bad(res, err);
   const c = await insertCampaign(b);
-  const engine = await autoFill(b.week);
+  const engine = await autoFillCampaign(c.id, b.week);
   res.status(201).json({ campaign: c, engine });
 }));
 
@@ -332,7 +336,7 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
 
   const out = await copyCampaign(src, b);
   if (out.error) return bad(res, out.error, out.status);
-  const engine = await autoFill(b.week);
+  const engine = await autoFillCampaign(out.campaign.id, b.week);
   res.status(201).json({ ...out, engine });
 }));
 
@@ -383,7 +387,7 @@ r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) 
   const out = await copyCampaign(src, b,
     { complete: !!src.content_complete_at, templateId: src.id });
   if (out.error) return bad(res, out.error, out.status);
-  const engine = await autoFill(body.week ?? body.starts_on);
+  const engine = await autoFillCampaign(out.campaign.id, body.week ?? body.starts_on);
   res.status(201).json({ ...out, engine });
 }));
 
@@ -436,7 +440,7 @@ r.post('/campaigns/:id/complete', requirePerm('settings'), wrap(async (req, res)
     return c;
   });
 
-  const engine = await autoFill(req.body?.week);
+  const engine = await autoFillCampaign(campaign.id, req.body?.week);
   res.json({ campaign, summary, engine });
 }));
 
@@ -446,7 +450,7 @@ r.post('/campaigns/:id/reopen', requirePerm('settings'), wrap(async (req, res) =
     'update campaigns set content_complete_at = null where id = $1 returning *',
     [req.params.id]);
   if (!campaign) return bad(res, 'לא נמצא קמפיין כזה', 404);
-  const engine = await autoFill(req.body?.week);
+  const engine = await autoFillCampaign(campaign.id, req.body?.week);
   res.json({ campaign, engine });
 }));
 
@@ -593,7 +597,7 @@ r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, re
     return { angles: items.length, posts: plan.reduce((s, p) => s + p.targets.length, 0),
              moved_posts: posts, detached_posts: detached };
   });
-  const engine = await autoFill(req.body?.week);
+  const engine = await autoFillCampaign(c.id, req.body?.week);
   res.json({ converted: counts, engine });
 }));
 
@@ -681,7 +685,11 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     }
   }
 
-  const engine = await autoFill(b.week);
+  // שינוי במה שהקמפיין צריך או מתי — כל התקופה שלו; שאר השדות (שם, מטרה)
+  // לא משנים שיבוץ, ומספיק השבוע שמוצג כמו קודם
+  const engine = FILL_FIELDS.some((k) => b[k] !== undefined)
+    ? await autoFillCampaign(c.id, b.week)
+    : await autoFill(b.week);
   res.json({ campaign: c, moved_posts: movedPosts, engine });
 }));
 
