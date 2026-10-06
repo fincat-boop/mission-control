@@ -4,7 +4,9 @@ import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
-import { averageShares, channelCapacity, normalizeShares, shareOf } from './capacity.js';
+import {
+  averageShares, channelCapacity, effectiveGap, normalizeShares, shareOf, siblingCount,
+} from './capacity.js';
 import { loadGapDays } from './gap.js';
 
 // הטעינה של ברירת המחדל יושבת ב-gap.js (מקום אחד); כאן רק מייצאים הלאה
@@ -39,10 +41,19 @@ const daysBetween = (a, b) => {
 };
 
 /**
- * הקמפיינים עם החשיבות של נקודת הקצה שלהם — הרשימה ש-shareOf מחלק
- * ביניהם. כל מי שמחשב נתח או צורך (channelNeeds) טוען דרכה.
+ * הערוצים של כל קמפיין כעמודה בשורה — siblingCount (capacity.js) סופר לפיה
+ * קמפיינים של אותה נקודה שחולקים ערוץ.
  */
-export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance
+const CHANNEL_IDS_SQL = `(select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
+     from campaign_channels cc where cc.campaign_id = c.id) as channel_ids`;
+
+/**
+ * הקמפיינים עם החשיבות של נקודת הקצה שלהם והערוצים שלהם — הרשימה ש-shareOf
+ * מחלק ביניהם ו-siblingCount סופר בה. כל מי שמחשב נתח או צורך
+ * (channelNeeds) טוען דרכה.
+ */
+export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance,
+       ${CHANNEL_IDS_SQL}
   from campaigns c join endpoints e on e.id = c.endpoint_id`;
 
 /**
@@ -50,21 +61,26 @@ export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_impo
  * (wanted), כמה נכנס (capacity), ומה מגביל (limitedBy). הנתח נמדד על חלון
  * הקמפיין מול הקמפיינים החופפים (shareOf).
  *
- * המרווח הוא לנקודה × ערוץ, לא לקמפיין: שני קמפיינים חופפים של אותה נקודה
- * חולקים אותו בפועל, ו-gapCap כאן לא מחלק אותו ביניהם.
- * @param concurrent שורות מ-CAMPAIGNS_WEIGHTED_SQL
- * @param opts.gapDays engine_settings.min_gap_days (loadGapDays)
- * @returns {Map<number, {wanted, capacity, rateCap, gapCap, availableDays, limitedBy, share}>}
+ * המרווח: של הקמפיין (min_gap_days), ובלעדיו הכללי — effectiveGap, אותו
+ * מרווח שהמנוע אוכף על התוכן שלו. המרווח הוא לנקודה × ערוץ, ולכן קמפיינים
+ * חופפים של אותה נקודה באותו ערוץ חולקים אותו (siblings — siblingCount).
+ * @param concurrent שורות מ-CAMPAIGNS_WEIGHTED_SQL (כולל channel_ids)
+ * @param opts.gapDays ברירת המחדל הכללית — engine_settings.min_gap_days (loadGapDays)
+ * @returns {Map<number, {wanted, capacity, rateCap, gapCap, siblings, availableDays,
+ *                        limitedBy, share, gapDays}>}
  */
 export function channelCapacities(campaign, channels, concurrent = [], { gapDays = 7 } = {}) {
   const out = new Map();
   if (!campaign.starts_on || !campaign.ends_on) return out;
   const share = shareOf(campaign, concurrent);
+  const gap = effectiveGap(campaign, { min_gap_days: gapDays });
   for (const ch of channels) {
     out.set(ch.id, {
       ...channelCapacity({ from: campaign.starts_on, to: campaign.ends_on, channel: ch,
-                           share, gapDays }),
+                           share, gapDays: gap,
+                           siblings: siblingCount(campaign, concurrent, ch.id) }),
       share,
+      gapDays: gap,
     });
   }
   return out;
@@ -533,7 +549,8 @@ export function missingAhead(rows, today, days = null) {
 
 /** כל הקמפיינים עם מצב מלא */
 export async function campaignsWithHealth() {
-  const list = await rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance
+  const list = await rows(`select c.*, e.name as endpoint_name, e.importance as endpoint_importance,
+               ${CHANNEL_IDS_SQL}
           from campaigns c join endpoints e on e.id = c.endpoint_id
          order by c.active desc, c.starts_on nulls last, c.id`);
   const content = await rows('select * from content_items order by campaign_id, sort_order, id');

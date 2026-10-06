@@ -560,3 +560,58 @@ test('gridFor — במרווח 7 של המנוע (ברירת מחדל): זווי
   assert.deepEqual(g.angles.map((r) => r.date), ['2026-11-01', '2026-11-08']);
   assert.ok(g.angles.every((r) => r.cells.every((x) => x.state === 'empty')));
 });
+
+/* ========================= מרווח לקמפיין ואחים באותה נקודה ========================= */
+
+test('channelCapacities — המרווח של הקמפיין גובר על הכללי', () => {
+  const bf = { id: 7, endpoint_id: 4, share_pct: 40, active: true, min_gap_days: 3,
+               starts_on: '2026-11-20', ends_on: '2026-12-05' };
+  const fb = { id: 6, max_per_week: 5, urgent_reserve_pct: 20 };
+  const d = channelCapacities(bf, [fb], [bf], { gapDays: 7 }).get(6);
+  assert.equal(d.gapDays, 3);
+  assert.equal(d.gapCap, 6);     // 20, 23, 26, 29.11, 2.12, 5.12
+  assert.equal(d.capacity, 4);   // הקצב מגביל עכשיו
+  assert.equal(d.limitedBy, 'rate');
+  // בלי מרווח לקמפיין — הכללי
+  const g = channelCapacities({ ...bf, min_gap_days: null }, [fb], [bf], { gapDays: 7 }).get(6);
+  assert.equal(g.gapDays, 7);
+  assert.equal(g.gapCap, 3);
+});
+
+test('channelCapacities — שני קמפיינים חופפים של אותה נקודה באותו ערוץ חולקים את המרווח', () => {
+  const fb = { id: 6, max_per_week: 7, urgent_reserve_pct: 0 };
+  const a = { id: 1, endpoint_id: 4, share_pct: 50, active: true, channel_ids: [6],
+              starts_on: '2026-11-01', ends_on: '2026-11-28' };
+  const b = { ...a, id: 2 };
+  // לבד: 4 שבועות במרווח 7 = 4
+  assert.equal(channelCapacities(a, [fb], [a], { gapDays: 7 }).get(6).gapCap, 4);
+  const d = channelCapacities(a, [fb], [a, b], { gapDays: 7 }).get(6);
+  assert.equal(d.siblings, 2);
+  assert.equal(d.gapCap, 2);
+  assert.equal(d.capacity, 2);
+});
+
+test('channelCapacities — אח לא נספר: נקודה אחרת, ערוץ אחר, מושהה, לא חופף', () => {
+  const fb = { id: 6, max_per_week: 7, urgent_reserve_pct: 0 };
+  const a = { id: 1, endpoint_id: 4, share_pct: 30, active: true, channel_ids: [6],
+              starts_on: '2026-11-01', ends_on: '2026-11-28' };
+  const others = [
+    { ...a, id: 2, endpoint_id: 5 },
+    { ...a, id: 3, channel_ids: [9] },
+    { ...a, id: 4, paused_at: '2026-10-01T00:00:00Z' },
+    { ...a, id: 5, active: false },
+    { ...a, id: 6, starts_on: '2026-12-01', ends_on: '2026-12-31' },
+    { ...a, id: 7, channel_ids: undefined },
+  ];
+  assert.equal(channelCapacities(a, [fb], [a, ...others], { gapDays: 7 }).get(6).siblings, 1);
+});
+
+test('channelCapacities — חלוקה בין אחים מעגלת למטה, אבל לא ל-0 כשיש יום', () => {
+  const fb = { id: 6, max_per_week: 7, urgent_reserve_pct: 0 };
+  const a = { id: 1, endpoint_id: 4, share_pct: 20, active: true, channel_ids: [6],
+              starts_on: '2026-11-01', ends_on: '2026-11-07' };
+  const list = [a, { ...a, id: 2 }, { ...a, id: 3 }];
+  const d = channelCapacities(a, [fb], list, { gapDays: 7 }).get(6);
+  assert.equal(d.siblings, 3);
+  assert.equal(d.gapCap, 1);     // floor(1/3) = 0 → לפחות 1
+});
