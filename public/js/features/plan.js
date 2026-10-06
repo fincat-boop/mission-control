@@ -1589,10 +1589,20 @@ async function completeCampaign(campaign, reload) {
   // הבחירה בחלון ההתאמה נשמרת לפני הסימון — הפריסה כבר על המרווח/התקופה החדשים
   if (ok === 'compress') await patchCampaign(campaign.id, { min_gap_days: fit.gap, week: state.week });
   if (ok === 'extend') await patchCampaign(campaign.id, { ends_on: fit.extendTo, week: state.week });
-  const res = await api(`/campaigns/${campaign.id}/complete`,
-    { method: 'POST', body: { week: state.week } });
-  engineToast(res, 'הקמפיין סומן מוכן — הפוסטים נפרסו על התקופה.');
-  await reload();
+  const patched = ok === 'compress' || ok === 'extend';
+  try {
+    const res = await api(`/campaigns/${campaign.id}/complete`,
+      { method: 'POST', body: { week: state.week } });
+    engineToast(res, 'הקמפיין סומן מוכן — הפוסטים נפרסו על התקופה.');
+  } catch (e) {
+    if (!patched) throw e;
+    // השינוי כבר נשמר והסימון לא — אומרים בדיוק מה קרה, והמסך מתעדכן למצב האמיתי
+    toast(`${ok === 'compress' ? 'המרווח נשמר' : 'התקופה נשמרה'}, אבל הקמפיין לא סומן מוכן — ${e.message}`,
+      true);
+  } finally {
+    if (patched) await reload();
+  }
+  if (!patched) await reload();
 }
 
 /**
