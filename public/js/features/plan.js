@@ -512,7 +512,11 @@ async function openGapForm(campaign, reload) {
   let timer = null;
   let seq = 0;
 
-  const show = (text) => { $('#gapOutcome').textContent = text; };
+  // החלון נסגר בינתיים (או נפתח בו טופס אחר) — אין איפה להציג
+  const show = (text) => {
+    const el = $('#gapOutcome');
+    if (el) el.textContent = text;
+  };
   const outcome = (p) => (p.channels.length
     ? `במרווח הזה ייכנסו: ${fitsText(p)}` : 'לקמפיין אין תאריכים או ערוצים — אין מה לחשב.');
   const refresh = () => {
@@ -520,11 +524,12 @@ async function openGapForm(campaign, reload) {
     const isOwn = mode() === 'own';
     $('#genBody [data-field="min_gap_days"]').hidden = !isOwn;
     const n = Number($('#gen_min_gap_days').value);
+    // כל שינוי מבטל תשובה שעוד בדרך — גם כשהערך לא תקין, שלא תדרוס את ההודעה
+    const mine = ++seq;
     if (isOwn && !(validGap(n))) {
       show('המרווח צריך להיות מספר שלם של ימים, בין 1 ל-30.');
       return;
     }
-    const mine = ++seq;
     timer = setTimeout(async () => {
       try {
         const p = await capacityPreview({ id: campaign.id, min_gap_days: isOwn ? n : null });
@@ -555,7 +560,7 @@ async function openGapForm(campaign, reload) {
       $('#gen_min_gap_days').addEventListener('input', refresh);
       if (own) refresh();
     },
-    onClose: () => clearTimeout(timer),
+    onClose: () => { clearTimeout(timer); seq += 1; },
     onSave: async (v) => {
       const gap = v.gap_mode === 'own' ? v.min_gap_days : null;
       if (gap != null && !(validGap(gap))) {
