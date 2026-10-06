@@ -197,7 +197,8 @@ function campaignItem(c) {
     <div class="abar" style="max-width:150px" data-tt="${c.ready} מתוך ${c.required} מוכנים">
       <div class="actual" style="width:${pct}%"></div>
     </div>
-    <span class="chip ${TONE_CLASS[c.status.tone]}">${esc(c.status.label)}</span>
+    <span class="chip ${TONE_CLASS[c.status.tone]}"${c.status.reason
+      ? ` data-tt="${esc(c.status.reason)}"` : ''}>${esc(c.status.label)}</span>
     ${can('settings') ? kebab('פעולות על הקמפיין', [
       `<button type="button" data-edit-campaign="${c.id}">ערוך</button>`,
       `<button type="button" data-toggle-pause="${c.id}" data-paused="${!!c.paused_at}">${
@@ -596,6 +597,18 @@ function campaignGrid(c) {
         <button class="btn primary" data-pick-channels="${c.id}">בחר ערוצים</button></div>` : ''}
     </div></div>`;
   }
+  // אין לקמפיין מקום באף ערוץ (נתחים קבועים תופסים הכול, תקרה 0, ימים
+  // חסומים) — אומרים למה, ולא "אין תאריכים". תוכן שכבר נכתב נשאר גלוי.
+  if (c.no_room_reason) {
+    const notice = `<div class="panel"><div class="empty">
+      אין לקמפיין הזה מקום בערוצים שלו: ${esc(c.no_room_reason)}.
+      לכן אין לו משבצות לתוכן.</div></div>`;
+    if (c.structure === 'general') {
+      return c.slots.some((col) => col.slots.some((x) => x.content))
+        ? generalBoard(c, notice) : `${campaignHead(c)}${notice}`;
+    }
+    return `${campaignHead(c)}${notice}${extraGroup(c)}`;
+  }
   const empty = c.structure === 'general' ? !c.slots.length : !c.grid.length;
   if (empty) {
     return `${campaignHead(c)}<div class="panel"><div class="empty">
@@ -952,9 +965,10 @@ function pickClass(c, item, blocked) {
   return !blocked && slotPickable(c, item) ? ' pick' : ' nopick';
 }
 
-function generalBoard(c) {
+function generalBoard(c, notice = '') {
   return `
     ${campaignHead(c)}
+    ${notice}
     <div id="gboardWrap">${boardInner(c)}</div>
     ${completeLine(c)}
     ${c.orphaned ? `<div class="sumline">

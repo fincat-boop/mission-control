@@ -4,7 +4,7 @@ import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
-import { channelCapacity, normalizeShares, shareOf } from './capacity.js';
+import { averageShares, channelCapacity, normalizeShares, shareOf } from './capacity.js';
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -73,6 +73,26 @@ export function channelCapacities(campaign, channels, concurrent = [], { gapDays
     });
   }
   return out;
+}
+
+/**
+ * למה לקמפיין אין אף פוסט באף ערוץ, כשזה המצב — אחרת null. בלי זה רשת
+ * בגודל 0 נראית "מלא — 0/0" והמסך מסביר "אין תאריכים", כשהסיבה אחרת לגמרי.
+ * @param capacities channelCapacities(...) של הקמפיין
+ */
+export function noRoomReason(campaign, capacities) {
+  const list = [...capacities.values()];
+  if (!list.length || list.some((c) => c.capacity > 0)) return null;
+  if (campaign.share_pct != null && Number(campaign.share_pct) <= 0) {
+    return 'לקמפיין נקבע נתח 0% מהערוצים';
+  }
+  if (list.every((c) => !(c.share > 0))) {
+    return 'קמפיינים עם נתח קבוע תופסים את כל הערוצים בתקופה הזו';
+  }
+  if (list.every((c) => c.limitedBy === 'blocked')) {
+    return 'כל הימים בתקופה חסומים בערוצים של הקמפיין';
+  }
+  return 'בערוצים של הקמפיין אין פוסטים בשבוע שמותר לשבץ (תקרה 0, או שכולה שמורה לדחופים)';
 }
 
 /** כמה פוסטים הקמפיין צריך בכל אחת מהמדיות שלו = כמה שבאמת נכנס */
@@ -580,6 +600,9 @@ export async function campaignsWithHealth() {
     // מה שהמערכת גוזרת בעצמה. נשלח תמיד — גם כשיש ערך ידני — כדי
     // שהממשק יוכל להראות "אוטומטי = כך וכך" ולא לבקש מספר בלי הקשר.
     const autoShare = Math.round(shareOf({ ...c, share_pct: null }, list) * 100);
+    // קמפיין שאין לו מקום באף ערוץ — מצב משלו, לא "מלא — 0/0"
+    const noRoom = grid.complete
+      ? null : noRoomReason(c, channelCapacities(c, myChannels, list, { gapDays }));
     const autoAngles = angleCount({ ...c, target_posts: null },
       channelNeeds(c, myChannels, list, { gapDays }));
 
@@ -616,7 +639,9 @@ export async function campaignsWithHealth() {
       total_ahead: ahead.total,
       missing_week: week.missing,
       phase,
-      status: statusOf({ c, today, grid, myChannels, ahead }),
+      status: statusOf({ c, today, grid, myChannels, ahead, noRoom }),
+      // למה אין לקמפיין משבצות (null = יש) — המסך מסביר את זה במקום "אין תאריכים"
+      no_room_reason: noRoom,
       pace: paceOf(c, today, published, grid),
       content: shaped,
       grid: grid.angles,
@@ -641,7 +666,7 @@ function phaseOf(c, today) {
   return 'running';
 }
 
-export function statusOf({ c, today, grid, myChannels, ahead = null }) {
+export function statusOf({ c, today, grid, myChannels, ahead = null, noRoom = null }) {
   const phase = phaseOf(c, today);
   if (phase === 'paused') return { key: 'paused', label: 'מושהה', tone: 'warn' };
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
@@ -662,6 +687,10 @@ export function statusOf({ c, today, grid, myChannels, ahead = null }) {
       };
     }
     return { key: 'complete', label: `מוכן — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
+  }
+  // אין לקמפיין מקום באף ערוץ (noRoomReason) — לא "מלא", גם אם 0 מתוך 0
+  if (noRoom) {
+    return { key: 'no_room', label: 'אין מקום בערוצים', tone: 'warn', reason: noRoom };
   }
   // החסר נספר מהיום והלאה — שורה שעברה כבר לא תושלם (ahead חסר: הכול, כמו קודם)
   const missing = ahead ? ahead.missing : grid.missing;
@@ -697,9 +726,9 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
  * חלוקת השטח בין נקודות הקצה, חודש אחר חודש.
  *
  * זו התמונה האסטרטגית: לא מה קורה בקמפיין מסוים, אלא כמה מקום כל נקודת קצה
- * מקבלת לאורך הזמן. הנתח של נקודה בחודש = סכום הנתחים המנורמלים
- * (normalizeShares — אותו חשבון כמו הרשת והמנוע) של הקמפיינים שלה שנוגעים
- * בחודש. הסכום לא עובר 100%; כשכל הקמפיינים קבועים ומתחת ל-100%, היתרה
+ * מקבלת לאורך הזמן. הנתח של נקודה בחודש = סכום הנתחים של הקמפיינים שלה,
+ * כל אחד ממוצע הנתח היומי שלו בחודש (averageShares — אותו חשבון כמו הרשת
+ * והמנוע). קמפיין שרץ חצי חודש נספר בחצי. הסכום לא עובר 100%; כשכל הקמפיינים קבועים ומתחת ל-100%, היתרה
  * היא של התוכן השוטף ולא מוצגת כאן.
  */
 export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
@@ -717,8 +746,8 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
     const from = ymd(start);
     const to = ymd(end);
 
-    // הקמפיינים שנוגעים בחודש הזה, והנתח המנורמל של כל אחד מהם בחודש
-    const shares = normalizeShares(campaigns, { from, to });
+    // הקמפיינים שנוגעים בחודש הזה, והנתח הממוצע של כל אחד מהם בחודש
+    const shares = averageShares(campaigns, { from, to });
     const live = campaigns.filter((c) => shares.has(c.id));
 
     const weights = new Map();

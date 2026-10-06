@@ -3,7 +3,7 @@ import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
-import { channelBudget, normalizeShares } from './capacity.js';
+import { averageShares, channelBudget } from './capacity.js';
 
 /**
  * מנוע השיבוץ.
@@ -571,9 +571,9 @@ const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'publish
  * בעוד חודש מושך את הנקודה שלו כשמתכננים את השבוע שבו הוא רץ (קודם בלאק
  * פריידי קיבל 0 משבצות, כי המנוע הסתכל רק על הקמפיינים של היום).
  *
- * היעד של נקודה = סכום הנתחים המנורמלים (normalizeShares — אותו חשבון כמו
- * הרשת וציר האסטרטגיה, כולל נתחים אוטומטיים) של הקמפיינים שלה שחופפים
- * לשבוע. החלון שבו נמדד "בפועל" מתחיל ב-starts_on המוקדם של אותם קמפיינים,
+ * היעד של נקודה = סכום הנתחים של הקמפיינים שלה שחופפים לשבוע, כל אחד ממוצע
+ * הנתח היומי שלו בשבוע (averageShares — אותו חשבון כמו הרשת וציר
+ * האסטרטגיה, כולל נתחים אוטומטיים). החלון שבו נמדד "בפועל" מתחיל ב-starts_on המוקדם של אותם קמפיינים,
  * ובלי תאריך כזה — 90 יום לפני השבוע; ונגמר בסוף השבוע המתוכנן.
  *
  * @param campaigns שורות campaigns עם endpoint_importance
@@ -583,7 +583,7 @@ const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'publish
 export function strategyTargets(campaigns, week) {
   const weekFrom = week.days[0].date;
   const weekTo = week.days[week.days.length - 1].date;
-  const shares = normalizeShares(campaigns, { from: weekFrom, to: weekTo });
+  const shares = averageShares(campaigns, { from: weekFrom, to: weekTo });
 
   const targetPct = new Map();
   const starts = [];

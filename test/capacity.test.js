@@ -2,7 +2,7 @@ import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  channelBudget, channelCapacity, normalizeShares, shareKey, shareOf,
+  averageShares, channelBudget, channelCapacity, normalizeShares, shareKey, shareOf,
 } from '../src/capacity.js';
 
 const span = { starts_on: '2026-08-01', ends_on: '2026-08-31', active: true, paused_at: null };
@@ -83,6 +83,49 @@ test('shareOf — מושהה עדיין רואה כמה יקבל; החשיבות
 test('shareOf — share_pct מפורש מנצח; בלי מתחרים = 1', () => {
   assert.equal(shareOf({ ...span, id: 1, endpoint_id: 1, share_pct: 25 }, []), 0.25);
   assert.equal(shareOf({ ...span, id: 1, endpoint_id: 1, endpoint_importance: 6 }, []), 1);
+});
+
+/* ---------- averageShares: ממוצע הנתח היומי ---------- */
+
+// אוטומטי לאורך אוק׳–דצמ׳, 60% קבוע באוקטובר, 50% קבוע בדצמבר. שני הקבועים
+// לא נפגשים — נרמול אחד על כל הטווח סכם אותם ל-110% ונתן לאוטומטי 0.
+const autoQ4 = { id: 1, endpoint_id: 1, endpoint_importance: 5, active: true,
+                 starts_on: '2026-10-01', ends_on: '2026-12-31' };
+const fixedOct = { id: 2, endpoint_id: 2, share_pct: 60, active: true,
+                   starts_on: '2026-10-01', ends_on: '2026-10-31' };
+const fixedDec = { id: 3, endpoint_id: 3, share_pct: 50, active: true,
+                   starts_on: '2026-12-01', ends_on: '2026-12-31' };
+
+test('averageShares — קבועים שלא נפגשים לא נסכמים: האוטומטי מקבל את הממוצע היומי', () => {
+  const s = averageShares([autoQ4, fixedOct, fixedDec], { from: '2026-10-01', to: '2026-12-31' });
+  // 31 יום × 40% + 30 × 100% + 31 × 50%, חלקי 92
+  near(s.get(1), (31 * 0.4 + 30 * 1 + 31 * 0.5) / 92);
+  near(s.get(2), (31 * 0.6) / 92);
+  near(s.get(3), (31 * 0.5) / 92);
+  near(shareOf(autoQ4, [autoQ4, fixedOct, fixedDec]), s.get(1));
+  // הנרמול הישן על כל הטווח — 0
+  assert.equal(normalizeShares([autoQ4, fixedOct, fixedDec],
+    { from: '2026-10-01', to: '2026-12-31' }).get(1), 0);
+});
+
+test('averageShares — יום בודד = normalizeShares; טווח פתוח נופל לנרמול אחד', () => {
+  const list = [autoQ4, fixedOct, fixedDec];
+  const day = { from: '2026-10-15', to: '2026-10-15' };
+  assert.deepEqual(averageShares(list, day), normalizeShares(list, day));
+  assert.deepEqual(averageShares(list, { from: '2026-10-15', to: null }),
+    normalizeShares(list, { from: '2026-10-15', to: null }));
+});
+
+test('averageShares — קמפיין שרץ חצי מהטווח נספר בחצי', () => {
+  const half = { id: 9, endpoint_id: 9, endpoint_importance: 5, active: true,
+                 starts_on: '2026-11-16', ends_on: '2026-11-30' };
+  const s = averageShares([half], { from: '2026-11-01', to: '2026-11-30' });
+  near(s.get(9), 15 / 30);
+});
+
+test('shareOf — קבועים שמכסים 100% כל הזמן: לאוטומטי באמת אין מקום', () => {
+  const full = { ...fixedOct, share_pct: 100, ends_on: '2026-12-31' };
+  assert.equal(shareOf(autoQ4, [autoQ4, full]), 0);
 });
 
 /* ---------- channelBudget / channelCapacity ---------- */

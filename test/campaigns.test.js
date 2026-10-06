@@ -505,3 +505,40 @@ test('statusOf — "חסרים" לפי מה שנשאר מהיום, ובלי חס
                           ahead: { missing: 0, total: 6 } });
   assert.equal(done.label, 'מלא מהיום והלאה');
 });
+
+/* ---------- אין מקום בערוצים: מצב משלו, לא "מלא — 0/0" ---------- */
+
+import { noRoomReason } from '../src/campaigns.js';
+
+const q4 = { id: 1, endpoint_id: 1, endpoint_importance: 5, share_pct: null, active: true,
+             starts_on: '2026-10-01', ends_on: '2026-12-31', structure: 'general' };
+const oct60 = { id: 2, endpoint_id: 2, share_pct: 60, active: true,
+                starts_on: '2026-10-01', ends_on: '2026-10-31' };
+const dec50 = { id: 3, endpoint_id: 3, share_pct: 50, active: true,
+                starts_on: '2026-12-01', ends_on: '2026-12-31' };
+const fb5 = { id: 6, name: 'פייסבוק', max_per_week: 5, urgent_reserve_pct: 20 };
+
+test('generalGridFor — אוטומטי מול קבועים שלא נפגשים לא קורס ל-0/0', () => {
+  const list = [q4, oct60, dec50];
+  const g = generalGridFor(q4, [], [fb5], '2026-09-01', list, { gapDays: 7 });
+  assert.deepEqual(g.needs, { 6: 14 });           // 92 יום במרווח 7; הקצב (33) לא מגביל
+  assert.equal(noRoomReason(q4, channelCapacities(q4, [fb5], list, { gapDays: 7 })), null);
+});
+
+test('noRoomReason + statusOf — קבוע של 100% לאורך כל התקופה: "אין מקום בערוצים"', () => {
+  const full = { ...oct60, share_pct: 100, ends_on: '2026-12-31' };
+  const list = [q4, full];
+  const caps = channelCapacities(q4, [fb5], list, { gapDays: 7 });
+  const reason = noRoomReason(q4, caps);
+  assert.match(reason, /נתח קבוע תופסים את כל הערוצים/);
+  const g = generalGridFor(q4, [], [fb5], '2026-09-01', list, { gapDays: 7 });
+  assert.equal(g.total_cells, 0);
+  const st = statusOf({ c: q4, today: '2026-09-01', grid: g, myChannels: [fb5], noRoom: reason });
+  assert.equal(st.key, 'no_room');
+  assert.equal(st.label, 'אין מקום בערוצים');
+  assert.notEqual(st.tone, 'good');
+  // נתח 0% שנקבע במפורש — סיבה משלו
+  const zero = { ...q4, share_pct: 0 };
+  assert.match(noRoomReason(zero, channelCapacities(zero, [fb5], [zero], { gapDays: 7 })),
+    /נתח 0%/);
+});

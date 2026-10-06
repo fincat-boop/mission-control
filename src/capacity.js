@@ -95,8 +95,59 @@ export function normalizeShares(campaigns, { from = null, to = null } = {}) {
   return out;
 }
 
+/** YYYY-MM-DD + n ימים, בלי מעבר שעון */
+const addDays = (s, n) => new Date(utc(s) + n * DAY).toISOString().slice(0, 10);
+
 /**
- * הנתח של קמפיין אחד, על פני החלון שלו (starts_on..ends_on). הקמפיין עצמו
+ * הנתח של כל קמפיין בממוצע על פני טווח של כמה ימים — ממוצע משוקלל בזמן של
+ * הנתח היומי, ולא נרמול אחד על כל הטווח.
+ *
+ * למה: normalizeShares על טווח ארוך מחשיב כל מי שנוגע בו כמתחרה לכל אורכו.
+ * קמפיין אוטומטי של אוק׳–דצמ׳ מול 60% קבוע באוקטובר ו-50% קבוע בדצמבר — שני
+ * הקבועים לא נפגשים אף פעם, אבל יחד הם "110%" והאוטומטי קיבל 0, הרשת שלו
+ * קרסה ל-0/0 והוא הוצג "מלא". כאן כל יום נמדד לבד (40% באוקטובר, 100%
+ * בנובמבר, 50% בדצמבר) ואז ממוצע.
+ *
+ * בפועל לא עוברים יום-יום: הנתח קבוע בין שני גבולות (תחילה / יום אחרי
+ * סיום של קמפיין כלשהו), ולכן מחשבים פעם אחת לכל קטע ומשקללים במספר הימים
+ * שלו — אותה תוצאה.
+ *
+ * טווח בלי התחלה או בלי סוף אי אפשר למצע — נופלים לנרמול אחד על כל הטווח.
+ * @returns {Map<number|'draft', number>} כמו normalizeShares: רק מי שמתחרה
+ *          לפחות ביום אחד בטווח מופיע במפה
+ */
+export function averageShares(campaigns, { from = null, to = null } = {}) {
+  const f = ymdOf(from);
+  const t = ymdOf(to);
+  if (!f || !t || t < f) return normalizeShares(campaigns, { from: f, to: t });
+
+  const end = addDays(t, 1);               // סוף פתוח: היום שאחרי הטווח
+  const cuts = new Set([f, end]);
+  for (const c of campaigns) {
+    const s = ymdOf(c.starts_on);
+    const e = ymdOf(c.ends_on);
+    if (s && s > f && s < end) cuts.add(s);
+    if (e) {
+      const after = addDays(e, 1);
+      if (after > f && after < end) cuts.add(after);
+    }
+  }
+  const points = [...cuts].sort();
+  const totalDays = (utc(end) - utc(f)) / DAY;
+
+  const out = new Map();
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const days = (utc(points[i + 1]) - utc(points[i])) / DAY;
+    // בתוך קטע אין גבול, ולכן היום הראשון שלו מייצג את כולו
+    const day = normalizeShares(campaigns, { from: points[i], to: points[i] });
+    for (const [k, v] of day) out.set(k, (out.get(k) ?? 0) + (v * days) / totalDays);
+  }
+  return out;
+}
+
+/**
+ * הנתח של קמפיין אחד, על פני החלון שלו (starts_on..ends_on) — ממוצע הנתח
+ * היומי (averageShares). הקמפיין עצמו
  * נספר תמיד — גם אם הוא לא ברשימה, לא פעיל או מושהה — כדי שהטופס והרשת
  * יראו כמה הוא *יקבל* כשירוץ. הערכים שבידי הקורא גוברים על השורה ברשימה
  * (טיוטה שמשנה share_pct), אבל החשיבות של נקודת הקצה נלקחת מהרשימה כשאין
@@ -113,7 +164,7 @@ export function shareOf(campaign, concurrent = []) {
   };
   const key = shareKey(self);
   const others = concurrent.filter((x) => shareKey(x) !== key);
-  const shares = normalizeShares([...others, self],
+  const shares = averageShares([...others, self],
     { from: campaign.starts_on ?? null, to: campaign.ends_on ?? null });
   return shares.get(key) ?? 0;
 }
