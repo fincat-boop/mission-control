@@ -22,7 +22,6 @@ test('onBlockedDay — ערוץ בלי הגדרה בכלל לא חוסם', () =>
   assert.equal(onBlockedDay(saturday, null), false);
 });
 
-import { readFileSync } from 'node:fs';
 import { windowAllows } from '../src/respace.js';
 
 // קמפיין מוכן בנובמבר, 6 פוסטים: השני מתוכנן ל-6.11
@@ -43,11 +42,7 @@ test('windowAllows — פוסט של קמפיין מוכן לא זז לפני ה
   assert.equal(windowAllows(normal, '2026-11-02'), true);
 });
 
-test('planRespace שולף את עמודות "קמפיין מוכן" — אחרת הכלל לא חל בהזזה', () => {
-  const src = readFileSync(new URL('../src/respace.js', import.meta.url), 'utf8');
-  const q = src.slice(src.indexOf('export async function planRespace'), src.indexOf('const byId'));
-  assert.match(q, /\$\{COMPLETE_SPREAD_COLUMNS\}/);
-});
+// planRespace שולף את עמודות "קמפיין מוכן" — נבדק מול מסד ב-cli-db.test.js
 
 /* ---------- שלב 4: מרווח מול פוסטים קבועים באותו שבוע ---------- */
 

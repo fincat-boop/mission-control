@@ -1,7 +1,6 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { planClashFixes } from '../src/fix-clashes.js';
 
 /**
@@ -67,10 +66,54 @@ test('planClashFixes — המרווח של הקמפיין של הפוסט, ומ�
   assert.deepEqual(stuck.groups[0].stuck.map((x) => x.id), [2]);
 });
 
-test('fix-clashes — CLI לארגון אחד (withOrg, --org), יבש כברירת מחדל', () => {
-  const src = readFileSync(new URL('../src/fix-clashes.js', import.meta.url), 'utf8');
-  assert.match(src, /withOrg\(orgId/);
-  assert.match(src, /argv\.includes\('--yes'\)/);
-  // אין שאילתה ברמת המודול (קודם רץ בייבוא, על כל הארגונים)
-  assert.match(src, /if \(runAsCli\)/);
+test('planClashFixes — לא יוצא מחלון הקמפיין (windowAllows, כמו respace)', () => {
+  const camp = { campaign_id: 5, campaign_starts_on: '2030-01-01', campaign_ends_on: '2030-01-10' };
+  const r = planClashFixes([p(1, '2030-01-10'), p(2, '2030-01-10', 'scheduled', camp)],
+    { channels: ch(), settings: { min_gap_days: 0 }, today });
+  assert.equal(r.moves.length, 0);
+  assert.deepEqual(r.groups[0].stuck.map((x) => x.id), [2]);
+  // קמפיין מוכן: לא לפני התאריך המתוכנן (פריט 4 מתוך 6 ב-1.11–30.11 → 16.11)
+  const done = { campaign_id: 6, campaign_starts_on: '2030-11-01', campaign_ends_on: '2030-11-30',
+                 campaign_complete_at: '2030-10-01T10:00:00Z', campaign_slot_rank: 4,
+                 campaign_slot_count: 6 };
+  const late = planClashFixes([p(1, '2030-11-12'), p(2, '2030-11-12', 'scheduled', done)],
+    { channels: ch(), settings: { min_gap_days: 0 }, today });
+  // 12.11 עצמו כבר לפני התאריך המתוכנן — פוסט שיושב מחוץ לחלון לא ננעל (כמו respace)
+  assert.equal(day(late.groups[0].moves[0]), '2030-11-13');
+  const inside = planClashFixes([p(1, '2030-11-16'), p(2, '2030-11-16', 'scheduled', done)],
+    { channels: ch(), settings: { min_gap_days: 0 }, today });
+  assert.equal(day(inside.groups[0].moves[0]), '2030-11-17');
+});
+
+test('planClashFixes — max_promo_per_day בכל הערוצים', () => {
+  const promo = { kind: 'promo' };
+  const r = planClashFixes([
+    p(1, '2030-01-08', 'scheduled', promo), p(2, '2030-01-08', 'scheduled', promo),
+    p(3, '2030-01-09', 'scheduled', { ...promo, endpoint_id: 2, channel_id: 2 }),
+  ], { channels: [...ch(), { id: 2, blocked_days: [] }],
+       settings: { min_gap_days: 0, max_promo_per_day: 1 }, today });
+  assert.equal(day(r.groups[0].moves[0]), '2030-01-10');
+  // ערך לא נספר במכסת המכירתי — נכנס ל-9.1
+  const v = planClashFixes([
+    p(1, '2030-01-08'), p(2, '2030-01-08'),
+    p(3, '2030-01-09', 'scheduled', { ...promo, endpoint_id: 2, channel_id: 2 }),
+  ], { channels: [...ch(), { id: 2, blocked_days: [] }],
+       settings: { min_gap_days: 0, max_promo_per_day: 1 }, today });
+  assert.equal(day(v.groups[0].moves[0]), '2030-01-09');
+});
+
+test('planClashFixes — שעה תפוסה בערוץ: השעה הפנויה הבאה; יום מלא עד 22 — היום הבא', () => {
+  // פוסטים של נקודות אחרות באותו ערוץ — תופסים שעות, לא מתנגשים
+  const other = (id, hour) => ({ ...p(id, '2030-01-09', 'scheduled', { endpoint_id: id }),
+                                 scheduled_at: `2030-01-09T${String(hour).padStart(2, '0')}:00:00` });
+  const r = planClashFixes([p(1, '2030-01-08'), p(2, '2030-01-08'), other(3, 10)],
+    { channels: ch(), settings: { min_gap_days: 0 }, today });
+  const m = r.groups[0].moves[0];
+  assert.equal(day(m), '2030-01-09');
+  assert.equal(m.to.getHours(), 11);
+  const full = Array.from({ length: 13 }, (_, i) => other(10 + i, 10 + i));   // 10:00–22:00
+  const f = planClashFixes([p(1, '2030-01-08'), p(2, '2030-01-08'), ...full],
+    { channels: ch(), settings: { min_gap_days: 0 }, today });
+  assert.equal(f.groups.length, 1);
+  assert.equal(day(f.groups[0].moves[0]), '2030-01-10');
 });
