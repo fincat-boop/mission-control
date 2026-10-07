@@ -84,7 +84,7 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   const neighbours = await neighbourDays(from, to, Math.max(30, effectiveGap(null, settings)));
 
   return respaceMoves({ week, channels, posts, settings, neighbours, onlyIllegal,
-                        today: ymd(new Date()) });
+                        now: new Date() });
 }
 
 /**
@@ -96,9 +96,14 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
  * יום שכבר עבר. הפוסטים הקבועים בתוך השבוע נכנסים גם ל-neighbours ולא רק
  * ל-sameDay — אחרת פוסט שזז יכול לנחות בתוך המרווח של פוסט קבוע באותו שבוע
  * (קודם נבדקו מולו רק פוסטים מחוץ לשבוע).
+ *
+ * השעה ביעד: השעה של הפוסט, ובאותו ערוץ ויום תפוסים — הפנויה הבאה עד 22:00.
+ * היום (now) — לא לפני השעה העגולה הבאה, כמו במנוע: קודם פוסט מאושר שזז
+ * להיום שמר את השעה שלו, שכבר עברה, ויצא לאוויר מיד. יום בלי שעה פנויה —
+ * המשבצת לא נלקחת והפוסט מחכה למשבצת הבאה.
  */
 export function respaceMoves({ week, channels, posts, settings, neighbours = new Map(),
-                               onlyIllegal = false, today = ymd(new Date()) }) {
+                               onlyIllegal = false, now = new Date(), today = ymd(now) }) {
   const byId = new Map(channels.map((c) => [c.id, c]));
   const illegal = (p) => onBlockedDay(p, byId.get(p.channel_id));
   const dayOf = (p) => ymd(new Date(p.scheduled_at));
@@ -158,13 +163,11 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
     const queue = queues.get(slot.channel_id);
     if (!queue?.length) continue;
 
-    // הפוסט הראשון בתור שהיום הזה חוקי בשבילו
-    const i = queue.findIndex((p) => fits(p, slot.dateKey));
+    // הפוסט הראשון בתור שהיום הזה חוקי בשבילו, ויש לו בו שעה פנויה
+    const i = queue.findIndex((p) => fits(p, slot.dateKey) && hourFor(p, slot) !== null);
     if (i === -1) continue;
     const post = queue.splice(i, 1)[0];
-
-    let hour = new Date(post.scheduled_at).getHours();
-    while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
+    const hour = hourFor(post, slot);
 
     usage.take(slot.channel_id, slot.dateKey, post.kind, hour);
     if (post.endpoint_id) {
@@ -195,6 +198,15 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
   }));
 
   return result;
+
+  /** השעה של הפוסט במשבצת, או null כשאין שעה פנויה עד 22:00 (היום — רק אחרי עכשיו) */
+  function hourFor(post, slot) {
+    let hour = new Date(post.scheduled_at).getHours();
+    if (slot.dateKey === ymd(now)) hour = Math.max(hour, now.getHours() + 1);
+    while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
+    if (hour > 22 || usage.hourTaken(slot.channel_id, slot.dateKey, hour)) return null;
+    return hour;
+  }
 
   /** האם מותר להעביר את הפוסט ליום הזה */
   function fits(post, dateKey) {
@@ -265,7 +277,13 @@ export function relocateBlocked({ weeks = HORIZON_WEEKS } = {}) {
   });
 }
 
-/** פוסטים עתידיים שיושבים על יום חסום לערוץ שלהם */
+/**
+ * פוסטים עתידיים שיושבים על יום חסום לערוץ שלהם — גם מאושרים: הטיק מפרסם
+ * מאושר במועד שלו, ובלעדיהם פוסט מאושר על יום שנחסם לא זז, לא הופיע
+ * בהתראה, ויצא לאוויר ביום הסגור. מאושר שזז נשאר מאושר (שינוי מועד בלבד,
+ * כמו בלוח — approvalResetOnChange). נכשל לא נכלל: הוא לא מתפרסם לבד, ויש
+ * לו התראה משלו.
+ */
 export async function postsOnBlockedDays(weeks = HORIZON_WEEKS) {
   const until = new Date();
   until.setDate(until.getDate() + weeks * 7);
@@ -275,7 +293,7 @@ export async function postsOnBlockedDays(weeks = HORIZON_WEEKS) {
             c.name as channel_name, c.blocked_days
        from posts p
        join channels c on c.id = p.channel_id
-      where p.status in ('scheduled','pending_approval')
+      where p.status in ('scheduled','approved','pending_approval')
         and p.scheduled_at >= date_trunc('day', now())
         and p.scheduled_at <= $1
       order by p.scheduled_at`,

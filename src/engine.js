@@ -136,8 +136,8 @@ export async function planWeek(anchorDate, {
   // תוכן שכבר משובץ השבוע — או שהמשתמש הוריד מהשבוע — לא יוצע שוב לאותו ערוץ
   const usedContent = blockedContent(existing, dismissals);
 
-  // ההיסטוריה המלאה של כל פריט תוכן — בלעדיה תוכן חד-פעמי היה חוזר לאוויר
-  // בכל שבוע שבו הוא לא במקרה משובץ
+  // ההיסטוריה המלאה של כל פריט תוכן בכל ערוץ — בלעדיה תוכן חד-פעמי היה
+  // חוזר לאוויר בכל שבוע שבו הוא לא במקרה משובץ
   const history = await contentHistory();
 
   // כל הפוסטים החיים של כל נקודה בכל ערוץ סביב השבוע — לבדיקת המרווח מול
@@ -218,7 +218,8 @@ export async function planWeek(anchorDate, {
     let hour = slot.dateKey === today ? Math.max(DEFAULT_HOUR, now.getHours() + 1) : DEFAULT_HOUR;
     // התנגשות שעה באותו ערוץ באותו יום — מזיזים שעה קדימה
     while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
-    if (hour > 22) continue; // היום כבר נגמר
+    // היום כבר נגמר, או שגם 22:00 תפוסה (הלולאה נעצרת עליה — קודם שובץ שם שני)
+    if (hour > 22 || usage.hourTaken(slot.channel_id, slot.dateKey, hour)) continue;
     at.setHours(hour, 0, 0, 0);
     if (at <= now) continue;
 
@@ -1445,6 +1446,7 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
 
     let hour = HOLE_HOUR;
     while (usage.hourTaken(target.id, day.date, hour) && hour < 22) hour += 1;
+    if (usage.hourTaken(target.id, day.date, hour)) continue; // עד 22:00 הכול תפוס
     // תופסים בפועל את המקום כדי ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת פנויה.
     usage.take(target.id, day.date, 'value', hour);
     sameDay.add(`${e.id}:${target.id}:${day.date}`);
@@ -1515,27 +1517,31 @@ function pickHoleDay(week, channel, usage, today = null, ok = () => true) {
 /**
  * האם מותר להשתמש בפריט התוכן הזה במשבצת הזו.
  *
- * תוכן חד-פעמי (ברירת המחדל) יוצא לאוויר פעם אחת ונגמר.
- * תוכן evergreen חוזר, אבל רק אחרי שעבר מספיק זמן מהפעם הקודמת באותו ערוץ.
+ * תוכן חד-פעמי (ברירת המחדל) יוצא לאוויר פעם אחת בכל ערוץ שיש לו גרסה
+ * אליו, ונגמר שם. קודם "פעם אחת" נספר על כל הערוצים יחד: זווית שנחתה
+ * בפייסבוק (גרירה ידנית, או שבאינסטגרם לא היה מקום באותו שבוע) לא הגיעה
+ * לאינסטגרם לעולם — בזמן שהרשת ו-unplacedOf (לפי תוכן×ערוץ) הראו אותה
+ * ממתינה. בתוך ריצה אחת היא כן יכלה לצאת בשניהם, כך שהתוצאה הייתה מזל.
+ * תוכן evergreen חוזר, אבל רק אחרי שעבר מספיק זמן מהפעם הקרובה באותו ערוץ
+ * — לשני הכיוונים: פוסט עתידי רחוק לא מסתיר פעם קרובה לפני המשבצת.
+ *
+ * תוכן מקושר (linked_to_id) לא מושפע: כל משבצת בקבוצה היא פריט נפרד שקשור
+ * לערוץ אחד (slot_channel_id, fitsSlotChannel), ולכל ערוץ לכל היותר אחת.
  */
 function reusable(c, slot, history, settings) {
-  const h = history.get(c.id);
-  if (!h) return true; // עוד לא פורסם מעולם
+  const here = history.get(c.id)?.datesByChannel.get(slot.channel_id);
+  if (!here?.length) return true; // עוד לא היה בערוץ הזה
 
   if (!c.evergreen) return false;
 
-  const lastHere = h.lastByChannel.get(slot.channel_id);
-  if (!lastHere) return true; // evergreen שעוד לא היה בערוץ הזה
-
-  const gap = Math.abs((new Date(slot.dateKey) - new Date(lastHere)) / 86400000);
   // מרווח שימוש חוזר של התוכן — לא המרווח של הקמפיין; ברירת המחדל הכללית
-  return gap >= (c.reuse_after_days ?? effectiveGap(null, settings));
+  return nearestDays(here, slot.dateKey) >= (c.reuse_after_days ?? effectiveGap(null, settings));
 }
 
-/** מתי כל פריט תוכן פורסם או שובץ, לכל ערוץ */
+/** כל התאריכים שבהם כל פריט תוכן פורסם או שובץ, לכל ערוץ */
 async function contentHistory() {
   const r = await rows(
-    `select content_id, channel_id, max(scheduled_at) as last_at
+    `select content_id, channel_id, array_agg(scheduled_at order by scheduled_at) as dates
        from posts
       where content_id is not null
         and status in ('scheduled','approved','publishing','failed','published','pending_approval')
@@ -1543,8 +1549,8 @@ async function contentHistory() {
   );
   const map = new Map();
   for (const x of r) {
-    if (!map.has(x.content_id)) map.set(x.content_id, { lastByChannel: new Map() });
-    map.get(x.content_id).lastByChannel.set(x.channel_id, ymd(new Date(x.last_at)));
+    if (!map.has(x.content_id)) map.set(x.content_id, { datesByChannel: new Map() });
+    map.get(x.content_id).datesByChannel.set(x.channel_id, x.dates.map((d) => ymd(new Date(d))));
   }
   return map;
 }

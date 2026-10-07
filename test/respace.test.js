@@ -99,3 +99,41 @@ test('respaceMoves — השכנים מחוץ לשבוע לא משתנים (המ�
                  settings: rSettings, neighbours, today: '2030-01-06' });
   assert.deepEqual(neighbours.get('1:1'), ['2029-12-20']);
 });
+
+/* ---------- פינוי יום חסום: לא לשעה שעברה, ולא על 22:00 תפוסה ---------- */
+
+// רק שלישי (8.1) פתוח; הפוסט המאושר על שישי החסום
+const onlyTuesday = { ...rCh, blocked_days: [0, 1, 3, 4, 5, 6] };
+const free = { min_gap_days: 0, max_promo_per_day: 1 };
+
+test('respaceMoves — היום: לא לשעה שכבר עברה, אלא לשעה העגולה הבאה', () => {
+  const posts = [rPost(1, '2030-01-11', 'approved')];
+  const now = new Date('2030-01-08T15:30:00');
+  const plan = respaceMoves({ week: rWeek, channels: [onlyTuesday], posts, settings: free,
+                              onlyIllegal: true, now });
+  assert.equal(plan.moves.length, 1);
+  assert.equal(plan.moves[0].dateKey, '2030-01-08');
+  assert.equal(plan.moves[0].hour, 16);
+  assert.ok(plan.moves[0].to > now);
+});
+
+test('respaceMoves — היום אחרי 22:00 אין שעה: הפוסט נשאר ומדווח', () => {
+  const posts = [rPost(1, '2030-01-11', 'approved')];
+  const plan = respaceMoves({ week: rWeek, channels: [onlyTuesday], posts, settings: free,
+                              onlyIllegal: true, now: new Date('2030-01-08T22:10:00') });
+  assert.equal(plan.moves.length, 0);
+  assert.deepEqual(plan.stuck.map((s) => [s.post.id, s.illegal]), [[1, true]]);
+});
+
+test('respaceMoves — 21:00 ו-22:00 תפוסות ביום היחיד: לא נוחת על 22:00 כפול', () => {
+  const posts = [
+    rPost(1, '2030-01-11', 'scheduled', { scheduled_at: '2030-01-11T21:00:00' }),
+    rPost(2, '2030-01-08', 'published', { endpoint_id: 2, scheduled_at: '2030-01-08T21:00:00' }),
+    rPost(3, '2030-01-08', 'published', { endpoint_id: 3, scheduled_at: '2030-01-08T22:00:00' }),
+  ];
+  const plan = respaceMoves({ week: rWeek, channels: [onlyTuesday], posts, settings: free,
+                              onlyIllegal: true, today: '2030-01-06',
+                              now: new Date('2030-01-06T08:00:00') });
+  assert.equal(plan.moves.length, 0);
+  assert.deepEqual(plan.stuck.map((s) => s.post.id), [1]);
+});

@@ -110,7 +110,8 @@ function systemPrompt(user, snap) {
 - **נקודת קצה** = מוצר או יעד שיווקי. לכל אחת חשיבות (importance) שקובעת כמה שטח אוויר מגיע לה.
 - **קמפיין** שייך לנקודת קצה אחת, יש לו חלון תאריכים (חובה) ורשימת ערוצים. לקמפיין אין חשיבות משלו: הנתח שלו נגזר מחשיבות נקודת הקצה מול הקמפיינים שרצים במקביל, אלא אם נקבע לו נתח קבוע (share_pct). לקמפיין יכול להיות גם מרווח משלו בין פוסטים (min_gap_days — ימים לפחות בין שני פוסטים של נקודת הקצה באותו ערוץ); בלעדיו חל המרווח הכללי של המנוע. לנקודת קצה אין תדירות ידנית — התדירות נגזרת מהחשיבות.
 - **תוכן** (זווית) שייך לקמפיין או רץ ברקע (evergreen). לכל זווית יש **גרסה נפרדת לכל ערוץ** —
-  אותו רעיון, ניסוח אחר לפייסבוק ולניוזלטר.
+  אותו רעיון, ניסוח אחר לפייסבוק ולניוזלטר. תוכן חד-פעמי (ברירת המחדל) יוצא **פעם אחת בכל ערוץ**:
+  זווית שכבר יצאה בפייסבוק עדיין תשובץ באינסטגרם (placed_channel_ids ב-get_content). evergreen חוזר באותו ערוץ אחרי reuse_after_days.
 - **פוסט** = תוכן ששובץ בערוץ בתאריך. פוסט בלי תוכן משויך הוא "חסר תוכן".
 - **המנוע** משבץ אוטומטית לפי "חוב אוויר": ותק בלי פרסום, פער מול הנתח שמגיע, וחשיבות.
 
@@ -298,9 +299,15 @@ async function readContent({ campaign_id, endpoint_id, content_id }) {
   const items = await rows(
     `select ci.id, ci.title, ci.kind, ci.campaign_id, ci.endpoint_id, ci.evergreen,
             ci.reuse_after_days, ci.sort_order,
-            coalesce(p.n, 0) as placements
+            coalesce(p.n, 0) as placements,
+            -- הערוצים שבהם כבר יש לו פוסט חי: חד-פעמי לא ישובץ שוב רק בהם
+            coalesce(p.channel_ids, '{}') as placed_channel_ids
        from content_items ci
-       left join (select content_id, count(*)::int as n from posts
+       left join (select content_id, count(*)::int as n,
+                         array_agg(distinct channel_id) filter (where status in
+                           ('scheduled','approved','publishing','failed','published','pending_approval'))
+                           as channel_ids
+                    from posts
                    where content_id is not null group by content_id) p on p.content_id = ci.id
       ${where.length ? `where ${where.join(' and ')}` : ''}
       order by ci.campaign_id nulls last, ci.sort_order, ci.id

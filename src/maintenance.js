@@ -168,11 +168,13 @@ export async function suggestContentSwaps() {
                and ts.meta->>'suggested_content_id' = ci.id::text
                and ts.created_at >= now() - make_interval(days => $6)
           )
+          -- אותו כלל כמו reusable במנוע: חד-פעמי יוצא פעם אחת בכל ערוץ (אי פעם,
+          -- לא רק השבוע); evergreen — רק לא פעמיים באותו שבוע באותו ערוץ
           and not exists (
             select 1 from posts p2
              where p2.content_id = ci.id and p2.channel_id = $1
                and p2.status in ('scheduled','approved','publishing','failed','published','pending_approval')
-               and p2.scheduled_at >= $2 and p2.scheduled_at <= $3
+               and (not ci.evergreen or (p2.scheduled_at >= $2 and p2.scheduled_at <= $3))
           )
         order by e.importance desc, ci.created_at asc
         limit 1`,
