@@ -323,6 +323,41 @@ async function copyCampaign(src, b, { complete = false, templateId = null } = {}
   return { campaign: c, copied: counts };
 }
 
+/** "1.11" — יום.חודש של תאריך YYYY-MM-DD, להודעות */
+const dayMonth = (d) => {
+  const [, m, day] = String(d).slice(0, 10).split('-').map(Number);
+  return `${day}.${m}`;
+};
+
+/**
+ * הרצה חדשה של קמפיין מחזורי (או שכפול של תבנית / הרצה) לא חופפת להרצה
+ * אחרת של אותה סדרה באותה נקודת קצה: זה אותו תוכן, וחפיפה הייתה מוציאה את
+ * אותו טקסט פעמיים. הסדרה = התבנית (template_id ?? id) וכל ההרצות שנוצרו
+ * ממנה. הרצה בלי תאריך סיום (תבנית "פתוחה") לא נבדקת — אין לה חלון.
+ * b — הקמפיין החדש אחרי newCampaignError (starts_on ו-ends_on כבר מחושבים).
+ * @returns {Promise<string|null>} הודעה בעברית עם שם ההרצה החופפת והתאריכים
+ */
+async function runOverlapError(src, b) {
+  if (!src.recurring && src.template_id == null) return null;
+  if (!b.starts_on || !b.ends_on) return null;
+  const root = src.template_id ?? src.id;
+  // נעילת התבנית: שתי הרצות חדשות במקביל לא עוברות שתיהן את הבדיקה
+  await one('select id from campaigns where id = $1 for update', [root]);
+  const clash = await one(
+    `select name, starts_on, ends_on from campaigns
+      where (id = $1 or template_id = $1) and endpoint_id = $2
+        and starts_on is not null and ends_on is not null
+        and starts_on <= $4::date and ends_on >= $3::date
+      order by ends_on desc, id desc limit 1`,
+    [root, b.endpoint_id, b.starts_on, b.ends_on]);
+  if (!clash) return null;
+  const range = `${dayMonth(clash.starts_on)}–${dayMonth(clash.ends_on)}`;
+  const fix = clash.starts_on <= b.starts_on
+    ? `בוחרים תאריך התחלה אחרי ${dayMonth(clash.ends_on)}.`
+    : `בוחרים תקופה שמסתיימת לפני ${dayMonth(clash.starts_on)}.`;
+  return `הסבב החדש חופף לסבב '${clash.name}' (${range}). ${fix}`;
+}
+
 /**
  * שכפול: הטופס נפתח עם ההגדרות של המקור, ומשנים בו מה שרוצים. העותק
  * מתחיל לא "מוכן" ולא מחזורי (ראו copyCampaign).
@@ -341,6 +376,8 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
               ...body, structure: src.structure };
   const err = newCampaignError(b);
   if (err) return bad(res, err);
+  const overlap = await runOverlapError(src, b);
+  if (overlap) return bad(res, overlap, 409);
 
   const out = await copyCampaign(src, b);
   if (out.error) return bad(res, out.error, out.status);
@@ -356,7 +393,8 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
  * החלון החדש. התבנית וההרצות הקודמות לא משתנות.
  *
  * גוף: { starts_on, name?, period?, ends_on?, week? } — period/ends_on כמו
- * בטופס הקמפיין; בלעדיהם אורך התבנית (rerunPeriod).
+ * בטופס הקמפיין; בלעדיהם אורך התבנית (rerunPeriod). הרצה שחופפת לתבנית או
+ * להרצה אחרת שלה — 409 (runOverlapError).
  */
 r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) => {
   const src = await one('select * from campaigns where id = $1', [req.params.id]);
@@ -391,6 +429,8 @@ r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) 
   };
   const err = newCampaignError(b);
   if (err) return bad(res, err);
+  const overlap = await runOverlapError(src, b);
+  if (overlap) return bad(res, overlap, 409);
 
   const out = await copyCampaign(src, b,
     { complete: !!src.content_complete_at, templateId: src.id });
