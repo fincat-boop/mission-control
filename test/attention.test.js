@@ -83,7 +83,7 @@ test('endpointAirStatus — נקודה חדשה בלי פוסטים לא מתר�
   assert.equal(endpointAirStatus({ ...ep, created_at: '2026-10-09T12:00:00Z' }, now), null);
   assert.equal(endpointAirStatus({ ...ep, created_at: '2026-10-03T12:00:00Z' }, now), null); // בדיוק 7
   assert.deepEqual(endpointAirStatus({ ...ep, created_at: '2026-10-01T12:00:00Z' }, now),
-    { days_since: null, days_over: 9 });
+    { days_since: null, days_over: 9, level: 'warn' });
 });
 
 test('endpointAirStatus — נקודה שפרסמה נמדדת מהפרסום האחרון, לא מהיצירה', () => {
@@ -91,7 +91,21 @@ test('endpointAirStatus — נקודה שפרסמה נמדדת מהפרסום ה
   const ep = { importance: 9, created_at: '2025-01-01T00:00:00Z' };
   assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-08T12:00:00Z' }, now), null);
   assert.deepEqual(endpointAirStatus({ ...ep, last_at: '2026-09-30T12:00:00Z' }, now),
-    { days_since: 10, days_over: 10 });
+    { days_since: 10, days_over: 10, level: 'warn' });
+});
+
+test('endpointAirStatus — כיול: מעל הקצב warn, פי שניים crit, ושקט כשפוסט מתוכנן בתוך הקצב', () => {
+  const now = new Date('2026-10-20T12:00:00Z');
+  const ep = { importance: 9, created_at: '2025-01-01T00:00:00Z' }; // קצב 7
+  assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-12T12:00:00Z' }, now).level, 'warn'); // 8
+  assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-07T12:00:00Z' }, now).level, 'warn'); // 13
+  assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-06T12:00:00Z' }, now).level, 'crit'); // 14
+  // פוסט חי מתוכנן בעוד 5 ימים (בתוך הקצב) — בדרך, אין התראה
+  assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-01T12:00:00Z',
+                                   next_at: '2026-10-25T12:00:00Z' }, now), null);
+  // מתוכנן רק בעוד 10 ימים — עדיין מתריעים
+  assert.equal(endpointAirStatus({ ...ep, last_at: '2026-10-01T12:00:00Z',
+                                   next_at: '2026-10-30T12:00:00Z' }, now).level, 'crit');
 });
 
 /* ========================= תאריך מקומי וקבוצות המשימות ========================= */

@@ -84,7 +84,7 @@ export async function buildAlerts(user = null) {
     const cadence = effectiveCadenceDays(e);
     alerts.push({
       id: `endpoint-air-${e.id}`,
-      level: e.days_over >= cadence ? 'crit' : 'warn',
+      level: e.level,
       title: `${e.name} לא מפרסמת`,
       detail: e.days_since === null
         ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, התדירות לפי החשיבות היא כל ${cadence} ימים`
@@ -256,7 +256,8 @@ const heDate = (d) => new Date(d).toLocaleDateString('he-IL');
  *                    (missing_ahead): שורה שהתאריך שלה עבר כבר לא תשובץ, ואין
  *                    טעם לבקש לכתוב לה. קמפיין מוכן — הטיוטות (כולן עוד יכולות
  *                    לצאת עד הסוף).
- *   מפגר אחרי הקצב — רץ, ויצא פחות ממה שהקיבולת שלו (הנדרש) מצפה עד היום.
+ *   מפגר אחרי הקצב — רץ, ויצא (כולל מתוכנן להיום ולא אושר שיצא) פחות ממה
+ *                    שהקיבולת שלו מצפה עד היום — בפער של 2+ ו-20%+ (paceOf).
  *   תוכן שלא ייכנס — רץ או מתוכנן, ויש תוכן בלי פוסט שאין לו מקום עד הסוף
  *                    (unplaced). warn — בלי החלטה הוא פשוט לא יצא.
  *   הסתיים         — עד שבועיים אחרי הסוף, כשנשארו גרסאות מוכנות שלא פורסמו
@@ -299,13 +300,15 @@ export function campaignAlerts(campaigns, today) {
       }
     }
 
-    if (c.phase === 'running' && c.pace?.behind > 0) {
+    // רק פיגור של ממש (paceOf.lagging — 2+ ולפחות 20%), ו"יצאו" כולל מה
+    // שמתוכנן עד היום ומה שלא אושר שיצא (paceDone) — סעיפים 2, 29
+    if (c.phase === 'running' && c.pace?.lagging) {
       alerts.push({
         id: `campaign-pace-${c.id}`,
         level: 'warn',
         title: `מפגר אחרי הקצב: ${c.name}`,
         detail: `לפי המקום שיש לקמפיין בערוצים היו אמורים לצאת עד היום ${c.pace.expected_by_now} ` +
-                `פוסטים, יצאו ${c.pace.published}`,
+                `פוסטים, יצאו או מתוכננים להיום ${c.pace.done ?? c.pace.published}`,
         tab: 'plan',
         campaign_id: c.id,
       });
@@ -428,13 +431,16 @@ export function missingContentAlerts(list, { alertHours = 48, now = new Date() }
  * האם נקודת קצה עברה את הקצב שלה בלי פרסום. null = בסדר.
  * נקודה שעוד לא פורסם ממנה כלום נמדדת מיום שנוספה — אחרת נקודה חדשה
  * מקבלת "לא מפרסמת" חוסם בדקה הראשונה, לפני שהיה לה בכלל סיכוי.
+ * הכיול (סעיף 29): מעל הקצב — warn; פי שניים ממנו — crit; ואין התראה בכלל
+ * כשפוסט חי שלה מתוכנן בתוך הקצב הקרוב (next_at) — היא כבר בדרך.
  */
 export function endpointAirStatus(e, now = new Date()) {
   const cadence = effectiveCadenceDays(e);
   const daysSince = e.last_at ? Math.floor((now - new Date(e.last_at)) / DAY) : null;
   const daysRef = daysSince ?? (e.created_at ? Math.floor((now - new Date(e.created_at)) / DAY) : 999);
   if (daysRef <= cadence) return null;
-  return { days_since: daysSince, days_over: daysRef };
+  if (e.next_at && (new Date(e.next_at) - now) / DAY <= cadence) return null;
+  return { days_since: daysSince, days_over: daysRef, level: daysRef >= 2 * cadence ? 'crit' : 'warn' };
 }
 
 /**
@@ -443,10 +449,20 @@ export function endpointAirStatus(e, now = new Date()) {
  * (החלטה ה1 — הוא לא מסומן אוטומטית, אבל גם לא מפיל את הנקודה ל"לא מפרסמת").
  */
 async function endpointsWithoutAir() {
+  // next_at — הפוסט החי הבא שלה (ערוץ פעיל, קמפיין לא מושהה): בתוך הקצב = בדרך
   const list = await rows(
     `select e.id, e.name, e.importance, e.created_at,
             max(case when p.status = 'published' then p.published_at
-                     else p.scheduled_at end) as last_at
+                     else p.scheduled_at end) as last_at,
+            (select min(n.scheduled_at) from posts n
+               join channels nc on nc.id = n.channel_id and nc.active
+              where n.endpoint_id = e.id
+                and n.status in ('scheduled', 'approved', 'pending_approval', 'publishing')
+                and n.scheduled_at >= now()
+                and not exists (select 1 from content_items nci
+                                  join campaigns nca on nca.id = nci.campaign_id
+                                 where nci.id = n.content_id and nca.paused_at is not null)
+            ) as next_at
        from endpoints e
        left join posts p on p.endpoint_id = e.id
                         and (p.status = 'published' or ${UNCONFIRMED_SQL})

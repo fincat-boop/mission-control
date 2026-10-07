@@ -465,3 +465,75 @@ test('27 — המונה סופר רק "דורש טיפול" (היום/באיחו
   assert.ok(!g.done_this_week.some((x) => x.id === t.expired));
   assert.deepEqual(g.expired_this_week.map((x) => x.id), [t.expired]);
 });
+
+/* ========================= 29 + קבלה: שבוע ידני רגיל ========================= */
+
+test('29 — נקודה לא מפרסמת: שקט כשפוסט חי מתוכנן בתוך הקצב; warn מעל הקצב; crit בכפול', { skip }, async () => {
+  const day = 60 * 24;
+  const ep = async (n) => (await q1(
+    "insert into endpoints (name, importance, created_at) values ($1, 9, now() - interval '60 days') returning id",
+    [n])).id; // חשיבות 9 → כל 7 ימים
+  const coming = await ep('בדרך');
+  const warn = await ep('מעל הקצב');
+  const crit = await ep('בכפול');
+  await post({ title: 'פורסם מזמן', endpoint: coming, at: -20 * day, status: 'published', channel: ids.wa });
+  await post({ title: 'בעוד 3 ימים', endpoint: coming, at: 3 * day, channel: ids.wa });
+  await inOrg(() => db.query(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, published_at, status) values
+       ($1, $2, 'לפני 9 ימים', 'value', now() - interval '9 days', now() - interval '9 days', 'published'),
+       ($1, $3, 'לפני 15 יום', 'value', now() - interval '15 days', now() - interval '15 days', 'published')`,
+    [ids.wa, warn, crit]));
+  const { buildAlerts } = await import('../src/alerts.js');
+  const { alerts } = await inOrg(() => buildAlerts(null));
+  const level = (id) => alerts.find((a) => a.id === `endpoint-air-${id}`)?.level ?? null;
+  assert.equal(level(coming), null);
+  assert.equal(level(warn), 'warn');
+  assert.equal(level(crit), 'crit');
+});
+
+test('קבלה — שבוע ידני רגיל (25 פוסטים, רובם לא סומנו): התראה מרוכזת אחת, משימות להיום, בלי "לא מפרסמת" חוסם ובלי קצב', { skip }, async () => {
+  await freshOrg('manual-week-test');
+  const runner = await import('../src/publish/runner.js');
+  const { buildAlerts } = await import('../src/alerts.js');
+  // קמפיין שרץ (התחיל לפני שבוע, נגמר בעוד שלושה) על שני הערוצים, וכל פוסט עם תוכן משלו
+  const camp = (await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure)
+     values ($1, 'השקה', current_date - 7, current_date + 21, 'general') returning id`, [ids.ep])).id;
+  await inOrg(async () => {
+    for (const ch of [ids.fb, ids.wa]) {
+      await db.query('insert into campaign_channels (campaign_id, channel_id) values ($1,$2)', [camp, ch]);
+    }
+  });
+  const item = async (i, ch, ep, campaign) => {
+    const c = (await q1(
+      `insert into content_items (endpoint_id, kind, title, campaign_id, slot_channel_id, sort_order)
+       values ($1,'value',$2,$3,$4,$5) returning id`, [ep, `פריט ${i}`, campaign, campaign ? ch : null, i])).id;
+    await inOrg(() => db.query(
+      "insert into content_variants (content_id, channel_id, status, body) values ($1,$2,'ready','טקסט')", [c, ch]));
+    return c;
+  };
+  // 25 פוסטים, מ-7 ימים אחורה ועד 7 קדימה, בשני הערוצים ובשתי הנקודות; 3 סומנו "פורסם"
+  const todays = [];
+  for (let i = 0; i < 25; i += 1) {
+    const d = -7 + Math.floor(i * 14 / 25);
+    const ch = i % 2 ? ids.wa : ids.fb;
+    const ep = i % 3 === 0 ? ids.ep2 : ids.ep;
+    const content = await item(i, ch, ep, ep === ids.ep ? camp : null);
+    const when = dayAt(10 + (i % 8), d);
+    const marked = d < 0 && i % 7 === 0;
+    const id = await post({ title: `פוסט ${i}`, channel: ch, endpoint: ep, content,
+      at: minutesUntil(when), status: marked ? 'published' : 'scheduled' });
+    if (marked) await inOrg(() => db.query('update posts set published_at = scheduled_at where id = $1', [id]));
+    if (d === 0) todays.push(id);
+  }
+
+  await runner.manualPublishPrep(org, dayAt(8));
+  for (const id of todays) assert.equal((await dayTasks(id)).length, 1, `משימה להיום לפוסט ${id}`);
+
+  const { alerts } = await inOrg(() => buildAlerts(null));
+  const ids2 = alerts.map((a) => `${a.id}:${a.level}`);
+  assert.equal(alerts.filter((a) => a.id === 'unconfirmed').length, 1, ids2.join(' | '));
+  assert.ok(!alerts.some((a) => a.id.startsWith('endpoint-air-') && a.level === 'crit'), ids2.join(' | '));
+  assert.ok(!alerts.some((a) => a.id === `campaign-pace-${camp}`), ids2.join(' | '));
+  assert.ok(!alerts.some((a) => a.id.startsWith('post-missed-')));
+});

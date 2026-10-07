@@ -877,7 +877,7 @@ export async function campaignsWithHealth() {
       status: statusOf({ c, today, grid, myChannels, ahead, noRoom, unplaced: room.unplaced }),
       // למה אין לקמפיין משבצות (null = יש) — המסך מסביר את זה במקום "אין תאריכים"
       no_room_reason: noRoom,
-      pace: paceOf(c, today, paceDone(myPosts, channelById), grid),
+      pace: paceOf(c, today, paceDone(myPosts, channelById, { today }), grid),
       content: shaped,
       grid: grid.angles,
       // זוויות שאין להן מקום ברשת (מעבר לתכנון / כפולות) — מוצגות מתחת לה
@@ -955,39 +955,53 @@ function baseStatus({ c, today, grid, myChannels, ahead, noRoom }) {
 }
 
 /**
- * כמה מהפוסטים של הקמפיין נספרים "יצאו" לקצב: מה שפורסם, וגם מה שלא אושר
- * שיצא — מתוכנן/מאושר שהמועד שלו עבר לפני יותר מחצי שעה, בערוץ פעיל שאינו
- * ניוזלטר (UNCONFIRMED_SQL ב-unconfirmed.js). לא ידוע ≠ לא יצא: כמעט הכול
- * מתפרסם ביד ולא מסומן (החלטה ה1 — לא מסמנים אוטומטית, רק לא מפילים את הקצב).
- * channelById — הערוצים לפי מזהה (active, platform).
+ * כמה מהפוסטים של הקמפיין נספרים "יצאו" לקצב (טהורה):
+ *   - מה שפורסם, או בפרסום ברגע זה;
+ *   - מה שמתוכנן/מאושר עד היום (כולל מאוחר יותר היום) בערוץ פעיל — היום
+ *     עוד לא נגמר, והוא בדרך;
+ *   - מה שלא אושר שיצא (UNCONFIRMED_SQL ב-unconfirmed.js): מתוכנן/מאושר
+ *     מיום שעבר, בערוץ פעיל שאינו ניוזלטר. לא ידוע ≠ לא יצא — כמעט הכול
+ *     מתפרסם ביד ולא מסומן (החלטה ה1: לא מסמנים אוטומטית, רק לא מפילים את הקצב).
+ * channelById — הערוצים לפי מזהה (active, platform). today — 'YYYY-MM-DD' מקומי.
  */
-export function paceDone(myPosts, channelById, now = new Date()) {
+export function paceDone(myPosts, channelById, { now = new Date(), today = ymd(now) } = {}) {
   const cutoff = now.getTime() - 30 * 60000;
   return myPosts.filter((p) => {
-    if (p.status === 'published') return true;
+    if (['published', 'publishing'].includes(p.status)) return true;
     if (!['scheduled', 'approved'].includes(p.status) || p.published_at) return false;
     const ch = channelById.get(p.channel_id);
-    return !!ch?.active && ch.platform !== 'newsletter' &&
-      new Date(p.scheduled_at).getTime() < cutoff;
+    if (!ch?.active) return false;
+    const day = ymd(new Date(p.scheduled_at));
+    if (day === today) return true;
+    return day < today && ch.platform !== 'newsletter' && new Date(p.scheduled_at).getTime() < cutoff;
   }).length;
 }
+
+/** מתחת לזה הפיגור הוא רעש (פוסט אחד שזז יום), לא בעיה — סעיף 29 */
+export const PACE_MIN_BEHIND = 2;
+export const PACE_MIN_SHARE = 0.2;
 
 /**
  * האם הקמפיין עומד בקצב, ביחס לזמן שכבר עבר ממנו. היעד = הנדרש ברשת
  * (grid.total_cells), כלומר הקיבולת שהמנוע באמת יכול לשבץ (channelCapacity),
  * או מה שנכתב בקמפיין מוכן — לא תדירות שמוגדרת על הקמפיין.
+ * done — paceDone (פורסם + מתוכנן עד היום + לא אושר שיצא).
+ * lagging — מתריעים רק מפיגור של PACE_MIN_BEHIND פוסטים ולפחות 20% מהצפוי.
  */
-export function paceOf(c, today, published, grid) {
+export function paceOf(c, today, done, grid) {
   if (!c.starts_on || !c.ends_on || c.starts_on > today || grid.total_cells === 0) return null;
   const end = c.ends_on < today ? c.ends_on : today;
   const elapsed = daysBetween(c.starts_on, end);
   const span = daysBetween(c.starts_on, c.ends_on);
   const expected = Math.floor(grid.total_cells * (elapsed / span));
+  const behind = Math.max(0, expected - done);
   return {
     elapsed_days: elapsed,
     expected_by_now: expected,
-    published,
-    behind: Math.max(0, expected - published),
+    done,
+    published: done, // שם ישן — אותו מספר
+    behind,
+    lagging: behind >= PACE_MIN_BEHIND && behind >= expected * PACE_MIN_SHARE,
   };
 }
 
