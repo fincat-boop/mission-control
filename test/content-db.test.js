@@ -361,3 +361,43 @@ test('פרסום עם תגובה ראשונה: הפוסט נרשם "פורסם" 
   assert.equal(task.done, false);
   assert.match(task.subtitle, /הקישור בתגובה/);
 });
+
+test('משבצת בקמפיין כללי: שדות הפרסום נשמרים ביצירה ובעריכה, קישור לא תקין נדחה', { skip }, async () => {
+  // יצירה עם meta — קישור לבד מספיק ל"מוכן" בפייסבוק
+  let r = await call('POST', '/content', {
+    title: 'עם קישור', kind: 'value', campaign_id: ids.general, slot_channel_id: ids.fb,
+    sort_order: 70, body: '', status: 'ready',
+    meta: { link: 'https://fincat.co.il/x', first_comment: 'תגובה' } });
+  assert.equal(r.status, 201, JSON.stringify(r.json));
+  const id = r.json.content.id;
+  assert.deepEqual((await variant(id, ids.fb)).meta, { link: 'https://fincat.co.il/x', first_comment: 'תגובה' });
+
+  r = await call('POST', '/content', {
+    title: 'רע', kind: 'value', campaign_id: ids.general, slot_channel_id: ids.fb,
+    sort_order: 71, body: 'x', meta: { link: 'javascript:alert(1)' } });
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /הקישור לא תקין/);
+
+  // עריכה: meta לבד מתעדכן, הטקסט והמצב נשארים; בלי meta — לא נוגעים בקיים
+  r = await call('PATCH', `/content/${id}`, { meta: { alt_text: 'תיאור' } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  let v = await variant(id, ids.fb);
+  assert.deepEqual(v.meta, { alt_text: 'תיאור' });
+  assert.equal(v.status, 'ready');
+  r = await call('PATCH', `/content/${id}`, { title: 'עם קישור', body: 'טקסט', status: 'ready' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  v = await variant(id, ids.fb);
+  assert.deepEqual(v.meta, { alt_text: 'תיאור' });
+  assert.equal(v.body, 'טקסט');
+  r = await call('PATCH', `/content/${id}`, { meta: { link: 'ftp://x' } });
+  assert.equal(r.status, 400);
+
+  // אינסטגרם: סטורי עם שני קבצים לא עובר ל"מוכן" (meta שנשלח באותה בקשה נבדק)
+  const ig = (await call('POST', '/content', {
+    title: 'סטורי', kind: 'value', campaign_id: ids.general, slot_channel_id: ids.ig,
+    sort_order: 70, body: '', status: 'draft' })).json.content.id;
+  for (const name of ['a.png', 'b.png']) await uploadBytes(ig, name);
+  r = await call('PATCH', `/content/${ig}`, { status: 'ready', meta: { format: 'story' } });
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /סטורי יוצא עם תמונה או סרטון אחד/);
+});

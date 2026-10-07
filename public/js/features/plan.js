@@ -1140,6 +1140,22 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   // הפוסט שהטופס עורך — מתעדכן אחרי השמירה הראשונה (גם כשקבצים נכשלו אחריה)
   let saved = item;
   let filesChanged = false;
+  // שדות הפרסום הנוספים (ui/variantExtras.js) — אותם אזורים כמו בעורך הגרסאות.
+  // baseMeta — ה-meta השמור; נשלח רק כשהאזורים השתנו
+  const platform = channel?.platform;
+  const slotAssets = [...(item?.assets ?? []), ...(item?.variant_assets ?? [])];
+  let baseMeta = v?.meta ?? null;
+  let extras = pickExtras(baseMeta);
+  const paintNote = () => paintCaptionNote($('#vnote'), {
+    platform, text: $('#gen_body')?.value ?? '', meta: extras, files: slotAssets, repaint: () => paintNote() });
+  /** האזורים מחדש — אחרי טעינת גרסה שמורה (409) */
+  const resetExtras = (meta) => {
+    baseMeta = meta ?? null;
+    extras = pickExtras(baseMeta);
+    $('#vextras').innerHTML = extrasHtml({ platform, meta: extras, files: slotAssets });
+    $('#gen___meta').value = extrasKey(extras);
+    paintNote();
+  };
 
   openGeneric({
     guardDirty: true,
@@ -1153,9 +1169,17 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
         value: item?.kind },
       ...(mail ? [] : [
-        { name: 'body', label: `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'ערוץ'}`,
+        { name: 'body', label: platform === 'instagram'
+            ? `הכיתוב — הטקסט שמופיע מתחת לפוסט ב${channel?.name ?? 'אינסטגרם'}`
+            : `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'ערוץ'}`,
           type: 'textarea', value: v?.body ?? item?.body },
+        { name: '__note', type: 'html',
+          html: '<div class="vnote" id="vnote" aria-live="polite" hidden></div>' },
         { name: '__files', label: 'תמונות, סרטונים ומסמכים', type: 'files', existing: files },
+        { name: '__extras', type: 'html', html: `<div class="vextras" id="vextras">${
+          extrasHtml({ platform, meta: extras, files: slotAssets })}</div>` },
+        // מפתח האזורים — כדי ש"לסגור בלי לשמור?" יתפוס גם שינוי בהם
+        { name: '__meta', type: 'hidden', hidden: true, value: extrasKey(extras) },
         { name: 'status', label: 'מצב', type: 'radio',
           options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום']],
           value: v?.status === 'ready' ? 'ready' : 'draft' },
@@ -1173,7 +1197,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
       const body = mail
         ? { title: val.title, kind: val.kind, week: state.week }
         : { title: val.title, kind: val.kind, body: val.body ?? '',
-            status: val.status, week: state.week };
+            status: val.status, week: state.week,
+            ...(extrasKey(extras) !== extrasKey(baseMeta) ? { meta: mergeExtras(baseMeta, extras) } : {}) };
 
       // פוסט קיים: קבצים קודם — "מוכן" נבדק מול המדיה שכבר עלתה
       if (saved && picked.length) await uploadPicked(saved.id, picked);
@@ -1196,12 +1221,14 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           const st = cur?.status === 'ready' ? 'ready' : 'draft';
           $(`[name="gen_status"][value="${st}"]`).checked = true;
           base = cur?.updated_at ?? null;
+          resetExtras(cur?.meta);
         });
       }
       const created = !saved;
       // מכאן הטופס עורך את מה שנשמר: "שמור" שוב לא יוצר פוסט כפול במשבצת תפוסה
       saved = res.content;
       base = res.variant?.updated_at ?? base;
+      if (res.variant) baseMeta = res.variant.meta ?? null;
       const fills = [res];
       if (created) $('#genTitle').textContent = `${channel?.name ?? ''} · פוסט ${index}`;
       if (created && picked.length) {
@@ -1236,6 +1263,19 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         b.addEventListener('click', run(async () => {
           if (await deleteAssetAsk(b)) filesChanged = true;
         })));
+      if (!mail) {
+        wireExtras($('#vextras'), {
+          files: () => slotAssets,
+          keep: () => extras,
+          onChange: () => {
+            extras = pickExtras({ ...extras, ...readExtras($('#vextras')) });
+            $('#gen___meta').value = extrasKey(extras);
+            paintNote();
+          },
+        });
+        $('#gen_body').addEventListener('input', paintNote);
+        paintNote();
+      }
       $('#genLinkOne')?.addEventListener('click', run(async () => {
         if (await closeGeneric()) openLinkOne(campaign, saved ?? item, reload);
       }));

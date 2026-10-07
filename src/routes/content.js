@@ -448,8 +448,13 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
 
   // משבצת חדשה שנשלחת כ"מוכן" — אותם כללי תוכן כמו בעריכת גרסה. אין לה
   // עדיין קבצים (הם עולים אחרי היצירה), ולכן הטופס שולח קודם טיוטה כשיש קבצים.
+  // שדות הפרסום הנוספים (סוג פרסום, תגובה ראשונה...) — רק למשבצת, שיש לה גרסה
+  const slotMeta = slotChannel && b.meta != null ? b.meta : null;
+  const metaErr = metaExtrasError(slotMeta);
+  if (metaErr) return bad(res, metaErr);
   if (slotChannel && b.status === 'ready') {
-    const check = await readyCheck(null, slotChannel, { body: b.body ?? '' }, false, { assets: [] });
+    const check = await readyCheck(null, slotChannel, { body: b.body ?? '', meta: slotMeta },
+      false, { assets: [] });
     if (check.error) return bad(res, check.error);
   }
 
@@ -472,9 +477,10 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   if (slotChannel) {
     // הגרסה היחידה של הפריט — לאותה מדיה. הטקסט שלה הוא הטקסט של הפריט.
     const variant = await one(
-      `insert into content_variants (content_id, channel_id, body, status)
-       values ($1,$2,coalesce($3,''),$4) returning *`,
-      [c.id, slotChannel, b.body ?? null, b.status === 'ready' ? 'ready' : 'draft']
+      `insert into content_variants (content_id, channel_id, body, status, meta)
+       values ($1,$2,coalesce($3,''),$4,$5::jsonb) returning *`,
+      [c.id, slotChannel, b.body ?? null, b.status === 'ready' ? 'ready' : 'draft',
+       slotMeta ? JSON.stringify(slotMeta) : null]
     );
     // קישור עמודות של הקמפיין: הפוסט מועתק למשבצת הפנויה הבאה בעמודות היעד
     const copied = await autoLinkNew(c.id);
@@ -537,7 +543,12 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   let warn = null;
   // המצב של המשבצת לפני העריכה — המצב עובר לקבוצה המקושרת רק כשהוא השתנה
   let statusBefore = null;
-  if (current.slot_channel_id && !leavingSlot && (b.body !== undefined || b.status !== undefined)) {
+  // meta — שדות הפרסום הנוספים של המשבצת; לא נשלח = לא נוגעים בקיים
+  const slotMeta = current.slot_channel_id && b.meta != null ? b.meta : null;
+  const metaErr = metaExtrasError(slotMeta);
+  if (metaErr) return bad(res, metaErr);
+  const touchesVariant = b.body !== undefined || b.status !== undefined || slotMeta != null;
+  if (current.slot_channel_id && !leavingSlot && touchesVariant) {
     const v = await one(
       `select id, body, status, meta, updated_at from content_variants
         where content_id = $1 and channel_id = $2 for update`,
@@ -547,7 +558,7 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
     const status = ['ready', 'draft'].includes(b.status) ? b.status : (v?.status ?? 'draft');
     if (status === 'ready') {
       const check = await readyCheck(current.id, current.slot_channel_id, {
-        body: b.body !== undefined ? (b.body ?? '') : (v?.body ?? ''), meta: v?.meta ?? null,
+        body: b.body !== undefined ? (b.body ?? '') : (v?.body ?? ''), meta: slotMeta ?? v?.meta ?? null,
       }, v?.status === 'ready');
       if (check.error) return bad(res, check.error);
       warn = check.warn;
@@ -592,21 +603,23 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
 
   // משבצת בקמפיין כללי: הטקסט והמצב נשמרים גם על הגרסה היחידה שלה,
   // כדי שהטופס הפשוט יישמר בבקשה אחת
-  if (c.slot_channel_id && (b.body !== undefined || b.status !== undefined)) {
+  if (c.slot_channel_id && touchesVariant) {
     await query(
-      `insert into content_variants (content_id, channel_id, body, status)
-       values ($1,$2,coalesce($3,''),coalesce($4,'draft'))
+      `insert into content_variants (content_id, channel_id, body, status, meta)
+       values ($1,$2,coalesce($3,''),coalesce($4,'draft'),$5::jsonb)
        on conflict (content_id, channel_id)
          do update set body = coalesce($3, content_variants.body),
-                       status = coalesce($4, content_variants.status)`,
+                       status = coalesce($4, content_variants.status),
+                       meta = coalesce($5::jsonb, content_variants.meta)`,
       [c.id, c.slot_channel_id, b.body !== undefined ? (b.body ?? '') : null,
-       ['ready', 'draft'].includes(b.status) ? b.status : null]
+       ['ready', 'draft'].includes(b.status) ? b.status : null,
+       slotMeta ? JSON.stringify(slotMeta) : null]
     );
   }
   // משבצת מקושרת: התוכן (כותרת, סוג, טקסט, מצב) אחד לכל הקבוצה — עריכה
   // מכל משבצת בה עוברת לכולן. המיקום (משבצת, קמפיין) נשאר של כל אחת.
   let downgraded = [];
-  if (['title', 'kind', 'body', 'status'].some((k) => b[k] !== undefined)) {
+  if (['title', 'kind', 'body', 'status'].some((k) => b[k] !== undefined) || slotMeta != null) {
     ({ downgraded } = await syncFrom(c.id, {
       statusChanged: ['ready', 'draft'].includes(b.status) && b.status !== statusBefore,
     }));
