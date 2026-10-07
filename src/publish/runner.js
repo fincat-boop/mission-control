@@ -221,6 +221,10 @@ export function publishBlocker({ post, variant, assets }) {
   // כמו בסימון "מוכן" (readiness.js)
   const missing = contentBlocker({ platform: post.platform, variant, assets });
   if (missing) return missing;
+  // סטורי בפייסבוק — אין לו מסלול אוטומטי; לא יוצא כפוסט רגיל בטעות
+  if (post.platform === 'facebook' && isStory(variant)) {
+    return 'סטורי בפייסבוק לא מתפרסם אוטומטית — מפרסמים ידנית ומסמנים "פורסם"';
+  }
   const media = postMedia({ variant, assets });
   const cover = post.platform === 'instagram' ? coverAsset({ variant, assets }) : null;
   if (post.platform === 'instagram' && !publicAssetsReady()) {

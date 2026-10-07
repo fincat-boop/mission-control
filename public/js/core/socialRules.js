@@ -15,12 +15,14 @@ export const IG_FEED_RATIO = { min: 0.8, max: 1.91 };
 export const EXTRA_KEYS = ['format', 'cover_asset_id', 'cover_offset_sec',
                            'first_comment', 'alt_text', 'link'];
 
-/** אילו אזורים מופיעים בערוץ. ערוץ בלי פלטפורמה (ידני, וואטסאפ) — אף אחד */
-export function extrasFor(platform) {
-  if (platform === 'instagram') return ['format', 'cover', 'first_comment', 'alt_text'];
-  if (platform === 'facebook') return ['link', 'first_comment', 'alt_text'];
-  return [];
-}
+/**
+ * אילו אזורים מופיעים בעורך: כולם, בכל ערוץ (חוץ מניוזלטר, שנכתב בעורך
+ * המייל) — בלי להתאים ערוץ-ערוץ בהגדרות; ממלאים רק את מה שרלוונטי לפוסט.
+ * הפרסום האוטומטי משתמש רק במה שהפלטפורמה שלו תומכת בו; בערוץ ידני הכול
+ * מוצג בתצוגת הפוסט, למי שמפרסם.
+ */
+export const EXTRA_SECTIONS = ['format', 'cover', 'link', 'first_comment', 'alt_text'];
+export const extrasFor = (platform) => (platform === 'newsletter' ? [] : EXTRA_SECTIONS);
 
 export const countHashtags = (s) => (String(s ?? '').match(/#[\p{L}\p{N}_]+/gu) ?? []).length;
 export const countMentions = (s) =>
@@ -82,7 +84,7 @@ export function extraSummary(key, meta, files = []) {
   if (key === 'format') {
     return m.format === 'story'
       ? { text: 'סטורי', set: true }
-      : { text: 'פוסט רגיל — ריל או קרוסלה לפי הקבצים', set: false };
+      : { text: 'פוסט רגיל', set: false };
   }
   if (key === 'cover') {
     if (m.format === 'story') return { text: 'אין שער בסטורי', set: false };
@@ -94,11 +96,11 @@ export function extraSummary(key, meta, files = []) {
   }
   if (key === 'link') {
     try {
-      return m.link ? { text: new URL(m.link).hostname, set: true } : { text: 'אין', set: false };
+      return m.link ? { text: new URL(m.link).hostname, set: true } : { text: 'לא בשימוש', set: false };
     } catch {
       return { text: 'קישור לא תקין', set: true };
     }
   }
   const v = key === 'first_comment' ? m.first_comment : m.alt_text;
-  return v?.trim() ? { text: short(v), set: true } : { text: 'אין', set: false };
+  return v?.trim() ? { text: short(v), set: true } : { text: 'לא בשימוש', set: false };
 }

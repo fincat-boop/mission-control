@@ -213,10 +213,21 @@ test('publishInstagramPost — שער מקובץ ישן: עותק זמני צי�
 
 /* ========================= העורך (החלק הטהור) ========================= */
 
-test('extrasFor — אזורים לפי פלטפורמה; ידני/וואטסאפ/ניוזלטר — בלי', () => {
-  assert.deepEqual(extrasFor('instagram'), ['format', 'cover', 'first_comment', 'alt_text']);
-  assert.deepEqual(extrasFor('facebook'), ['link', 'first_comment', 'alt_text']);
-  for (const p of ['manual', 'whatsapp', 'newsletter']) assert.deepEqual(extrasFor(p), []);
+test('extrasFor — כל האזורים בכל ערוץ, בלי התאמה בהגדרות; ניוזלטר — בעורך המייל', () => {
+  const all = ['format', 'cover', 'link', 'first_comment', 'alt_text'];
+  for (const p of ['instagram', 'facebook', 'whatsapp', 'manual', undefined]) assert.deepEqual(extrasFor(p), all);
+  assert.deepEqual(extrasFor('newsletter'), []);
+});
+
+test('publishBlocker — סטורי בפייסבוק לא יוצא אוטומטית (ולא כפוסט רגיל בטעות)', async () => {
+  const { publishBlocker } = await import('../src/publish/runner.js');
+  const p = {
+    post: { platform: 'facebook', channel_name: 'פייסבוק', access_token_enc: 'x', page_id: '9', content_id: 1 },
+    variant: { status: 'ready', body: 'טקסט', meta: { format: 'story' } }, assets: [],
+  };
+  assert.match(publishBlocker(p), /סטורי בפייסבוק לא מתפרסם אוטומטית/);
+  p.variant.meta = {};
+  assert.equal(publishBlocker(p), null);
 });
 
 test('pickExtras / mergeExtras — ריק לא נשמר, שדות של אחרים לא נמחקים', () => {
@@ -241,5 +252,5 @@ test('captionCounts / badFeedRatio / extraSummary', () => {
   assert.equal(extraSummary('cover', {}, [img(2)]).text, 'רק לפוסט עם סרטון');
   assert.equal(captionCounts('שלום')[0].text, '4 מתוך 2,200 תווים');
   assert.equal(extraSummary('link', { link: 'https://fincat.co.il/a' }).text, 'fincat.co.il');
-  assert.deepEqual(extraSummary('first_comment', {}), { text: 'אין', set: false });
+  assert.deepEqual(extraSummary('first_comment', {}), { text: 'לא בשימוש', set: false });
 });

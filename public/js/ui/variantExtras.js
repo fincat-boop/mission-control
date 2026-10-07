@@ -6,31 +6,52 @@ import {
 
 /**
  * האזורים המקופלים בעורך הגרסאות — מה שאפשר להוסיף לפוסט מעבר לטקסט
- * ולקבצים, לפי הפלטפורמה של הערוץ (core/socialRules.js). כל אזור סגור,
- * ובשורה שלו סיכום של מה שהוגדר; ערוץ בלי פלטפורמה — אין אזורים.
+ * ולקבצים (core/socialRules.js) — כולם בכל ערוץ. כל אזור סגור, ובשורה שלו
+ * סיכום של מה שהוגדר ("לא בשימוש" = לא מולא). ההסברים לפי הפלטפורמה.
  *
  * שכבה 2: תלוי רק ב-core. העורך (features/plan.js) מחזיק את המצב ושומר.
  */
 
 const LABELS = {
-  format: 'סוג פרסום', cover: 'שער לריל', first_comment: 'תגובה ראשונה',
+  format: 'סוג פרסום', cover: 'שער לסרטון', first_comment: 'תגובה ראשונה',
   alt_text: 'תיאור תמונה', link: 'קישור',
 };
 
-const COMMENT_HINT = {
-  instagram: 'נכתבת מיד אחרי הפרסום. מתאים להאשטגים, כדי שהכיתוב יישאר נקי.',
-  facebook: 'נכתבת בשם העמוד מיד אחרי הפרסום. מתאים לקישור — פוסט שהקישור בגוף שלו מקבל פחות חשיפה.',
+// מה קורה עם כל שדה בפרסום — לפי הפלטפורמה; ערוץ ידני: מוצג למי שמפרסם
+const MANUAL_HINT = 'בערוץ הזה מפרסמים ידנית — מופיע בתצוגת הפוסט בלוח, להעתקה.';
+const AUTO_COMMENT = ' אם החיבור בלי הרשאה לתגובות — הפוסט יוצא בכל זאת, ונפתחת משימה להוסיף את התגובה ידנית.';
+const HINTS = {
+  format: {
+    instagram: 'סטורי נשלח לאינסטגרם אוטומטית.',
+    facebook: 'סטורי בפייסבוק לא נשלח אוטומטית — מסומן לפרסום ידני.',
+  },
+  cover: { instagram: 'תמונה שנבחרה כשער לא יוצאת כחלק מהפוסט.' },
+  link: {
+    facebook: 'בפוסט בלי תמונה — פייסבוק מציג כרטיס עם תצוגה מקדימה של הקישור. עם תמונה או סרטון — הקישור נוסף לסוף הטקסט.',
+    instagram: 'באינסטגרם קישור בכיתוב לא לחיץ ולא נשלח — מופיע בתצוגת הפוסט בלוח.',
+  },
+  first_comment: {
+    instagram: `נכתבת מיד אחרי הפרסום. מתאים להאשטגים, כדי שהכיתוב יישאר נקי.${AUTO_COMMENT}`,
+    facebook: `נכתבת בשם העמוד מיד אחרי הפרסום. מתאים לקישור — פוסט שהקישור בגוף שלו מקבל פחות חשיפה.${AUTO_COMMENT}`,
+  },
+  alt_text: {
+    instagram: 'מה רואים בתמונה, למי שמשתמש בקורא מסך. נשלח בפוסט עם תמונה אחת.',
+    facebook: 'מה רואים בתמונה, למי שמשתמש בקורא מסך. נשלח בפוסט עם תמונה אחת.',
+  },
 };
+const hint = (key, platform) => HINTS[key]?.[platform] ??
+  (key === 'cover' ? 'תמונה שנבחרה כשער לא יוצאת כחלק מהפוסט.' : MANUAL_HINT);
 
 function sectionBody(key, platform, meta, files) {
   if (key === 'format') {
     const story = meta.format === 'story';
     return `<div class="checks vx-radios" role="radiogroup" aria-label="סוג פרסום">
         <label><input type="radio" name="vx_format" value="" ${story ? '' : 'checked'}>
-          <span>פוסט רגיל<span class="d">תמונה — פוסט · סרטון — ריל · כמה קבצים — קרוסלה</span></span></label>
+          <span>פוסט רגיל<span class="d">באינסטגרם: תמונה — פוסט · סרטון — ריל · כמה קבצים — קרוסלה</span></span></label>
         <label><input type="radio" name="vx_format" value="story" ${story ? 'checked' : ''}>
-          <span>סטורי<span class="d">קובץ אחד, בלי כיתוב, נעלם אחרי 24 שעות</span></span></label>
-      </div>`;
+          <span>סטורי<span class="d">קובץ אחד, נעלם אחרי 24 שעות</span></span></label>
+      </div>
+      <div class="fhint">${esc(hint(key, platform))}</div>`;
   }
   if (key === 'cover') {
     if (!files.some((a) => isVideo(a.mime))) {
@@ -38,7 +59,7 @@ function sectionBody(key, platform, meta, files) {
     }
     const images = files.filter((a) => isImage(a.mime));
     const cur = String(meta.cover_asset_id ?? '');
-    return `<select id="vx_cover" aria-label="שער לריל">
+    return `<select id="vx_cover" aria-label="שער לסרטון">
         <option value="">פריים מתוך הסרטון</option>
         ${images.map((a) => `<option value="${a.id}"${String(a.id) === cur ? ' selected' : ''}>
           תמונה: ${esc(a.filename)}</option>`).join('')}
@@ -50,24 +71,22 @@ function sectionBody(key, platform, meta, files) {
         <input id="vx_offset" type="number" min="0" step="0.5" value="${esc(meta.cover_offset_sec ?? '')}"
                placeholder="0">
       </div>
-      <div class="fhint">תמונה שנבחרה כשער לא יוצאת כחלק מהפוסט.${images.length ? ''
+      <div class="fhint">${esc(hint(key, platform))}${images.length ? ''
         : ' כדי לבחור תמונה — מוסיפים אותה לקבצים ושומרים.'}</div>`;
   }
   if (key === 'first_comment') {
     return `<textarea id="vx_comment" aria-label="תגובה ראשונה">${esc(meta.first_comment ?? '')}</textarea>
-      <div class="fhint">${COMMENT_HINT[platform] ?? ''} אם החיבור בלי הרשאה לתגובות — הפוסט
-        יוצא בכל זאת, ונפתחת משימה להוסיף את התגובה ידנית.</div>`;
+      <div class="fhint">${esc(hint(key, platform))}</div>`;
   }
   if (key === 'alt_text') {
     return `<textarea id="vx_alt" maxlength="${IG_LIMITS.alt}" aria-label="תיאור תמונה"
         placeholder="למשל: אישה מחייכת מול מחשב נייד, על השולחן כוס קפה">${esc(meta.alt_text ?? '')}</textarea>
-      <div class="fhint">מה רואים בתמונה, למי שמשתמש בקורא מסך. נשלח רק בפוסט עם תמונה אחת.</div>`;
+      <div class="fhint">${esc(hint(key, platform))}</div>`;
   }
   if (key === 'link') {
     return `<input id="vx_link" type="url" dir="ltr" value="${esc(meta.link ?? '')}"
         placeholder="https://" aria-label="קישור">
-      <div class="fhint">בפוסט בלי תמונה — פייסבוק מציג כרטיס עם תצוגה מקדימה של הקישור.
-        עם תמונה או סרטון — הקישור נוסף לסוף הטקסט.</div>`;
+      <div class="fhint">${esc(hint(key, platform))}</div>`;
   }
   return '';
 }

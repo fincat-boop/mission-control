@@ -708,9 +708,7 @@ export async function openPostPreview(postId) {
   const nlNotes = newsletterPostNotes(post);
   // מה שנוסף לגרסה מעבר לטקסט (סוג פרסום, קישור, תגובה ראשונה) — גם למי
   // שמפרסם ידנית. התגובה הראשונה עם כפתור העתקה משלה.
-  const ex = ['facebook', 'instagram'].includes(post.platform) ? pickExtras(vMeta) : {};
-  // סטורי — רק באינסטגרם (משבצת פייסבוק מקושרת לסטורי חולקת את ה-meta)
-  if (post.platform !== 'instagram') delete ex.format;
+  const ex = post.platform === 'newsletter' ? {} : pickExtras(vMeta);
   const extrasLines = [
     ex.format === 'story' ? '<div>סוג פרסום: <b>סטורי</b></div>' : '',
     // לחיץ רק http/https (השרת לא שומר אחר — כאן ליתר ביטחון)
