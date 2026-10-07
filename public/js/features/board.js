@@ -127,7 +127,7 @@ export async function renderBoard() {
              ${setupGoButton(chStep?.target ?? { tab: 'manage', section: 'channels' },
                              chStep?.action ?? 'לערוצים', true)}</div>`}</div>`
       : `<div class="board panel">
-      <table class="grid">
+      <table class="grid wboard">
         <thead><tr><th></th>${head}</tr></thead>
         <tbody>${body || emptyRow}</tbody>
       </table>

@@ -97,6 +97,9 @@ section[hidden] { display: none; }
 .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 5px; vertical-align: -1px; }
 .board { overflow-x: auto; }
 table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
+/* הלוח השבועי: עמודות ימים שוות, כדי שכל הכרטיסים יהיו באותו רוחב */
+table.grid.wboard { table-layout: fixed; }
+.wboard thead th:first-child { width: 150px; }
 .grid th, .grid td { border-bottom: 1px solid var(--border); padding: 8px; vertical-align: top; font-size: 12.5px; }
 .grid td + td, .grid th + th { border-inline-start: 1px solid var(--border); }
 .grid tbody tr:last-child td { border-bottom: none; }
@@ -112,19 +115,22 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
   line-height: 1.4; cursor: pointer; background: var(--panel-2); color: var(--ink-1);
   border: 1px solid var(--border); border-inline-start: 4px solid var(--ep, var(--muted)); }
 .post:hover { border-color: color-mix(in srgb, var(--ink-2) 45%, var(--border)); border-inline-start-color: var(--ep); }
-/* שם הנקודה נשבר לשתי שורות לכל היותר — שורה אחת בלי שבירה הייתה מרחיבה
-   את עמודות הטבלה מעבר למסך */
-.post .pep { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  font-size: 12px; font-weight: 600; color: var(--ink-1); }
-.post .meta { color: var(--ink-2); font-size: 10.5px; margin-top: 3px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+/* כל הכרטיסים באותו גודל: רוחב העמודה (הטבלה ב-table-layout קבוע) ושלוש
+   שורות קבועות — נקודה, סוג ושעה, מצב. מה שלא נכנס נחתך עם "…" (המלא בריחוף) */
+.post .pep { font-size: 12px; font-weight: 600; color: var(--ink-1); }
+.post .pep, .post .meta, .post .pst { display: block; height: 17px; line-height: 17px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.post .meta { color: var(--ink-2); font-size: 10.5px; margin-top: 2px; }
+.post .meta .kind { margin-inline-end: 5px; }
 .post .kind {
   font-style: normal; font-size: 9.5px; font-weight: 600;
   padding: 0 5px; border-radius: 4px; border: 1px solid var(--border); color: var(--ink-2);
 }
 .post .kind.promo { color: var(--st-warn); border-color: color-mix(in srgb, var(--st-warn) 45%, transparent); }
 /* שורת המצב */
-.pst { display: flex; align-items: baseline; gap: 5px; margin-top: 5px; font-size: 11px; font-weight: 600; flex-wrap: wrap; }
-.pst > i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; align-self: center; }
+.pst { margin-top: 3px; font-size: 11px; font-weight: 600; }
+.pst > i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+  margin-inline-end: 5px; vertical-align: 0; }
 .pst .h { font-weight: 400; color: var(--muted); }
 .pst.red { color: var(--st-crit); }
 .pst.yellow { color: var(--st-warn); }
