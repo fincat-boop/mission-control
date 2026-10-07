@@ -985,75 +985,6 @@ function openLinkRules(campaign, reload) {
   }
 }
 
-/* ---------- קישור של פוסט בודד (מתוך הפוסט) ---------- */
-
-/**
- * לאילו ערוצים אפשר לקשר את הפוסט: לא ניוזלטר, ולא ערוץ שכבר יש בו פוסט
- * מאותה קבוצה (המקור או עוקבת). קישור שרשרת אין — הקישור הוא תמיד מהמקור.
- */
-function linkTargets(c, item) {
-  if (!can('content') || c.structure !== 'general') return [];
-  const root = c.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
-  const busy = new Set([root, ...c.content.filter((x) => x.linked_to_id === root.id)]
-    .map((x) => x.slot_channel_id));
-  return c.channels.filter((ch) => ch.platform !== 'newsletter' && !busy.has(ch.id));
-}
-
-/**
- * חלון קטן: ערוץ, ואז משבצת — "הפנויה הבאה" או משבצת מסוימת (ריקה, או עם
- * תוכן שלא מקושר — הוא יוחלף). התוכן של הפוסט (או המקור שלו) הופך למשותף.
- */
-function openLinkOne(campaign, item, reload) {
-  const root = campaign.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
-  const targets = linkTargets(campaign, item);
-  const slotOptions = (channelId) => {
-    const col = campaign.slots.find((x) => x.channel_id === channelId);
-    const list = (col?.slots ?? []).filter((s) => !s.extra || s.content);
-    const free = list.find((s) => !s.content)?.index ?? Math.max(0, ...list.map((s) => s.index)) + 1;
-    const pickable = list.filter((s) => !s.content || (!s.content.linked_to_id &&
-      !campaign.content.some((x) => x.linked_to_id === s.content.id)));
-    return [[`next:${free}`, `המשבצת הפנויה הבאה (#${free})`],
-      ...pickable.map((s) => [String(s.index), `#${s.index}${s.date ? ` · ${fmtDate(s.date)}` : ''}${
-        s.content ? ` · ${s.content.title} — יוחלף` : ' · ריקה'}`])];
-  };
-
-  openGeneric({
-    title: `קישור "${root.title}" לערוץ אחר`,
-    saveLabel: 'קשר',
-    fields: [
-      { name: '__h', type: 'html', html: `<p class="fhint" style="margin:0">התוכן של ${
-        esc(slotLabel(root))} (טקסט, קבצים ומצב) יהיה משותף לשני הפוסטים, וכל אחד ייצא במועד
-        של הערוץ שלו.</p>` },
-      { name: 'channel_id', label: 'לאיזה ערוץ', type: 'select',
-        options: targets.map((ch) => [ch.id, ch.name]) },
-      { name: 'slot', label: 'לאיזו משבצת', type: 'select', options: slotOptions(targets[0].id) },
-    ],
-    onOpen: () => {
-      $('#gen_channel_id').addEventListener('change', (e) => {
-        $('#gen_slot').innerHTML = slotOptions(Number(e.target.value)).map(([v, l]) =>
-          `<option value="${esc(v)}">${esc(l)}</option>`).join('');
-      });
-    },
-    onSave: async (v) => {
-      const raw = String(v.slot);
-      const index = Number(raw.replace('next:', ''));
-      const occupied = campaign.content.find((x) =>
-        x.slot_channel_id === v.channel_id && x.sort_order === index);
-      if (occupied && !(await confirmDialog(
-        `התוכן של "${occupied.title}" יוחלף בתוכן של "${root.title}" — הטקסט, הקבצים והמצב. להמשיך?`,
-        { okLabel: 'קשר והחלף', danger: true }))) return { keepOpen: true };
-      const res = await api(`/content/${root.id}/link`, { method: 'POST', body: {
-        target_campaign_slot: { channel_id: v.channel_id, sort_order: index },
-        replace: !!occupied, week: state.week,
-      } });
-      engineToast(res, `${slotLabel(root)} ו${channelName(v.channel_id)} #${index} מקושרים — ` +
-        'תוכן אחד, כל אחד במועד של הערוץ שלו.' + downgradeNote(res.downgraded));
-      await reload();
-      return false;
-    },
-  });
-}
-
 /**
  * קמפיין כללי: אותה טבלה כמו בזוויות — עמודה לכל ערוץ, שורה לכל מספר פוסט —
  * בלי זווית משותפת. כל תא עומד בפני עצמו, עם הניסוח והמועד של הערוץ שלו.
@@ -1163,20 +1094,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     extras = pickExtras(baseMeta);
     $('#vextras').innerHTML = extrasHtml({ platform, meta: extras, files: slotAssets });
     $('#gen___meta').value = extrasKey(extras);
-    addLinkRow();
     paintNote();
-  };
-  /** "קשר לערוץ אחר" — שורה אחרונה בתוך "אפשרויות נוספות" (פוסט קיים שיש לאן לקשר) */
-  const addLinkRow = () => {
-    const list = $('#vextras .vx-list');
-    if (!list || !item || !linkTargets(campaign, item).length) return;
-    list.insertAdjacentHTML('beforeend', `<div class="vx vx-act">
-      <span class="vx-l">קישור לערוץ אחר</span>
-      <span class="vx-sum">אותו תוכן גם בערוץ נוסף</span>
-      <button type="button" class="btn small" id="genLinkOne">קשר לערוץ אחר</button></div>`);
-    $('#genLinkOne').addEventListener('click', run(async () => {
-      if (await closeGeneric()) openLinkOne(campaign, saved ?? item, reload);
-    }));
   };
 
   /* ---------- שמירה אוטומטית (כל ערוץ חוץ מניוזלטר) ----------
@@ -1458,7 +1376,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         // התווית קבועה ("מוכן לפרסום") — טקסט שמתחלף היה מזיז את המתג
         readyEl().addEventListener('change', () => schedule(0));
       }
-      if (!mail) addLinkRow();
       $('#genDelete')?.addEventListener('click', run(async () => {
         const names = partners.map(slotLabel).join(', ');
         const question = !partners.length ? 'למחוק את הפוסט הזה?'
@@ -1633,6 +1550,11 @@ function campaignMenu(c) {
   // ייבוא מטבלה — רק בזוויות. העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
   const angles = c.structure !== 'general';
   const items = [
+    // "קמפיין מוכן" ראשון: רק כשיש מה להשאיר ועל מה לפרוס
+    can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
+      '<button type="button" data-act="complete" class="ok">קמפיין מוכן</button>',
+    can('settings') && c.content_complete_at &&
+      '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
     can('settings') && `<button type="button" data-act="share">${c.share_pct != null
       ? `נתח קבוע: ${c.share_pct}%` : 'נתח קבוע…'}</button>`,
@@ -1640,11 +1562,6 @@ function campaignMenu(c) {
     can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     canLinkIn(c) && '<button type="button" data-act="link">קשר תוכן</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
-    // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
-    can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
-      '<button type="button" data-act="complete" class="ok">קמפיין מוכן</button>',
-    can('settings') && c.content_complete_at &&
-      '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     // קמפיין חדש תמיד כללי; קמפיין ישן לפי זוויות עובר בהמרה (כל ניסוח = פוסט)
     angles && can('settings') && '<button type="button" data-act="to-general">המר לקמפיין כללי</button>',
     // תבנית ל"שבץ מחדש" בלוח האסטרטגיה

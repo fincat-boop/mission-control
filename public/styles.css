@@ -1440,9 +1440,6 @@ button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 .vx-sum { flex: 1 1 0; min-width: 0; margin-inline-start: auto; text-align: end; font-size: 12px;
   color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vx-sum.set { color: var(--ink-2); }
-/* שורת פעולה בתוך הרשימה (קשר לערוץ אחר) — כמו שורת אזור, עם כפתור במקום חץ */
-.vx-act { display: flex; align-items: center; gap: 12px; padding: 8px 14px; font-size: 13px; }
-.vx-act .vx-sum { margin-inline-start: 0; }
 .vx-b { padding: 2px 14px 14px; }
 .vx-b textarea { min-height: 64px; }
 .vx-radios { display: grid; grid-template-columns: 1fr 1fr; }
