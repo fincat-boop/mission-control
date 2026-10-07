@@ -55,6 +55,14 @@ export const goToTab = (tab) => reg.goToTab?.(tab)
   ?? Promise.reject(new Error('הניווט לא נרשם במתאם'));
 
 /**
+ * "פתח בתוכן" מחלון הפוסט — העורך של התוכן מעל הלוח (features/plan.js,
+ * openPostEditor). מאותה סיבה כמו goToTab: הדיאלוג לא מייבא פיצ'ר.
+ * @returns {Promise<boolean>} false — אין עורך מתאים
+ */
+export const openPostEditor = (post, hooks) => reg.openPostEditor?.(post, hooks)
+  ?? Promise.reject(new Error('עורך התוכן לא נרשם במתאם'));
+
+/**
  * מה שדורש תשומת לב: תגית המשימות והפעמון — ואם טאב המשימות מוצג, גם
  * הרשימה עצמה (היא מעדכנת את שתי התגיות בדרך). זה מה שהרענון התקופתי
  * מריץ; את הלוח הוא לא מצייר מחדש לעולם.

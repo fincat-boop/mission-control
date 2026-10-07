@@ -138,8 +138,6 @@ table.grid.wboard { table-layout: fixed; }
 .pst.blue > i { background: var(--accent); }
 .pst.orange > i { background: #ff8a1f; }
 .pst.auto > i { background: var(--st-good); }
-/* בלי תוכן — מסגרת מקווקוות: משבצת שמחכה */
-.post.missing { outline: 1.5px dashed color-mix(in srgb, var(--on, #fff) 70%, transparent); outline-offset: -4px; }
 /* פורסם — הכרטיס נשאר, דהוי, ודגל "פורסם" גדול באלכסון מעליו (מחוץ לדהייה).
    inset:0 + margin:auto ממרכז בדיוק, בלי תלות בכיוון RTL */
 .post.published { overflow: hidden; }
@@ -324,11 +322,13 @@ table.utable { width: 100%; border-collapse: collapse; }
 #postDlg .pfoot { border-top: 1px solid var(--border); padding-top: 12px; }
 .pmore { position: relative; }
 .pmenu {
-  position: absolute; bottom: calc(100% + 6px); inset-inline-start: 0; z-index: 5;
   min-width: 190px; padding: 5px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--panel); box-shadow: 0 8px 24px rgba(0,0,0,.45);
   display: flex; flex-direction: column; gap: 2px;
 }
+/* תפריט הפעולות בחלון הפוסט נפתח למעלה מהכפתור (הוא בתחתית החלון).
+   top:auto חובה — אחרת ה-top של .pmenu הכללי נשאר, והתפריט נמתח לגובה 0 ונשפך מתחת לחלון */
+#pMenu { top: auto; bottom: calc(100% + 6px); inset-inline-start: 0; inset-inline-end: auto; z-index: 5; }
 .pmenu button {
   all: unset; box-sizing: border-box; width: 100%; cursor: pointer;
   padding: 7px 10px; border-radius: 7px; font-size: 12.5px; color: var(--ink-1);
@@ -446,6 +446,16 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 /* חלון ההתאמה (לא כל הפוסטים נכנסים בזמן) — חלק נוסף בתוך חלון האישור */
 .confirm-dlg.wide { width: min(480px, 92vw); }
 #confirmExtra h3 { margin-bottom: 16px; }
+/* "לא אושר שיצא" — שורה לכל פוסט: תיבה מסומנת מראש, מתי וערוץ, "לא יצא" */
+.uclist { max-height: min(420px, 55vh); overflow-y: auto; border-block: 1px solid var(--border); margin-bottom: 16px; }
+.ucrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+.ucrow:last-child { border-bottom: 0; }
+.ucrow label { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.ucrow input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.uctx { min-width: 0; }
+.uctx b { display: block; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uctx span { font-size: 12px; color: var(--muted); }
+.ucrow .btn { flex-shrink: 0; }
 .fitrows {
   display: grid; grid-template-columns: minmax(0, 1fr) max-content max-content;
   gap: 8px 20px; padding: 12px 0; border-block: 1px solid var(--border); font-size: 13px;
@@ -1391,6 +1401,9 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .vcopy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); }
 .frow .vcopy label { display: inline; margin: 0; font-size: 12.5px; }
 .frow .vcopy select { width: auto; min-width: 140px; padding: 4px 10px; font-size: 12.5px; }
+/* "כולל קבצים" ליד "העתק מ־" בחלון המשבצת — תיבה ומילים בשורה אחת */
+.frow .vcopy .vcopy-files { display: inline-flex; align-items: center; gap: 4px; }
+.frow .vcopy .vcopy-files input { width: auto; margin: 0; }
 .vmail { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--ink-2); }
 .vmail b { color: var(--ink-1); }
 .vacts { margin-inline-end: auto; display: flex; gap: 8px; flex-wrap: wrap; }

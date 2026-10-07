@@ -74,7 +74,7 @@ function describe(req, payload, deletedName) {
     'campaigns/pause':    ['pause',   `השהה קמפיין ${label}`],
     'campaigns/resume':   ['resume',  `הפעיל מחדש קמפיין ${label}`],
     'campaigns/order':    ['update',  `סידר מחדש את התוכן בקמפיין ${label}`],
-    'campaigns/complete': ['update',  `סימן את הקמפיין ${label} כמוכן — המשבצות הריקות ירדו`],
+    'campaigns/complete': ['update',  `סימן "סיימתי לכתוב" בקמפיין ${label} — המשבצות הריקות ירדו`],
     'campaigns/reopen':   ['update',  `פתח מחדש את הקמפיין ${label} להשלמת תוכן`],
     // label = שם ההרצה החדשה (מהתשובה)
     'campaigns/replace':  ['create',  `שיבץ מחדש קמפיין מחזורי — נוצר ${label}`],
@@ -82,6 +82,7 @@ function describe(req, payload, deletedName) {
     'campaigns/assets':   ['create',  `העלה קבצים לקמפיין ${label}`],
     'content/assets':     ['create',  `הוסיף קבצים לתוכן ${label}`],
     'content/uploads':    ['create',  `הוסיף קובץ לתוכן ${label}`],
+    'content/copy-assets': ['create', `העתיק קבצים לתוכן ${label} מתוכן #${req.body?.from ?? ''}`],
     'content/variants':   ['update',  `כתב ניסוח לתוכן ${label} בערוץ #${parts[3] ?? ''}`],
     'content/link':       ['update',  `קישר את התוכן ${label} למשבצת בערוץ נוסף`],
     'content/unlink':     ['update',  `ניתק את הקישור של התוכן ${label} — לכל משבצת עותק משלה`],
@@ -97,6 +98,12 @@ function describe(req, payload, deletedName) {
   if (key && special[key]) {
     const [action, summary] = special[key];
     return { action, entity, entity_id: /^\d+$/.test(id ?? '') ? id : null, summary };
+  }
+  // סימון מרוכז מחלון "לא אושר שיצא" — כמה פוסטים, מתוך התשובה
+  if (entity === 'posts' && id === 'publish-bulk') {
+    const n = payload?.marked ?? 0;
+    return { action: 'publish', entity, entity_id: null,
+      summary: n === 1 ? 'סימן פוסט אחד כפורסם (אישור מרוכז)' : `סימן ${n} פוסטים כפורסמו (אישור מרוכז)` };
   }
   // שמירה מרוכזת מטבלת התוצאות (PUT /results) — כמה פוסטים, מתוך התשובה
   if (entity === 'results' && !id && req.method === 'PUT') {

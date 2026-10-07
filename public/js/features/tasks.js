@@ -3,7 +3,7 @@ import { goToTab, refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { $, $$, copyText, esc, run, toast } from '../core/dom.js';
 import { can, state } from '../core/state.js';
 import { openPostPreview } from '../ui/postDialog.js';
-import { hhmm, fmtDate } from '../core/format.js';
+import { HE_DAYS, hhmm, fmtDate } from '../core/format.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openGeneric } from '../ui/dialog.js';
 
@@ -17,6 +17,7 @@ const MINE_KEY = 'mc.tasks.mine';
 const view = {
   mine: (() => { try { return localStorage.getItem(MINE_KEY) === '1'; } catch { return false; } })(),
   showSnoozed: false,
+  showExpired: false,
   selecting: false,
   selected: new Set(),
 };
@@ -86,7 +87,9 @@ export async function renderTasks({ force = false } = {}) {
     ? list.filter((x) => x.assignee_id === state.me?.id || (x.kind === 'approve' && can('approve')))
     : list);
   // הבחירה המרובה — רק ממה שמוצג עכשיו (אחרי "שלי"); מה שהוסתר יוצא ממנה
-  const visibleIds = new Set([...mineOnly(t.today), ...mineOnly(t.attention)].map((x) => x.id));
+  const upcoming = t.upcoming ?? [];
+  const visibleIds = new Set([...mineOnly(t.today), ...mineOnly(t.attention), ...mineOnly(upcoming)]
+    .map((x) => x.id));
   for (const id of view.selected) if (!visibleIds.has(id)) view.selected.delete(id);
 
   const group = (title, items, emptyText) => `
@@ -96,17 +99,23 @@ export async function renderTasks({ force = false } = {}) {
     </div>`;
 
   const snoozed = mineOnly(t.snoozed ?? []);
+  const soon = mineOnly(upcoming);
+  // קבוצה מקופלת (נדחו / פג תוקף): כפתור עם מונה, והרשימה רק כשפתוחה
+  const folded = (id, label, items, open) => (items.length ? `<div class="tgroup">
+      <button class="tsnoozed-toggle" id="${id}" aria-expanded="${open}">${esc(label)} (${items.length})</button>
+      ${open ? `<div class="panel">${items.map(taskRow).join('')}</div>` : ''}
+    </div>` : '');
+  // פג תוקף ≠ הושלם: משימה שנסגרה לבד כי היום שלה עבר — אף אחד לא עשה אותה
+  const expired = mineOnly(t.expired_this_week ?? []);
   $('#tasks').innerHTML = `<div class="tasks">
     ${alertsPanel(alertData)}
     ${tasksToolbar()}
     ${group('היום', mineOnly(t.today), view.mine ? 'אין לך משימות להיום.' : 'אין משימות להיום.')}
     ${group('דורש טיפול', mineOnly(t.attention), 'הכול מטופל.')}
-    ${snoozed.length ? `<div class="tgroup">
-      <button class="tsnoozed-toggle" id="taskSnoozedToggle" aria-expanded="${view.showSnoozed}">
-        נדחו (${snoozed.length})</button>
-      ${view.showSnoozed ? `<div class="panel">${snoozed.map(taskRow).join('')}</div>` : ''}
-    </div>` : ''}
+    ${soon.length ? group('בקרוב', soon, '') : ''}
+    ${folded('taskSnoozedToggle', 'נדחו', snoozed, view.showSnoozed)}
     ${group('הושלם השבוע', mineOnly(t.done_this_week), 'עוד לא הושלמו משימות השבוע.')}
+    ${folded('taskExpiredToggle', 'פג תוקף השבוע', expired, view.showExpired)}
   </div>`;
 
   wireToolbar();
@@ -130,6 +139,9 @@ export async function renderTasks({ force = false } = {}) {
       if (b.dataset.post) await openPostPreview(b.dataset.post);
     })));
 
+  $$('#tasks [data-unconfirmed]').forEach((b) =>
+    b.addEventListener('click', run(openUnconfirmed)));
+
   $$('#tasks [data-task-pick]').forEach((cb) =>
     cb.addEventListener('change', () => {
       const id = Number(cb.dataset.taskPick);
@@ -143,6 +155,18 @@ export async function renderTasks({ force = false } = {}) {
 
   $$('#tasks [data-task-done]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
+      // וי על משימת פרסום צמודה לפוסט = "סמן שפורסם" בפועל (הנתיב השמור — הוא
+      // גם סוגר את המשימה). נכשל — ההודעה מוצגת והמשימה נשארת פתוחה
+      if (cb.checked && cb.dataset.postPublish) {
+        try {
+          await api(`/posts/${cb.dataset.postPublish}/publish`, { method: 'POST' });
+          toast('סומן כפורסם.');
+        } catch (e) {
+          toast(e.message, true);
+        }
+        await Promise.all([rerender(), refreshBoard()]);
+        return;
+      }
       await api(`/tasks/${cb.dataset.taskDone}`, { method: 'PATCH', body: { done: cb.checked } });
       await rerender();
     })));
@@ -186,6 +210,54 @@ export async function renderTasks({ force = false } = {}) {
     })));
 }
 
+/** "יום ראשון 5.10 · 10:00" — מתי היה המועד, לשורת חלון האישור */
+const whenLabel = (iso) => {
+  const d = new Date(iso);
+  return `${HE_DAYS[d.getDay()]} ${fmtDate(d)} · ${hhmm(iso)}`;
+};
+
+/**
+ * "לא אושר שיצא" (סעיף 2): פוסטים שהמועד שלהם עבר ואף אחד לא סימן. כמעט
+ * תמיד הם יצאו — ולכן כולם מסומנים מראש, ו"סמן שפורסמו" מאשר בבת אחת. מה
+ * שלא יצא: "לא יצא" פותח את הפוסט (שם קובעים מועד חדש או מוחקים).
+ */
+async function openUnconfirmed() {
+  const { posts } = await api('/posts/unconfirmed');
+  if (!posts.length) {
+    toast('אין פוסטים שממתינים לסימון.');
+    await rerender();
+    return;
+  }
+  const rowsHtml = posts.map((p) => `<div class="ucrow">
+      <label><input type="checkbox" data-uc="${p.id}" checked>
+        <span class="uctx"><b>${p.urgent ? '⚡ ' : ''}${esc(p.title)}</b>
+          <span>${esc(whenLabel(p.scheduled_at))} · ${esc(p.channel_name)}</span></span></label>
+      <button type="button" class="btn small" data-uc-open="${p.id}">לא יצא</button>
+    </div>`).join('');
+  let openId = null;
+  const picked = confirmDialog(
+    'לא סומנו כפורסמו: המועד עבר ואף אחד לא סימן. מה שיצא — נשאר מסומן. מה שלא יצא — מורידים את הסימון, או "לא יצא" כדי לשבץ מחדש או למחוק.',
+    {
+      okLabel: 'סמן שפורסמו',
+      html: `<div class="uclist">${rowsHtml}</div>`,
+      read: (el) => [...el.querySelectorAll('[data-uc]:checked')].map((x) => Number(x.dataset.uc)),
+    });
+  // החלון כבר מצויר (confirmDialog ממלא אותו לפני שהוא מחכה) — "לא יצא" סוגר
+  // אותו ופותח את הפוסט
+  $$('#confirmExtra [data-uc-open]').forEach((b) => b.addEventListener('click', () => {
+    openId = b.dataset.ucOpen;
+    $('#confirmDlg').close();
+  }));
+  const ids = await picked;
+  if (openId) return openPostPreview(openId);
+  if (!ids) return;
+  if (!ids.length) return toast('לא סומן אף פוסט.', true);
+  const r = await api('/posts/publish-bulk', { method: 'POST', body: { ids } });
+  toast((r.marked === 1 ? 'פוסט אחד סומן כפורסם' : `${r.marked} פוסטים סומנו כפורסמו`) +
+        (r.skipped ? ` · ${r.skipped} כבר לא היו במצב שאפשר לסמן` : '.'));
+  await Promise.all([rerender(), refreshBoard()]);
+}
+
 const ALERT_TONE = {
   crit: { color: 'var(--st-crit)', label: 'חוסם' },
   warn: { color: 'var(--st-warn)', label: 'דורש טיפול' },
@@ -207,7 +279,9 @@ function alertsPanel({ alerts, counts }) {
         <b style="color:${tone.color}">${esc(a.title)}</b>
         <span>${esc(a.detail)}</span>
       </div>
-      ${a.tab ? `<button class="btn small act" data-goto="${esc(a.tab)}"
+      ${a.action === 'unconfirmed'
+        ? '<button class="btn small act" data-unconfirmed>פתח</button>'
+        : a.tab ? `<button class="btn small act" data-goto="${esc(a.tab)}"
         data-campaign="${a.campaign_id ?? ''}" data-endpoint="${a.endpoint_id ?? ''}"
         data-post="${a.post_id ?? ''}">פתח</button>` : ''}
     </div>`;
@@ -236,9 +310,15 @@ function checkbox(t) {
       locked ? ' disabled data-tt="רק מי שמורשה לאשר יכול לסגור או למחוק משימת אישור"' : ''}>`;
   }
   const locked = approveLocked(t);
-  return `<input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}${
+  // משימת פרסום של פוסט: הווי מסמן את הפוסט "פורסם" (לא רק סוגר את המשימה)
+  const act = isPublishAction(t)
+    ? ` data-post-publish="${t.post_id}" aria-label="סמן שפורסם" data-tt="מסמן את הפוסט כפורסם"` : '';
+  return `<input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}${act}${
     locked ? ' disabled data-tt="רק מי שמורשה לאשר יכול לסגור משימת אישור"' : ''}>`;
 }
+
+/** משימה פתוחה שהפעולה שלה היא "סמן שפורסם" (לפרסם היום / וואטסאפ) */
+const isPublishAction = (t) => !t.done && t.kind === 'publish' && !!t.post_id;
 
 const isSnoozedRow = (t) => !t.done && t.snoozed_until && new Date(t.snoozed_until) > new Date();
 
@@ -350,6 +430,10 @@ function wireToolbar() {
   $('#taskAdd')?.addEventListener('click', openNewTask);
   $('#taskSnoozedToggle')?.addEventListener('click', run(async () => {
     view.showSnoozed = !view.showSnoozed;
+    await rerender();
+  }));
+  $('#taskExpiredToggle')?.addEventListener('click', run(async () => {
+    view.showExpired = !view.showExpired;
     await rerender();
   }));
   $('#taskBulkDone')?.addEventListener('click', run(() => bulk('done')));

@@ -127,10 +127,11 @@ test('חסר תוכן — auto_hole בשבוע הקרוב / שעבר ביומי�
   for (const id of [ids.holeFar, ids.manualLater, ids.holeTasked]) {
     assert.ok(!byId.has(`no-text-${id}`), `no-text-${id}`);
   }
-  // סימן אחד: לפוסט שעבר המועד שלו — "חסר תוכן", לא גם "עבר המועד"
-  assert.ok(!byId.has(`post-missed-${ids.holePast}`));
+  // סימן אחד: ממלא מקום שהמועד שלו עבר — "חסר תוכן", ולא נכנס ל"לא אושר שיצא"
+  // (התראה לכל פוסט "עבר המועד" כבר לא קיימת — סעיף 2)
+  assert.ok(!shown.some((a) => a.id.startsWith('post-missed-')));
   assert.ok(!shown.some((a) => a.id.startsWith('hole-')));
-  // משימה מכסה את "חסר תוכן" — ולכן פוסט שהמועד שלו עבר נשאר עם "עבר המועד"
+  assert.ok(!shown.some((a) => a.id === 'unconfirmed'));
+  // משימת "לכתוב" פתוחה מכסה את "חסר תוכן" — היא הסימן שלו
   assert.ok(!byId.has(`no-text-${ids.holePastTasked}`));
-  assert.equal(byId.get(`post-missed-${ids.holePastTasked}`)?.level, 'warn');
 });

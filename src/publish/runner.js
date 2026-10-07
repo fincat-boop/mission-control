@@ -14,6 +14,7 @@ import {
   nextHubRef, reusableHubStatus, transferBlocker,
 } from './newsletter.js';
 import { contentBlocker, coverAsset, isStory, postMedia } from './readiness.js';
+import { LOCAL_TZ, localYmd } from '../task-lifecycle.js';
 
 /**
  * מסלול הפרסום האוטומטי.
@@ -24,8 +25,9 @@ import { contentBlocker, coverAsset, isStory, postMedia } from './readiness.js';
  *   ב-publish_log וביומן הפעולות. כל שלב בטרנזקציה קצרה משלו, ואף אחת
  *   לא פתוחה בזמן הקריאה לפלטפורמה (publishOne).
  *
- * וואטסאפ (קבוצה) — אין API רשמי, ולכן חצי-אוטומטי: כשמגיע הזמן נוצרת
- * משימה דחופה עם הטקסט המוכן, והמשתמש שולח ומסמן "פורסם" בעצמו.
+ * וואטסאפ (קבוצה) וכל ערוץ שלא מתפרסם לבד — חצי-אוטומטי: בבוקר של היום
+ * נוצרת משימת "לפרסם היום" עם הטקסט המוכן (manualPublishPrep), והמשתמש
+ * מפרסם ומסמן "פורסם" בעצמו.
  *
  * ניוזלטר — לא נשלח מכאן ולא נוצר מכאן ב-HUB. המשתמש לוחץ "העבר ל-HUB"
  * (transferNewsletter), בעל העסק מאשר שם, והטיק רק שואל על הסטטוס. הגיע
@@ -33,7 +35,6 @@ import { contentBlocker, coverAsset, isStory, postMedia } from './readiness.js';
  */
 
 const MAX_LATE_HOURS = 12;   // approved שפוספס ביותר מזה — נכשל, לא מתפרסם באיחור
-const WA_AHEAD_MINUTES = 15; // כמה דקות לפני הזמן נוצרת משימת הוואטסאפ
 
 export const STUCK_SOCIAL_MINUTES = 30;   // פייסבוק/אינסטגרם ב-publishing יותר מזה — נקטע
 export const STUCK_NEWSLETTER_HOURS = 24; // ניוזלטר שה-HUB לא ענה עליו / לא קיבל תוך יממה
@@ -721,12 +722,26 @@ export async function resetPublishing(postId, user) {
 export const WA_SUB_READY = 'מעתיקים את הטקסט, שולחים לקבוצה ומסמנים פורסם';
 export const WA_SUB_NOT_READY =
   'הטקסט לוואטסאפ עוד לא מוכן — משלימים אותו בתוכן, ואז שולחים ומסמנים פורסם';
+export const MANUAL_SUB_READY = 'מעתיקים את הטקסט, מפרסמים ומסמנים פורסם';
+export const MANUAL_SUB_NOT_READY =
+  'הטקסט לערוץ הזה עוד לא מוכן — משלימים אותו בתוכן, ואז מפרסמים ומסמנים פורסם';
+export const MANUAL_SUB_TITLE_ONLY = 'מבצע דחוף, כותרת בלבד — מפרסמים ומסמנים פורסם';
+
+/** מאיזו שעה (שעון ישראל) נוצרות משימות "לפרסם היום" של היום */
+export const PUBLISH_DAY_FROM_HOUR = 6;
+
+/** השעה המקומית (0–23) בשעון ישראל — בלי תלות ב-TZ של התהליך */
+export function localHour(d = new Date()) {
+  return Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: LOCAL_TZ, hour: '2-digit', hourCycle: 'h23',
+  }).format(d));
+}
 
 /**
- * מה לעשות עם משימת הוואטסאפ של פוסט אחד: 'insert' — אין עדיין משימה;
- * 'update' — יש משימה פתוחה, אבל מצב המוכנות של הטקסט השתנה מאז שנוצרה
- * (הכותרת המשנית שלה כבר לא נכונה); null — אין מה לעשות. משימה שנסגרה
- * לא נפתחת מחדש: פעם אחת לכל פוסט.
+ * מה לעשות עם משימת "לפרסם היום" של פוסט אחד: 'insert' — אין עדיין משימה
+ * להיום; 'update' — יש משימה פתוחה, אבל מצב המוכנות של הטקסט השתנה מאז
+ * שנוצרה (הכותרת המשנית שלה כבר לא נכונה); null — אין מה לעשות. משימה
+ * שנסגרה לא נפתחת מחדש באותו יום.
  */
 export function waTaskAction({ ready, task_id, task_done, task_ready }) {
   if (task_id == null) return 'insert';
@@ -734,66 +749,107 @@ export function waTaskAction({ ready, task_id, task_done, task_ready }) {
   return task_ready === ready ? null : 'update';
 }
 
+/** כותרת המשימה: וואטסאפ — "לשלוח", כל ערוץ ידני אחר — "לפרסם היום ב…" */
+export function publishTaskTitle(p) {
+  return p.platform === 'whatsapp'
+    ? `לשלוח בוואטסאפ: ${p.title}`
+    : `לפרסם היום ב${p.channel_name}: ${p.title}`;
+}
+
+/** הכותרת המשנית — אומרת מה עושים, לפי מצב הטקסט */
+export function publishTaskSubtitle(p) {
+  if (p.urgent && p.content_id == null) return MANUAL_SUB_TITLE_ONLY;
+  if (p.platform === 'whatsapp') return p.ready ? WA_SUB_READY : WA_SUB_NOT_READY;
+  return p.ready ? MANUAL_SUB_READY : MANUAL_SUB_NOT_READY;
+}
+
 /**
- * וואטסאפ חצי-אוטומטי: קצת לפני הזמן נוצרת משימת "לשלוח בוואטסאפ"
- * דחופה. גם כשהטקסט עוד לא מוכן — אחרת הפוסט פשוט עובר בשקט; אז המשימה
- * אומרת להשלים אותו קודם. הטקסט להעתקה נשלף חי ב-GET /tasks (copy_text),
- * כך שתיקון בגרסה אחרי יצירת המשימה מגיע גם לכפתור.
- * due_on — התאריך המקומי של המועד, לא UTC (פוסט ב-01:00 שייך ליום שלו).
+ * משימת "לפרסם היום" (סעיף 1): כמעט הכול מתפרסם ביד — אדם מעלה לפייסבוק /
+ * אינסטגרם / וואטסאפ ואמור לסמן "פורסם". לכל פוסט של היום בערוץ שלא מתפרסם
+ * לבד נוצרת בבוקר (מ-PUBLISH_DAY_FROM_HOUR בשעון ישראל) משימה אחת, עם
+ * "העתק טקסט" ו"סמן שפורסם", שנסגרת לבד (task-lifecycle.js): פורסם, נמחק,
+ * הוזז ליום אחר, או שהיום נגמר — ואז הפוסט עובר לרשימת "לא אושר שיצא".
+ * פוסט שנוסף מאוחר יותר באותו יום מקבל משימה בטיק הבא.
+ *
+ * "לא מתפרסם לבד": אין חיבור עם פרסום אוטומטי לערוץ (channel_connections
+ * .auto_enabled) או שהמתג הכללי (autopublish_enabled) כבוי. בלי ניוזלטר (יש
+ * לו מסלול משלו דרך ה-HUB), בלי קמפיין מושהה או ערוץ מושבת, ובלי פוסט בלי
+ * כותרת. מבצע דחוף (כותרת בלבד) — כן. לא דחופה: הדחיפות מחושבת בקריאה
+ * (routes/tasks.js — היום/באיחור).
+ *
+ * קודם: רק וואטסאפ, רבע שעה לפני המועד (מאז הפרסום האוטומטי, d72c27b).
+ * וואטסאפ נכנס לאותו כלל — משימה בבוקר.
+ *
+ * הטקסט להעתקה נשלף חי ב-GET /tasks (copy_text), כך שתיקון בגרסה אחרי
+ * יצירת המשימה מגיע גם לכפתור. due_on — התאריך המקומי.
  */
-async function whatsappPrep(orgId) {
+export async function manualPublishPrep(orgId, now = new Date()) {
+  if (localHour(now) < PUBLISH_DAY_FROM_HOUR) return;
+  const today = localYmd(now);
   // הרשימה בטרנזקציה קצרה, וכל משימה בטרנזקציה משלה — כשל באחת לא מבטל את האחרות
-  const due = (await tickStep(orgId, 'הכנת משימות וואטסאפ נכשלה:', () => rows(
-    `select p.id, p.title, p.endpoint_id, p.assignee_id,
-            (p.scheduled_at at time zone 'Asia/Jerusalem')::date as due_on,
+  const due = (await tickStep(orgId, 'הכנת משימות "לפרסם היום" נכשלה:', () => rows(
+    `select p.id, p.title, p.endpoint_id, p.assignee_id, p.urgent, p.content_id,
+            c.platform, c.name as channel_name, $1::date::text as due_on,
             coalesce(v.status = 'ready', false) as ready, v.body,
             t.id as task_id, t.done as task_done,
-            (t.meta->>'wa_ready')::boolean as task_ready
+            coalesce(t.meta->>'text_ready', t.meta->>'wa_ready')::boolean as task_ready
        from posts p
-       join channels c on c.id = p.channel_id and c.platform = 'whatsapp' and c.active
+       join channels c on c.id = p.channel_id and c.active and c.platform <> 'newsletter'
+       left join channel_connections cc on cc.channel_id = c.id
        left join content_variants v on v.content_id = p.content_id
             and v.channel_id = p.channel_id
        left join lateral (
          select t.id, t.done, t.meta from tasks t
-          where t.post_id = p.id and t.kind = 'publish' and (t.meta->>'wa_send') = 'true'
+          where t.post_id = p.id and t.kind = 'publish' and t.due_on = $1::date
           order by t.done, t.id desc limit 1
        ) t on true
-      where p.status = 'scheduled'
+      where p.status in ('scheduled', 'approved') and p.published_at is null
+        and nullif(btrim(p.title), '') is not null
+        and (p.scheduled_at at time zone 'Asia/Jerusalem')::date = $1::date
+        -- ערוץ שמתפרסם לבד (חיבור עם פרסום אוטומטי + המתג הכללי דלוק) — לא כאן
+        and not (coalesce(cc.auto_enabled, false)
+                 and exists (select 1 from engine_settings s where s.autopublish_enabled))
         and not exists (select 1 from content_items ci
                           join campaigns ca on ca.id = ci.campaign_id
-                         where ci.id = p.content_id and ca.paused_at is not null)
-        and p.scheduled_at between now() - interval '24 hours'
-                               and now() + ($1 || ' minutes')::interval`,
-    [WA_AHEAD_MINUTES]
+                         where ci.id = p.content_id and ca.paused_at is not null)`,
+    [today]
   ))) ?? [];
 
   for (const p of due) {
     const action = waTaskAction(p);
     if (!action) continue;
-    const subtitle = p.ready ? WA_SUB_READY : WA_SUB_NOT_READY;
-    await tickStep(orgId, `משימת וואטסאפ לפוסט #${p.id} נכשלה:`, () => writeWaTask(p, action, subtitle));
+    await tickStep(orgId, `משימת "לפרסם היום" לפוסט #${p.id} נכשלה:`,
+      () => writePublishTask(p, action));
   }
 }
 
-/** כתיבת משימת הוואטסאפ של פוסט אחד לפי waTaskAction (insert / update) */
-async function writeWaTask(p, action, subtitle) {
+/** הנקודה שהטיק קורא לה (publishTickForOrg) — היום כל ערוץ ידני, לא רק וואטסאפ */
+const whatsappPrep = (orgId) => manualPublishPrep(orgId);
+
+/** כתיבת משימת "לפרסם היום" של פוסט אחד לפי waTaskAction (insert / update) */
+async function writePublishTask(p, action) {
+  const subtitle = publishTaskSubtitle(p);
   if (action === 'insert') {
+    // אחת לכל פוסט ליום (tasks_publish_day_uidx) — טיק מקביל לא יוצר כפולה
     await query(
       `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
-       values ($1,$2,'publish',$3,$4,true,$5,$6,$7)`,
-      [`לשלוח בוואטסאפ: ${p.title}`, subtitle, p.id, p.endpoint_id, p.due_on,
+       values ($1,$2,'publish',$3,$4,false,$5,$6,$7)
+       on conflict (post_id, due_on) where kind = 'publish' and (meta->>'publish_day') = 'true'
+       do nothing`,
+      [publishTaskTitle(p), subtitle, p.id, p.endpoint_id, p.due_on,
        JSON.stringify({
-         wa_send: true, wa_ready: p.ready, body: p.ready ? p.body : null,
-         // האחראי של הפוסט שולח — פעם אחת (task-lifecycle.js autoAssignee)
+         publish_day: true,
+         ...(p.platform === 'whatsapp' ? { wa_send: true } : {}),
+         text_ready: p.ready, body: p.ready ? p.body : null,
+         // האחראי של הפוסט מפרסם — פעם אחת (task-lifecycle.js autoAssignee)
          ...(p.assignee_id ? { assignee_auto: true } : {}),
        }),
        p.assignee_id ?? null]
     );
-    console.log(`נוצרה משימת וואטסאפ לפוסט #${p.id} ("${p.title}")${p.ready ? '' : ' — הטקסט עוד לא מוכן'}`);
   } else if (action === 'update') {
     await query(
       `update tasks set subtitle = $2,
-              meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('wa_ready', $3::boolean)
+              meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('text_ready', $3::boolean)
         where id = $1 and done = false`,
       [p.task_id, subtitle, p.ready]
     );

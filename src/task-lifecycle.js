@@ -9,6 +9,18 @@ import { query, rows } from './db.js';
  * כך שהרשימה לא מציגה משימה שכבר לא רלוונטית.
  */
 
+export const LOCAL_TZ = 'Asia/Jerusalem';
+
+/**
+ * YYYY-MM-DD של הרגע הנתון בשעון ישראל — בלי תלות ב-TZ של התהליך. due_on
+ * של משימות נכתב בתאריך המקומי, ולכן גם "היום" שמולו משווים חייב להיות מקומי.
+ */
+export function localYmd(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: LOCAL_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+}
+
 const DAY_MS = 86400000;
 const EXPIRE_MS = DAY_MS; // משימת כתיבה/וואטסאפ שהמועד שלה עבר ביותר מזה — כבר לא רלוונטית
 
@@ -24,8 +36,11 @@ const AUTO_ASSIGN_KINDS = ['write', 'swap', 'publish'];
  *   write / swap   — לפוסט יש תוכן עם גרסה מוכנה לערוץ שלו (post_ready), הוא
  *                    אושר או פורסם, או שהמועד עבר ביותר מיממה. תוכן בלי
  *                    גרסה מוכנה לערוץ הזה — עוד יש מה לכתוב
- *   publish (wa)   — הפוסט פורסם, או שהמועד עבר ביותר מיממה (התראת "עבר
- *                    המועד" ממשיכה להציג אותו שבוע)
+ *   publish (יום)  — משימת "לפרסם היום" (meta.publish_day, סעיף 1): הפוסט
+ *                    פורסם, הוזז ליום אחר (moved), או שהיום שלה נגמר
+ *                    (expired) — ואז הוא עובר לרשימת "לא אושר שיצא"
+ *   publish (wa)   — משימת וואטסאפ ישנה (לפני publish_day): הפוסט פורסם, או
+ *                    שהמועד עבר ביותר מיממה
  *   failed         — הפוסט פורסם, או אושר שוב למועד עתידי
  *   approve        — הפוסט כבר לא ממתין לאישור
  */
@@ -47,6 +62,11 @@ export function taskCloseReason(t, now = new Date()) {
       if (t.post_content_id != null && t.post_ready) return 'has_content';
       return expired ? 'expired' : null;
     case 'publish':
+      if (t.meta?.publish_day) {
+        if (published) return 'published';
+        if (t.post_local_date && t.due_on && t.post_local_date !== t.due_on) return 'moved';
+        return t.due_on && localYmd(now) > t.due_on ? 'expired' : null;
+      }
       if (!t.meta?.wa_send) return null; // משימת פרסום ידנית ישנה — נשארת לאדם
       if (published) return 'published';
       return expired ? 'expired' : null;
@@ -98,8 +118,9 @@ export async function closeResolvedTasksSafely() {
  */
 export async function closeResolvedTasks(now = new Date()) {
   const open = await rows(
-    `select t.id, t.kind, t.meta, t.post_id, t.assignee_id, t.done,
+    `select t.id, t.kind, t.meta, t.post_id, t.assignee_id, t.done, t.due_on,
             p.status as post_status, p.content_id as post_content_id,
+            (p.scheduled_at at time zone 'Asia/Jerusalem')::date::text as post_local_date,
             p.scheduled_at as post_scheduled_at, p.assignee_id as post_assignee_id,
             exists (select 1 from content_variants v
                      where v.content_id = p.content_id and v.channel_id = p.channel_id
@@ -148,13 +169,20 @@ export async function closeResolvedTasks(now = new Date()) {
 
 /* ========================= סימן אחד לכל פוסט ========================= */
 
-/** איזו התראה מתייתרת כשיש משימה פתוחה מאיזה סוג (המשימה היא ה-to-do) */
-const ALERT_COVERED_BY = { approval: 'approve', 'no-text': 'write' };
+/**
+ * איזו התראה מתייתרת כשיש משימה פתוחה מאילו סוגים (המשימה היא ה-to-do).
+ * "לא אושר שיצא" לא כאן: היא מרוכזת, ופוסט עם משימת "לפרסם היום" פתוחה
+ * כבר לא נספר בה (unconfirmedPosts).
+ */
+export const ALERT_COVERED_BY = { approval: ['approve'], 'no-text': ['write', 'swap'] };
+
+/** סוגי המשימות שמכסים התראה כלשהי — מה ש-buildAlerts שולף */
+export const COVERING_TASK_KINDS = [...new Set(Object.values(ALERT_COVERED_BY).flat())];
 
 /**
  * מסיר התראות שמשימה פתוחה כבר מכסה: "ממתין לאישור" כשיש משימת אישור,
- * "אין טקסט" כשיש משימת כתיבה לאותו פוסט. התראת כשל (crit) נשארת גם
- * כשיש משימת כשל — זה מצב חוסם, לא רק תזכורת.
+ * "חסר תוכן" כשיש משימת כתיבה או הצעת החלפה לאותו פוסט. התראת כשל (crit)
+ * נשארת גם כשיש משימת כשל — זה מצב חוסם, לא רק תזכורת.
  * openTasks: [{post_id, kind}] — משימות פתוחות שלא נדחו.
  */
 export function suppressTaskedAlerts(alerts, openTasks) {
@@ -162,6 +190,6 @@ export function suppressTaskedAlerts(alerts, openTasks) {
   return alerts.filter((a) => {
     if (a.post_id == null) return true;
     const prefix = Object.keys(ALERT_COVERED_BY).find((p) => a.id === `${p}-${a.post_id}`);
-    return !prefix || !covered.has(`${ALERT_COVERED_BY[prefix]}:${a.post_id}`);
+    return !prefix || !ALERT_COVERED_BY[prefix].some((k) => covered.has(`${k}:${a.post_id}`));
   });
 }

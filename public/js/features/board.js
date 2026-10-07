@@ -69,7 +69,7 @@ export async function renderBoard() {
       const drop = editable && !blocked
         ? `data-drop-channel="${ch.id}" data-drop-date="${day.date}"` : '';
       // הוספה ידנית של פוסט — לא נוגעת בכלום אחר בלוח, רק פותחת משבצת חדשה
-      const add = editable && !blocked
+      const add = editable && !blocked && day.date >= today
         ? `<button type="button" class="addslot" data-add-slot
              data-channel="${ch.id}" data-date="${day.date}"
              data-channel-name="${esc(ch.name)}" title="הוסף פוסט">+</button>` : '';
@@ -206,14 +206,23 @@ export async function renderBoard() {
  * (red/yellow/blue/auto). hint — פרט משני (יש מה לשייך לפוסט בלי תוכן).
  */
 function statusTag(p) {
+  // מבצע דחוף בלי תוכן — כותרת בלבד בכוונה, לא "אין תוכן" (סעיף 26)
+  if (!p.content_id && p.urgent && p.status !== 'hole' && !AUTO_TAG[p.status] && p.status !== 'published') {
+    return isMissed(p) ? { cls: 'orange', label: 'המועד עבר', hint: 'כותרת בלבד' } : URGENT_TAG;
+  }
   if (p.status === 'hole' || (!p.content_id && !AUTO_TAG[p.status] && p.status !== 'published')) {
     // שורות 'hole' ישנות: ה"סיבה" שהמנוע כתב אומרת אם יש טיוטה (findHoles ב-engine.js)
     const hint = p.status === 'hole'
       ? ((p.note ?? '').includes('יש תוכן') ? 'יש טיוטה לשייך' : '')
       : p.content_hint === 'ready' ? 'יש תוכן מוכן לשייך'
       : p.content_hint ? 'יש טיוטה לשייך' : '';
-    if (isMissed(p)) return { cls: 'orange', label: 'המועד עבר', hint: 'אין תוכן' };
+    // בלי תוכן — תמיד "אין תוכן" באדום, גם כשהמועד עבר: זה מה שצריך לטפל בו
     return { cls: 'red', label: 'אין תוכן', hint };
+  }
+  // תוכן משויך בלי טקסט ובלי מדיה (כותרת בלבד) — גם "אין תוכן" (סעיף 20;
+  // השרת מחליט — contentState ב-readiness.js, אותה הגדרה כמו ההתראה)
+  if (p.content_empty && !AUTO_TAG[p.status] && p.status !== 'published') {
+    return { cls: 'red', label: 'אין תוכן', hint: 'יש רק כותרת' };
   }
   if (p.status === 'pending_approval') return { cls: 'yellow', label: 'ממתין לאישור' };
   if (p.status === 'published') {
@@ -223,10 +232,17 @@ function statusTag(p) {
   const hub = newsletterHubTag(p); // ניוזלטר שהועבר — "ממתין לאישור ב-HUB"
   if (hub) return hub;
   if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
+  // "מוכן" שלא יעבור את בדיקת הפרסום — אותה בדיקה כמו התא בטבלה (סעיף 21)
+  if (p.variant_status === 'ready' && p.ready_warn) {
+    return { cls: 'orange', label: 'מוכן ⚠', hint: shortReason(p.ready_warn) };
+  }
   return p.variant_status === 'ready'
     ? { cls: 'auto', label: 'מוכן לפרסום' }
     : { cls: 'blue', label: 'טיוטה', hint: 'התוכן עוד לא מוכן' };
 }
+
+/** "הכיתוב ארוך מדי לאינסטגרם — 2,300 תווים…" → החלק שלפני הפירוט, לכרטיס הקטן */
+const shortReason = (r) => String(r).split(' — ')[0];
 
 /** שורת המצב בתחתית הכרטיס: נקודה בגוון + המילים, ופרט משני באפור */
 const statusLine = (t) => `<div class="pst ${t.cls}"><i></i>${esc(t.label)}${
@@ -256,7 +272,7 @@ function phoneDays(b, editable) {
       .flatMap((ch) => (ch.days.find((x) => x.date === d.date)?.posts ?? [])
         .map((p) => ({ ...p, channel_name: ch.name })))
       .sort((x, y) => new Date(x.scheduled_at) - new Date(y.scheduled_at));
-    const add = editable
+    const add = editable && d.date >= today
       ? `<button type="button" class="btn small mday-add" data-add-day="${d.date}"
            aria-label="הוסף פוסט ליום ${esc(d.label)}">+ פוסט</button>` : '';
     return `<section class="mday${d.date === today ? ' today' : ''}">
@@ -342,6 +358,12 @@ function wireBoardDrag() {
   });
 }
 
+/**
+ * מבצע דחוף (/urgent/commit) נולד בלי תוכן — כותרת בלבד, בכוונה. זה לא
+ * "חסר תוכן": לא תגית אדומה ולא מסגרת מקווקוות, אלא התגית הרגילה.
+ */
+const URGENT_TAG = { cls: 'blue', label: 'כותרת בלבד' }; // ⚡ בראש הכרטיס כבר אומר דחוף
+
 // מצבי מסלול הפרסום האוטומטי — תג במקום תגית התוכן, כי הם חזקים ממנה
 const AUTO_TAG = {
   approved:   { cls: 'auto', label: 'יתפרסם אוטומטית' },
@@ -357,14 +379,14 @@ function postCard(p) {
   // הכותרת לא בכרטיס (קטן ומהיר לסריקה) — רק בריחוף ובחלון הפוסט
   const title = p.status === 'hole' ? '' : p.title;
   const tip = `${title ? `${title} · ` : ''}${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}` +
-              `${p.urgent ? ' · דחוף' : ''}${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
+              `${p.urgent ? ' · דחוף' : ''}${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}` +
+              `${p.ready_warn && p.status !== 'published' ? ` · ${p.ready_warn}` : ''}`;
 
   // הכרטיס כולו בצבע נקודת הקצה — אותו צבע כמו הבלוק שלה במקרא שבתחתית —
   // ושם הנקודה כתוב בראשו.
   // מתחת: הסוג והשעה, ושורת מצב אחת במילים.
   const tag = statusTag(p);
-  const missing = p.status === 'hole' || (!p.content_id && p.status !== 'published');
-  const cls = ['post', p.status === 'published' && 'published', missing && 'missing',
+  const cls = ['post', p.status === 'published' && 'published',
     p.status === 'failed' && 'failed'].filter(Boolean).join(' ');
   const lines = `
     <span class="pep">${p.urgent ? '⚡ ' : ''}${esc(p.endpoint_name ?? '')}</span>

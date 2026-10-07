@@ -10,7 +10,7 @@
  * R2 בשרת — אלה מצב של המערכת, לא של התוכן שהמשתמש כתב.
  */
 
-import { newsletterContentBlocker } from './newsletter.js';
+import { hasNewsletterContent, newsletterContentBlocker } from './newsletter.js';
 import { IG_LIMITS, countHashtags, countMentions } from '../../public/js/core/socialRules.js';
 
 const isMedia = (m) => /^(image|video)\//.test(m ?? '');
@@ -124,8 +124,38 @@ export function contentBlocker({ platform, variant, assets = [] }) {
   // קישור נפרד יוצא רק בפייסבוק — בוואטסאפ/ידני הוא לא חלק מהטקסט
   const link = platform === 'facebook' ? String(m.link ?? '').trim() : '';
   if (link && !validLink(link)) return 'הקישור לא תקין — צריך כתובת מלאה שמתחילה ב-https://';
-  if (!media.length && !text && !link) return 'אין טקסט ואין מדיה — אין מה לפרסם';
+  if (isEmptyContent({ platform, variant: v, assets })) return 'אין טקסט ואין מדיה — אין מה לפרסם';
   return null;
+}
+
+/**
+ * "חסר תוכן" של פוסט שיש לו תוכן משויך (סעיף 20): הגרסה לערוץ בלי טקסט
+ * ובלי מדיה — כותרת בלבד. **ההגדרה היחידה של "אין טקסט"**: גם contentBlocker
+ * (למעלה) נשען עליה, וגם הלוח, התראת "חסר תוכן" ומשימת "לכתוב"
+ * (postContentStates ב-board.js). ניוזלטר — אין גוף ואין שדה שמולא בעורך
+ * ה-HUB (hasNewsletterContent, אותו כלל כמו ההעברה). קישור של פייסבוק הוא
+ * תוכן (פוסט קישור). בלי גרסה לערוץ בכלל — ריק.
+ */
+export function isEmptyContent({ platform, variant, assets = [] }) {
+  if (platform === 'newsletter') return !hasNewsletterContent(variant);
+  const v = variant ?? {};
+  if (String(v.body ?? '').trim()) return false;
+  if (postMedia({ variant: v, assets }).length) return false;
+  return !(platform === 'facebook' && String(v.meta?.link ?? '').trim());
+}
+
+/**
+ * מצב התוכן של פוסט לתצוגה — אותם כללים כמו תא הטבלה (readyWarn ב-campaigns.js)
+ * והפרסום: empty — חסר תוכן (isEmptyContent); warn — הגרסה סומנה "מוכן" אבל
+ * לא תעבור את בדיקת הפרסום (contentBlocker), אחרת null. פוסט ריק לא מקבל warn —
+ * "חסר תוכן" חזק ממנו.
+ * @param {{platform:string, variant:object|null, assets?:{id?:number, mime:string}[]}} p
+ */
+export function contentState({ platform, variant, assets = [] }) {
+  const empty = isEmptyContent({ platform, variant, assets });
+  const warn = !empty && variant?.status === 'ready'
+    ? contentBlocker({ platform, variant, assets }) : null;
+  return { empty, warn };
 }
 
 /** ההודעה למשתמש כשהסימון "מוכן" נדחה */

@@ -377,6 +377,12 @@ alter table tasks add column if not exists meta jsonb;
 create unique index if not exists tasks_open_failed_post_idx
   on tasks (post_id) where kind = 'failed' and done = false;
 
+-- משימת "לפרסם היום" (meta.publish_day — סעיף 1 בשיפורי ההתנהגות): אחת
+-- לכל פוסט ליום, גם אחרי שנסגרה (on conflict ב-runner.js). רק משימות עם
+-- הדגל — משימות וואטסאפ ישנות לא נכנסות לאינדקס ולא יכולות להפיל אותו.
+create unique index if not exists tasks_publish_day_uidx
+  on tasks (post_id, due_on) where kind = 'publish' and (meta->>'publish_day') = 'true';
+
 -- "דחה עד מחר": משימה שנדחתה לא מוצגת ברשימה הפתוחה ולא נספרת בתגית
 -- עד הזמן הזה. null = לא נדחתה.
 alter table tasks add column if not exists snoozed_until timestamptz;

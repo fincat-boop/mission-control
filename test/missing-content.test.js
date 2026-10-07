@@ -1,7 +1,7 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { missedWithoutNoText, missingContentAlerts } from '../src/alerts.js';
+import { missingContentAlerts } from '../src/alerts.js';
 import { suppressTaskedAlerts } from '../src/task-lifecycle.js';
 
 /**
@@ -36,15 +36,4 @@ test('missingContentAlerts — משימת "לכתוב" פתוחה על הפוס�
   const alerts = missingContentAlerts([post(1, 10), post(2, 24 * 4)], { now });
   const shown = suppressTaskedAlerts(alerts, [{ post_id: 2, kind: 'write' }]);
   assert.deepEqual(shown.map((a) => a.id), ['no-text-1']);
-});
-
-test('missedWithoutNoText — "חסר תוכן" מחליף "עבר המועד" רק כשהוא מוצג (משימה מכסה אותו)', () => {
-  const noText = missingContentAlerts([post(1, -20), post(2, -30)], { now });
-  const missed = [{ id: 1 }, { id: 2 }, { id: 3 }];
-  // לפוסט 2 משימת "לכתוב" פתוחה: "חסר תוכן" מוסתר, ולכן "עבר המועד" נשאר
-  const r = missedWithoutNoText(noText, missed, [{ post_id: 2, kind: 'write' }]);
-  assert.deepEqual(r.noText.map((a) => a.id), ['no-text-1']);
-  assert.deepEqual(r.missed.map((p) => p.id), [2, 3]);
-  // בלי משימות — רק פוסט 3 (עם תוכן) מקבל "עבר המועד"
-  assert.deepEqual(missedWithoutNoText(noText, missed).missed.map((p) => p.id), [3]);
 });

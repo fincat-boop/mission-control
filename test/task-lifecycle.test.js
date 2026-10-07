@@ -1,7 +1,9 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoAssignee, suppressTaskedAlerts, taskCloseReason } from '../src/task-lifecycle.js';
+import {
+  COVERING_TASK_KINDS, autoAssignee, suppressTaskedAlerts, taskCloseReason,
+} from '../src/task-lifecycle.js';
 import {
   BULK_MAX, approveTaskBlocked, groupTasks, invalidTaskShape, isDbId, isRealDate, isSnoozed, parseBulkIds,
 } from '../src/routes/tasks.js';
@@ -37,6 +39,21 @@ test('publish (וואטסאפ) — נסגרת כשפורסם או יממה אח�
   assert.equal(taskCloseReason(task('publish', { post_scheduled_at: at(-25) }, wa), NOW), 'expired');
   // בלי wa_send — לא נוגעים
   assert.equal(taskCloseReason(task('publish', { post_status: 'published' }), NOW), null);
+});
+
+test('publish (לפרסם היום) — נסגרת כשפורסם, כשהוזז ליום אחר, או כשהיום שלה נגמר', () => {
+  // NOW = 2026-10-05 15:00 בישראל
+  const day = { meta: { publish_day: true }, due_on: '2026-10-05' };
+  const today = { post_local_date: '2026-10-05' };
+  assert.equal(taskCloseReason(task('publish', today, day), NOW), null);
+  assert.equal(taskCloseReason(task('publish', { ...today, post_status: 'published' }, day), NOW), 'published');
+  assert.equal(taskCloseReason(task('publish', { post_local_date: '2026-10-07' }, day), NOW), 'moved');
+  // עבר המועד באותו יום — עוד בתוקף (המשימה מכסה את הפוסט עד סוף היום)
+  assert.equal(taskCloseReason(task('publish', { ...today, post_scheduled_at: at(-5) }, day), NOW), null);
+  // למחרת — פג תוקף, והפוסט עובר לרשימת "לא אושר שיצא"
+  const tomorrow = new Date('2026-10-05T21:30:00Z'); // 00:30 ב-6.10 בישראל
+  assert.equal(taskCloseReason(task('publish', today, day), tomorrow), 'expired');
+  assert.equal(taskCloseReason(task('publish', { post_status: null }, day), NOW), 'post_deleted');
 });
 
 test('failed — נסגרת כשפורסם, כשאושר שוב למועד עתידי, או כשהפוסט נמחק', () => {
@@ -92,6 +109,13 @@ test('suppressTaskedAlerts — אישור/בלי טקסט מוסתרים כשי�
   ];
   assert.deepEqual(suppressTaskedAlerts(alerts, open).map((a) => a.id),
     ['approval-2', 'no-text-4', 'post-failed-5', 'storage']);
+});
+
+test('suppressTaskedAlerts — הצעת החלפה (swap) מכסה "חסר תוכן" (סעיף 28); משימת פרסום לא', () => {
+  const alerts = [{ id: 'no-text-3', post_id: 3 }, { id: 'no-text-4', post_id: 4 }];
+  const open = [{ post_id: 3, kind: 'swap' }, { post_id: 4, kind: 'publish' }];
+  assert.deepEqual(suppressTaskedAlerts(alerts, open).map((a) => a.id), ['no-text-4']);
+  assert.deepEqual([...COVERING_TASK_KINDS].sort(), ['approve', 'swap', 'write']);
 });
 
 /* ========================= דחייה ========================= */

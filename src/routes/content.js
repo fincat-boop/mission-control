@@ -14,9 +14,9 @@ import { assistantReady } from '../assistant.js';
 import { extract } from '../extract.js';
 import { analyzeDocument } from '../analyze.js';
 import {
-  LinkError, applyLinkPlan, assetOwnerId, autoLinkNew, itemAssetsSql, linkGroup, linkRulesError,
-  linkRulesPlan, linkSlots, linkedBetween, lockLinkScope, mediaOwner, normalizeLinkRules,
-  releaseLinks, syncFrom, unlink,
+  LinkError, applyLinkPlan, assetOwnerId, autoLinkNew, copyAssetsTo, itemAssetsSql, linkGroup,
+  linkRulesError, linkRulesPlan, linkSlots, linkedBetween, lockLinkScope, mediaOwner,
+  normalizeLinkRules, releaseLinks, syncFrom, unlink,
 } from '../links.js';
 import { contentBlocker, metaExtrasError, readyRejection } from '../publish/readiness.js';
 import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
@@ -484,7 +484,9 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     );
     // קישור עמודות של הקמפיין: הפוסט מועתק למשבצת הפנויה הבאה בעמודות היעד
     const copied = await autoLinkNew(c.id);
-    const engine = await fillFor(c, b.week);
+    // fill: false — משבצת שנפתחה מפוסט על הלוח (סעיף 17): הטופס משייך אותה
+    // לפוסט הזה מיד אחרי היצירה, ומילוי עכשיו היה משבץ אותה גם במקום אחר
+    const engine = b.fill === false ? null : await fillFor(c, b.week);
     // variant — לנעילה האופטימית של השמירה הבאה מאותו טופס (updated_at)
     return res.status(201).json({ content: c, variant, copied, engine });
   }
@@ -770,6 +772,35 @@ r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
     if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
     res.status(201).json({ assets: await saveAssets(req.files, owner.contentId, null) });
   }));
+
+/**
+ * "העתק מ־" עם "כולל קבצים" בחלון המשבצת (סעיף 18): הקבצים של פוסט אחר
+ * באותו קמפיין מועתקים לפוסט הזה — עותקים עצמאיים (copyAssetsTo, כמו
+ * בניתוק), לא קישור. מקור מקושר — הקבצים של המקור שלו; יעד מקושר — נרשמים
+ * על המקור של היעד (mediaOwner), ומשם כל הקבוצה רואה אותם.
+ */
+r.post('/content/:id/copy-assets', requirePerm('content'), wrap(async (req, res) => {
+  const fromId = Number(req.body?.from);
+  if (!Number.isInteger(fromId) || fromId <= 0) return bad(res, 'צריך לבחור מאיפה להעתיק');
+  const owner = await mediaOwner(req.params.id);
+  if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
+  // בזו אחר זו — client אחד לבקשה
+  const item = (id) => one('select id, campaign_id, linked_to_id from content_items where id = $1', [id]);
+  const to = await item(req.params.id);
+  const from = await item(fromId);
+  if (!from) return bad(res, 'לא נמצא התוכן להעתקה', 404);
+  if (!to.campaign_id || from.campaign_id !== to.campaign_id) {
+    return bad(res, 'מעתיקים קבצים רק מפוסט באותו קמפיין');
+  }
+  // רק קמפיין כללי: בזוויות הקבצים של כל הגרסאות היו הופכים למשותפים ביעד
+  const camp = await one('select structure from campaigns where id = $1', [to.campaign_id]);
+  if (camp?.structure !== 'general') return bad(res, 'העתקת קבצים — רק בקמפיין כללי');
+  const source = assetOwnerId(from);
+  if (source === owner.contentId) return bad(res, 'הקבצים כבר משותפים לשני הפוסטים (מקושרים)');
+  let copied;
+  try { copied = await copyAssetsTo(source, owner.contentId); } catch (e) { return linkFail(res, e); }
+  res.json({ copied, warns: await readyWarns(owner.contentId) });
+}));
 
 /** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
 r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),

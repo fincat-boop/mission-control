@@ -1,11 +1,12 @@
 import { currentOrg, one, rows } from './db.js';
 import { isPlatformOrg } from './platform.js';
-import { effectiveCadenceDays, ymd } from './board.js';
+import { effectiveCadenceDays, postContentStates, ymd } from './board.js';
 import { campaignsWithHealth } from './campaigns.js';
 import { postsOnBlockedDays } from './respace.js';
-import { suppressTaskedAlerts } from './task-lifecycle.js';
+import { COVERING_TASK_KINDS, suppressTaskedAlerts } from './task-lifecycle.js';
 import { backupAlerts, readBackupLayers } from './backup-status.js';
 import { mediaReady } from './media.js';
+import { UNCONFIRMED_SQL, unconfirmedAlert, unconfirmedPosts } from './unconfirmed.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -33,20 +34,35 @@ export async function buildAlerts(user = null) {
   const endpoints = await endpointsWithoutAir();
   // פוסטים בלי תוכן: כל מה שיוצא בתוך content_alert_hours, ופוסטים שהמנוע
   // פתח כחסרי תוכן (auto_hole, status='scheduled' — לא 'hole') בשבוע הקרוב
-  // או שהמועד שלהם עבר ביומיים האחרונים (missingContentAlerts)
-  const withoutContent = await rows(
-    `select p.id, p.title, p.scheduled_at, p.auto_hole,
-            e.name as endpoint_name, c.name as channel_name
+  // או שהמועד שלהם עבר ביומיים האחרונים (missingContentAlerts).
+  // מבצע דחוף (urgent) — כותרת בלבד בכוונה (/urgent/commit), לא "חסר תוכן".
+  // תוכן משויך בלי טקסט ובלי מדיה (טיוטה עם כותרת בלבד) — גם "חסר תוכן"
+  // (סעיף 20). ההחלטה — isEmptyContent (readiness.js), אותה הגדרה כמו הלוח
+  // והפרסום; בשאילתה רק החלון (48 שעות / שבוע לממלאי מקום), לא כלל משלה.
+  const noContentCandidates = await rows(
+    `select p.id, p.title, p.scheduled_at, p.auto_hole, p.content_id, p.channel_id,
+            e.name as endpoint_name, c.name as channel_name, c.platform,
+            v.status as variant_status, v.body as variant_body, v.meta as variant_meta
        from posts p
        left join endpoints e on e.id = p.endpoint_id
        left join channels c  on c.id = p.channel_id
-      where p.status = 'scheduled' and p.content_id is null and p.published_at is null
+       left join content_variants v on v.content_id = p.content_id and v.channel_id = p.channel_id
+      where p.status = 'scheduled' and p.published_at is null
+        and not p.urgent
+        -- תוכן ריק שהמועד שלו עבר נספר ב"לא סומנו כפורסמו" (UNCONFIRMED_SQL) — סימן אחד
+        and (p.content_id is null or p.scheduled_at >= now())
+        -- פוסט של קמפיין מושהה לא על הלוח — אין מה לכתוב לו עכשיו
+        and not exists (select 1 from content_items ci join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)
         and (p.scheduled_at between now() and now() + ($1 || ' hours')::interval
              or (p.auto_hole and p.scheduled_at between now() - interval '${HOLE_PAST_DAYS} days'
                                                     and now() + interval '${HOLE_AHEAD_DAYS} days'))
       order by p.scheduled_at`,
     [alertHours]
   );
+  const contentStates = await postContentStates(noContentCandidates);
+  const withoutContent = noContentCandidates.filter((p) =>
+    !p.content_id || contentStates.get(p.id)?.empty);
   const pending = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
           from posts p left join channels c on c.id = p.channel_id
          where p.status = 'pending_approval' order by p.scheduled_at`);
@@ -58,21 +74,13 @@ export async function buildAlerts(user = null) {
                              join campaigns ca on ca.id = ci.campaign_id
                             where ci.id = p.content_id and ca.paused_at is not null)
          order by p.scheduled_at`);
-  // המועד עבר ואף אחד לא פרסם/סימן. חצי שעה חסד — וואטסאפ נשלח ידנית,
-  // ופרסום אוטומטי עוד יכול להיות בדרך.
-  const missed = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
-          from posts p left join channels c on c.id = p.channel_id
-         where p.status in ('scheduled','approved') and p.published_at is null
-           and not exists (select 1 from content_items ci
-                             join campaigns ca on ca.id = ci.campaign_id
-                            where ci.id = p.content_id and ca.paused_at is not null)
-           and p.scheduled_at between now() - interval '7 days'
-                                  and now() - interval '30 minutes'
-         order by p.scheduled_at`);
+  // המועד עבר ואף אחד לא סימן שפורסם — "לא אושר שיצא" (unconfirmed.js).
+  // התראה מרוכזת אחת במקום התראה לכל פוסט, ובלי חיתוך של שבוע.
+  const unconfirmed = await unconfirmedPosts();
   // משימות פתוחות (שלא נדחו) שכבר מכסות התראה על אותו פוסט — suppressTaskedAlerts
   const openTasks = await rows(`select post_id, kind from tasks
-         where not done and post_id is not null and kind in ('approve','write')
-           and (snoozed_until is null or snoozed_until <= now())`);
+         where not done and post_id is not null and kind = any($1::text[])
+           and (snoozed_until is null or snoozed_until <= now())`, [COVERING_TASK_KINDS]);
   const backupLayers = await readBackupLayers();
 
   const alerts = [];
@@ -80,17 +88,16 @@ export async function buildAlerts(user = null) {
 
   alerts.push(...campaignAlerts(campaigns, today));
 
-  // חסר תוכן — התראה אחת לפוסט; פוסט בלי תוכן שהמועד שלו עבר מקבל אותה
-  // במקום "עבר המועד" (missedWithoutNoText)
-  const { noText, missed: missedShown } = missedWithoutNoText(
-    missingContentAlerts(withoutContent, { alertHours }), missed, openTasks);
-  alerts.push(...failedPostAlerts(failed), ...missedPostAlerts(missedShown));
+  // חסר תוכן — התראה אחת לפוסט. ממלא מקום של המנוע (auto_hole) שהמועד שלו
+  // עבר מקבל אותה, ולא נכנס ל"לא אושר שיצא" (UNCONFIRMED_SQL) — סימן אחד
+  const noText = missingContentAlerts(withoutContent, { alertHours });
+  alerts.push(...failedPostAlerts(failed), ...unconfirmedAlert(unconfirmed));
 
   for (const e of endpoints) {
     const cadence = effectiveCadenceDays(e);
     alerts.push({
       id: `endpoint-air-${e.id}`,
-      level: e.days_over >= cadence ? 'crit' : 'warn',
+      level: e.level,
       title: `${e.name} לא מפרסמת`,
       detail: e.days_since === null
         ? `עוד לא פורסם ממנה כלום — נוספה לפני ${e.days_over} ימים, התדירות לפי החשיבות היא כל ${cadence} ימים`
@@ -262,7 +269,8 @@ const heDate = (d) => new Date(d).toLocaleDateString('he-IL');
  *                    (missing_ahead): שורה שהתאריך שלה עבר כבר לא תשובץ, ואין
  *                    טעם לבקש לכתוב לה. קמפיין מוכן — הטיוטות (כולן עוד יכולות
  *                    לצאת עד הסוף).
- *   מפגר אחרי הקצב — רץ, ויצא פחות ממה שהקיבולת שלו (הנדרש) מצפה עד היום.
+ *   מפגר אחרי הקצב — רץ, ויצא (כולל מתוכנן להיום ולא אושר שיצא) פחות ממה
+ *                    שהקיבולת שלו מצפה עד היום — בפער של 2+ ו-20%+ (paceOf).
  *   תוכן שלא ייכנס — רץ או מתוכנן, ויש תוכן בלי פוסט שאין לו מקום עד הסוף
  *                    (unplaced). warn — בלי החלטה הוא פשוט לא יצא.
  *   הסתיים         — עד שבועיים אחרי הסוף, כשנשארו גרסאות מוכנות שלא פורסמו
@@ -305,13 +313,15 @@ export function campaignAlerts(campaigns, today) {
       }
     }
 
-    if (c.phase === 'running' && c.pace?.behind > 0) {
+    // רק פיגור של ממש (paceOf.lagging — 2+ ולפחות 20%), ו"יצאו" כולל מה
+    // שמתוכנן עד היום ומה שלא אושר שיצא (paceDone) — סעיפים 2, 29
+    if (c.phase === 'running' && c.pace?.lagging) {
       alerts.push({
         id: `campaign-pace-${c.id}`,
         level: 'warn',
         title: `מפגר אחרי הקצב: ${c.name}`,
         detail: `לפי המקום שיש לקמפיין בערוצים היו אמורים לצאת עד היום ${c.pace.expected_by_now} ` +
-                `פוסטים, יצאו ${c.pace.published}`,
+                `פוסטים, יצאו או מתוכננים להיום ${c.pace.done ?? c.pace.published}`,
         tab: 'plan',
         campaign_id: c.id,
       });
@@ -381,19 +391,6 @@ export function failedPostAlerts(list) {
   }));
 }
 
-/** התראה לכל פוסט שהמועד שלו עבר והוא לא פורסם ולא סומן "פורסם" */
-export function missedPostAlerts(list) {
-  return list.map((p) => ({
-    id: `post-missed-${p.id}`,
-    level: 'warn',
-    title: `עבר המועד ולא פורסם: ${p.title}`,
-    detail: [p.channel_name, shortWhen(p.scheduled_at),
-             'מפרסמים ומסמנים "פורסם", או משבצים מחדש'].filter(Boolean).join(' · '),
-    tab: 'board',
-    post_id: p.id,
-  }));
-}
-
 /**
  * "חסר תוכן" — התראה אחת לכל פוסט מתוכנן בלי תוכן (שורות מהשאילתה ב-
  * buildAlerts). טהורה.
@@ -403,7 +400,7 @@ export function missedPostAlerts(list) {
  * עלתה, ו"חסר תוכן לפוסט שמתפרסם בקרוב" (content_alert_hours). עכשיו אחת,
  * עם id אחד (no-text-<post>), כך שמשימת "לכתוב" פתוחה על הפוסט מכסה אותה
  * (suppressTaskedAlerts — סימן אחד לכל פוסט):
- *   המועד עבר (עד יומיים)    — crit, במקום "עבר המועד ולא פורסם"
+ *   המועד עבר (עד יומיים)    — crit (ממלא מקום של המנוע לא נכנס ל"לא אושר שיצא")
  *   בתוך content_alert_hours — crit
  *   אחרת (auto_hole, עד שבוע) — warn
  */
@@ -411,7 +408,9 @@ export function missingContentAlerts(list, { alertHours = 48, now = new Date() }
   const soonUntil = now.getTime() + alertHours * 3600000;
   return list.map((p) => {
     const at = new Date(p.scheduled_at).getTime();
-    const where = [p.channel_name, shortWhen(p.scheduled_at)].filter(Boolean);
+    // תוכן משויך בלי טקסט ובלי מדיה (סעיף 20) — אומרים שיש רק כותרת
+    const where = [p.channel_name, shortWhen(p.scheduled_at),
+                   p.content_id ? 'יש רק כותרת' : null].filter(Boolean);
     if (at <= now.getTime()) {
       return {
         id: `no-text-${p.id}`,
@@ -444,38 +443,45 @@ export function missingContentAlerts(list, { alertHours = 48, now = new Date() }
 }
 
 /**
- * פוסט בלי תוכן שהמועד שלו עבר: "חסר תוכן" מחליף את "עבר המועד" — אבל רק
- * כשהיא באמת מוצגת. משימת "לכתוב" פתוחה מכסה את "חסר תוכן"
- * (suppressTaskedAlerts), ומשימה לא מכסה "עבר המועד" — אחרת פוסט שהמועד
- * שלו עבר היה נשאר בלי שום התראה. טהורה.
- * @returns {{noText:object[], missed:object[]}} מה שנשאר מכל אחת
- */
-export function missedWithoutNoText(noText, missed, openTasks = []) {
-  const shown = suppressTaskedAlerts(noText, openTasks);
-  const covered = new Set(shown.map((a) => a.post_id));
-  return { noText: shown, missed: missed.filter((p) => !covered.has(p.id)) };
-}
-
-/**
  * האם נקודת קצה עברה את הקצב שלה בלי פרסום. null = בסדר.
  * נקודה שעוד לא פורסם ממנה כלום נמדדת מיום שנוספה — אחרת נקודה חדשה
  * מקבלת "לא מפרסמת" חוסם בדקה הראשונה, לפני שהיה לה בכלל סיכוי.
+ * הכיול (סעיף 29): מעל הקצב — warn; פי שניים ממנו — crit; ואין התראה בכלל
+ * כשפוסט חי שלה מתוכנן בתוך הקצב הקרוב (next_at) — היא כבר בדרך.
  */
 export function endpointAirStatus(e, now = new Date()) {
   const cadence = effectiveCadenceDays(e);
   const daysSince = e.last_at ? Math.floor((now - new Date(e.last_at)) / DAY) : null;
   const daysRef = daysSince ?? (e.created_at ? Math.floor((now - new Date(e.created_at)) / DAY) : 999);
   if (daysRef <= cadence) return null;
-  return { days_since: daysSince, days_over: daysRef };
+  if (e.next_at && (new Date(e.next_at) - now) / DAY <= cadence) return null;
+  return { days_since: daysSince, days_over: daysRef, level: daysRef >= 2 * cadence ? 'crit' : 'warn' };
 }
 
-/** נקודות קצה שעברו את הקצב שהוגדר להן בלי פרסום */
+/**
+ * נקודות קצה שעברו את הקצב שהוגדר להן בלי פרסום. "הפרסום האחרון" כולל גם
+ * פוסט שלא אושר שיצא (UNCONFIRMED_SQL, לפי המועד שלו): לא ידוע ≠ לא יצא
+ * (החלטה ה1 — הוא לא מסומן אוטומטית, אבל גם לא מפיל את הנקודה ל"לא מפרסמת").
+ */
 async function endpointsWithoutAir() {
+  // next_at — הפוסט החי הבא שלה (ערוץ פעיל, קמפיין לא מושהה): בתוך הקצב = בדרך
   const list = await rows(
     `select e.id, e.name, e.importance, e.created_at,
-            max(p.published_at) as last_at
+            max(case when p.status = 'published' then p.published_at
+                     else p.scheduled_at end) as last_at,
+            (select min(n.scheduled_at) from posts n
+               join channels nc on nc.id = n.channel_id and nc.active
+              where n.endpoint_id = e.id
+                and n.status in ('scheduled', 'approved', 'pending_approval', 'publishing')
+                and n.scheduled_at >= now()
+                and not (n.auto_hole and n.content_id is null)
+                and not exists (select 1 from content_items nci
+                                  join campaigns nca on nca.id = nci.campaign_id
+                                 where nci.id = n.content_id and nca.paused_at is not null)
+            ) as next_at
        from endpoints e
-       left join posts p on p.endpoint_id = e.id and p.status = 'published'
+       left join posts p on p.endpoint_id = e.id
+                        and (p.status = 'published' or ${UNCONFIRMED_SQL})
       where e.active = true
       group by e.id, e.name, e.importance, e.created_at`
   );

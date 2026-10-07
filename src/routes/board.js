@@ -11,9 +11,11 @@ import { hubMailReady } from '../hub-mail.js';
 import { emitPostEvent } from '../publish/runner.js';
 import { hubStale, hubUnverified } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
+import { contentState } from '../publish/readiness.js';
 import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
 import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
+import { unconfirmedPosts } from '../unconfirmed.js';
 
 /** פוסט שתופס את היום שלו על הלוח — אותם מצבים כמו במנוע (LIVE ב-gap.js) */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
@@ -34,6 +36,11 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
   }
+  // מועד שעבר לא יתפרסם לעולם (כמו בהזזה — moveBlocker). אותו יום בשעה
+  // מאוחרת יותר — בסדר.
+  const when = new Date(b.scheduled_at);
+  if (Number.isNaN(when.getTime())) return bad(res, 'המועד לא תקין');
+  if (when.getTime() < Date.now()) return bad(res, 'אי אפשר לשבץ פוסט לזמן שעבר');
   // אותם כללים קשיחים כמו בהזזה: יום שהערוץ חסם, ושני פוסטים לאותה נקודת
   // קצה באותו ערוץ באותו יום
   const target = await one('select name, blocked_days, active from channels where id = $1', [b.channel_id]);
@@ -57,13 +64,16 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
     return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
   }
 
+  // פוסט ידני נולד תמיד "מתוכנן": status מהגוף לא נקרא — אחרת אפשר ליצור
+  // פוסט מאושר (או "פורסם") בלי הרשאת אישור. מעברי סטטוס — רק בנתיבים
+  // הייעודיים (approve / publish / reject).
   const post = await one(
     `insert into posts (channel_id, endpoint_id, content_id, title, kind,
                         scheduled_at, status, assignee_id, urgent, note)
-     values ($1,$2,$3,$4,$5,$6,coalesce($7,'scheduled'),$8,coalesce($9,false),$10)
+     values ($1,$2,$3,$4,$5,$6,'scheduled',$7,coalesce($8,false),$9)
      returning *`,
     [b.channel_id, b.endpoint_id ?? null, b.content_id ?? null, b.title, b.kind,
-     b.scheduled_at, b.status ?? null, b.assignee_id ?? null, b.urgent ?? false, b.note ?? null]
+     b.scheduled_at, b.assignee_id ?? null, b.urgent ?? false, b.note ?? null]
   );
   res.status(201).json({ post });
 }));
@@ -326,6 +336,14 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
         [p.content_id, p.channel_id]).then((list) => list.map(assetView))
     : [];
 
+  // "חסר תוכן" (טיוטה בלי טקסט ובלי מדיה) ו"מוכן ⚠ <סיבה>" — אותה בדיקה
+  // כמו כרטיס הלוח והטבלה (contentState, readiness.js — סעיפים 20–21)
+  if (p.content_id) {
+    const st = contentState({ platform: p.platform, variant, assets });
+    p.content_empty = st.empty;
+    p.ready_warn = st.warn;
+  }
+
   // ניוזלטר שהועבר ל-HUB: האם השתנה משהו בלוח מאז (השינוי לא יגיע לשם)
   if (p.platform === 'newsletter') {
     p.hub_stale = hubStale({ post: p, variant });
@@ -481,7 +499,7 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     const planned = plannedDate(c);
     if (planned && day < planned) {
       return bad(res, `"${c.title}" מתוכנן ל-${planned} בקמפיין "${c.campaign_name}"` +
-        ' (קמפיין מוכן) — אי אפשר לשייך אותו לפוסט מוקדם יותר');
+        ' (סומן "סיימתי לכתוב") — אי אפשר לשייך אותו לפוסט מוקדם יותר');
     }
   }
   // פוסט בלי נקודת קצה מקבל את של התוכן — ואז חל עליו אותו כלל כמו בהזזה:
@@ -520,18 +538,53 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     content_id: c.id, title: c.title, kind: c.kind, endpoint_id: c.endpoint_id,
   });
   if (!done) return bad(res, 'הפוסט השתנה בינתיים — רעננו ונסו שוב', 409);
+  // תוכן בלי טקסט ובלי מדיה (כותרת בלבד) עדיין "חסר תוכן" (סעיף 20): משימת
+  // "לכתוב" שהשיוך סגר (attachToPost) נפתחת שוב — נסגרת כשהתוכן מוכן
+  // (taskCloseReason). הצעת החלפה נשארת סגורה: נבחר תוכן משלו.
+  const variant = await one(
+    'select status, body, meta from content_variants where content_id = $1 and channel_id = $2',
+    [c.id, post.channel_id]);
+  const files = await rows(itemAssetsSql('a.id, a.mime, a.variant_id'), [c.id, post.channel_id]);
+  const platform = (await one('select platform from channels where id = $1', [post.channel_id]))?.platform;
+  if (done.closed_task_ids.length && contentState({ platform, variant, assets: files }).empty) {
+    await query(
+      `update tasks set done = false, done_at = null
+        where id = any($1::int[]) and kind = 'write'`, [done.closed_task_ids]);
+  }
   res.json({ post: done.post, draft: c.variant_status !== 'ready',
              approval_reset: done.approval_reset });
 }));
 
+/** מאילו מצבים מותר לסמן "פורסם" ביד — לא ממתין לאישור, לא באמצע פרסום, לא פעמיים */
+export const MARKABLE_STATUSES = ['scheduled', 'approved', 'failed'];
+
+/**
+ * published_at של סימון ידני: המועד המתוכנן כשהוא כבר עבר (השעה האמיתית
+ * לא ידועה, ושעת הלחיצה — שבוע אחרי, לפעמים — בטוח לא נכונה), אחרת עכשיו.
+ * אותו ביטוי בסימון בודד ובסימון המרוכז.
+ */
+export const MARK_PUBLISHED_AT_SQL =
+  'case when p.scheduled_at < now() then p.scheduled_at else now() end';
+
+export const MARK_STATUS_ERROR = {
+  published: 'הפוסט כבר מסומן כפורסם',
+  publishing: 'הפוסט מתפרסם ממש עכשיו — אי אפשר לסמן אותו ביד',
+  pending_approval: 'הפוסט ממתין לאישור — קודם מאשרים או דוחים אותו',
+};
+
 /** סימון "פורסם" — מעדכן גם את המשימה הצמודה */
 r.post('/posts/:id/publish', requirePerm('content'), wrap(async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return bad(res, 'לא נמצא שיבוץ כזה', 404);
   const post = await one(
-    `update posts set status = 'published', published_at = now()
-      where id = $1 returning *`,
-    [req.params.id]
+    `update posts p set status = 'published', published_at = ${MARK_PUBLISHED_AT_SQL}
+      where p.id = $1 and p.status = any($2) returning *`,
+    [req.params.id, MARKABLE_STATUSES]
   );
-  if (!post) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  if (!post) {
+    const cur = await one('select status from posts where id = $1', [req.params.id]);
+    if (!cur) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+    return bad(res, MARK_STATUS_ERROR[cur.status] ?? 'אי אפשר לסמן את הפוסט הזה כפורסם', 409);
+  }
   await query(
     `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
     [post.id]
@@ -542,6 +595,53 @@ r.post('/posts/:id/publish', requirePerm('content'), wrap(async (req, res) => {
     ...post, channel_name: ch?.name, platform: ch?.platform,
   });
   res.json({ post });
+}));
+
+/** כמה פוסטים אפשר לסמן בבת אחת (כמו BULK_MAX של המשימות) */
+export const PUBLISH_BULK_MAX = 200;
+
+/** רשימת מזהים לסימון מרוכז: 1–200 מספרים שלמים חיוביים. { ids } או { error } */
+export function parsePostIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return { error: 'לא נבחרו פוסטים' };
+  if (ids.length > PUBLISH_BULK_MAX) return { error: `אפשר לסמן עד ${PUBLISH_BULK_MAX} פוסטים בבת אחת` };
+  const ok = ids.every((v) => /^\d+$/.test(String(v)) && Number(v) > 0 && Number(v) <= 2147483647);
+  if (!ok) return { error: 'רשימת הפוסטים לא תקינה' };
+  return { ids: [...new Set(ids.map(Number))] };
+}
+
+/** "לא אושר שיצא" — השורות של חלון האישור (אותה רשימה שההתראה סופרת) */
+r.get('/posts/unconfirmed', wrap(async (_req, res) => {
+  res.json({ posts: await unconfirmedPosts() });
+}));
+
+/**
+ * "סמן שפורסמו" מחלון האישור: אותו כלל כמו סימון בודד (MARKABLE_STATUSES,
+ * published_at = המועד כשהוא עבר) בפקודה אחת. מה שכבר לא במצב שמותר לסמן
+ * (סומן בינתיים, נמחק, ממתין לאישור) — מדולג ונספר ב-skipped.
+ */
+r.post('/posts/publish-bulk', requirePerm('content'), wrap(async (req, res) => {
+  const parsed = parsePostIds(req.body?.ids);
+  if (parsed.error) return bad(res, parsed.error);
+  const posts = await rows(
+    `update posts p set status = 'published', published_at = ${MARK_PUBLISHED_AT_SQL}
+      where p.id = any($1::int[]) and p.status = any($2) returning *`,
+    [parsed.ids, MARKABLE_STATUSES]
+  );
+  if (posts.length) {
+    const marked = posts.map((p) => p.id);
+    await query(
+      'update tasks set done = true, done_at = now() where post_id = any($1::int[]) and done = false',
+      [marked]);
+    // אירוע ל-HUB לכל פוסט — כמו בסימון בודד, אבל בלי לחכות: עשרות קריאות
+    // ברצף היו מחזיקות את הבקשה (ואת הטרנזקציה) פתוחה. לא זורק לעולם.
+    const chans = new Map((await rows('select id, name, platform from channels where id = any($1::int[])',
+      [[...new Set(posts.map((p) => p.channel_id))]])).map((c) => [c.id, c]));
+    for (const post of posts) {
+      const ch = chans.get(post.channel_id);
+      void emitPostEvent('post_published', { ...post, channel_name: ch?.name, platform: ch?.platform });
+    }
+  }
+  res.json({ marked: posts.length, skipped: parsed.ids.length - posts.length });
 }));
 
 /** ביטול "פורסם" — חוזר למתוכנן, למקרה שסימנו בטעות */
