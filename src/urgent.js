@@ -1,5 +1,5 @@
 import { one, rows } from './db.js';
-import { weekStart, ymd } from './board.js';
+import { weekMeta, weekStart, ymd } from './board.js';
 import { gapWarning } from './gap.js';
 import { takesRoomSql } from './engine.js';
 
@@ -41,8 +41,9 @@ export function urgentSlotTime(day, [h, m], now = new Date()) {
  * שבו עוד יש שטח, בלי לדחוף שום דבר מתוכנן.
  *
  * @param {{title?:string, until?:string, channel_ids?:number[], endpoint_id?:number}} input
+ * @param {{now?:Date}} [opts] now — לבדיקות; ברירת מחדל: עכשיו
  */
-export async function planUrgent(input) {
+export async function planUrgent(input, { now = new Date() } = {}) {
   const title = String(input.title ?? '').trim();
   const channelIds = (input.channel_ids ?? []).map(Number).filter(Boolean);
 
@@ -56,7 +57,6 @@ export async function planUrgent(input) {
   if (!hm) errors.push('שעה לא תקינה');
   if (errors.length) return { ok: false, errors, placements: [], warnings: [], displaced: [] };
 
-  const now = new Date();
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
 
@@ -77,16 +77,20 @@ export async function planUrgent(input) {
     return { ok: false, errors: ['הערוצים שנבחרו לא פעילים'], placements: [], warnings: [], displaced: [] };
   }
 
-  // כל מה שכבר משובץ בטווח הרלוונטי, כולל שבוע אחורה כדי לספור קיבולת שבועית נכון.
+  // כל מה שכבר משובץ בשבועות שהמבצע יכול לנחות בהם: מתחילת השבוע של היום
+  // ועד סוף השבוע של היום האחרון — המכסה השבועית נספרת על כל השבוע, ולא רק
+  // עד lastDay (קודם: דחוף עד שני בשבוע שמלא שלישי–שבת עוד נכנס לשני).
   // נכשל שהמועד שלו עבר לא עלה לאוויר ולא תופס מקום (takesRoom, כמו במנוע)
   const countFrom = weekStart(today);
+  const countTo = new Date(weekMeta(lastDay).endDate);
+  countTo.setHours(23, 59, 59, 999);
   const existing = await rows(
     `select id, channel_id, endpoint_id, kind, scheduled_at
        from posts p
       where status in ('scheduled','approved','publishing','failed','published','pending_approval')
-        and ${takesRoomSql('p')}
+        and ${takesRoomSql('p', '$3::timestamptz')}
         and scheduled_at >= $1 and scheduled_at <= $2`,
-    [countFrom, lastDay]
+    [countFrom, countTo, now]
   );
 
   // אותה נקודת קצה לא מקבלת שני פוסטים באותה מדיה באותו יום —

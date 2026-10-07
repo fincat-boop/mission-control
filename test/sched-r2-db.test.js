@@ -118,3 +118,101 @@ for (const [status, expectPlaced] of [['failed', true], ['scheduled', false], ['
       });
     });
 }
+
+/* ========================= מבצע דחוף ========================= */
+
+/** n פוסטים מתוכננים בערוץ, החל מ-firstDay (YYYY-MM-DD), יום אחרי יום */
+async function fillDays(x, firstDay, n) {
+  for (let i = 0; i < n; i += 1) {
+    const d = new Date(`${firstDay}T10:00:00`);
+    d.setDate(d.getDate() + i);
+    await inOrg(() => db.query(
+      `insert into posts (channel_id, endpoint_id, kind, title, status, scheduled_at)
+       values ($1, $2, 'value', 'קיים', 'scheduled', $3)`, [x.ch, x.ep, d]));
+  }
+}
+
+test('דחוף עד שני — שבוע שכבר מלא שלישי–שבת לא מקבל את שני', { skip }, async () => {
+  const { planUrgent } = await import('../src/urgent.js');
+  const now = new Date('2031-06-15T08:00:00');   // ראשון בבוקר
+  const full = await fresh('דחוף מלא', { maxPerWeek: 5 });
+  await fillDays(full, '2031-06-17', 5);          // שלישי–שבת = 5 מתוך 5
+  const roomy = await fresh('דחוף פנוי', { maxPerWeek: 5 });
+  await fillDays(roomy, '2031-06-17', 4);         // 4 מתוך 5 — יש מקום אחד
+  await inOrg(async () => {
+    const input = (x) => ({ title: 'מבצע', until: '2031-06-16', channel_ids: [x.ch] });
+    const a = await planUrgent(input(full), { now });
+    assert.deepEqual(a.placements, []);
+    assert.match(a.warnings.join(' '), /אין שטח פנוי/);
+    const b = await planUrgent(input(roomy), { now });
+    assert.equal(b.placements.length, 1);
+    assert.ok(new Date(b.placements[0].scheduled_at) > now);
+  });
+});
+
+test('דחוף — נכשל שהמועד שלו עבר לא תופס מקום', { skip }, async () => {
+  const { planUrgent } = await import('../src/urgent.js');
+  const now = new Date('2031-06-25T08:00:00');   // רביעי בבוקר
+  const x = await fresh('דחוף נכשל', { maxPerWeek: 1 });
+  await inOrg(() => db.query(
+    `insert into posts (channel_id, endpoint_id, kind, title, status, scheduled_at)
+     values ($1, $2, 'value', 'נכשל', 'failed', '2031-06-23T10:00:00')`, [x.ch, x.ep]));
+  await inOrg(async () => {
+    const plan = await planUrgent({ title: 'מבצע', until: '2031-06-26', channel_ids: [x.ch] },
+      { now });
+    assert.equal(plan.placements.length, 1);
+  });
+});
+
+test('אישור דחוף: מילוי אחר מחזיק את נעילת המנוע — 503 בלי לכתוב', { skip }, async () => {
+  const { default: express } = await import('express');
+  const { default: engineRoutes } = await import('../src/routes/engine.js');
+  const app = express();
+  app.use(express.json());
+  app.use((req, res, next) => {
+    req.user = { id: null, name: 'בדיקה', is_owner: true };
+    db.withOrg(org, () => new Promise((resolve) => {
+      res.on('finish', resolve);
+      res.on('close', resolve);
+      next();
+    })).catch(() => {});
+  });
+  app.use(engineRoutes);
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, _req, res, _next) => res.status(500).json({ error: err.message }));
+  const server = app.listen(0);
+  const base = `http://localhost:${server.address().port}`;
+  const x = await fresh('דחוף נעול');
+  const commit = () => fetch(`${base}/urgent/commit`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'מבצע נעול', channel_ids: [x.ch] }),
+  });
+
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let locked;
+  const gotLock = new Promise((r) => { locked = r; });
+  const holder = db.withOrg(org, async () => {
+    await db.query('select pg_advisory_xact_lock($1, $2)', [engine.ENGINE_LOCK_KEY, org]);
+    locked();
+    await held;
+  });
+  await gotLock;
+  process.env.ENGINE_LOCK_TIMEOUT = '200ms';
+  try {
+    const res = await commit();
+    assert.equal(res.status, 503);
+    assert.match((await res.json()).error, /נסו לאשר שוב/);
+    const n = await inOrg(() => db.one(
+      "select count(*)::int as n from posts where channel_id = $1 and title = 'מבצע נעול'", [x.ch]));
+    assert.equal(n.n, 0);
+  } finally {
+    delete process.env.ENGINE_LOCK_TIMEOUT;
+    release();
+    await holder;
+  }
+  // אחרי השחרור — נכתב כרגיל
+  const ok = await commit();
+  assert.equal(ok.status, 201);
+  server.close();
+});
