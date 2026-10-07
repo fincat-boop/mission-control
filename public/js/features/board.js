@@ -111,12 +111,9 @@ export async function renderBoard() {
         <button data-week="${b.week.nextWeek}">›</button>
       </div>
       <button class="btn small" id="thisWeek">השבוע</button>
-      ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
-      ${can('approve') ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
       <div class="spacer"></div>
-      <div class="legend">
-        <span>צבע הכרטיס = נקודת הקצה (מקרא בתחתית) · ⚡ דחוף</span>
-      </div>
+      ${can('approve') ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
+      ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
     </div>
 
     ${PHONE.matches
