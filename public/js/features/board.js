@@ -1,7 +1,7 @@
 import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, persistView, state } from '../core/state.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
-import { HE_DAYS, KIND_HE, ymd } from '../core/format.js';
+import { HE_DAYS, KIND_HE, inkOn, ymd } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
@@ -37,8 +37,9 @@ export async function renderBoard() {
   const editable = can('content');
 
   // מי מקבל במה: בתחתית הלוח, נקודה לכל נקודת קצה (גם מקרא הצבעים) והמצב
-  // שלה כטקסט גלוי — כמה פעמים משובצת השבוע ומתי פורסמה לאחרונה. נקודה
-  // שלא באוויר (לא פורסמה מזמן ולא משובצת) — המצב בכתום
+  // שלה כטקסט גלוי — כמה פעמים משובצת השבוע ומתי פורסמה לאחרונה. כל נקודה
+  // בלוק מלא בצבע שלה — אותו צבע כמו הכרטיסים שלה בלוח. נקודה שלא באוויר
+  // (לא פורסמה מזמן ולא משובצת) — דהויה, עם ⚠ במצב
   const oxy = b.oxygen.map((o) => {
     const when = o.days_since === null
       ? 'עוד לא פורסם'
@@ -49,10 +50,11 @@ export async function renderBoard() {
     const plan = o.scheduled_this_week
       ? (o.scheduled_this_week === 1 ? 'פעם אחת השבוע' : `${o.scheduled_this_week} פעמים השבוע`)
       : 'לא משובץ השבוע';
-    return `<li class="oxyitem${onAir ? '' : ' off'}" title="${esc(`${o.name} · ${plan} · ${when}`)}">
-      <i class="sw" style="background:${epColor(o.endpoint_id)}"></i>
+    const bg = epColor(o.endpoint_id);
+    return `<li class="oxyitem${onAir ? '' : ' off'}" title="${esc(`${o.name} · ${plan} · ${when}`)}"
+      style="background:${bg};color:${inkOn(bg)}">
       <span class="nm">${esc(o.name)}</span>
-      <span class="st">${esc(plan)} · ${esc(when)}</span>
+      <span class="st">${onAir ? '' : '⚠ '}${esc(plan)} · ${esc(when)}</span>
     </li>`;
   }).join('');
 
@@ -117,7 +119,7 @@ export async function renderBoard() {
       ${can('approve') ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
       <div class="spacer"></div>
       <div class="legend">
-        <span>הפס והשם בראש הכרטיס = נקודת הקצה · ⚡ דחוף</span>
+        <span>צבע הכרטיס = נקודת הקצה (מקרא בתחתית) · ⚡ דחוף</span>
       </div>
     </div>
 
@@ -364,15 +366,15 @@ function postCard(p) {
   const tip = `${title ? `${title} · ` : ''}${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}` +
               `${p.urgent ? ' · דחוף' : ''}${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
 
-  // כרטיס ניטרלי: נקודת הקצה היא פס בצבע שלה בצד, והשם שלה כתוב בראש הכרטיס
-  // (קודם הכרטיס כולו היה בצבע הנקודה — וכמה נקודות בגוון דומה לא היו נבדלות).
+  // הכרטיס כולו בצבע נקודת הקצה — אותו צבע כמו הבלוק שלה במקרא שבתחתית —
+  // ושם הנקודה כתוב בראשו.
   // מתחת: הסוג והשעה, ושורת מצב אחת במילים.
   const tag = statusTag(p);
   const missing = p.status === 'hole' || (!p.content_id && p.status !== 'published');
   const cls = ['post', p.status === 'published' && 'published', missing && 'missing',
     p.status === 'failed' && 'failed'].filter(Boolean).join(' ');
   return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}"
-    style="--ep:${epColor(p.endpoint_id)}">
+    style="--ep:${epColor(p.endpoint_id)};--on:${inkOn(epColor(p.endpoint_id))}">
     <span class="pep">${p.urgent ? '⚡ ' : ''}${esc(p.endpoint_name ?? '')}</span>
     <div class="meta"><i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>${esc(p.time ?? '')}${who}</div>
     ${statusLine(tag)}

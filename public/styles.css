@@ -82,13 +82,13 @@ section[hidden] { display: none; }
 .oxy h3 { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 12px; }
 /* כל הנקודות בשורה אחת, תמיד: עמודות שוות; שם ארוך נחתך, במסך צר גוללים לצד */
 .oxy ul { list-style: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(140px, 1fr);
-  gap: 0 24px; overflow-x: auto; padding-bottom: 4px; }
-.oxyitem { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 9px; row-gap: 2px; }
+  gap: 0 8px; overflow-x: auto; padding-bottom: 4px; }
+/* כל נקודה בלוק מלא בצבע שלה (מהקוד) — אותו צבע כמו הכרטיסים שלה בלוח */
+.oxyitem { display: grid; row-gap: 2px; min-width: 0; padding: 9px 12px; border-radius: 8px; }
 .oxyitem .nm, .oxyitem .st { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.oxyitem .sw { width: 9px; height: 9px; border-radius: 50%; }
-.oxyitem .nm { font-size: 13px; color: var(--ink-1); font-weight: 500; }
-.oxyitem .st { grid-column: 2; font-size: 11.5px; color: var(--muted); }
-.oxyitem.off .st { color: var(--st-warn); }
+.oxyitem .nm { font-size: 13px; font-weight: 600; }
+.oxyitem .st { font-size: 11.5px; opacity: .85; }
+.oxyitem.off { opacity: .5; }
 .oxy .d { font-size: 12.5px; color: var(--muted); }
 .toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
 .weeknav { display: flex; align-items: center; gap: 8px; font-weight: 600; }
@@ -109,38 +109,39 @@ table.grid.wboard { table-layout: fixed; }
 .chan .cap { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .chan .cap.full { color: var(--st-warn); }
 .grid td.day { min-width: 110px; height: 68px; }
-/* כרטיס פוסט: ניטרלי, עם פס בצבע נקודת הקצה (--ep, מהקוד) ושם הנקודה בראשו.
-   בתחתית שורת מצב אחת — נקודה בגוון ומילים, בלי תגיות צפות */
+/* כרטיס פוסט: כולו בצבע נקודת הקצה (--ep) והטקסט בניגוד אליו (--on), כמו
+   הבלוק שלה במקרא. בתחתית שורת מצב אחת — נקודה בגוון המצב ומילים */
 .post { position: relative; border-radius: 7px; padding: 6px 9px 7px; margin-bottom: 6px; font-size: 12px;
-  line-height: 1.4; cursor: pointer; background: var(--panel-2); color: var(--ink-1);
-  border: 1px solid var(--border); border-inline-start: 4px solid var(--ep, var(--muted)); }
-.post:hover { border-color: color-mix(in srgb, var(--ink-2) 45%, var(--border)); border-inline-start-color: var(--ep); }
+  line-height: 1.4; cursor: pointer; background: var(--ep, var(--panel-2)); color: var(--on, var(--ink-1)); }
+.post:hover { filter: brightness(1.08); }
 /* כל הכרטיסים באותו גודל: רוחב העמודה (הטבלה ב-table-layout קבוע) ושלוש
    שורות קבועות — נקודה, סוג ושעה, מצב. מה שלא נכנס נחתך עם "…" (המלא בריחוף) */
-.post .pep { font-size: 12px; font-weight: 600; color: var(--ink-1); }
+.post .pep { font-size: 12px; font-weight: 700; }
 .post .pep, .post .meta, .post .pst { display: block; height: 17px; line-height: 17px;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.post .meta { color: var(--ink-2); font-size: 10.5px; margin-top: 2px; }
+.post .meta { font-size: 10.5px; margin-top: 2px; opacity: .85; }
 .post .meta .kind { margin-inline-end: 5px; }
 .post .kind {
   font-style: normal; font-size: 9.5px; font-weight: 600;
-  padding: 0 5px; border-radius: 4px; border: 1px solid var(--border); color: var(--ink-2);
+  padding: 0 5px; border-radius: 4px; border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
 }
-.post .kind.promo { color: var(--st-warn); border-color: color-mix(in srgb, var(--st-warn) 45%, transparent); }
+.post .kind.promo { background: rgba(0,0,0,.28); }
 /* שורת המצב */
 .pst { margin-top: 3px; font-size: 11px; font-weight: 600; }
-.pst > i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor;
-  margin-inline-end: 5px; vertical-align: 0; }
-.pst .h { font-weight: 400; color: var(--muted); }
-.pst.red { color: var(--st-crit); }
-.pst.yellow { color: var(--st-warn); }
-.pst.blue { color: var(--accent); }
-.pst.auto { color: var(--st-good); }
+/* על רקע צבעוני הטקסט בצבע הכרטיס; הגוון של המצב בנקודה, עם טבעת כהה
+   כדי שתיראה גם על כרטיס באותו גוון */
+.pst > i { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  box-shadow: 0 0 0 1.5px rgba(0,0,0,.45); margin-inline-end: 6px; vertical-align: 0; }
+.pst .h { font-weight: 400; opacity: .8; }
+.pst.red > i { background: var(--st-crit); }
+.pst.yellow > i { background: var(--st-warn); }
+.pst.blue > i { background: var(--accent); }
+.pst.auto > i { background: var(--st-good); }
 /* בלי תוכן — מסגרת מקווקוות: משבצת שמחכה */
-.post.missing { border-style: dashed; border-inline-start-style: solid; }
+.post.missing { outline: 1.5px dashed color-mix(in srgb, var(--on, #fff) 70%, transparent); outline-offset: -4px; }
 /* פורסם — הכרטיס נשאר, דהוי; המצב אומר "פורסם" */
-.post.published .pep, .post.published .meta { opacity: .55; }
-.post.failed { border-color: var(--st-crit); border-inline-start-color: var(--ep); }
+.post.published { opacity: .5; }
+.post.failed { outline: 2px solid var(--st-crit); outline-offset: -1px; }
 
 /* יש תוכן בטיוטה שעוד לא אושר לאף ערוץ — פחות דחוף מ"אין תוכן בכלל" */
 /* כפתור ההוספה לא משתתף בזרימה: הוא מרחף בפינת המשבצת ורק משנה שקיפות.
