@@ -400,7 +400,7 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
   gap: 0 20px; width: min(1200px, 96vw);
 }
-#genDlg.with-live-preview > h3, #genDlg.with-live-preview > .dactions { grid-column: 1 / -1; }
+#genDlg.with-live-preview > .ghead, #genDlg.with-live-preview > .dactions { grid-column: 1 / -1; }
 #livePreviewPane { min-width: 0; }
 #livePreviewPane .lp-head { color: var(--ink-2); font-size: 12px; margin-bottom: 6px; }
 #livePreviewPane .lp-warn { color: var(--st-crit); font-size: 12px; margin-bottom: 6px; }
@@ -506,6 +506,29 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 }
 .ack-row input { margin-top: 3px; flex-shrink: 0; }
 .dactions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+/* כותרת הדיאלוג הכללי: הכותרת מימין, ובקצה השמאלי מה שהטופס שותל (מתג מצב) */
+.ghead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.ghead h3 { margin: 0; flex: 1 1 auto; min-width: 0; }
+#genHead:empty { display: none; }
+/* מצב השמירה האוטומטית — צמוד ל"סגור", שקט */
+.gstate { align-self: center; font-size: 12px; color: var(--muted); }
+.gstate:empty { display: none; }
+.gstate.err { color: var(--st-crit); }
+.gstate.warn { color: var(--st-warn); }
+
+/* מתג (טיוטה ↔ מוכן לפרסום): checkbox עם role=switch, הטקסט אומר את המצב הנוכחי */
+.tswitch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px;
+  color: var(--ink-2); user-select: none; white-space: nowrap; }
+.tswitch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.tswitch .tr { position: relative; width: 32px; height: 18px; border-radius: 9px; flex: none;
+  background: var(--border); transition: background .15s; }
+.tswitch .tr::after { content: ""; position: absolute; top: 2px; inset-inline-start: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--ink-1); transition: inset-inline-start .15s; }
+.tswitch input:checked + .tr { background: var(--st-good); }
+.tswitch input:checked + .tr::after { inset-inline-start: 16px; }
+.tswitch input:checked ~ .tl { color: var(--st-good); }
+.tswitch input:focus-visible + .tr { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tswitch input:disabled ~ * { opacity: .5; cursor: default; }
 /* ייבוא מטבלה */
 #importDlg { width: min(700px, 95vw); }
 #importDlg textarea { min-height: 140px; font-family: ui-monospace, monospace; font-size: 12px; }
@@ -792,6 +815,23 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 .cbhead .fill { font-size: 12.5px; color: var(--ink-2); }
 .cbhead .fill b { color: var(--ink-1); }
 .cbhead .ok { color: var(--st-good); }
+/* כותרת קמפיין: פירורי הלחם והשם בשורה אחת, הפרטים מתחת, תפריט בקצה השמאלי */
+.chead { align-items: flex-start; flex-wrap: nowrap; gap: 12px; margin-bottom: 14px; }
+.chead .ch-main { flex: 1 1 auto; min-width: 0; }
+.chead .crumbs { margin-bottom: 0; flex-wrap: wrap; row-gap: 2px; }
+.chead .crumbs h2 { font-size: 15px; font-weight: 650; color: var(--ink-1); margin: 0; padding: 3px 2px; }
+.chead .crumbs .gst { font-size: 12px; margin-inline-start: 4px; }
+.chead .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 2px; }
+.chead .sub .dot { font-style: normal; color: var(--muted); opacity: .6; }
+.chead .glinks { display: inline-flex; margin: 0; gap: 6px; font-size: inherit; color: var(--muted); flex-wrap: nowrap; }
+.chead .glinks .lnk { width: 13px; height: 13px; }
+.chead .linkbtn { font-size: 12.5px; color: var(--ink-2); }
+.chead > .pmore { flex: none; }
+/* קמפיין כללי: הכותרת ברוחב הטבלה שמתחתיה (.board.gfull), כדי שהתפריט יישב מעל הקצה שלה */
+.cbhead.gbleed {
+  width: max(100%, calc(100vw - 64px)); max-width: none;
+  margin-inline: min(0px, calc((100% - (100vw - 64px)) / 2));
+}
 .cbhead .off { color: var(--st-warn); }
 
 /* תפריט שלוש הנקודות (כותרת קמפיין, שורת קמפיין) — נפתח למטה, צמוד לקצה הכפתור.
@@ -1373,18 +1413,21 @@ button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 /* מה שנוסף לפוסט לפי הפלטפורמה (ui/variantExtras.js): כל אזור שורה מקופלת
    עם סיכום, סגורה כברירת מחדל */
 .vextras:empty { display: none; }
-/* "אפשרויות נוספות" — שורה מקופלת אחת שעוטפת את כל האזורים */
-.vx-more { border: 1px solid var(--border); border-radius: 8px; }
-.vx-more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px; font-size: 13px; }
+/* "אפשרויות נוספות" — שורה נפתחת אחת, בלי מסגרת משלה: חץ מימין למילים,
+   והאזורים נפתחים מתחתיה */
+.vx-more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 13px; }
 .vx-more > summary::-webkit-details-marker { display: none; }
-.vx-more > summary::after { content: "‹"; color: var(--muted); transition: transform .15s; }
-.vx-more[open] > summary::after { transform: rotate(-90deg); }
-.vx-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
-.vx-more-sum { flex: 1 1 0; min-width: 0; margin-inline-start: auto; text-align: end; font-size: 12px;
+.vx-more > summary::before { content: "‹"; width: 12px; text-align: center; color: var(--muted);
+  font-size: 15px; line-height: 1; transition: transform .15s; }
+.vx-more[open] > summary::before { transform: rotate(-90deg); }
+.vx-more > summary:hover .vx-l { color: var(--accent); }
+.vx-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.vx-more-sum { flex: 1 1 0; min-width: 0; text-align: start; font-size: 12px;
   color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-more-sum::before { content: "· "; }
 .vx-more-sum.set { color: var(--ink-2); }
-.vx-list { display: grid; margin: 0 14px 14px; border: 1px solid var(--border); border-radius: 8px; }
+.vx-list { display: grid; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; }
 .vx + .vx { border-top: 1px solid var(--border); }
 .vx[hidden] { display: none; }
 .vx summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px;

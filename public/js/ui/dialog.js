@@ -54,6 +54,8 @@ function isDirty() {
 export async function closeGeneric({ force = false } = {}) {
   const dlg = $('#genDlg');
   if (!dlg.open) return true;
+  // שמירה אוטומטית: מה שעוד ממתין נשמר לפני הסגירה. false = לא לסגור
+  if (!force && genSpec?.beforeClose && (await genSpec.beforeClose()) === false) return false;
   if (!force && isDirty()) {
     if (genClosing) return false;
     genClosing = true;
@@ -85,6 +87,16 @@ function finishClose() {
 /** אחרי שמירה חלקית (למשל קבצים שנכשלו): מה שכבר נשמר הוא נקודת ההשוואה החדשה */
 export function markGenericClean() {
   if (genSpec) genSnapshot = snapshot(genSpec.fields);
+}
+
+/** הערכים של הטופס הפתוח כרגע — לשמירה אוטומטית מתוך הטופס עצמו */
+export const genValues = () => collectValues(genSpec?.fields ?? []);
+
+/** שורת מצב השמירה בתחתית הדיאלוג ("נשמר", "שומר…", שגיאה) */
+export function genState(text = '', tone = '') {
+  const el = $('#genState');
+  el.textContent = text;
+  el.className = `gstate${tone ? ` ${tone}` : ''}`;
 }
 
 /** קורא את הערכים מהטופס לפי סוג כל שדה ומחזיר אובייקט אחד */
@@ -298,9 +310,13 @@ function fieldHtml(f) {
 /**
  * @param {{title:string, fields:object[], onSave:(v:object)=>Promise<void>,
  *          extraActions?:string, onOpen?:()=>void, saveLabel?:string,
- *          guardDirty?:boolean|(()=>boolean), onClose?:()=>void}} spec
+ *          guardDirty?:boolean|(()=>boolean), onClose?:()=>void,
+ *          head?:string, autosave?:boolean, beforeClose?:()=>Promise<boolean|void>}} spec
  * guardDirty — ביטול/Esc שואלים "לסגור?" כשהטופס השתנה מאז הפתיחה (true =
  * השוואת ערכים; פונקציה = הקורא מחליט). onClose — אחרי כל סגירה.
+ * head — HTML בשורת הכותרת, בקצה השמאלי (למשל מתג מצב). autosave — הטופס
+ * שומר בעצמו תוך כדי: אין "שמור", ו"ביטול" הופך ל"סגור". beforeClose — רץ
+ * לפני כל סגירה רגילה (לשמור מה שממתין); false משאיר את הטופס פתוח.
  */
 export function openGeneric(spec) {
   // שרשור טפסים (פתיחה מתוך טופס, או לפני שאירוע הסגירה של הקודם הגיע) —
@@ -312,7 +328,11 @@ export function openGeneric(spec) {
   $('#genDlg').classList.remove('with-live-preview');
   $('#livePreviewPane')?.remove();
   $('#genTitle').textContent = spec.title;
+  $('#genHead').innerHTML = spec.head ?? '';
   $('#genSave').textContent = spec.saveLabel ?? 'שמור';
+  $('#genSave').hidden = !!spec.autosave;
+  $('#genCancel').textContent = spec.autosave ? 'סגור' : 'ביטול';
+  genState();
   $('#genBody').innerHTML = spec.fields.map((f) =>
     fieldHtml(f).replace('<div class="frow"',
       `<div class="frow" data-field="${esc(f.name)}"${f.hidden ? ' hidden' : ''}`)).join('');
@@ -341,4 +361,6 @@ export function openGeneric(spec) {
   genSnapshot = spec.guardDirty === true ? snapshot(spec.fields) : null;
 
   if (!$('#genDlg').open) $('#genDlg').showModal();
+  // מתג בכותרת היה תופס את הפוקוס הראשון — הפוקוס לשדה הראשון בטופס
+  if (spec.head) $('#genBody').querySelector('input:not([type=hidden]), textarea, select')?.focus();
 }
