@@ -36,25 +36,21 @@ export async function renderBoard() {
   if (req !== boardReq) return; // בינתיים התבקש שבוע אחר
   const editable = can('content');
 
-  // מי מקבל במה: בתחתית הלוח, נקודה לכל נקודת קצה (גם מקרא הצבעים) והמצב
-  // שלה כטקסט גלוי — כמה פעמים משובצת השבוע ומתי פורסמה לאחרונה. כל נקודה
-  // בלוק מלא בצבע שלה — אותו צבע כמו הכרטיסים שלה בלוח. נקודה שלא באוויר
-  // (לא פורסמה מזמן ולא משובצת) — דהויה, עם ⚠ במצב
-  const oxy = b.oxygen.map((o) => {
+  // מי מקבל במה: בתחתית הלוח — רק נקודות שמשובצות השבוע (גם מקרא הצבעים).
+  // כל נקודה בלוק מלא בצבע שלה, אותו צבע כמו הכרטיסים שלה בלוח, ומתחת לשם
+  // כמה פעמים היא משובצת ומתי פורסמה לאחרונה
+  const oxy = b.oxygen.filter((o) => o.scheduled_this_week > 0).map((o) => {
     const when = o.days_since === null
       ? 'עוד לא פורסם'
       : o.days_since === 0 ? 'פורסם היום'
       : o.days_since === 1 ? 'פורסם אתמול'
       : `${o.days_since} ימים בלי פרסום`;
-    const onAir = !o.stale || o.scheduled_this_week > 0;
-    const plan = o.scheduled_this_week
-      ? (o.scheduled_this_week === 1 ? 'פעם אחת השבוע' : `${o.scheduled_this_week} פעמים השבוע`)
-      : 'לא משובץ השבוע';
+    const plan = o.scheduled_this_week === 1 ? 'פעם אחת השבוע' : `${o.scheduled_this_week} פעמים השבוע`;
     const bg = epColor(o.endpoint_id);
-    return `<li class="oxyitem${onAir ? '' : ' off'}" title="${esc(`${o.name} · ${plan} · ${when}`)}"
+    return `<li class="oxyitem" title="${esc(`${o.name} · ${plan} · ${when}`)}"
       style="background:${bg};color:${inkOn(bg)}">
       <span class="nm">${esc(o.name)}</span>
-      <span class="st">${onAir ? '' : '⚠ '}${esc(plan)} · ${esc(when)}</span>
+      <span class="st">${esc(plan)} · ${esc(when)}</span>
     </li>`;
   }).join('');
 
@@ -140,7 +136,7 @@ export async function renderBoard() {
       — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}
     <section class="oxy" aria-label="מי מקבל במה">
       <h3>מי מקבל במה</h3>
-      ${oxy ? `<ul>${oxy}</ul>` : '<p class="d">אין נקודות קצה פעילות</p>'}
+      ${oxy ? `<ul>${oxy}</ul>` : '<p class="d">אף נקודת קצה לא משובצת השבוע</p>'}
     </section>`;
 
   renderSetupCard($('#setupCard'), setup);
