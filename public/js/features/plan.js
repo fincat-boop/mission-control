@@ -2,7 +2,7 @@ import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
 import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
 import { describeMailVariant, openNewsletterEditor } from '../ui/hubFill.js';
-import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
+import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb, ymd } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { closeGeneric, genState, genValues, markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
@@ -20,7 +20,9 @@ import { changedCampaignFields, shiftNote, tidyCampaignDates } from '../core/cam
 import { extrasHtml, paintCaptionNote, readExtras, wireExtras } from '../ui/variantExtras.js';
 import { extrasFor, extrasKey, mergeExtras, pickExtras } from '../core/socialRules.js';
 import { goToSetupTarget } from '../ui/setup.js';
-import { copySources, nextEmptySlot, rowPrefill } from '../core/slotRow.js';
+import {
+  copySources, nextEmptySlot, postCampaign, rowPrefill, slotForPost,
+} from '../core/slotRow.js';
 
 /* ========================= ניוזלטר ========================= */
 
@@ -1091,7 +1093,7 @@ function wireGeneralBoard(selected, reload) {
  * קישור; "הבא ›" שומר ופותח את המשבצת הריקה הבאה (core/slotRow.js).
  * onCreated — נקרא עם הפריט כשהטופס יצר אותו (מהלוח: שיוך לפוסט, סעיף 17).
  */
-export function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated } = {}) {
+function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated } = {}) {
   const channel = state.channels.find((c) => c.id === channelId);
   const order = (campaign.slots ?? []).map((col) => col.channel_id);
   const prefill = item ? null : rowPrefill(campaign.content ?? [], { index, channelId, order });
@@ -1227,6 +1229,8 @@ export function openSlotForm({ campaign, channelId, index, item }, reload, { onC
         res = await api('/content', { method: 'POST', body: {
           ...body, status: picked.length && wantReady ? 'draft' : body.status,
           campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
+          // נפתח מפוסט על הלוח: בלי מילוי ביצירה — התוכן משויך לפוסט הזה
+          ...(onCreated ? { fill: false } : {}),
         } });
       }
     } catch (e) {
@@ -1432,7 +1436,8 @@ export function openSlotForm({ campaign, channelId, index, item }, reload, { onC
       const res = saved
         ? await api(`/content/${saved.id}`, { method: 'PATCH', body })
         : await api('/content', { method: 'POST', body: {
-          ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index } });
+          ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
+          ...(onCreated ? { fill: false } : {}) } });
       const created = !saved;
       saved = res.content;
       if (created && onCreated) await onCreated(saved);
@@ -1506,6 +1511,88 @@ export function openSlotForm({ campaign, channelId, index, item }, reload, { onC
         })));
     },
   });
+}
+
+/* ---------- "פתח בתוכן" מהלוח: העורך כחלון מעל הלוח (סעיף 17) ---------- */
+
+/**
+ * העורך של הפוסט — אותו עורך כמו בטבלה (openSlotForm למשבצת בקמפיין כללי,
+ * openVariantForm לזווית ולתוכן שוטף) — נפתח מעל חלון הפוסט, בלי לעבור טאב.
+ * הנתונים שהעורך צריך (הקמפיינים עם התוכן שלהם) נטענים כאן לפי הצורך.
+ * פוסט בלי תוכן שהקמפיין שלו ידוע (postCampaign) — משבצת חדשה בעמודה של
+ * הערוץ, והתוכן שנוצר בה משויך לפוסט בשמירה הראשונה.
+ *
+ * onChange — אחרי כל שמירה (reload של העורך) ובסגירת העורך: רענון הלוח
+ * וחלון הפוסט (נקרא מ-ui/postDialog.js דרך ui/refresh.js — openPostEditor).
+ * @returns {Promise<boolean>} false — אין עורך מתאים (הקורא מנווט לטאב התוכן)
+ */
+export async function openPostEditor(post, { onChange }) {
+  const { campaigns } = await api('/campaigns');
+  state.campaigns = campaigns;
+  const reload = async () => {
+    state.campaigns = (await api('/campaigns')).campaigns;
+    await onChange();
+  };
+
+  if (post.content_id) {
+    const campaign = campaigns.find((c) => c.content?.some((x) => x.id === post.content_id)) ?? null;
+    let item = campaign?.content.find((x) => x.id === post.content_id) ?? null;
+    if (!campaign) {
+      // תוכן שוטף — מ-/content, כמו ברשת התוכן השוטף
+      const { content } = await api('/content');
+      item = content.find((x) => x.id === post.content_id) ?? null;
+    }
+    if (!item) return false;
+    if (campaign?.structure === 'general' && item.slot_channel_id) {
+      openSlotForm({ campaign, channelId: item.slot_channel_id, index: item.sort_order, item }, reload);
+    } else {
+      await openVariantForm({ item, channelId: post.channel_id, campaign: campaign ?? undefined }, reload);
+    }
+    whenEditorCloses(onChange);
+    return true;
+  }
+
+  // בלי תוכן: משבצת חדשה בקמפיין של הפוסט, אם הוא ידוע
+  const day = ymd(new Date(post.scheduled_at));
+  const campaign = postCampaign(campaigns, post, day);
+  if (!campaign) return false;
+  const index = slotForPost(campaign, post.channel_id, day);
+  openSlotForm({ campaign, channelId: post.channel_id, index, item: null }, reload, {
+    onCreated: (created) => attachCreated(post, created),
+  });
+  whenEditorCloses(onChange);
+  return true;
+}
+
+/**
+ * התוכן שנוצר במשבצת → לפוסט שממנו נפתח העורך (אותו נתיב כמו "שייך תוכן",
+ * עם אזהרת המרווח). המילוי האוטומטי שאחרי היצירה יכול היה כבר לשייך אותו
+ * לפוסט הזה — אז אין מה לעשות.
+ */
+async function attachCreated(post, created) {
+  try {
+    const r = await postWithGapCheck(`/posts/${post.id}/attach-content`,
+      { content_id: created.id }, 'POST', 'לשייך בכל זאת?');
+    if (r) toast('התוכן נשמר בקמפיין ושויך לפוסט.');
+    else toast('התוכן נשמר בקמפיין, אבל לא שויך לפוסט בלוח.', true);
+  } catch (e) {
+    const { post: now } = await api(`/posts/${post.id}/preview`).catch(() => ({ post: null }));
+    if (now?.content_id === created.id) return; // המנוע כבר שייך
+    toast(`התוכן נשמר בקמפיין, אבל לא שויך לפוסט: ${e.message}`, true);
+  }
+}
+
+/**
+ * onChange כשהעורך נסגר. "הבא ›" ומעבר לעורך המייל סוגרים ופותחים את אותו
+ * חלון מיד — אז ממתינים לסגירה הבאה (אירוע close מגיע אחרי שהחלון כבר נפתח שוב).
+ */
+function whenEditorCloses(cb) {
+  const dlg = $('#genDlg');
+  const onClose = () => setTimeout(() => {
+    if (dlg.open) dlg.addEventListener('close', onClose, { once: true });
+    else run(cb)();
+  });
+  dlg.addEventListener('close', onClose, { once: true });
 }
 
 /* ---------- גרסה שמישהו אחר שמר בינתיים (409, נעילה אופטימית) ---------- */

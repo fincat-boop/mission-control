@@ -1401,6 +1401,9 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .vcopy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); }
 .frow .vcopy label { display: inline; margin: 0; font-size: 12.5px; }
 .frow .vcopy select { width: auto; min-width: 140px; padding: 4px 10px; font-size: 12.5px; }
+/* "כולל קבצים" ליד "העתק מ־" בחלון המשבצת — תיבה ומילים בשורה אחת */
+.frow .vcopy .vcopy-files { display: inline-flex; align-items: center; gap: 4px; }
+.frow .vcopy .vcopy-files input { width: auto; margin: 0; }
 .vmail { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--ink-2); }
 .vmail b { color: var(--ink-1); }
 .vacts { margin-inline-end: auto; display: flex; gap: 8px; flex-wrap: wrap; }

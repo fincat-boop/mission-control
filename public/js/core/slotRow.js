@@ -78,3 +78,35 @@ export function nextEmptySlot(slots, { channelId, index }) {
   const later = [...empty.keys()].filter((i) => i > index).sort((a, b) => a - b);
   return later.length ? { channelId: empty.get(later[0])[0], index: later[0] } : null;
 }
+
+/**
+ * פוסט בלי תוכן על הלוח (סעיף 17): לאיזה קמפיין כללי הוא שייך — רק כשיש
+ * בדיוק אחד: של אותה נקודת קצה, לא מושהה ופעיל, הערוץ של הפוסט בקמפיין,
+ * והיום של הפוסט בתוך התקופה. אחרת null (אין דרך לדעת לאן לכתוב).
+ * @param {object[]} campaigns /campaigns
+ * @param {{endpoint_id:number|null, channel_id:number}} post
+ * @param {string} day YYYY-MM-DD מקומי של מועד הפוסט
+ */
+export function postCampaign(campaigns, post, day) {
+  if (!post.endpoint_id) return null;
+  const fits = campaigns.filter((c) => c.structure === 'general' && c.endpoint_id === post.endpoint_id &&
+    !c.paused_at && c.active !== false && c.starts_on && c.ends_on &&
+    c.starts_on <= day && day <= c.ends_on &&
+    (c.channels ?? []).some((ch) => ch.id === post.channel_id));
+  return fits.length === 1 ? fits[0] : null;
+}
+
+/**
+ * המשבצת שהפוסט ימלא בעמודה של הערוץ: הריקה שהתאריך שלה הכי קרוב ליום של
+ * הפוסט (ביום — קודם; שוויון — המוקדמת). אין ריקה — מקום חדש אחרי האחרון.
+ * @returns {number} מספר הפוסט (sort_order)
+ */
+export function slotForPost(campaign, channelId, day) {
+  const col = (campaign.slots ?? []).find((c) => c.channel_id === channelId);
+  const slots = col?.slots ?? [];
+  const dist = (d) => Math.abs(new Date(`${d}T00:00:00`) - new Date(`${day}T00:00:00`));
+  const empty = slots.filter((s) => !s.content && !s.extra && s.date)
+    .sort((a, b) => (dist(a.date) - dist(b.date)) || (a.index - b.index));
+  if (empty.length) return empty[0].index;
+  return Math.max(0, ...slots.map((s) => s.index)) + 1;
+}

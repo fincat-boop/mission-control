@@ -2,7 +2,7 @@ import { $, $$, copyLinkButton, copyText, esc, fillSelect, run, toast, wireCopyL
 import { confirmDialog } from '../core/confirm.js';
 import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state } from '../core/state.js';
-import { goToTab, refreshAfterPostChange } from '../ui/refresh.js';
+import { goToTab, openPostEditor, refreshAfterPostChange } from '../ui/refresh.js';
 import { KIND_HE, hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
 import { AUTO_PLATFORMS, choosePrimary, editPatch, isMissed, nextFreeSlot, postFacts,
@@ -149,6 +149,9 @@ const ACT = {
         await showAttachPicker(post);
         return false;
       }
+      // העורך עצמו, כחלון מעל הלוח; בסגירה — חזרה לפוסט המעודכן (סעיף 17)
+      if (await openPostEditor(post, { onChange: () => afterChange(post.id) })) return false;
+      // לא נמצא העורך (התוכן נמחק בינתיים?) — לטאב התוכן, כמו קודם
       $('#postDlg').close();
       const { content } = await api('/content');
       const item = content.find((c) => c.id === post.content_id);
@@ -295,15 +298,25 @@ async function showAttachPicker(post) {
     date: ymd(new Date(post.scheduled_at)),
   });
 
+  // הקמפיין של הפוסט ידוע — משבצת חדשה בו, מעל הלוח, והתוכן משויך לפוסט
+  // בשמירה הראשונה (סעיף 17). לא ידוע — לטאב התוכן של הנקודה, כמו קודם.
+  const wireWrite = () => $('#pGoPlan').addEventListener('click', run(async () => {
+    if (await openPostEditor(post, { onChange: () => afterChange(post.id) })) return;
+    await goToEndpointContent(post.endpoint_id);
+  }));
+
   if (list.length === 0) {
     box.innerHTML = `<div class="pick-empty">${post.endpoint_id
       ? 'אין תוכן לנקודה הזו בערוץ הזה.' : 'אין תוכן עם ניסוח לערוץ הזה.'}
-      <div><button type="button" class="btn small primary" id="pGoPlan">לכתוב תוכן ב"קמפיינים ותוכן"</button></div></div>`;
-    $('#pGoPlan').addEventListener('click', run(() => goToEndpointContent(post.endpoint_id)));
+      <div><button type="button" class="btn small primary" id="pGoPlan">לכתוב תוכן</button></div></div>`;
+    wireWrite();
     return;
   }
 
-  box.innerHTML = candidateButtons(list, !post.endpoint_id);
+  // גם כשיש מה לשייך — אפשר לכתוב תוכן חדש במקום
+  box.innerHTML = `${candidateButtons(list, !post.endpoint_id)}
+    <div class="pick-empty">או <button type="button" class="btn small" id="pGoPlan">לכתוב תוכן חדש</button></div>`;
+  wireWrite();
   const buttons = [...box.querySelectorAll('[data-content-id]')];
   buttons.forEach((b) =>
     b.addEventListener('click', run(async () => {

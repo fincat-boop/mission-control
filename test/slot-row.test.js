@@ -77,3 +77,33 @@ test('nextEmptySlot — המשך השורה, ואז השורות הבאות מת
   // עמודות קודמות באותה שורה לא חוזרות
   assert.deepEqual(nextEmptySlot(slots, { channelId: IG, index: 3 }), { channelId: WA, index: 3 });
 });
+
+test('postCampaign — קמפיין כללי אחד בלבד שמתאים לנקודה, לערוץ וליום', async () => {
+  const { postCampaign } = await import('../public/js/core/slotRow.js');
+  const c = (id, over = {}) => ({ id, structure: 'general', endpoint_id: 7, active: true, paused_at: null,
+    starts_on: '2026-10-01', ends_on: '2026-10-31', channels: [{ id: FB }], ...over });
+  const post = { endpoint_id: 7, channel_id: FB };
+  assert.equal(postCampaign([c(1)], post, '2026-10-10')?.id, 1);
+  assert.equal(postCampaign([c(1)], post, '2026-11-02'), null, 'מחוץ לתקופה');
+  assert.equal(postCampaign([c(1, { channels: [{ id: IG }] })], post, '2026-10-10'), null, 'ערוץ אחר');
+  assert.equal(postCampaign([c(1, { paused_at: '2026-10-02' })], post, '2026-10-10'), null, 'מושהה');
+  assert.equal(postCampaign([c(1, { structure: 'angles' })], post, '2026-10-10'), null, 'לפי זוויות');
+  assert.equal(postCampaign([c(1), c(2)], post, '2026-10-10'), null, 'שניים — לא יודעים');
+  assert.equal(postCampaign([c(1)], { ...post, endpoint_id: null }, '2026-10-10'), null);
+});
+
+test('slotForPost — הריקה הקרובה ליום, ובלי ריקה — מקום חדש', async () => {
+  const { slotForPost } = await import('../public/js/core/slotRow.js');
+  const camp = { slots: [{ channel_id: FB, slots: [
+    { index: 1, date: '2026-10-01', content: {} },
+    { index: 2, date: '2026-10-08', content: null },
+    { index: 3, date: '2026-10-15', content: null },
+    { index: 4, date: null, extra: true, content: {} },
+  ] }] };
+  assert.equal(slotForPost(camp, FB, '2026-10-14'), 3);
+  assert.equal(slotForPost(camp, FB, '2026-10-02'), 2);
+  const full = { slots: [{ channel_id: FB, slots: [{ index: 1, date: '2026-10-01', content: {} },
+    { index: 2, date: null, extra: true, content: {} }] }] };
+  assert.equal(slotForPost(full, FB, '2026-10-02'), 3);
+  assert.equal(slotForPost({ slots: [] }, FB, '2026-10-02'), 1);
+});

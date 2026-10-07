@@ -423,3 +423,12 @@ test('סעיף 18 — "העתק מ־" עם קבצים: עותקים עצמאיי
   r = await call('POST', `/content/${to}/copy-assets`, {});
   assert.equal(r.status, 400);
 });
+
+test('סעיף 17 — משבצת שנפתחה מפוסט בלוח (fill:false) נוצרת בלי מילוי אוטומטי', { skip }, async () => {
+  const r = await call('POST', '/content', {
+    title: 'מהלוח', kind: 'value', campaign_id: ids.general, slot_channel_id: ids.fb, sort_order: 42,
+    body: 'טקסט', status: 'draft', fill: false });
+  assert.equal(r.status, 201, JSON.stringify(r.json));
+  assert.equal(r.json.engine, null);
+  assert.equal((await q('select id from posts where content_id = $1', [r.json.content.id])).length, 0);
+});

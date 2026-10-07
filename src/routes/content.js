@@ -484,7 +484,9 @@ r.post('/content', requirePerm('content'), wrap(async (req, res) => {
     );
     // קישור עמודות של הקמפיין: הפוסט מועתק למשבצת הפנויה הבאה בעמודות היעד
     const copied = await autoLinkNew(c.id);
-    const engine = await fillFor(c, b.week);
+    // fill: false — משבצת שנפתחה מפוסט על הלוח (סעיף 17): הטופס משייך אותה
+    // לפוסט הזה מיד אחרי היצירה, ומילוי עכשיו היה משבץ אותה גם במקום אחר
+    const engine = b.fill === false ? null : await fillFor(c, b.week);
     // variant — לנעילה האופטימית של השמירה הבאה מאותו טופס (updated_at)
     return res.status(201).json({ content: c, variant, copied, engine });
   }

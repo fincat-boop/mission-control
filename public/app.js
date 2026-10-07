@@ -16,7 +16,7 @@ import { renderStrategy } from './js/features/strategy.js';
 import { wireAIWidget } from './js/features/assistant.js';
 import { paintTaskBadge, renderTasks } from './js/features/tasks.js';
 import { confirmLeaveData, renderData } from './js/features/data.js';
-import { renderPlan, wireMailPreview } from './js/features/plan.js';
+import { openPostEditor, renderPlan, wireMailPreview } from './js/features/plan.js';
 import { renderManage } from './js/features/manage.js';
 import { renderBoard } from './js/features/board.js';
 
@@ -39,6 +39,7 @@ registerRefreshers({
   postViews: () => (state.tab === 'data' ? renderData() : undefined),
   currentTab: () => renderTab(state.tab),
   goToTab: (tab) => showTab(tab),
+  openPostEditor: (post, hooks) => openPostEditor(post, hooks),
 });
 
 let chromeWired = false;
