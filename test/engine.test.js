@@ -282,11 +282,34 @@ test('chooseHoleFills — אותו תוכן לא ממלא שני פוסטים, �
 });
 
 test('chooseHoleFills — תוכן חד-פעמי שכבר שובץ בעבר לא חוזר', () => {
-  const history = new Map([[5, { lastByChannel: new Map([[1, '2026-09-01']]) }]]);
+  const history = new Map([[5, { datesByChannel: new Map([[1, ['2026-09-01']]]) }]]);
   const fills = chooseHoleFills({
     holes: [hole()], content: [holeItem({ id: 5 })], usedContent: new Set(), history,
   });
   assert.deepEqual(fills, []);
+});
+
+test('chooseHoleFills — חד-פעמי שיצא בערוץ אחר עדיין ממלא את הערוץ הזה (פעם אחת לכל ערוץ)', () => {
+  // יצא בערוץ 2 בלבד — בערוץ 1 הוא עוד לא היה
+  const history = new Map([[5, { datesByChannel: new Map([[2, ['2026-09-01']]]) }]]);
+  const fills = chooseHoleFills({
+    holes: [hole()], content: [holeItem({ id: 5, eligible_channel_ids: [1, 2] })],
+    usedContent: new Set(), history,
+  });
+  assert.deepEqual(fills.map((f) => f.content_id), [5]);
+});
+
+test('chooseHoleFills — evergreen נבדק מול הפעם הקרובה, לא רק האחרונה', () => {
+  // 8.10: לפני 3 ימים (5.10) כבר יצא; פוסט עתידי רחוק (30.11) לא מסתיר את זה
+  const ever = holeItem({ id: 5, evergreen: true, reuse_after_days: 14 });
+  const history = new Map([[5, { datesByChannel: new Map([[1, ['2026-10-05', '2026-11-30']]]) }]]);
+  assert.deepEqual(chooseHoleFills({
+    holes: [hole()], content: [ever], usedContent: new Set(), history,
+  }), []);
+  const farEnough = new Map([[5, { datesByChannel: new Map([[1, ['2026-09-01', '2026-11-30']]]) }]]);
+  assert.equal(chooseHoleFills({
+    holes: [hole()], content: [ever], usedContent: new Set(), history: farEnough,
+  }).length, 1);
 });
 
 /* ========================= בחירה מתוך ההצעה ========================= */
@@ -427,7 +450,7 @@ function runWeeks(content, anchors, chOver = {}) {
     const usedContent = new Set();
     const pending = new Set(buildSlots(week, [ch], null));
     const history = new Map([...placedAt].map(([id, date]) =>
-      [id, { lastByChannel: new Map([[1, date]]) }]));
+      [id, { datesByChannel: new Map([[1, [date]]]) }]));
     while (pending.size) {
       const slot = nextSlot(pending, usage, week);
       pending.delete(slot);
@@ -440,7 +463,7 @@ function runWeeks(content, anchors, chOver = {}) {
       if (!pick) continue;
       usage.take(slot.channel_id, slot.dateKey, pick.content.kind, 10);
       usedContent.add(`${slot.channel_id}:${pick.content.id}`);
-      history.set(pick.content.id, { lastByChannel: new Map([[1, slot.dateKey]]) });
+      history.set(pick.content.id, { datesByChannel: new Map([[1, [slot.dateKey]]]) });
       placedAt.set(pick.content.id, slot.dateKey);
     }
   }
