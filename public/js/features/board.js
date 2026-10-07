@@ -36,23 +36,22 @@ export async function renderBoard() {
   if (req !== boardReq) return; // בינתיים התבקש שבוע אחר
   const editable = can('content');
 
-  // רשימה אחת שמשמשת גם כמקרא הצבעים וגם כמצב האוויר של כל נקודה.
-  // קודם היו כאן שתי שורות שמציגות את אותן נקודות בשתי מערכות צבע שונות.
-  const oxy = b.oxygen.map((o) => {
+  // מי מקבל במה: בתחתית הלוח — רק נקודות שמשובצות השבוע (גם מקרא הצבעים).
+  // כל נקודה בלוק מלא בצבע שלה, אותו צבע כמו הכרטיסים שלה בלוח, ומתחת לשם
+  // כמה פעמים היא משובצת ומתי פורסמה לאחרונה
+  const oxy = b.oxygen.filter((o) => o.scheduled_this_week > 0).map((o) => {
     const when = o.days_since === null
       ? 'עוד לא פורסם'
       : o.days_since === 0 ? 'פורסם היום'
       : o.days_since === 1 ? 'פורסם אתמול'
       : `${o.days_since} ימים בלי פרסום`;
-    const onAir = !o.stale || o.scheduled_this_week > 0;
-    const tip = `${o.name} · ${when}` +
-                (o.scheduled_this_week ? ` · משובץ ${o.scheduled_this_week} פעמים השבוע`
-                                       : ' · לא משובץ השבוע');
-    // כפתור ולא span: במגע אין ריחוף, ולחיצה מציגה את אותו הסבר (data-oxy)
-    return `<button type="button" class="oxychip${onAir ? '' : ' off'}" data-tt="${esc(tip)}"
-      data-oxy="${esc(tip)}" aria-label="${esc(tip)}">
-      <i class="sw" style="background:${epColor(o.endpoint_id)}"></i>${esc(o.name)}
-    </button>`;
+    const plan = o.scheduled_this_week === 1 ? 'פעם אחת השבוע' : `${o.scheduled_this_week} פעמים השבוע`;
+    const bg = epColor(o.endpoint_id);
+    return `<li class="oxyitem" title="${esc(`${o.name} · ${plan} · ${when}`)}"
+      style="background:${bg};color:${inkOn(bg)}">
+      <span class="nm">${esc(o.name)}</span>
+      <span class="st">${esc(plan)} · ${esc(when)}</span>
+    </li>`;
   }).join('');
 
   const today = ymd(new Date());
@@ -105,8 +104,6 @@ export async function renderBoard() {
 
   $('#board').innerHTML = `
     <div id="setupCard"></div>
-    <div class="oxy"><span class="t">מי מקבל במה:</span>${oxy || '<span class="d">אין נקודות קצה פעילות</span>'}</div>
-
     <div class="toolbar">
       <div class="weeknav">
         <button data-week="${b.week.prevWeek}">‹</button>
@@ -114,12 +111,9 @@ export async function renderBoard() {
         <button data-week="${b.week.nextWeek}">›</button>
       </div>
       <button class="btn small" id="thisWeek">השבוע</button>
-      ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
-      ${can('approve') ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
       <div class="spacer"></div>
-      <div class="legend">
-        <span>הסוג מסומן בתג בכל פוסט · ⚡ דחוף · ✓ פורסם</span>
-      </div>
+      ${can('approve') ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
+      ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
     </div>
 
     ${PHONE.matches
@@ -128,7 +122,7 @@ export async function renderBoard() {
              ${setupGoButton(chStep?.target ?? { tab: 'manage', section: 'channels' },
                              chStep?.action ?? 'לערוצים', true)}</div>`}</div>`
       : `<div class="board panel">
-      <table class="grid">
+      <table class="grid wboard">
         <thead><tr><th></th>${head}</tr></thead>
         <tbody>${body || emptyRow}</tbody>
       </table>
@@ -136,7 +130,11 @@ export async function renderBoard() {
     <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
-      — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}`;
+      — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}
+    <section class="oxy" aria-label="מי מקבל במה">
+      <h3>מי מקבל במה</h3>
+      ${oxy ? `<ul>${oxy}</ul>` : '<p class="d">אף נקודת קצה לא משובצת השבוע</p>'}
+    </section>`;
 
   renderSetupCard($('#setupCard'), setup);
   wireSetupGo($('#board .board'));
@@ -187,8 +185,6 @@ export async function renderBoard() {
     el.addEventListener('click', run(() => openPostPreview(el.dataset.postId))));
 
   // מצב האוויר של נקודה — גם בלחיצה (במגע אין ריחוף)
-  $$('#board [data-oxy]').forEach((chip) =>
-    chip.addEventListener('click', () => toast(chip.dataset.oxy)));
 
   // + במשבצת ריקה — הוספת פוסט ידנית
   $$('#board [data-add-slot]').forEach((btn) =>
@@ -205,25 +201,41 @@ export async function renderBoard() {
 
 /* ========================= הלוח בטלפון ========================= */
 
-/** תג המצב של פוסט ברשימת הטלפון — אותה שפה כמו התגיות הפינתיות בטבלה */
+/**
+ * המצב של פוסט במילים — אותו מקור לכרטיס בטבלה ולשורה בטלפון. cls הוא הגוון
+ * (red/yellow/blue/auto). hint — פרט משני (יש מה לשייך לפוסט בלי תוכן).
+ */
 function statusTag(p) {
-  if (p.status === 'hole') return { cls: 'red', label: 'חסר תוכן' };
+  if (p.status === 'hole' || (!p.content_id && !AUTO_TAG[p.status] && p.status !== 'published')) {
+    // שורות 'hole' ישנות: ה"סיבה" שהמנוע כתב אומרת אם יש טיוטה (findHoles ב-engine.js)
+    const hint = p.status === 'hole'
+      ? ((p.note ?? '').includes('יש תוכן') ? 'יש טיוטה לשייך' : '')
+      : p.content_hint === 'ready' ? 'יש תוכן מוכן לשייך'
+      : p.content_hint ? 'יש טיוטה לשייך' : '';
+    if (isMissed(p)) return { cls: 'orange', label: 'המועד עבר', hint: 'אין תוכן' };
+    return { cls: 'red', label: 'אין תוכן', hint };
+  }
   if (p.status === 'pending_approval') return { cls: 'yellow', label: 'ממתין לאישור' };
   if (p.status === 'published') {
-    return p.has_results ? { cls: 'auto', label: '✓ פורסם' } : { cls: 'yellow', label: '✓ פורסם · לא נמדד' };
+    return p.has_results ? { cls: 'auto', label: 'פורסם' } : { cls: 'auto', label: 'פורסם', hint: 'אין תוצאות עדיין' };
   }
-  if (isMissed(p)) return { cls: 'yellow', label: 'עבר המועד' };
+  if (isMissed(p)) return { cls: 'orange', label: 'המועד עבר', hint: 'לא פורסם' };
   const hub = newsletterHubTag(p); // ניוזלטר שהועבר — "ממתין לאישור ב-HUB"
   if (hub) return hub;
   if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
-  if (!p.content_id) return { cls: 'red', label: 'חסר תוכן' };
-  return p.variant_status === 'ready' ? { cls: 'blue', label: 'יש תוכן' } : { cls: 'yellow', label: 'יש טיוטה' };
+  return p.variant_status === 'ready'
+    ? { cls: 'auto', label: 'מוכן לפרסום' }
+    : { cls: 'blue', label: 'טיוטה', hint: 'התוכן עוד לא מוכן' };
 }
+
+/** שורת המצב בתחתית הכרטיס: נקודה בגוון + המילים, ופרט משני באפור */
+const statusLine = (t) => `<div class="pst ${t.cls}"><i></i>${esc(t.label)}${
+  t.hint ? `<span class="h"> · ${esc(t.hint)}</span>` : ''}</div>`;
 
 /** שורת פוסט בטלפון: שעה, צבע הנקודה, כותרת, ערוץ ונקודה, ותג מצב */
 function phoneRow(p) {
   const tag = statusTag(p);
-  const title = p.status === 'hole' ? 'חסר תוכן' : p.title;
+  const title = p.status === 'hole' ? KIND_HE[p.kind] : p.title;
   return `<button type="button" class="mpost${p.status === 'published' ? ' done' : ''}" data-post-id="${p.id}">
     <span class="mtime">${esc(p.time)}</span>
     <i class="sw" style="background:${epColor(p.endpoint_id)}"></i>
@@ -232,7 +244,7 @@ function phoneRow(p) {
       <span class="d">${esc(p.channel_name)}${p.endpoint_name ? ` · ${esc(p.endpoint_name)}` : ''}${
         p.assignee_name ? ` · ${esc(p.assignee_name)}` : ''}</span>
     </span>
-    <span class="mtag ${tag.cls}">${tag.label}</span>
+    <span class="mtag ${tag.cls}"><i></i>${esc(tag.label)}</span>
   </button>`;
 }
 
@@ -332,9 +344,9 @@ function wireBoardDrag() {
 
 // מצבי מסלול הפרסום האוטומטי — תג במקום תגית התוכן, כי הם חזקים ממנה
 const AUTO_TAG = {
-  approved:   { cls: 'auto', label: '⚡ פרסום אוטו׳' },
-  publishing: { cls: 'auto', label: '🚀 מתפרסם…' },
-  failed:     { cls: 'red',  label: '✗ הפרסום נכשל' },
+  approved:   { cls: 'auto', label: 'יתפרסם אוטומטית' },
+  publishing: { cls: 'auto', label: 'מתפרסם עכשיו' },
+  failed:     { cls: 'red',  label: 'הפרסום נכשל' },
 };
 
 function postCard(p) {
@@ -342,75 +354,34 @@ function postCard(p) {
   const payload = esc(JSON.stringify(p));
   // התצוגה פתוחה לכולם; הגרירה בלבד מוגבלת להרשאת תוכן
   const clickable = `data-post-id="${p.id}" data-post="${payload}"`;
+  // הכותרת לא בכרטיס (קטן ומהיר לסריקה) — רק בריחוף ובחלון הפוסט
+  const title = p.status === 'hole' ? '' : p.title;
+  const tip = `${title ? `${title} · ` : ''}${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}` +
+              `${p.urgent ? ' · דחוף' : ''}${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
 
-  if (p.status === 'hole') {
-    // שורות 'hole' ישנות (לפני שפוסט חסר תוכן הפך לפוסט רגיל בלי content_id).
-    // ה"סיבה" שהמנוע כתב מבדילה בין שני מצבים: יש טיוטה שעוד לא אושרה
-    // לאף ערוץ פנוי, או שאין בכלל תוכן לנקודה הזו — ראו findHoles ב-engine.js
-    const hasDraft = (p.note ?? '').includes('יש תוכן');
-    return `<div class="hole${hasDraft ? ' draft' : ''}" ${clickable}
-      data-tt="חסר תוכן: ${esc(KIND_HE[p.kind])} — ${esc(p.endpoint_name ?? '')}${p.note ? ` · ${esc(p.note)}` : ''}">
-      <span class="corner-tag ${hasDraft ? 'yellow' : 'red'}">${hasDraft ? 'יש טיוטה' : 'חסר תוכן'}</span>
-      חסר תוכן<br><small>${esc(KIND_HE[p.kind])} · ${esc(p.endpoint_name ?? '')}</small></div>`;
-  }
-  if (p.status === 'pending_approval') {
-    return `<div class="pending" ${clickable}
-      data-tt="ממתין לאישור — ${esc(p.title)}">
-      ממתין לאישור<br><small>${esc(p.title)}</small></div>`;
-  }
-
-  const tip = `${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}${p.urgent ? ' · דחוף' : ''}` +
-              `${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
-  const bg = epColor(p.endpoint_id);
-
-  // פוסט שכבר יצא לאוויר: הכרטיס עצמו נשאר (צבע, כותרת, פרטים), רק
-  // דהוי, וחותמת ירוקה גדולה למעלה אומרת שזה כבר קרה.
+  // הכרטיס כולו בצבע נקודת הקצה — אותו צבע כמו הבלוק שלה במקרא שבתחתית —
+  // ושם הנקודה כתוב בראשו.
+  // מתחת: הסוג והשעה, ושורת מצב אחת במילים.
+  const tag = statusTag(p);
+  const missing = p.status === 'hole' || (!p.content_id && p.status !== 'published');
+  const cls = ['post', p.status === 'published' && 'published', missing && 'missing',
+    p.status === 'failed' && 'failed'].filter(Boolean).join(' ');
+  const lines = `
+    <span class="pep">${p.urgent ? '⚡ ' : ''}${esc(p.endpoint_name ?? '')}</span>
+    <div class="meta"><i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>${esc(p.time ?? '')}${who}</div>`;
+  const style = `--ep:${epColor(p.endpoint_id)};--on:${inkOn(epColor(p.endpoint_id))}`;
+  // פורסם: הכרטיס נשאר (צבע, נקודה, שעה), דהוי — ודגל "פורסם" גדול באלכסון
+  // מעליו, מחוץ לדהייה. שורת המצב רק כשחסרות תוצאות (ריקה — אותו גובה)
   if (p.status === 'published') {
-    return `<div class="post published" ${clickable} data-tt="${esc(p.has_results ? tip : `לא נמדד · ${tip}`)}"
-      style="background:${bg};color:${inkOn(bg)}">
-      <span class="pub-stamp">✓ פורסם</span>
-      <div class="published-inner">
-        <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
-        <div class="meta">
-          <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
-          ${esc(p.time)}${who}
-        </div>
+    return `<div class="${cls}" ${clickable} data-tt="${esc(p.has_results ? tip : `אין תוצאות עדיין · ${tip}`)}"
+      style="${style}">
+      <div class="published-inner">${lines}
+        ${p.has_results ? '<div class="pst"></div>' : '<div class="pst"><span class="h">אין תוצאות עדיין</span></div>'}
       </div>
-      ${p.has_results ? '' : '<i class="unmeasured" title="עוד לא הוזנו תוצאות — לוחצים כדי להזין">לא נמדד</i>'}
+      <span class="pub-stamp">✓ פורסם</span>
     </div>`;
   }
-
-  // הצבע הוא נקודת הקצה. סוג התוכן מסומן בתג קטן, כדי ששני הממדים
-  // יהיו קריאים בלי שאחד יסתיר את השני.
-  // התגית נגזרת מהמצב האמיתי של התוכן — לא רק "משובץ = מוכן". שיבוץ
-  // יכול להיות לפי אסטרטגיה גם בלי תוכן סופי (וגם בלי תוכן בכלל).
-  // "פורסם" הוא הדבר היחיד שלא נגזר משום מקום: מישהו צריך לקבוע את זה בפועל.
-  //
-  // פוסט חסר תוכן (content_id ריק) נשאר הכרטיס הרגיל — צבע הנקודה, כותרת,
-  // שעה — אבל במסגרת מקווקוות, כדי שיהיה ברור שהוא מחכה. content_hint אומר
-  // אם יש לנקודה כבר משהו לשייך לו בערוץ הזה (טיוטה או מוכן).
-  const missing = !p.content_id;
-  const contentTag = missing
-    ? { cls: 'red', label: 'חסר תוכן' }
-    : p.variant_status === 'ready'
-      ? { cls: 'blue', label: 'יש תוכן' }
-      : { cls: 'yellow', label: 'יש טיוטה' };
-  const hint = missing && p.content_hint
-    ? `<i class="hint">${p.content_hint === 'ready' ? 'יש תוכן לשייך' : 'יש טיוטה'}</i>` : '';
-
-  const tag = newsletterHubTag(p) ?? AUTO_TAG[p.status] ?? contentTag;
-  // מתוכנן (או מאושר שלא נתפס) שהמועד שלו עבר — לא יצא, וצריך החלטה
-  const missed = isMissed(p);
-  const cls = ['post', p.status === 'failed' && 'failed', missing && 'missing', missed && 'missed']
-    .filter(Boolean).join(' ');
-  const tt = [missed && 'עבר המועד', missing && 'חסר תוכן', tip].filter(Boolean).join(' · ');
-
-  return `<div class="${cls}" ${clickable} data-tt="${esc(tt)}"
-    style="background:${bg};color:${inkOn(bg)}">
-    <span class="corner-tag ${tag.cls}">${tag.label}</span>
-    <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(p.title)}</span>
-    <div class="meta">
-      <i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>
-      ${esc(p.time)}${who}${hint}
-    </div>${missed ? '<i class="missed-tag">עבר המועד</i>' : ''}</div>`;
+  return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}" style="${style}">${lines}
+    ${statusLine(tag)}
+  </div>`;
 }
