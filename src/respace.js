@@ -229,7 +229,7 @@ export async function applyRespace(moves) {
   for (const m of moves) {
     const was = new Date(m.post.scheduled_at);
     if (m.from === m.dateKey && was.getHours() === m.hour) continue;
-    await query('update posts set scheduled_at = $1 where id = $2', [m.to, m.post.id]);
+    await query('update posts set scheduled_at = $1 where id = $2 and status = any($3)', [m.to, m.post.id, MOVABLE]);
     changed += 1;
   }
   return changed;

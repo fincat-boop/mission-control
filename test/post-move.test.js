@@ -72,3 +72,13 @@ test('channelChangeBlocker — ערוץ פעיל, ניסוח שאינו "לא ר
   assert.match(channelChangeBlocker({ target, item: { id: 5, slot_channel_id: 6 }, variant: { status: 'ready' } }, 7).error,
     /משבצת של ערוץ אחר/);
 });
+
+test('publishingBlocker — פוסט שבדרך לפלטפורמה לא נערך ולא נמחק; פורסם/מתוכנן — אין חסימה', async () => {
+  const { publishingBlocker } = await import('../src/routes/board.js');
+  assert.match(publishingBlocker(post({ status: 'publishing' })), /מתפרסם ממש עכשיו/);
+  assert.match(publishingBlocker(post({ status: 'publishing', hub_transferred_at: '2026-10-05T09:00:00Z' })),
+    /הועבר ל-HUB/);
+  for (const status of ['scheduled', 'approved', 'failed', 'published']) {
+    assert.equal(publishingBlocker(post({ status })), null);
+  }
+});

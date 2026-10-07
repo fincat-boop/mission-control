@@ -364,3 +364,73 @@ test('"פרסם עכשיו": הדפדפן התנתק בזמן הקריאה ל-Gr
     server.close();
   }
 });
+
+/* ---------- עריכה ומחיקה מול פרסום ---------- */
+
+async function boardCall(method, path, body) {
+  const { default: board } = await import('../src/routes/board.js');
+  const { server, base } = await scopedApp((app) => app.use(board));
+  try {
+    const res = await httpFetch(`${base}${path}`, {
+      method, headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const json = await res.json().catch(() => null);
+    // ה-commit של הבקשה קורה אחרי שהתשובה נשלחה
+    await new Promise((r) => setTimeout(r, 50));
+    return { status: res.status, json };
+  } finally {
+    server.close();
+  }
+}
+
+test('עריכה ומחיקה של פוסט ב-publishing — 409, והשורה לא משתנה', { skip }, async () => {
+  const id = await duePost('באמצע פרסום', { at: 30 });
+  await inOrg(() => db.query(
+    `update posts set status = 'publishing', publishing_started_at = now() where id = $1`, [id]));
+
+  let r = await boardCall('PATCH', `/posts/${id}`, { note: 'הערה' });
+  assert.equal(r.status, 409);
+  assert.equal(r.json.error, 'הפוסט מתפרסם ממש עכשיו — נסו שוב בעוד דקה');
+  r = await boardCall('PATCH', `/posts/${id}`, { scheduled_at: new Date(Date.now() + 86400000).toISOString() });
+  assert.equal(r.status, 409);
+  r = await boardCall('DELETE', `/posts/${id}`);
+  assert.equal(r.status, 409);
+  const p = await q1('select status, note from posts where id = $1', [id]);
+  assert.equal(p.status, 'publishing');
+  assert.equal(p.note, null);
+});
+
+test('פוסט שפורסם: הזזה נחסמת, הסרה מהלוח מותרת (כמו בממשק)', { skip }, async () => {
+  const id = await duePost('כבר באוויר', { at: -60 });
+  await inOrg(() => db.query(`update posts set status = 'published', published_at = now() where id = $1`, [id]));
+  let r = await boardCall('PATCH', `/posts/${id}`, { scheduled_at: new Date(Date.now() + 86400000).toISOString() });
+  assert.equal(r.status, 409);
+  assert.match(r.json.error, /שכבר פורסם/);
+  r = await boardCall('DELETE', `/posts/${id}`);
+  assert.equal(r.status, 200);
+  assert.equal(await status(id), null);
+});
+
+test('עריכה שמחזיקה את השורה: התפיסה בטיק מחכה לה ורואה את המועד החדש — לא יוצא', { skip }, async () => {
+  const id = await duePost('נעול בעריכה');
+  const locked = deferred();
+  const hold = deferred();
+  // כמו PATCH: select ... for update, הזזה, והטרנזקציה עוד פתוחה
+  const editing = inOrg(async () => {
+    await db.one('select id from posts where id = $1 for update', [id]);
+    await db.query(`update posts set scheduled_at = now() + interval '1 day' where id = $1`, [id]);
+    locked.resolve();
+    await hold.promise;
+  });
+  await locked.promise;
+  let calls;
+  const publishing = withGraph(null, () => runner.publishOne(id, { orgId: org, dueOnly: true }))
+    .then((c) => { calls = c; });
+  await new Promise((r) => setTimeout(r, 100));
+  hold.resolve();
+  await editing;
+  await publishing;
+  assert.equal(calls.length, 0);
+  assert.equal(await status(id), 'approved');
+});

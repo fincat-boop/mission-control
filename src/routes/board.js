@@ -126,6 +126,19 @@ export function moveBlocker(current, when, now = new Date()) {
   return null;
 }
 
+/**
+ * למה אסור לערוך או למחוק את הפוסט עכשיו, או null (טהורה). publishing =
+ * בדרך לפלטפורמה ברגע זה — עריכה הייתה נכתבת על פוסט שכבר יצא (או נמחק
+ * פוסט שבאוויר). ניוזלטר ב-publishing נמצא בידי ה-HUB, לפעמים ימים.
+ * פוסט שכבר פורסם — הזזה חסומה ב-moveBlocker; מחיקה מהלוח מותרת (כמו בממשק).
+ */
+export function publishingBlocker(current) {
+  if (current.status !== 'publishing') return null;
+  return current.hub_transferred_at
+    ? 'הניוזלטר כבר הועבר ל-HUB — משנים או מבטלים אותו שם'
+    : 'הפוסט מתפרסם ממש עכשיו — נסו שוב בעוד דקה';
+}
+
 // status לא כאן בכוונה: מעבר סטטוס עובר רק בנתיבים הייעודיים (אישור, פרסום,
 // "סמן כפורסם") שבודקים הרשאת approve. אחרת content יכול לקבוע approved.
 const POST_FIELDS = ['channel_id', 'endpoint_id', 'content_id', 'title', 'kind',
@@ -133,8 +146,13 @@ const POST_FIELDS = ['channel_id', 'endpoint_id', 'content_id', 'title', 'kind',
 
 r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
-  const current = await one('select * from posts where id = $1', [req.params.id]);
+  // נעילת השורה עד סוף הבקשה: התפיסה לפרסום (publishOne) מחכה לה, ורואה את
+  // המועד/הערוץ החדשים. בלי הנעילה עדכון יכול היה לנחות על פוסט שבדיוק עבר
+  // ל-publishing / published.
+  const current = await one('select * from posts where id = $1 for update', [req.params.id]);
   if (!current) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  const publishing = publishingBlocker(current);
+  if (publishing) return bad(res, publishing, 409);
 
   // הזזה על הלוח עוברת את אותו כלל שהמנוע והמבצע הדחוף מכבדים:
   // נקודת קצה אחת, מדיה אחת, יום אחד.
@@ -371,6 +389,11 @@ r.delete('/posts/:id/results', requirePerm('content'), wrap(async (req, res) => 
  * אותו לשם (engine_dismissals).
  */
 r.delete('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
+  // נעילה ובדיקה לפני המחיקה — פוסט שבדרך לפלטפורמה לא נמחק (ראו publishingBlocker)
+  const locked = await one(
+    'select status, hub_transferred_at from posts where id = $1 for update', [req.params.id]);
+  const publishing = locked && publishingBlocker(locked);
+  if (publishing) return bad(res, publishing, 409);
   const post = await one(
     'delete from posts where id = $1 returning id, content_id, channel_id, scheduled_at',
     [req.params.id]
