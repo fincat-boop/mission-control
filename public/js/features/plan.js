@@ -16,6 +16,7 @@ import {
   sameShortage, shortChannels, totalCapacity, validGap,
 } from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
+import { shiftNote } from '../core/campaignEdit.js';
 import { extrasHtml, paintCaptionNote, readExtras, wireExtras } from '../ui/variantExtras.js';
 import { extrasFor, extrasKey, mergeExtras, pickExtras } from '../core/socialRules.js';
 import { goToSetupTarget } from '../ui/setup.js';
@@ -687,7 +688,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
       const res = campaign
         ? await patchCampaign(campaign.id, v)
         : await api('/campaigns', { method: 'POST', body: v });
-      engineToast(res, campaign ? 'הקמפיין נשמר.' : 'הקמפיין נוצר.');
+      engineToast(res, campaign ? `הקמפיין נשמר. ${shiftNote(res.shift)}`.trim() : 'הקמפיין נוצר.');
       await reload();
       return false;
     },

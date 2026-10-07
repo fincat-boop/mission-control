@@ -12,6 +12,8 @@ import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
 import { isDate, rerunPeriod, runName } from '../../public/js/core/period.js';
 import { ymd } from '../board.js';
+import { lockEngine } from '../engine.js';
+import { shiftCampaignPosts } from '../campaign-shift.js';
 
 const r = Router();
 
@@ -610,6 +612,10 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   const before = await one('select * from campaigns where id = $1', [req.params.id]);
   if (!before) return bad(res, 'לא נמצא קמפיין כזה', 404);
 
+  // תאריך שבור היה מגיע ל-SQL ונופל ב-500. תאריך שעבר מותר — קמפיין שכבר
+  // התחיל נערך כרגיל; ההזזה למטה דואגת ששום פוסט לא יזוז לעבר
+  const dateErr = datesError(b);
+  if (dateErr) return bad(res, dateErr);
   const periodErr = applyPeriod(b, before);
   if (periodErr) return bad(res, periodErr);
   const gapErr = gapDaysError(b) ?? shareError(b) ?? await channelIdsError(b);
@@ -661,39 +667,36 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     }
   }
 
+  // הזזת קמפיין בזמן גוררת איתה את השיבוצים שלו. בלי זה הקמפיין זז
+  // והפוסטים נשארים מאחור, מנותקים מהחלון שהם אמורים לשרת.
+  const shiftDays = b.starts_on && before.starts_on && b.starts_on !== before.starts_on
+    ? daysBetweenDates(before.starts_on, b.starts_on) : 0;
+  if (shiftDays) {
+    // ההזזה והמילוי שאחריה תחת אותה נעילת מנוע של הארגון, עד ה-commit —
+    // נלקחת לפני כל כתיבה, כדי שנעילה תפוסה לא תשאיר שמירה חצויה
+    try {
+      await lockEngine();
+    } catch (e) {
+      if (e?.code !== '55P03') throw e;
+      return bad(res, 'מילוי אחר של הלוח רץ ממש עכשיו — מנסים לשמור שוב בעוד רגע', 503);
+    }
+  }
+
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
   }
 
-  // הזזת קמפיין בזמן גוררת איתה את השיבוצים שלו. בלי זה הקמפיין זז
-  // והפוסטים נשארים מאחור, מנותקים מהחלון שהם אמורים לשרת.
-  let movedPosts = 0;
-  if (b.starts_on && before.starts_on && b.starts_on !== before.starts_on) {
-    const days = daysBetweenDates(before.starts_on, b.starts_on);
-    if (days !== 0) {
-      // רק מה שעוד לא יצא ועוד לא עבר. היסטוריה לא מזיזים.
-      const moved = await rows(
-        `update posts p
-            set scheduled_at = p.scheduled_at + ($1 || ' days')::interval
-           from content_items ci
-          where ci.id = p.content_id
-            and ci.campaign_id = $2
-            and p.status in ('scheduled','approved','failed','pending_approval','hole')
-            and p.scheduled_at >= now()
-          returning p.id`,
-        [days, c.id]
-      );
-      movedPosts = moved.length;
-    }
-  }
+  // אחרי השמירה: הפוסטים נבדקים מול החלון, המרווח והקישורים החדשים.
+  // מה שלא עובר את הכללים יורד מהלוח, והמילוי שמיד אחרי משבץ אותו מחדש
+  const shift = await shiftCampaignPosts(c.id, shiftDays);
 
   // שינוי במה שהקמפיין צריך או מתי — כל התקופה שלו; שאר השדות (שם, מטרה)
   // לא משנים שיבוץ, ומספיק השבוע שמוצג כמו קודם
   const engine = FILL_FIELDS.some((k) => b[k] !== undefined)
     ? await autoFillCampaign(c.id, b.week)
     : await autoFill(b.week);
-  res.json({ campaign: c, moved_posts: movedPosts, engine });
+  res.json({ campaign: c, moved_posts: shift.moved, shift, engine });
 }));
 
 /** מספר ימים בין שני תאריכים, בלי להיתקל במעבר שעון */
