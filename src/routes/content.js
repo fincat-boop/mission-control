@@ -792,6 +792,9 @@ r.post('/content/:id/copy-assets', requirePerm('content'), wrap(async (req, res)
   if (!to.campaign_id || from.campaign_id !== to.campaign_id) {
     return bad(res, 'מעתיקים קבצים רק מפוסט באותו קמפיין');
   }
+  // רק קמפיין כללי: בזוויות הקבצים של כל הגרסאות היו הופכים למשותפים ביעד
+  const camp = await one('select structure from campaigns where id = $1', [to.campaign_id]);
+  if (camp?.structure !== 'general') return bad(res, 'העתקת קבצים — רק בקמפיין כללי');
   const source = assetOwnerId(from);
   if (source === owner.contentId) return bad(res, 'הקבצים כבר משותפים לשני הפוסטים (מקושרים)');
   let copied;

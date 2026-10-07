@@ -30,7 +30,7 @@ export function rowPrefill(content, { index, channelId, order = [] }) {
   const same = content
     .filter((x) => x.sort_order === index && x.slot_channel_id !== channelId && x.title?.trim())
     .sort((a, b) => rank(a) - rank(b));
-  return same.length ? { title: same[0].title, kind: same[0].kind } : null;
+  return same.length ? { title: same[0].title.trim(), kind: same[0].kind } : null;
 }
 
 /**
@@ -90,7 +90,7 @@ export function nextEmptySlot(slots, { channelId, index }) {
 export function postCampaign(campaigns, post, day) {
   if (!post.endpoint_id) return null;
   const fits = campaigns.filter((c) => c.structure === 'general' && c.endpoint_id === post.endpoint_id &&
-    !c.paused_at && c.active !== false && c.starts_on && c.ends_on &&
+    !c.paused_at && !c.complete && c.active !== false && c.starts_on && c.ends_on &&
     c.starts_on <= day && day <= c.ends_on &&
     (c.channels ?? []).some((ch) => ch.id === post.channel_id));
   return fits.length === 1 ? fits[0] : null;

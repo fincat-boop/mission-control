@@ -1527,6 +1527,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
  * @returns {Promise<boolean>} false — אין עורך מתאים (הקורא מנווט לטאב התוכן)
  */
 export async function openPostEditor(post, { onChange }) {
+  // בלי הרשאת תוכן — אין עורך (כל שמירה הייתה נכשלת); הקורא מנווט לטאב לקריאה
+  if (!can('content')) return false;
   const { campaigns } = await api('/campaigns');
   state.campaigns = campaigns;
   const reload = async () => {
