@@ -82,6 +82,7 @@ function describe(req, payload, deletedName) {
     'campaigns/assets':   ['create',  `העלה קבצים לקמפיין ${label}`],
     'content/assets':     ['create',  `הוסיף קבצים לתוכן ${label}`],
     'content/uploads':    ['create',  `הוסיף קובץ לתוכן ${label}`],
+    'content/copy-assets': ['create', `העתיק קבצים לתוכן ${label} מתוכן #${req.body?.from ?? ''}`],
     'content/variants':   ['update',  `כתב ניסוח לתוכן ${label} בערוץ #${parts[3] ?? ''}`],
     'content/link':       ['update',  `קישר את התוכן ${label} למשבצת בערוץ נוסף`],
     'content/unlink':     ['update',  `ניתק את הקישור של התוכן ${label} — לכל משבצת עותק משלה`],

@@ -401,3 +401,25 @@ test('משבצת בקמפיין כללי: שדות הפרסום נשמרים ב�
   assert.equal(r.status, 400);
   assert.match(r.json.error, /סטורי יוצא עם תמונה או סרטון אחד/);
 });
+
+test('סעיף 18 — "העתק מ־" עם קבצים: עותקים עצמאיים מפוסט באותו קמפיין בלבד', { skip }, async () => {
+  const from = await slot(ids.fb, 41);
+  await uploadBytes(from, 'one.png');
+  await uploadBytes(from, 'two.png');
+  const to = await slot(ids.ig, 41, { body: '' });
+  let r = await call('POST', `/content/${to}/copy-assets`, { from });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.copied, 2);
+  const mine = await q('select filename from content_assets where content_id = $1 order by filename', [to]);
+  assert.deepEqual(mine.map((x) => x.filename), ['one.png', 'two.png']);
+  // עותק, לא קישור: המקור לא השתנה, והפוסט לא נקשר
+  assert.equal((await q('select id from content_assets where content_id = $1', [from])).length, 2);
+  assert.equal((await q1('select linked_to_id from content_items where id = $1', [to])).linked_to_id, null);
+
+  // מקמפיין אחר — לא
+  const other = await angle(41);
+  r = await call('POST', `/content/${to}/copy-assets`, { from: other });
+  assert.equal(r.status, 400);
+  r = await call('POST', `/content/${to}/copy-assets`, {});
+  assert.equal(r.status, 400);
+});

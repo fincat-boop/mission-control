@@ -20,6 +20,7 @@ import { changedCampaignFields, shiftNote, tidyCampaignDates } from '../core/cam
 import { extrasHtml, paintCaptionNote, readExtras, wireExtras } from '../ui/variantExtras.js';
 import { extrasFor, extrasKey, mergeExtras, pickExtras } from '../core/socialRules.js';
 import { goToSetupTarget } from '../ui/setup.js';
+import { copySources, nextEmptySlot, rowPrefill } from '../core/slotRow.js';
 
 /* ========================= ניוזלטר ========================= */
 
@@ -1084,9 +1085,29 @@ function wireGeneralBoard(selected, reload) {
 /**
  * פוסט במשבצת של קמפיין כללי: טופס אחד פשוט. מתחת לפני השטח — פריט תוכן
  * וגרסה אחת שלו לאותה מדיה (השרת שומר את הטקסט והמצב על שניהם).
+ *
+ * סעיף 18: משבצת חדשה מקבלת כותרת וסוג מפוסט אחר באותה שורה; "העתק מ־"
+ * מעתיק פעם אחת טקסט (ואם מסמנים — גם קבצים) מפוסט אחר בקמפיין — עותק, לא
+ * קישור; "הבא ›" שומר ופותח את המשבצת הריקה הבאה (core/slotRow.js).
+ * onCreated — נקרא עם הפריט כשהטופס יצר אותו (מהלוח: שיוך לפוסט, סעיף 17).
  */
-function openSlotForm({ campaign, channelId, index, item }, reload) {
+export function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated } = {}) {
   const channel = state.channels.find((c) => c.id === channelId);
+  const order = (campaign.slots ?? []).map((col) => col.channel_id);
+  const prefill = item ? null : rowPrefill(campaign.content ?? [], { index, channelId, order });
+  const sources = copySources(campaign.content ?? [], { index, channelId, selfId: item?.id, order });
+  const next = nextEmptySlot(campaign.slots ?? [], { channelId, index });
+  const sourceLabel = (x) => `${channelName(x.channel_id)}${x.sameRow ? '' : ` #${x.index}`}` +
+    `${x.title && !x.sameRow ? ` · ${x.title}` : ''}${x.files ? ` · 📎${x.files}` : ''}`;
+  const copyHtml = () => {
+    const opt = (x) => `<option value="${x.id}">${esc(sourceLabel(x))}</option>`;
+    const row = sources.filter((x) => x.sameRow);
+    const rest = sources.filter((x) => !x.sameRow);
+    return sources.length
+      ? `${row.length ? `<optgroup label="פוסט ${index} בערוצים אחרים">${row.map(opt).join('')}</optgroup>` : ''}
+         ${rest.length ? `<optgroup label="שאר הקמפיין">${rest.map(opt).join('')}</optgroup>` : ''}`
+      : '<option value="">אין עדיין טקסט בפוסט אחר</option>';
+  };
   const v = item?.variants.find((x) => x.channel_id === channelId) ?? null;
   // ניוזלטר: הנושא, התבנית והתוכן נערכים בעורך המייל הקיים (בלעדיהם אי אפשר
   // לשלוח). כאן רק הכותרת והסוג — והשמירה ממשיכה ישר לעורך.
@@ -1139,8 +1160,11 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   };
   const pickedFiles = () => [...($('#gen___files')?.files ?? [])];
   const keyOf = (p) => JSON.stringify([p, extrasKey(extras)]);
+  // משבצת חדשה: נקודת ההשוואה היא מה שהטופס נפתח איתו (גם כותרת וסוג
+  // שהגיעו מהשורה) — בלי שינוי לא נוצר פוסט ריק, גם לא ב"הבא ›"
   let lastKey = item ? keyOf({ title: item.title ?? '', kind: item.kind, body: v?.body ?? item?.body ?? '',
-    status: readyNow ? 'ready' : 'draft' }) : null;
+    status: readyNow ? 'ready' : 'draft' })
+    : keyOf({ title: prefill?.title ?? '', kind: prefill?.kind ?? 'value', body: '', status: 'draft' });
 
   /** תיבת הקבצים מחדש, מהפריט הטרי שאחרי הרענון */
   const repaintFiles = () => {
@@ -1240,6 +1264,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     if (res.variant) baseMeta = res.variant.meta ?? null;
     fills.push(res);
     if (created) $('#genTitle').textContent = `${channel?.name ?? ''} · פוסט ${index}`;
+    if (created && onCreated) await onCreated(saved);
     if (created && picked.length) {
       try {
         await uploadPicked(saved.id, picked, () => reload());
@@ -1308,6 +1333,51 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     timer = setTimeout(saveNow, ms);
   };
 
+  /**
+   * "העתק לכאן": הטקסט של הפוסט שנבחר נכנס לתיבה (שאלה לפני שמחליפים טקסט
+   * אחר), ונשמר כרגיל. "כולל קבצים" — אחרי השמירה הקבצים שלו מועתקים לכאן
+   * בשרת (עותקים). משבצת חדשה בלי כותרת מקבלת את הכותרת שלו, כדי להישמר.
+   */
+  async function copyFrom() {
+    const src = sources.find((x) => x.id === Number($('#slotCopyFrom').value));
+    if (!src) return;
+    const withFiles = $('#slotCopyFiles').checked && src.files > 0;
+    const cur = $('#gen_body').value;
+    if (src.body.trim() && cur.trim() && cur !== src.body && !(await confirmDialog(
+      `להחליף את הטקסט של ${channel?.name ?? 'הפוסט'} בטקסט של ${sourceLabel(src)}?`,
+      { okLabel: 'החלף' }))) return;
+    if (src.body.trim()) $('#gen_body').value = src.body;
+    if (!$('#gen_title').value.trim() && src.title) $('#gen_title').value = src.title;
+    paintNote();
+    await saveNow();
+    if (!withFiles) return;
+    if (!saved) {
+      toast('צריך כותרת לפני שמעתיקים קבצים — כותבים כותרת ומעתיקים שוב.', true);
+      return;
+    }
+    const r = await api(`/content/${saved.id}/copy-assets`, { method: 'POST', body: { from: src.id } });
+    filesChanged = true;
+    const lost = (r.warns ?? []).find((w) => w.warn);
+    toast(`${r.copied === 1 ? 'קובץ אחד הועתק' : `${r.copied} קבצים הועתקו`} מ${sourceLabel(src)}.` +
+          `${lost ? warnNote(lost.warn) : ''}`);
+    await reload();
+    repaintFiles();
+  }
+
+  /** "הבא ›": שומר, ופותח את המשבצת הריקה הבאה (מהנתונים הטריים שאחרי השמירה) */
+  async function goNext() {
+    await saveNow();
+    if (unsaved) return; // השמירה נכשלה — ההודעה כבר בשורת המצב
+    const fresh = state.campaigns.find((c) => c.id === campaign.id) ?? campaign;
+    const to = nextEmptySlot(fresh.slots ?? [], { channelId, index });
+    if (!to) {
+      toast('אין עוד משבצות ריקות בקמפיין.');
+      return;
+    }
+    await closeGeneric({ force: true });
+    openSlotForm({ campaign: fresh, channelId: to.channelId, index: to.index, item: null }, reload);
+  }
+
   openGeneric({
     guardDirty: mail ? true : () => unsaved,
     autosave: !mail,
@@ -1321,12 +1391,20 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     saveLabel: mail ? 'שמור והמשך לעריכת המייל' : undefined,
     fields: [
       ...(partners.length ? [{ name: '__link', type: 'html', html: linkInfo(item, partners) }] : []),
+      // משבצת חדשה: הכותרת והסוג מפוסט אחר באותה שורה (סעיף 18)
       { name: 'title', label: mail ? 'כותרת (פנימית — הנושא נכתב בעורך המייל)' : 'כותרת',
-        type: 'text', value: item?.title },
+        type: 'text', value: item?.title ?? prefill?.title },
       { name: 'kind', label: 'סוג', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
-        value: item?.kind },
+        value: item?.kind ?? prefill?.kind },
       ...(mail ? [] : [
+        // "העתק מ־" — כמו בעורך הגרסאות; העתקה חד-פעמית, לא קישור
+        { name: '__copy', type: 'html', html: `<div class="vcopy">
+            <label for="slotCopyFrom">העתק מ־</label>
+            <select id="slotCopyFrom"${sources.length ? '' : ' disabled'}>${copyHtml()}</select>
+            <label class="vcopy-files"><input type="checkbox" id="slotCopyFiles"> כולל קבצים</label>
+            <button type="button" class="btn small" id="slotCopyBtn"${sources.length ? '' : ' disabled'}>העתק לכאן</button>
+          </div>` },
         { name: 'body', label: platform === 'instagram'
             ? `הכיתוב — הטקסט שמופיע מתחת לפוסט ב${channel?.name ?? 'אינסטגרם'}`
             : `הטקסט כפי שהוא ייצא ב${channel?.name ?? 'ערוץ'}`,
@@ -1343,7 +1421,10 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     ],
     extraActions: (item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
-      : ''),
+      : '') +
+      // "הבא ›" — שומר ופותח את המשבצת הריקה הבאה בשורה, ואז בשורות הבאות
+      (!mail && next ? `<button type="button" class="btn" id="slotNext"${item ? '' : ' style="margin-inline-end:auto"'}
+        title="שומר ופותח את המשבצת הריקה הבאה">הבא ›</button>` : ''),
     // ניוזלטר בלבד — בשאר הערוצים אין כפתור שמירה, הכול נשמר לבד
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
@@ -1352,7 +1433,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         ? await api(`/content/${saved.id}`, { method: 'PATCH', body })
         : await api('/content', { method: 'POST', body: {
           ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index } });
+      const created = !saved;
       saved = res.content;
+      if (created && onCreated) await onCreated(saved);
       engineToast(res, 'נשמר.');
       await reload();
       // הפריט הטרי (עם הגרסה שלו) — אחרי הרענון. העורך נפתח רק אחרי שהטופס
@@ -1395,6 +1478,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         }, { signal: ac.signal });
         // התווית קבועה ("מוכן לפרסום") — טקסט שמתחלף היה מזיז את המתג
         readyEl().addEventListener('change', () => schedule(0));
+        $('#slotCopyBtn').addEventListener('click', run(copyFrom));
+        $('#slotNext')?.addEventListener('click', run(goNext));
       }
       $('#genDelete')?.addEventListener('click', run(async () => {
         const names = partners.map(slotLabel).join(', ');
