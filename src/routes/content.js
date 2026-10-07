@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
-import { autoFill, autoFillCampaign, bad, parseIdList, titleFromFilename, updateById, upload, wrap } from './_shared.js';
+import {
+  autoFill, autoFillCampaign, bad, lockEngineOr503, parseIdList, titleFromFilename, updateById,
+  upload, wrap,
+} from './_shared.js';
+import { revalidateCampaignPosts } from '../campaign-shift.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
@@ -656,7 +660,8 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
  * ומנתקת את הפוסטים שמקושרים בין שתי העמודות (dry_run מחזיר גם unlinks).
  */
 r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res) => {
-  const c = await one('select id, structure, link_rules from campaigns where id = $1 for update',
+  const c = await one(
+    'select id, structure, link_rules, links_apart from campaigns where id = $1 for update',
     [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
   if (c.structure !== 'general') return bad(res, 'קישור עמודות זמין רק בקמפיין כללי');
@@ -680,6 +685,10 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
   if (req.body?.dry_run) return res.json({ copies: plan.length, unlinks: followers.length });
 
   const apart = typeof req.body?.links_apart === 'boolean' ? req.body.links_apart : null;
+  // "לא באותו יום" נדלק: פוסטים מקושרים שכבר משובצים באותו יום נבדקים מחדש
+  // (revalidateCampaignPosts) — נעילת המנוע לפני כל כתיבה, כמו בעריכת קמפיין
+  const tighten = apart === true && c.links_apart === false;
+  if (tighten && !(await lockEngineOr503(res))) return;
   await query(
     `update campaigns set link_rules = $2::jsonb, links_apart = coalesce($3, links_apart)
       where id = $1`, [c.id, JSON.stringify(clean), apart]);
@@ -688,8 +697,12 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
     try { await unlink(id); unlinked += 1; } catch (e) { if (!(e instanceof LinkError)) throw e; }
   }
   const out = await applyLinkPlan(plan);
-  const engine = await autoFill(req.body?.week);
-  res.json({ rules: clean, ...out, unlinked, engine });
+  // מה שירד מהלוח משובץ מחדש על כל התקופה של הקמפיין, לא רק בשבוע שמוצג
+  const shift = tighten ? await revalidateCampaignPosts(c.id) : null;
+  const engine = shift?.rescheduled
+    ? await autoFillCampaign(c.id, req.body?.week)
+    : await autoFill(req.body?.week);
+  res.json({ rules: clean, ...out, unlinked, shift, engine });
 }));
 
 /**

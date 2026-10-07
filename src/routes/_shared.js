@@ -37,6 +37,23 @@ export function autoFill(week) {
 }
 
 /**
+ * נעילת המנוע של הארגון לפני כתיבה שמזיזה / מורידה פוסטים (הזזת קמפיין,
+ * בדיקה מחדש מול הכללים) — עד ה-commit, יחד עם המילוי שאחריה. נלקחת לפני
+ * כל כתיבה בבקשה: נעילה תפוסה עונה 503 בלי להשאיר שמירה חצויה.
+ * @returns {Promise<boolean>} false — כבר נענה 503, הקורא יוצא
+ */
+export async function lockEngineOr503(res) {
+  try {
+    await lockEngine();
+    return true;
+  } catch (e) {
+    if (e?.code !== '55P03') throw e;
+    bad(res, 'מילוי אחר של הלוח רץ ממש עכשיו — מנסים לשמור שוב בעוד רגע', 503);
+    return false;
+  }
+}
+
+/**
  * savepoint + fail-soft משותפים ל-autoFill ול-autoFillCampaign (ראו למעלה).
  * בתוך ה-savepoint — נעילת המנוע של הארגון (lockEngine) עד ה-commit של
  * הבקשה. מילוי אחר שמחזיק אותה יותר מ-5 שניות: המילוי הזה מוותר (תשובה

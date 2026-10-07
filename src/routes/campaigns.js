@@ -1,5 +1,7 @@
 import { Router } from 'express';
-import { EMPTY_FILL, autoFill, autoFillCampaign, bad, updateById, wrap } from './_shared.js';
+import {
+  EMPTY_FILL, autoFill, autoFillCampaign, bad, lockEngineOr503, updateById, wrap,
+} from './_shared.js';
 import {
   campaignsWithHealth, completionSummary, currentAllocation, gapDaysError, loadCapacityPreview,
   resolvePeriod, structureChangeError,
@@ -12,8 +14,8 @@ import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
 import { isDate, rerunPeriod, runName } from '../../public/js/core/period.js';
 import { ymd } from '../board.js';
-import { lockEngine } from '../engine.js';
-import { shiftCampaignPosts } from '../campaign-shift.js';
+import { revalidateCampaignPosts, shiftCampaignPosts } from '../campaign-shift.js';
+import { effectiveGap } from '../capacity.js';
 import { STALE_CAMPAIGN, staleCampaign } from '../variant-lock.js';
 
 const r = Router();
@@ -679,16 +681,13 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   // והפוסטים נשארים מאחור, מנותקים מהחלון שהם אמורים לשרת.
   const shiftDays = b.starts_on && before.starts_on && b.starts_on !== before.starts_on
     ? daysBetweenDates(before.starts_on, b.starts_on) : 0;
-  if (shiftDays) {
-    // ההזזה והמילוי שאחריה תחת אותה נעילת מנוע של הארגון, עד ה-commit —
-    // נלקחת לפני כל כתיבה, כדי שנעילה תפוסה לא תשאיר שמירה חצויה
-    try {
-      await lockEngine();
-    } catch (e) {
-      if (e?.code !== '55P03') throw e;
-      return bad(res, 'מילוי אחר של הלוח רץ ממש עכשיו — מנסים לשמור שוב בעוד רגע', 503);
-    }
-  }
+  // בלי הזזה: שינוי שמהדק את הכללים (סיום מוקדם יותר, מרווח גדול יותר) —
+  // הפוסטים שכבר בלוח נבדקים מחדש מולם. הזזה בודקת את כל אלה בעצמה
+  const revalidate = !shiftDays &&
+    tightensCampaignRules(before, b, await one('select * from engine_settings limit 1'));
+  // ההזזה / הבדיקה והמילוי שאחריה תחת אותה נעילת מנוע של הארגון, עד ה-commit —
+  // נלקחת לפני כל כתיבה, כדי שנעילה תפוסה לא תשאיר שמירה חצויה
+  if ((shiftDays || revalidate) && !(await lockEngineOr503(res))) return;
 
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (Array.isArray(b.channel_ids)) {
@@ -697,15 +696,37 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 
   // אחרי השמירה: הפוסטים נבדקים מול החלון, המרווח והקישורים החדשים.
   // מה שלא עובר את הכללים יורד מהלוח, והמילוי שמיד אחרי משבץ אותו מחדש
-  const shift = await shiftCampaignPosts(c.id, shiftDays);
+  const shift = revalidate
+    ? await revalidateCampaignPosts(c.id)
+    : await shiftCampaignPosts(c.id, shiftDays);
 
   // שינוי במה שהקמפיין צריך או מתי — כל התקופה שלו; שאר השדות (שם, מטרה)
   // לא משנים שיבוץ, ומספיק השבוע שמוצג כמו קודם
   const engine = FILL_FIELDS.some((k) => b[k] !== undefined)
     ? await autoFillCampaign(c.id, b.week)
     : await autoFill(b.week);
-  res.json({ campaign: c, moved_posts: shift.moved, shift, engine });
+  res.json({ campaign: c, moved_posts: shift.moved ?? 0, shift, engine });
 }));
+
+/** YYYY-MM-DD מעמודת date או מהגוף; null כשאין */
+const dateKey = (v) => (v == null || v === '' ? null : String(v).slice(0, 10));
+
+/**
+ * העריכה b (אחרי applyPeriod ו-gapDaysError) מהדקת כלל שפוסטים שכבר בלוח
+ * עלולים לשבור: הסיום הוקדם (גם דרך תקופה קצרה יותר), נקבע תאריך התחלה
+ * לקמפיין שלא היה לו (בלי הזזה — אין ממה להזיז), או שהמרווח בפועל גדל
+ * (effectiveGap — גם ריק ← הכללי). שם, מטרה, נתח וכו' — לא.
+ * @param settings engine_settings — המרווח הכללי, כשלקמפיין אין משלו
+ */
+export function tightensCampaignRules(before, b, settings) {
+  const oldEnd = dateKey(before.ends_on);
+  const newEnd = b.ends_on !== undefined ? dateKey(b.ends_on) : oldEnd;
+  if (newEnd && (!oldEnd || newEnd < oldEnd)) return true;
+  if (dateKey(b.starts_on) && !dateKey(before.starts_on)) return true;
+  if (b.min_gap_days !== undefined &&
+      effectiveGap(b, settings) > effectiveGap(before, settings)) return true;
+  return false;
+}
 
 /** מספר ימים בין שני תאריכים, בלי להיתקל במעבר שעון */
 function daysBetweenDates(a, b) {

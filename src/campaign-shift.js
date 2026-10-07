@@ -42,8 +42,9 @@ const LAST_HOUR = 22;
  *   campaign_links_apart.
  * fixed — כל שאר הפוסטים החיים סביב התאריכים החדשים (גם של הקמפיין עצמו
  *   שלא זזים — היסטוריה, פורסם). מולם נבדק כל פוסט, ומול מה שכבר התקבל
- *   לפניו: הזזה אחידה שומרת על המרווחים בתוך הקמפיין, ולכן אין צורך לבדוק
- *   את הפוסטים שלו זה מול זה מעבר לזה.
+ *   לפניו — כך שגם הפוסטים של הקמפיין נבדקים זה מול זה: בהזזה אחידה זה
+ *   כמעט תמיד עובר, ובבדיקה בלי הזזה (days = 0, revalidateCampaignPosts) זה
+ *   מה שתופס מרווח שגדל או זוג מקושר באותו יום.
  * channels — כל הערוצים (גם לא פעילים: פוסט על ערוץ כבוי לא יורד בגלל זה).
  *
  * @returns {{moves:{post:object, at:Date}[], drops:object[]}}
@@ -136,8 +137,33 @@ export function planCampaignShift({ moving, fixed, channels, settings, days, now
  *   approved — כמה מאלה שירדו היו מאושרים (יצטרכו אישור מחדש)
  */
 export async function shiftCampaignPosts(campaignId, days, now = new Date()) {
+  if (!days) return { moved: 0, rescheduled: 0, approved: 0 };
+  return reschedule(campaignId, days, now);
+}
+
+/**
+ * בדיקה מחדש של הפוסטים העתידיים של הקמפיין מול הכללים הקשיחים של המנוע,
+ * בלי להזיז אותם בזמן (אותה בדיקה כמו בהזזה, עם 0 ימים). אחרי שינוי שמהדק
+ * את הכללים — סיום מוקדם יותר, התחלה מאוחרת יותר בלי הזזה, מרווח גדול יותר,
+ * "לא באותו יום" שנדלק, קישור למשבצת שכבר משובצת — פוסט שכבר על הלוח היה
+ * נשאר שובר את הכלל, בלי התראה ובלי שמשהו יזיז אותו. מה שלא עובר יורד מהלוח
+ * (פורסם / בפרסום — לעולם לא), והמילוי של הקמפיין שאחרי משבץ אותו מחדש.
+ * הקורא אחראי לנעילת המנוע (lockEngine) לפני כל כתיבה בבקשה.
+ *
+ * הסדר: לפי המועד — הפוסט המוקדם נשאר, וזה שאחריו נבדק מולו (המרווח, אותו
+ * יום של פוסט מקושר).
+ * @returns {Promise<{kept:number, rescheduled:number, approved:number}>}
+ *   kept — מה שנשאר במקומו (או זז שעה באותו יום, כששעה תפוסה); approved — כמה
+ *   מאלה שירדו היו מאושרים (יצטרכו אישור מחדש)
+ */
+export async function revalidateCampaignPosts(campaignId, now = new Date()) {
+  const { moved, rescheduled, approved } = await reschedule(campaignId, 0, now);
+  return { kept: moved, rescheduled, approved };
+}
+
+/** ההזזה / הבדיקה עצמה — days = 0: בדיקה בלבד, בלי הזזה בזמן */
+async function reschedule(campaignId, days, now) {
   const none = { moved: 0, rescheduled: 0, approved: 0 };
-  if (!days) return none;
   // רק מה שעוד לא יצא ועוד לא עבר. היסטוריה לא מזיזים.
   const moving = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.status, p.scheduled_at,
@@ -183,6 +209,8 @@ export async function shiftCampaignPosts(campaignId, days, now = new Date()) {
 
   const { moves, drops } = planCampaignShift({ moving, fixed, channels, settings, days, now });
   for (const m of moves) {
+    // בבדיקה בלי הזזה רוב הפוסטים נשארים בדיוק במקום — אין מה לכתוב
+    if (+m.at === +new Date(m.post.scheduled_at)) continue;
     await query('update posts set scheduled_at = $1 where id = $2', [m.at, m.post.id]);
   }
   if (drops.length) {
