@@ -383,6 +383,9 @@ r.post('/posts/:id/publish-now', requirePerm('approve'), wrap(async (req, res) =
   if (target?.platform === 'newsletter') {
     return bad(res, 'ניוזלטר לא נשלח מכאן — לוחצים "העבר ל-HUB" ומאשרים את השליחה ב-HUB');
   }
+  // publishOne פותח טרנזקציה משלו לכל שלב (runner.js) — הפרסום לא תלוי
+  // בטרנזקציית הבקשה ובחיבור שלה, וגם דפדפן שהתנתק באמצע (וידאו לאינסטגרם
+  // — דקות) לא מפיל את שמירת התוצאה. ולכן אין כאן נעילה על הפוסט לפני.
   const result = await publishOne(req.params.id, {
     allowedFrom: ['scheduled', 'approved', 'failed'],
   });

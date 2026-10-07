@@ -240,3 +240,127 @@ test('Graph נכשל: failed עם משימה, נשמר — ולא חוזר לפ�
   assert.equal(log.ok, false);
   assert.equal((await withGraph(null, () => runner.publishTickForOrg(org))).length, 0);
 });
+
+/* ---------- דפדפן שהתנתק באמצע בקשה ---------- */
+
+// הבקשות לשרת הבדיקה — לא דרך ה-Graph המדומה (withGraph מחליף את fetch הגלובלי)
+const httpFetch = globalThis.fetch;
+
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+
+/** שרת עם tenantScope האמיתי, ונתיבים שהבדיקה מוסיפה */
+async function scopedApp(mount) {
+  const { default: express } = await import('express');
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = { id: null, name: 'בודק', is_owner: true };
+    req.org = org;
+    next();
+  });
+  app.use(db.tenantScope);
+  mount(app);
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, _req, res, _next) => res.status(500).json({ error: err.message }));
+  const server = app.listen(0);
+  return { server, base: `http://localhost:${server.address().port}` };
+}
+
+/** מחכה עד ש-check מחזיר אמת (עד שתי שניות) */
+async function until(check) {
+  for (let i = 0; i < 100; i++) {
+    if (await check()) return true;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return false;
+}
+
+const countByName = async (names) => (await db.pool.query(
+  'select org_id from endpoints where name = any($1)', [names])).rows;
+
+test('tenantScope: הדפדפן התנתק והנתיב עוד רץ — הטרנזקציה לא נסגרת עד שהנתיב מסיים, והכתיבות שלו בארגון הנכון', { skip }, async () => {
+  const stamp = Date.now();
+  const [nameA, nameB] = [`לפני-ניתוק-${stamp}`, `אחרי-ניתוק-${stamp}`];
+  const entered = deferred();
+  const closed = deferred();
+  const release = deferred();
+  const handled = deferred();
+  const { server, base } = await scopedApp((app) => {
+    app.post('/slow', async (req, res, next) => {
+      try {
+        await db.query('insert into endpoints (name, importance) values ($1, 5)', [nameA]);
+        res.on('close', () => closed.resolve());
+        entered.resolve();
+        await release.promise;
+        const r = await db.one("select current_setting('app.current_org', true) as org");
+        await db.query('insert into endpoints (name, importance) values ($1, 5)', [nameB]);
+        res.json({ ok: true });
+        handled.resolve(r.org);
+      } catch (e) {
+        handled.reject(e);
+        next(e);
+      }
+    });
+  });
+  try {
+    const ac = new AbortController();
+    const req = fetch(`${base}/slow`, { method: 'POST', signal: ac.signal }).catch(() => null);
+    await entered.promise;
+    ac.abort();
+    await closed.promise;
+    await req;
+    // הדפדפן כבר לא שם — אבל הטרנזקציה של הנתיב עוד פתוחה (לא נשמרה באמצע)
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(await countByName([nameA]), [], 'הטרנזקציה נסגרה לפני שהנתיב סיים');
+
+    release.resolve();
+    assert.equal(await handled.promise, String(org), 'הכתיבה אחרי הניתוק רצה על חיבור בלי הארגון');
+    assert.ok(await until(async () => (await countByName([nameA, nameB])).length === 2),
+      'שתי הכתיבות נשמרו כשהנתיב סיים');
+    for (const row of await countByName([nameA, nameB])) assert.equal(row.org_id, org);
+  } finally {
+    release.resolve();
+    server.close();
+  }
+});
+
+test('"פרסם עכשיו": הדפדפן התנתק בזמן הקריאה ל-Graph — הפוסט נרשם "פורסם" עם המזהה', { skip }, async () => {
+  const { default: publish } = await import('../src/routes/publish.js');
+  const id = await duePost('פרסם עכשיו וניתוק', { at: 120, status: 'scheduled' });
+  const inGraph = deferred();
+  const release = deferred();
+  const { server, base } = await scopedApp((app) => app.use(publish));
+  try {
+    const ac = new AbortController();
+    let calls;
+    const graphDone = withGraph(async () => {
+      inGraph.resolve();
+      await release.promise;
+    }, async () => {
+      const req = httpFetch(`${base}/posts/${id}/publish-now`, { method: 'POST', signal: ac.signal })
+        .catch(() => null);
+      await inGraph.promise;
+      // הפוסט כבר נתפס ונשמר כ-publishing — לפני הקריאה ל-Graph
+      assert.equal((await db.pool.query('select status from posts where id = $1', [id])).rows[0].status,
+        'publishing');
+      ac.abort();
+      await req;
+      await new Promise((r) => setTimeout(r, 50));
+      release.resolve();
+      assert.ok(await until(async () =>
+        (await db.pool.query('select status from posts where id = $1', [id])).rows[0].status === 'published'));
+    }).then((c) => { calls = c; });
+    await graphDone;
+    assert.equal(calls.length, 1);
+    const p = await q1('select status, external_id from posts where id = $1', [id]);
+    assert.equal(p.status, 'published');
+    assert.equal(p.external_id, '9_1');
+  } finally {
+    release.resolve();
+    server.close();
+  }
+});

@@ -111,6 +111,66 @@ export async function withOrg(orgId, fn) {
   }
 }
 
+/** כמה מחכים לנתיב שעוד רץ אחרי שהדפדפן התנתק, לפני שסוגרים את הטרנזקציה בכוח */
+export const HANDLER_GRACE_MS = 10 * 60000;
+
+/**
+ * middleware: כל בקשה מאומתת רצה בתוך הקשר הטננט של המשתמש (withOrg): set
+ * role app_user + app.current_org, וכל השאילתות בבקשה מסוננות ע"י RLS.
+ * בקשות אנונימיות (login/logout/me — req.org ריק) רצות על ה-pool כרגיל,
+ * וזה גם ה-bootstrap שמגלה את הארגון של המשתמש.
+ *
+ * מתי הטרנזקציה נסגרת (commit + החיבור חוזר ל-pool): ב-'finish' — התשובה
+ * נשלחה, הנתיב סיים. 'close' לבדו (הדפדפן התנתק באמצע) לא מספיק: הנתיב עוד
+ * רץ ומשתמש בחיבור — למשל "פרסם עכשיו" לאינסטגרם שמחכה דקות לוידאו. קודם
+ * הטרנזקציה נסגרה שם, החיבור חזר ל-pool, והכתיבות שאחרי זה של הנתיב נחתו
+ * על חיבור של בקשה אחרת (ארגון אחר — RLS מסתיר את השורה, העדכון פוגע ב-0
+ * שורות, ופוסט שעלה מסומן אחר כך כנכשל ומתפרסם שוב). עכשיו: 'close' לפני
+ * שהתשובה הסתיימה — מחכים שהנתיב יקרא ל-res.end (עטיפה חד-פעמית שלו; כל
+ * תשובה, כולל שגיאה דרך ה-error handler, עוברת שם). 'finish' כבר לא יגיע
+ * על חיבור סגור, ולכן העטיפה היא שסוגרת. רשת ביטחון: נתיב שלא סיים תוך
+ * HANDLER_GRACE_MS — נרשם בלוג, והטרנזקציה נסגרת בכל זאת (אחרת החיבור תקוע
+ * לנצח).
+ */
+export function tenantScope(req, res, next) {
+  if (!req.org) return next();
+  withOrg(req.org, () => new Promise((resolve) => {
+    let timer = null;
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    res.on('finish', done);
+    res.on('close', () => {
+      // התשובה כבר הסתיימה (res.end נקרא) — הנתיב סיים, אפשר לסגור
+      if (res.writableEnded) return done();
+      const end = res.end;
+      res.end = function endAfterDisconnect(...args) {
+        res.end = end;
+        try {
+          return end.apply(this, args);
+        } finally {
+          done();
+        }
+      };
+      timer = setTimeout(() => {
+        console.error(`חמור: ${req.method} ${req.originalUrl} עדיין רץ ${HANDLER_GRACE_MS / 60000} דקות ` +
+          'אחרי שהדפדפן התנתק — הטרנזקציה נסגרת; כתיבות מאוחרות של הנתיב לא בטוחות');
+        done();
+      }, HANDLER_GRACE_MS);
+    });
+    next();
+  })).catch((err) => {
+    // ה-commit רץ אחרי שהתשובה כבר יצאה, ולכן COMMIT שהתגלגל אחורה
+    // (CommitRolledBackError) כבר לא יכול להפוך ל-500 — לפחות לא בשקט
+    if (res.headersSent) {
+      console.error(`הבקשה ${req.method} ${req.originalUrl} לא נשמרה במסד:`, err);
+      return;
+    }
+    next(err);
+  });
+}
+
 /** מריץ את schema.sql. בטוח להרצה חוזרת. */
 export async function migrate() {
   const sql = await readFile(join(here, 'schema.sql'), 'utf8');
