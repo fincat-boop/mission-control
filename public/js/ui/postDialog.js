@@ -608,8 +608,8 @@ function renderActions(post, f) {
   const more = $('#pMoreBtn');
   menuEl.hidden = true;
   more.hidden = menu.length === 0;
-  // בלי פעולה ראשית — "פעולות" הוא הכפתור הבולט; עם ראשית — "עוד" צנוע לידה
-  more.textContent = shown.length ? 'עוד ⌄' : 'פעולות ⌄';
+  // תמיד "פעולות" — שם אחד לאותו תפריט. בלי פעולה ראשית הוא הכפתור הבולט; עם ראשית — צנוע לידה
+  more.textContent = 'פעולות ⌄';
   more.classList.toggle('primary', shown.length === 0);
   menuEl.innerHTML = menu.map((key, i) => `${
     ACT[key].danger && i > 0 ? '<div class="sep"></div>' : ''
