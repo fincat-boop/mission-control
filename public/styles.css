@@ -76,18 +76,18 @@ section[hidden] { display: none; }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
 
 /* ============ הלוח ============ */
-/* רשימת נקודות הקצה: גם מקרא הצבעים וגם מי מקבל במה השבוע.
-   הצבע תמיד של הנקודה; מי שלא באוויר מעומעם ולא מוחלף בצבע אחר. */
-.oxy { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; font-size: 12.5px; }
-.oxy .t { color: var(--muted); margin-inline-end: 4px; }
-.oxychip {
-  display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--border); background: var(--panel);
-  border-radius: 999px; padding: 4px 11px; color: var(--ink-1);
-}
-.oxychip .sw { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.oxychip.off { color: var(--muted); border-style: dashed; }
-.oxychip.off .sw { opacity: .3; }
+/* מי מקבל במה — בתחתית הלוח: נקודה לכל נקודת קצה (גם מקרא הצבעים), השם,
+   ומתחתיו המצב שלה השבוע. בלי שבבים ומסגרות; מי שלא באוויר — המצב בכתום */
+.oxy { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--border); }
+.oxy h3 { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 12px; }
+.oxy ul { list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px 28px; }
+.oxyitem { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 9px; row-gap: 2px; }
+.oxyitem .sw { width: 9px; height: 9px; border-radius: 50%; }
+.oxyitem .nm { font-size: 13px; color: var(--ink-1); font-weight: 500; }
+.oxyitem .st { grid-column: 2; font-size: 11.5px; color: var(--muted); }
+.oxyitem.off .st { color: var(--st-warn); }
+.oxy .d { font-size: 12.5px; color: var(--muted); }
 .toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
 .weeknav { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .weeknav button { border: 1px solid var(--border); background: var(--panel); color: var(--ink-1); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
@@ -1286,8 +1286,6 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .grid td.day.today { background-color: rgba(77,163,255,.04); }
 /* יום חסום — הסיבה כטקסט גלוי, לא רק בריחוף */
 .day .daynote { display: block; font-size: 10.5px; color: var(--muted); margin-bottom: 4px; }
-/* שבב נקודת הקצה הוא כפתור (לחיצה מציגה את מצב האוויר) */
-button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 /* במגע אין ריחוף — ה-+ גלוי תמיד */
 @media (hover: none) {
   .day .addslot { opacity: .75; }

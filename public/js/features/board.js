@@ -36,8 +36,9 @@ export async function renderBoard() {
   if (req !== boardReq) return; // בינתיים התבקש שבוע אחר
   const editable = can('content');
 
-  // רשימה אחת שמשמשת גם כמקרא הצבעים וגם כמצב האוויר של כל נקודה.
-  // קודם היו כאן שתי שורות שמציגות את אותן נקודות בשתי מערכות צבע שונות.
+  // מי מקבל במה: בתחתית הלוח, נקודה לכל נקודת קצה (גם מקרא הצבעים) והמצב
+  // שלה כטקסט גלוי — כמה פעמים משובצת השבוע ומתי פורסמה לאחרונה. נקודה
+  // שלא באוויר (לא פורסמה מזמן ולא משובצת) — המצב בכתום
   const oxy = b.oxygen.map((o) => {
     const when = o.days_since === null
       ? 'עוד לא פורסם'
@@ -45,14 +46,14 @@ export async function renderBoard() {
       : o.days_since === 1 ? 'פורסם אתמול'
       : `${o.days_since} ימים בלי פרסום`;
     const onAir = !o.stale || o.scheduled_this_week > 0;
-    const tip = `${o.name} · ${when}` +
-                (o.scheduled_this_week ? ` · משובץ ${o.scheduled_this_week} פעמים השבוע`
-                                       : ' · לא משובץ השבוע');
-    // כפתור ולא span: במגע אין ריחוף, ולחיצה מציגה את אותו הסבר (data-oxy)
-    return `<button type="button" class="oxychip${onAir ? '' : ' off'}" data-tt="${esc(tip)}"
-      data-oxy="${esc(tip)}" aria-label="${esc(tip)}">
-      <i class="sw" style="background:${epColor(o.endpoint_id)}"></i>${esc(o.name)}
-    </button>`;
+    const plan = o.scheduled_this_week
+      ? (o.scheduled_this_week === 1 ? 'פעם אחת השבוע' : `${o.scheduled_this_week} פעמים השבוע`)
+      : 'לא משובץ השבוע';
+    return `<li class="oxyitem${onAir ? '' : ' off'}">
+      <i class="sw" style="background:${epColor(o.endpoint_id)}"></i>
+      <span class="nm">${esc(o.name)}</span>
+      <span class="st">${esc(plan)} · ${esc(when)}</span>
+    </li>`;
   }).join('');
 
   const today = ymd(new Date());
@@ -105,8 +106,6 @@ export async function renderBoard() {
 
   $('#board').innerHTML = `
     <div id="setupCard"></div>
-    <div class="oxy"><span class="t">מי מקבל במה:</span>${oxy || '<span class="d">אין נקודות קצה פעילות</span>'}</div>
-
     <div class="toolbar">
       <div class="weeknav">
         <button data-week="${b.week.prevWeek}">‹</button>
@@ -136,7 +135,11 @@ export async function renderBoard() {
     <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
-      — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}`;
+      — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}
+    <section class="oxy" aria-label="מי מקבל במה">
+      <h3>מי מקבל במה</h3>
+      ${oxy ? `<ul>${oxy}</ul>` : '<p class="d">אין נקודות קצה פעילות</p>'}
+    </section>`;
 
   renderSetupCard($('#setupCard'), setup);
   wireSetupGo($('#board .board'));
@@ -187,8 +190,6 @@ export async function renderBoard() {
     el.addEventListener('click', run(() => openPostPreview(el.dataset.postId))));
 
   // מצב האוויר של נקודה — גם בלחיצה (במגע אין ריחוף)
-  $$('#board [data-oxy]').forEach((chip) =>
-    chip.addEventListener('click', () => toast(chip.dataset.oxy)));
 
   // + במשבצת ריקה — הוספת פוסט ידנית
   $$('#board [data-add-slot]').forEach((btn) =>
