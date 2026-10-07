@@ -1,7 +1,9 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoAssignee, suppressTaskedAlerts, taskCloseReason } from '../src/task-lifecycle.js';
+import {
+  COVERING_TASK_KINDS, autoAssignee, suppressTaskedAlerts, taskCloseReason,
+} from '../src/task-lifecycle.js';
 import {
   BULK_MAX, approveTaskBlocked, groupTasks, invalidTaskShape, isDbId, isRealDate, isSnoozed, parseBulkIds,
 } from '../src/routes/tasks.js';
@@ -107,6 +109,13 @@ test('suppressTaskedAlerts — אישור/בלי טקסט מוסתרים כשי�
   ];
   assert.deepEqual(suppressTaskedAlerts(alerts, open).map((a) => a.id),
     ['approval-2', 'no-text-4', 'post-failed-5', 'storage']);
+});
+
+test('suppressTaskedAlerts — הצעת החלפה (swap) מכסה "חסר תוכן" (סעיף 28); משימת פרסום לא', () => {
+  const alerts = [{ id: 'no-text-3', post_id: 3 }, { id: 'no-text-4', post_id: 4 }];
+  const open = [{ post_id: 3, kind: 'swap' }, { post_id: 4, kind: 'publish' }];
+  assert.deepEqual(suppressTaskedAlerts(alerts, open).map((a) => a.id), ['no-text-4']);
+  assert.deepEqual([...COVERING_TASK_KINDS].sort(), ['approve', 'swap', 'write']);
 });
 
 /* ========================= דחייה ========================= */

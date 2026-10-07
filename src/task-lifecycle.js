@@ -169,13 +169,20 @@ export async function closeResolvedTasks(now = new Date()) {
 
 /* ========================= סימן אחד לכל פוסט ========================= */
 
-/** איזו התראה מתייתרת כשיש משימה פתוחה מאיזה סוג (המשימה היא ה-to-do) */
-const ALERT_COVERED_BY = { approval: 'approve', 'no-text': 'write' };
+/**
+ * איזו התראה מתייתרת כשיש משימה פתוחה מאילו סוגים (המשימה היא ה-to-do).
+ * "לא אושר שיצא" לא כאן: היא מרוכזת, ופוסט עם משימת "לפרסם היום" פתוחה
+ * כבר לא נספר בה (unconfirmedPosts).
+ */
+export const ALERT_COVERED_BY = { approval: ['approve'], 'no-text': ['write', 'swap'] };
+
+/** סוגי המשימות שמכסים התראה כלשהי — מה ש-buildAlerts שולף */
+export const COVERING_TASK_KINDS = [...new Set(Object.values(ALERT_COVERED_BY).flat())];
 
 /**
  * מסיר התראות שמשימה פתוחה כבר מכסה: "ממתין לאישור" כשיש משימת אישור,
- * "אין טקסט" כשיש משימת כתיבה לאותו פוסט. התראת כשל (crit) נשארת גם
- * כשיש משימת כשל — זה מצב חוסם, לא רק תזכורת.
+ * "חסר תוכן" כשיש משימת כתיבה או הצעת החלפה לאותו פוסט. התראת כשל (crit)
+ * נשארת גם כשיש משימת כשל — זה מצב חוסם, לא רק תזכורת.
  * openTasks: [{post_id, kind}] — משימות פתוחות שלא נדחו.
  */
 export function suppressTaskedAlerts(alerts, openTasks) {
@@ -183,6 +190,6 @@ export function suppressTaskedAlerts(alerts, openTasks) {
   return alerts.filter((a) => {
     if (a.post_id == null) return true;
     const prefix = Object.keys(ALERT_COVERED_BY).find((p) => a.id === `${p}-${a.post_id}`);
-    return !prefix || !covered.has(`${ALERT_COVERED_BY[prefix]}:${a.post_id}`);
+    return !prefix || !ALERT_COVERED_BY[prefix].some((k) => covered.has(`${k}:${a.post_id}`));
   });
 }

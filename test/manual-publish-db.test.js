@@ -418,3 +418,15 @@ test('2 — לא ידוע ≠ לא יצא: נקודה שהפוסט שלה לא �
   assert.ok(since != null && Math.abs(since - 3) < 0.1, `daysSince=${since}`);
   assert.equal(debts.parts(offOnly).daysSince, null);
 });
+
+/* ========================= 28 — סימן אחד לפוסט ========================= */
+
+test('28 — הצעת החלפה פתוחה מכסה את "חסר תוכן" של הפוסט שלה', { skip }, async () => {
+  const id = await post({ title: 'בלי תוכן בקרוב', content: null, at: 120, channel: ids.wa, endpoint: null });
+  const { buildAlerts } = await import('../src/alerts.js');
+  let { alerts } = await inOrg(() => buildAlerts(null));
+  assert.ok(alerts.some((a) => a.id === `no-text-${id}`));
+  await q1("insert into tasks (title, kind, post_id) values ('הצעה', 'swap', $1) returning id", [id]);
+  ({ alerts } = await inOrg(() => buildAlerts(null)));
+  assert.ok(!alerts.some((a) => a.id === `no-text-${id}`));
+});

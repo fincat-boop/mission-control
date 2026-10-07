@@ -3,7 +3,7 @@ import { isPlatformOrg } from './platform.js';
 import { effectiveCadenceDays, ymd } from './board.js';
 import { campaignsWithHealth } from './campaigns.js';
 import { postsOnBlockedDays } from './respace.js';
-import { suppressTaskedAlerts } from './task-lifecycle.js';
+import { COVERING_TASK_KINDS, suppressTaskedAlerts } from './task-lifecycle.js';
 import { backupAlerts, readBackupLayers } from './backup-status.js';
 import { mediaReady } from './media.js';
 import { UNCONFIRMED_SQL, unconfirmedAlert, unconfirmedPosts } from './unconfirmed.js';
@@ -66,8 +66,8 @@ export async function buildAlerts(user = null) {
   const unconfirmed = await unconfirmedPosts();
   // משימות פתוחות (שלא נדחו) שכבר מכסות התראה על אותו פוסט — suppressTaskedAlerts
   const openTasks = await rows(`select post_id, kind from tasks
-         where not done and post_id is not null and kind in ('approve','write')
-           and (snoozed_until is null or snoozed_until <= now())`);
+         where not done and post_id is not null and kind = any($1::text[])
+           and (snoozed_until is null or snoozed_until <= now())`, [COVERING_TASK_KINDS]);
   const backupLayers = await readBackupLayers();
 
   const alerts = [];
