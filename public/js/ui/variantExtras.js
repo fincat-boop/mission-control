@@ -91,9 +91,34 @@ function sectionBody(key, platform, meta, files) {
   return '';
 }
 
-/** ה-HTML של כל האזורים לערוץ. files — הקבצים של הגרסה ({id, filename, mime}) */
+/**
+ * שורת הסיכום של "אפשרויות נוספות": מה בשימוש ("סטורי · תגובה ראשונה"),
+ * או "לא בשימוש". אזור שמוסתר כרגע (בסטורי) לא נספר.
+ */
+export function moreSummary(meta = {}, files = [], platform) {
+  const used = extrasFor(platform)
+    .filter((key) => !hiddenFor(key, meta) && extraSummary(key, meta, files).set)
+    .map((key) => (key === 'format' ? 'סטורי' : LABELS[key]));
+  return used.length ? used.join(' · ') : 'לא בשימוש';
+}
+
+/**
+ * ה-HTML של כל האזורים, בתוך שורה מקופלת אחת "אפשרויות נוספות" (סגורה
+ * כברירת מחדל, עם סיכום של מה בשימוש). files — הקבצים של הגרסה.
+ */
 export function extrasHtml({ platform, meta = {}, files = [] }) {
-  return extrasFor(platform).map((key) => {
+  const keys = extrasFor(platform);
+  if (!keys.length) return '';
+  const sum = moreSummary(meta, files, platform);
+  return `<details class="vx-more">
+    <summary><span class="vx-l">אפשרויות נוספות</span>
+      <span class="vx-more-sum${sum === 'לא בשימוש' ? '' : ' set'}">${esc(sum)}</span></summary>
+    <div class="vx-list">${sectionsHtml(keys, platform, meta, files)}</div>
+  </details>`;
+}
+
+function sectionsHtml(keys, platform, meta, files) {
+  return keys.map((key) => {
     const s = extraSummary(key, meta, files);
     return `<details class="vx" data-vx="${key}"${hiddenFor(key, meta) ? ' hidden' : ''}>
       <summary><span class="vx-l">${LABELS[key]}</span>
@@ -130,9 +155,14 @@ export function readExtras(root) {
  * ואז onChange. files/keep — פונקציות, כי הערוץ שבעריכה מתחלף. keep — מה
  * שנשמר ואין לו שדה כרגע (שער שנבחר כשאין סרטון), לשורת הסיכום.
  */
-export function wireExtras(root, { files = () => [], keep = () => ({}), onChange }) {
+export function wireExtras(root, { files = () => [], keep = () => ({}), platform = () => null, onChange }) {
   const paint = () => {
     const meta = { ...keep(), ...readExtras(root) };
+    const more = root.querySelector('.vx-more-sum');
+    if (more) {
+      more.textContent = moreSummary(meta, files(), platform());
+      more.classList.toggle('set', more.textContent !== 'לא בשימוש');
+    }
     for (const d of $$('details.vx', root)) {
       const key = d.dataset.vx;
       d.hidden = hiddenFor(key, meta);

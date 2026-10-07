@@ -254,3 +254,16 @@ test('captionCounts / badFeedRatio / extraSummary', () => {
   assert.equal(extraSummary('link', { link: 'https://fincat.co.il/a' }).text, 'fincat.co.il');
   assert.deepEqual(extraSummary('first_comment', {}), { text: 'לא בשימוש', set: false });
 });
+
+test('moreSummary — "אפשרויות נוספות": מה בשימוש, בלי מה שמוסתר בסטורי', async () => {
+  const { moreSummary, extrasHtml } = await import('../public/js/ui/variantExtras.js');
+  assert.equal(moreSummary({}, [], 'facebook'), 'לא בשימוש');
+  assert.equal(moreSummary({ link: 'https://a.co', first_comment: 'x' }, [], 'facebook'), 'קישור · תגובה ראשונה');
+  // בסטורי התגובה מוסתרת — לא נספרת
+  assert.equal(moreSummary({ format: 'story', first_comment: 'x' }, [], 'instagram'), 'סטורי');
+  const html = extrasHtml({ platform: 'manual', meta: { alt_text: 'תיאור' } });
+  assert.match(html, /^<details class="vx-more">/);
+  assert.ok(!/<details class="vx-more" open/.test(html), 'סגור כברירת מחדל');
+  assert.match(html, /תיאור תמונה<\/span>/);
+  assert.equal(extrasHtml({ platform: 'newsletter' }), '');
+});

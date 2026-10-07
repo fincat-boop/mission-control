@@ -1267,6 +1267,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         wireExtras($('#vextras'), {
           files: () => slotAssets,
           keep: () => extras,
+          platform: () => platform,
           onChange: () => {
             extras = pickExtras({ ...extras, ...readExtras($('#vextras')) });
             $('#gen___meta').value = extrasKey(extras);
@@ -2113,6 +2114,7 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
       wireExtras($('#vextras'), {
         files: () => versionAssets(item, cur.v?.id),
         keep: () => cur.extras,
+        platform: () => cur.ch.platform,
         onChange: () => { sync(); paintTabs(); paintNote(); },
       });
       $('#vcopyBtn').addEventListener('click', run(async () => {
