@@ -11,6 +11,9 @@ let impCampaign = null;
 let checkedText = null;
 
 const markReady = () => !!$('#impReady')?.checked;
+// קמפיין כללי, ייבוא חוזר: משבצת עם טיוטה מייבוא קודם שלא נגעו בה — לעדכן או לדלג
+const existingMode = () => ($('#impUpdate')?.checked ? 'update' : 'skip');
+const isGeneral = () => impCampaign?.campaign.structure === 'general';
 
 /** התצוגה המקדימה כבר לא מתארת את מה שבתיבה — בודקים שוב לפני ייבוא */
 function invalidate() {
@@ -24,7 +27,10 @@ function invalidate() {
   }
 }
 
-/** "לסמן כמוכן" — נשתל פעם אחת מעל כפתורי הדיאלוג (הדיאלוג עצמו ב-index.html) */
+/**
+ * "לסמן כמוכן" ו"עדכן טיוטות" — נשתלות פעם אחת מעל כפתורי הדיאלוג (הדיאלוג
+ * עצמו ב-index.html). "עדכן טיוטות" מוצגת רק כשהבדיקה מצאה משבצות כאלה.
+ */
 function ensureReadyOption() {
   if ($('#impReady')) return;
   const row = document.createElement('label');
@@ -32,13 +38,21 @@ function ensureReadyOption() {
   row.innerHTML = `<input type="checkbox" id="impReady">
     <span>לסמן את הניסוחים כמוכנים לפרסום — רק מה שעובר את בדיקת הערוץ
       (אינסטגרם בלי תמונה, למשל, יישאר טיוטה)</span>`;
-  $('#importDlg .dactions').before(row);
-  $('#impReady').addEventListener('change', () => {
-    // מה ייכנס כמוכן משתנה — אם כבר נבדק, בודקים שוב מיד
+  const upd = document.createElement('label');
+  upd.className = 'cbline imp-ready';
+  upd.id = 'impUpdateRow';
+  upd.hidden = true;
+  upd.innerHTML = `<input type="checkbox" id="impUpdate">
+    <span id="impUpdateLabel">עדכן טיוטות שלא נגעו בהן</span>`;
+  $('#importDlg .dactions').before(row, upd);
+  // מה ייכנס משתנה — אם כבר נבדק, בודקים שוב מיד
+  const recheck = () => {
     const had = checkedText !== null;
     invalidate();
     if (had) run(checkImport)();
-  });
+  };
+  $('#impReady').addEventListener('change', recheck);
+  $('#impUpdate').addEventListener('change', recheck);
 }
 
 export function wireImportDialog() {
@@ -75,27 +89,48 @@ export function openImport(campaign, reload) {
   checkedText = null;
   ensureReadyOption();
   $('#impReady').checked = false;
+  $('#impUpdate').checked = false;
+  $('#impUpdateRow').hidden = true;
   $('#impCampaign').textContent = `— ${campaign.name}`;
   $('#impText').value = '';
   $('#impResult').innerHTML = '';
   $('#impRun').disabled = true;
 
   const names = (campaign.channels ?? []).map((c) => c.name);
-  $('#impHelp').innerHTML = `
-    <b>המבנה שהמערכת מצפה לו</b>
-    שורה לכל זווית, עמודה לכל ערוץ. התא הוא הניסוח של אותה זווית באותו ערוץ.
-    <table class="imptable">
-      <tr><th>כותרת</th><th>סוג</th>${names.map((n) => `<th>${esc(n)}</th>`).join('')}</tr>
-      <tr><td>המסר הראשון</td><td>ערך</td>${names.map(() => '<td>הניסוח לערוץ הזה…</td>').join('')}</tr>
-    </table>
-    <span>עמודת "סוג" מקבלת ערך / מכירתי / משולב, ואם היא חסרה הכול נחשב ערך.
-    עמודת "טקסט" כללית נכנסת לכל ערוץ שאין לו עמודה משלו.
-    תא ריק פירושו שאין גרסה לערוץ הזה. הכול נכנס כטיוטה, אלא אם מסמנים "מוכנים" למטה.
-    שורה שהכותרת שלה כבר קיימת בקמפיין מדולגת, כך שאפשר לייבא שוב אחרי תיקון
-    בלי ליצור כפילויות.</span>
-    <span><b style="display:inline">אין לך את המבנה הזה?</b>
+  const docNote = `<span><b style="display:inline">אין לך את המבנה הזה?</b>
     העלו את המסמך כמו שהוא — Excel, Word או PDF — והמערכת תפרק אותו לטבלה הזו.
     התוצאה תופיע כאן לעריכה, ורק אחרי שתאשרו היא תיכנס.</span>`;
+  // קמפיין כללי (סעיף 19): שורה N = פוסט N בכל ערוץ
+  if (campaign.structure === 'general') {
+    $('#impHelp').innerHTML = `
+      <b>המבנה שהמערכת מצפה לו</b>
+      שורה לכל מספר פוסט, עמודה לכל ערוץ — כמו הטבלה של הקמפיין. השורה הראשונה
+      אחרי הכותרות היא פוסט 1 בכל ערוץ, השנייה פוסט 2, וכן הלאה.
+      <table class="imptable">
+        <tr><th>כותרת</th><th>סוג</th>${names.map((n) => `<th>${esc(n)}</th>`).join('')}</tr>
+        <tr><td>המסר הראשון</td><td>ערך</td>${names.map(() => '<td>הפוסט לערוץ הזה…</td>').join('')}</tr>
+      </table>
+      <span>תא ריק — אין פוסט באותו ערוץ. "כותרת" ו"סוג" לא חובה: בלי כותרת היא נגזרת
+      מהשורה הראשונה של הטקסט, ובלי סוג הכול ערך. עמודת "טקסט" כללית נכנסת לכל ערוץ
+      שאין לו עמודה משלו. הכול נכנס כטיוטה, אלא אם מסמנים "מוכנים" למטה.
+      פוסט שכבר קיים לא נדרס — בייבוא חוזר אפשר לבחור לעדכן טיוטות מייבוא קודם
+      שאיש לא נגע בהן.</span>
+      ${docNote}`;
+  } else {
+    $('#impHelp').innerHTML = `
+      <b>המבנה שהמערכת מצפה לו</b>
+      שורה לכל זווית, עמודה לכל ערוץ. התא הוא הניסוח של אותה זווית באותו ערוץ.
+      <table class="imptable">
+        <tr><th>כותרת</th><th>סוג</th>${names.map((n) => `<th>${esc(n)}</th>`).join('')}</tr>
+        <tr><td>המסר הראשון</td><td>ערך</td>${names.map(() => '<td>הניסוח לערוץ הזה…</td>').join('')}</tr>
+      </table>
+      <span>עמודת "סוג" מקבלת ערך / מכירתי / משולב, ואם היא חסרה הכול נחשב ערך.
+      עמודת "טקסט" כללית נכנסת לכל ערוץ שאין לו עמודה משלו.
+      תא ריק פירושו שאין גרסה לערוץ הזה. הכול נכנס כטיוטה, אלא אם מסמנים "מוכנים" למטה.
+      שורה שהכותרת שלה כבר קיימת בקמפיין מדולגת, כך שאפשר לייבא שוב אחרי תיקון
+      בלי ליצור כפילויות.</span>
+      ${docNote}`;
+  }
 
   $('#impRun').onclick = run(async () => {
     const btn = $('#impRun');
@@ -109,7 +144,7 @@ export function openImport(campaign, reload) {
     let res;
     try {
       res = await api(`/campaigns/${campaign.id}/import`, {
-        method: 'POST', body: { text, mark_ready: markReady(), week: state.week },
+        method: 'POST', body: { text, mark_ready: markReady(), existing: existingMode(), week: state.week },
       });
     } catch (e) {
       btn.disabled = false;
@@ -132,7 +167,12 @@ export function openImport(campaign, reload) {
 function importedToast(campaign, res, reload) {
   const fill = res.engine ?? {};
   const drafts = res.variants - (res.ready ?? 0);
-  const parts = [`יובאו ${res.created} זוויות · ${res.variants} ניסוחים`];
+  const general = res.structure === 'general';
+  const unit = general ? 'פוסטים' : 'זוויות';
+  const parts = [general
+    ? `יובאו ${res.created} פוסטים${res.updated ? ` · ${res.updated} טיוטות עודכנו` : ''}${
+      res.copied ? ` · ${res.copied} הועתקו לפי קישור העמודות` : ''}`
+    : `יובאו ${res.created} זוויות · ${res.variants} ניסוחים`];
   parts.push(res.ready ? `${res.ready} מוכנים, ${drafts} טיוטות` : 'כולם טיוטות');
   const placed = (fill.placed ?? 0) + (fill.attached ?? 0);
   const engine = placed ? ` המנוע שיבץ מהם ${placed} פוסטים.` : '';
@@ -142,9 +182,11 @@ function importedToast(campaign, res, reload) {
         created: fill.created_items ?? [], attached: fill.attached_items ?? [] } });
     }
     const r = await api(`/campaigns/${campaign.id}/import/${res.batch}`, { method: 'DELETE' });
-    toast(r.kept
-      ? `הייבוא בוטל: ${r.removed} זוויות נמחקו, ${r.kept} נשארו — נערכו או שובצו מאז.`
-      : `הייבוא בוטל — ${r.removed} זוויות נמחקו.`);
+    // טיוטות שהייבוא עדכן לא חוזרות לגרסה הקודמת — אומרים את זה
+    const upd = res.updated ? ` ${res.updated} הטיוטות שעודכנו נשארות כמו שהן.` : '';
+    toast((r.kept
+      ? `הייבוא בוטל: ${r.removed} ${unit} נמחקו, ${r.kept} נשארו — נערכו או שובצו מאז.`
+      : `הייבוא בוטל — ${r.removed} ${unit} נמחקו.`) + upd);
     await reload();
   }), 12000);
 }
@@ -172,7 +214,7 @@ async function analyzeFile(file) {
     const cost = data.usage?.usd
       ? ` · עלות הניתוח ${data.usage.usd < 0.01 ? '<$0.01' : `$${data.usage.usd.toFixed(2)}`}`
       : '';
-    out.innerHTML = `<div class="impbox ok"><b>זוהו ${data.count} זוויות</b>
+    out.innerHTML = `<div class="impbox ok"><b>זוהו ${data.count} ${isGeneral() ? 'שורות' : 'זוויות'}</b>
         ${esc(data.layout)}${esc(cost)}</div>` +
       (data.notes?.length
         ? `<div class="impbox warn"><b>מה שכדאי לבדוק</b>${
@@ -201,7 +243,7 @@ async function checkImport() {
   let plan;
   try {
     plan = await api(`/campaigns/${impCampaign.campaign.id}/import/preview`,
-      { method: 'POST', body: { text, mark_ready: markReady() } });
+      { method: 'POST', body: { text, mark_ready: markReady(), existing: existingMode() } });
   } catch (e) {
     out.innerHTML = `<div class="impbox bad">${esc(e.message)}</div>`;
     return;
@@ -210,6 +252,13 @@ async function checkImport() {
   if ($('#impText').value.trim() !== text) return;
 
   const t = plan.totals;
+  // "עדכן טיוטות" — רק כשיש משבצות כאלה (כללי, ייבוא חוזר)
+  $('#impUpdateRow').hidden = !(t.updatable > 0);
+  if (t.updatable > 0) {
+    $('#impUpdateLabel').textContent = `עדכן טיוטות שלא נגעו בהן — ${t.updatable === 1
+      ? 'פוסט אחד מייבוא קודם, שאיש לא ערך מאז'
+      : `${t.updatable} פוסטים מייבוא קודם, שאיש לא ערך מאז`} (בלי הסימון — מדלגים עליהם)`;
+  }
   const list = (title, items, cls) => items.length
     ? `<div class="impbox ${cls}"><b>${esc(title)}</b>${
         items.slice(0, 6).map((x) => `<div>${esc(x)}</div>`).join('')}${
@@ -224,6 +273,13 @@ async function checkImport() {
   ).join('');
   const readyNote = t.ready ? `${t.ready} מוכנים, ${t.variants - t.ready} טיוטות` : 'כטיוטות';
 
+  if (plan.structure === 'general') {
+    out.innerHTML = generalPreview(plan, list, readyNote);
+    checkedText = text;
+    $('#impRun').disabled = t.errors > 0 || t.variants === 0;
+    return;
+  }
+
   out.innerHTML = `
     <div class="impbox ${t.errors ? 'bad' : 'ok'}">
       <b>${t.errors ? 'יש שגיאות — שום דבר לא ייובא'
@@ -237,4 +293,33 @@ async function checkImport() {
 
   checkedText = text;
   $('#impRun').disabled = t.errors > 0 || t.to_create === 0;
+}
+
+/**
+ * תצוגה מקדימה לקמפיין כללי (סעיף 19): כמה פוסטים ייווצרו / יעודכנו /
+ * ידולגו, ודוגמה — שורה N עם הערוצים שיקבלו בה פוסט.
+ */
+function generalPreview(plan, list, readyNote) {
+  const t = plan.totals;
+  const head = t.errors ? 'יש שגיאות — שום דבר לא ייובא'
+    : t.variants === 0 ? 'אין מה לייבא — כל התאים ריקים או שהמשבצות כבר תפוסות'
+    : [`ייווצרו ${t.to_create} פוסטים`, t.to_update ? `יעודכנו ${t.to_update} טיוטות` : '']
+      .filter(Boolean).join(' · ') + ` (${readyNote})`;
+  const tag = { create: '', update: ' (עדכון)', skip: ' (דילוג)' };
+  const sample = plan.items.slice(0, 4).map((i) =>
+    `<tr><td>${i.index}</td><td>${esc(i.title || i.variants[0]?.title || '')}</td>
+         <td>${esc(KIND_HE[i.kind])}</td>
+         <td>${esc(i.variants.map((v) => `${v.channel_name}${v.from_general ? ' (כללי)' : ''}${
+           tag[v.action]}`).join(', '))}</td></tr>`).join('');
+  return `
+    <div class="impbox ${t.errors || !t.variants ? 'bad' : 'ok'}">
+      <b>${esc(head)}</b>
+      זוהו ${t.rows} שורות · ערוצים שזוהו: ${esc(plan.columns.channels.join(', ') || 'אין')}${
+        t.skipped ? ` · ${t.skipped} ידולגו` : ''}
+    </div>
+    ${list('שגיאות', plan.errors, 'bad')}
+    ${list('ידולגו', plan.skipped, '')}
+    ${list('שים לב', plan.warnings, 'warn')}
+    ${sample ? `<table class="imptable"><tr><th>פוסט</th><th>כותרת</th><th>סוג</th><th>ערוצים</th></tr>${
+      sample}</table>` : ''}`;
 }

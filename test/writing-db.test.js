@@ -159,3 +159,174 @@ test('סעיף 23 — הלוח מציג את כותרת התוכן העדכני�
   assert.equal(pv.json.post.title, 'השם החדש');
   assert.equal(pv.json.post.post_title, 'הכותרת הישנה');
 });
+
+/* ========================= סעיף 19 — ייבוא לקמפיין כללי ========================= */
+
+/** הפריטים של הקמפיין לפי "ערוץ:מספר" */
+async function slotMap(campaignId) {
+  const list = await q(
+    `select ci.id, ci.slot_channel_id, ci.sort_order, ci.title, ci.kind, ci.import_batch,
+            v.body, v.status
+       from content_items ci
+       left join content_variants v on v.content_id = ci.id and v.channel_id = ci.slot_channel_id
+      where ci.campaign_id = $1`, [campaignId]);
+  return new Map(list.map((x) => [`${x.slot_channel_id}:${x.sort_order}`, x]));
+}
+
+test('סעיף 19 — ייבוא לקמפיין כללי: שורה N ← פוסט N בכל ערוץ, תא ריק = אין פוסט', { skip }, async () => {
+  const g = await generalCampaign('ייבוא כללי', ['פייסבוק', 'אינסטגרם', 'טוויטר']);
+  const [fb, ig, x] = g.chans;
+  const text = [
+    ['כותרת', 'סוג', fb.name, ig.name, x.name].join('\t'),
+    ['פתיחה', 'מכירתי', 'fb אחת', 'ig אחת', 'x אחת'].join('\t'),
+    // תא עם כמה שורות מגיע מאקסל במרכאות
+    ['', '', '"fb שתיים\nהמשך"', '', 'x שתיים'].join('\t'),
+  ].join('\n');
+
+  const pv = await call('POST', `/campaigns/${g.campaign}/import/preview`, { text });
+  assert.equal(pv.status, 200, JSON.stringify(pv.json));
+  assert.equal(pv.json.structure, 'general');
+  assert.equal(pv.json.totals.to_create, 5);
+  assert.equal(pv.json.totals.errors, 0);
+  // התצוגה המקדימה לא כותבת
+  assert.equal((await slotMap(g.campaign)).size, 0);
+
+  const imp = await call('POST', `/campaigns/${g.campaign}/import`,
+    { text, mark_ready: true, week: inDays(1) });
+  assert.equal(imp.status, 201, JSON.stringify(imp.json));
+  assert.equal(imp.json.created, 5);
+  assert.ok(imp.json.engine, 'מילוי אחד אחרי הייבוא');
+  assert.ok(imp.json.engine.placed > 0, JSON.stringify(imp.json.engine.summary));
+
+  const m = await slotMap(g.campaign);
+  assert.equal(m.size, 5);
+  for (const ch of [fb, ig, x]) assert.equal(m.get(`${ch.id}:1`)?.title, 'פתיחה');
+  assert.equal(m.get(`${fb.id}:1`).kind, 'promo');
+  assert.equal(m.get(`${fb.id}:1`).body, 'fb אחת');
+  assert.equal(m.get(`${fb.id}:1`).status, 'ready');
+  assert.equal(m.get(`${fb.id}:2`).body, 'fb שתיים\nהמשך');
+  // בלי כותרת — נגזרת מהשורה הראשונה של התא
+  assert.equal(m.get(`${fb.id}:2`).title, 'fb שתיים');
+  assert.equal(m.get(`${x.id}:2`).title, 'x שתיים');
+  assert.equal(m.get(`${fb.id}:2`).kind, 'value');
+  assert.ok(!m.has(`${ig.id}:2`), 'תא ריק — אין פוסט');
+  assert.ok([...m.values()].every((it) => it.import_batch === imp.json.batch));
+
+  // כל פוסט שובץ לכל היותר פעם אחת (מילוי אחד לקמפיין, לא לכל פריט)
+  const dup = await q(
+    `select content_id, count(*)::int as n from posts
+      where content_id = any($1::int[]) group by content_id having count(*) > 1`,
+    [[...m.values()].map((it) => it.id)]);
+  assert.deepEqual(dup, []);
+});
+
+test('סעיף 19 — ייבוא חוזר: ברירת מחדל מדלגת; "עדכן" מעדכן רק טיוטות שלא נגעו בהן', { skip }, async () => {
+  const g = await generalCampaign('ייבוא חוזר', ['פייסבוק', 'אינסטגרם']);
+  const [fb, ig] = g.chans;
+  const table = (suffix, extra = []) => [
+    ['כותרת', fb.name, ig.name].join('\t'),
+    ['א', `fb א${suffix}`, `ig א${suffix}`].join('\t'),
+    ['ב', `fb ב${suffix}`, `ig ב${suffix}`].join('\t'),
+    ...extra,
+  ].join('\n');
+
+  const first = await call('POST', `/campaigns/${g.campaign}/import`, { text: table('') });
+  assert.equal(first.status, 201, JSON.stringify(first.json));
+  assert.equal(first.json.created, 4);
+
+  // מישהו ערך את fb · פוסט 1 — כבר לא "לא נגעו בו"
+  const fb1 = (await slotMap(g.campaign)).get(`${fb.id}:1`);
+  const edit = await call('PATCH', `/content/${fb1.id}`, { body: 'נערך ביד' });
+  assert.equal(edit.status, 200, JSON.stringify(edit.json));
+
+  // ברירת המחדל: מדלגים, והתצוגה אומרת כמה אפשר לעדכן
+  const skipPv = await call('POST', `/campaigns/${g.campaign}/import/preview`,
+    { text: table(' (תוקן)', [['ג', 'fb ג', ''].join('\t')]) });
+  assert.equal(skipPv.json.totals.to_create, 1);
+  assert.equal(skipPv.json.totals.to_update, 0);
+  assert.equal(skipPv.json.totals.updatable, 3);
+  assert.equal(skipPv.json.totals.skipped, 4);
+
+  const updPv = await call('POST', `/campaigns/${g.campaign}/import/preview`,
+    { text: table(' (תוקן)'), existing: 'update' });
+  assert.equal(updPv.json.totals.to_update, 3);
+  assert.equal(updPv.json.totals.to_create, 0);
+
+  const second = await call('POST', `/campaigns/${g.campaign}/import`,
+    { text: table(' (תוקן)', [['ג', 'fb ג', ''].join('\t')]), existing: 'update' });
+  assert.equal(second.status, 201, JSON.stringify(second.json));
+  assert.equal(second.json.updated, 3);
+  assert.equal(second.json.created, 1);
+  let m = await slotMap(g.campaign);
+  assert.equal(m.get(`${fb.id}:1`).body, 'נערך ביד', 'מה שנערך ביד לא נדרס');
+  assert.equal(m.get(`${ig.id}:1`).body, 'ig א (תוקן)');
+  assert.equal(m.get(`${fb.id}:2`).body, 'fb ב (תוקן)');
+  assert.equal(m.get(`${fb.id}:3`).body, 'fb ג');
+  // עודכן — שומר את המנה המקורית; "בטל ייבוא" של המנה השנייה מוחק רק את מה שהיא יצרה
+  assert.equal(m.get(`${ig.id}:1`).import_batch, first.json.batch);
+
+  // ייבוא שלישי: מה שהייבוא עדכן עדיין "לא נגעו בו"
+  const third = await call('POST', `/campaigns/${g.campaign}/import/preview`,
+    { text: table(' (שוב)'), existing: 'update' });
+  assert.equal(third.json.totals.to_update, 3);
+
+  const undo = await call('DELETE', `/campaigns/${g.campaign}/import/${second.json.batch}`);
+  assert.equal(undo.status, 200, JSON.stringify(undo.json));
+  assert.deepEqual(undo.json, { removed: 1, kept: 0 });
+  m = await slotMap(g.campaign);
+  assert.ok(!m.has(`${fb.id}:3`));
+  assert.equal(m.get(`${ig.id}:1`).body, 'ig א (תוקן)');
+  assert.equal(m.size, 4);
+});
+
+test('סעיף 19 — ייבוא לכללי: סוג לא מוכר = שגיאה; עמודת ערוץ שלא בקמפיין לא נכנסת', { skip }, async () => {
+  const g = await generalCampaign('שגיאות', ['פייסבוק']);
+  const other = await q1(
+    `insert into channels (name, platform, max_per_week) values ('ערוץ זר שגיאות', 'manual', 7)
+     returning id, name`);
+  const bad = await call('POST', `/campaigns/${g.campaign}/import/preview`, {
+    text: `סוג\t${g.chans[0].name}\nמשהו\tטקסט`,
+  });
+  assert.equal(bad.json.totals.errors, 1);
+  const out = await call('POST', `/campaigns/${g.campaign}/import`, {
+    text: `${g.chans[0].name}\t${other.name}\nטקסט\tזר`,
+  });
+  assert.equal(out.status, 201, JSON.stringify(out.json));
+  assert.equal(out.json.created, 1);
+  const m = await slotMap(g.campaign);
+  assert.equal(m.size, 1);
+  assert.ok(m.has(`${g.chans[0].id}:1`));
+});
+
+test('סעיף 19 — קישור עמודות: פוסט מיובא מועתק לעמודת היעד, אלא אם הטבלה ממלאת אותה', { skip }, async () => {
+  const g = await generalCampaign('קישור ייבוא', ['פייסבוק', 'אינסטגרם']);
+  const [fb, ig] = g.chans;
+  await q('update campaigns set link_rules = $2::jsonb where id = $1',
+    [g.campaign, JSON.stringify([{ from: fb.id, to: ig.id }])]);
+
+  const only = await call('POST', `/campaigns/${g.campaign}/import`,
+    { text: `${fb.name}\nאחת\nשתיים` });
+  assert.equal(only.status, 201, JSON.stringify(only.json));
+  assert.equal(only.json.created, 2);
+  assert.equal(only.json.copied, 2);
+  const followers = await q(
+    `select count(*)::int as n from content_items
+      where campaign_id = $1 and slot_channel_id = $2 and linked_to_id is not null`, [g.campaign, ig.id]);
+  assert.equal(followers[0].n, 2);
+
+  // "בטל ייבוא" — גם העותקים שקישור העמודות יצר יורדים עם המקור
+  const undo = await call('DELETE', `/campaigns/${g.campaign}/import/${only.json.batch}`);
+  assert.deepEqual(undo.json, { removed: 4, kept: 0 });
+  assert.equal((await slotMap(g.campaign)).size, 0);
+  const again = await call('POST', `/campaigns/${g.campaign}/import`,
+    { text: `${fb.name}\nאחת\nשתיים` });
+  assert.equal(again.json.copied, 2);
+
+  // הטבלה ממלאת גם את היעד — בלי העתקה (אחרת כפילות), ואזהרה בתצוגה
+  const both = `${fb.name}\t${ig.name}\nא\tב\nג\tד\nה\tו`;
+  const pv = await call('POST', `/campaigns/${g.campaign}/import/preview`, { text: both });
+  assert.ok(pv.json.warnings.some((w) => /קישור העמודות/.test(w)), JSON.stringify(pv.json.warnings));
+  const imp = await call('POST', `/campaigns/${g.campaign}/import`, { text: both });
+  assert.equal(imp.json.copied, 0);
+  assert.equal(imp.json.created, 2, 'שורות 1–2 תפוסות; שורה 3 נוצרת בשני הערוצים');
+});

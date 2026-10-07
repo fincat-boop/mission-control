@@ -1763,7 +1763,8 @@ function wireCampaignGrid(selected, reload) {
 
 /** תפריט שלוש הנקודות בכותרת הקמפיין — כל הפעולות על הקמפיין עצמו */
 function campaignMenu(c) {
-  // ייבוא מטבלה — רק בזוויות. העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
+  // ייבוא מטבלה ומסמך — בשני המבנים (סעיף 19: בכללי שורה N = פוסט N בכל ערוץ).
+  // העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
   const angles = c.structure !== 'general';
   const items = [
     // "סיימתי לכתוב" ראשון: רק כשיש מה להשאיר ועל מה לפרוס (סעיף 25 — "מוכן"
@@ -1778,7 +1779,7 @@ function campaignMenu(c) {
     can('settings') && '<button type="button" data-act="gap">מרווח בין פוסטים</button>',
     can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     canLinkIn(c) && '<button type="button" data-act="link">קשר תוכן</button>',
-    angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
+    can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // קמפיין חדש תמיד כללי; קמפיין ישן לפי זוויות עובר בהמרה (כל ניסוח = פוסט)
     angles && can('settings') && '<button type="button" data-act="to-general">המר לקמפיין כללי</button>',
     // תבנית ל"שבץ מחדש" בלוח האסטרטגיה

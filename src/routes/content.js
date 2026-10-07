@@ -1159,16 +1159,6 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   });
 }
 
-/** ייבוא וניתוח יוצרים זוויות — בקמפיין כללי אין להן מקום */
-async function anglesOnly(req, res) {
-  const c = await one('select structure from campaigns where id = $1', [req.params.id]);
-  if (c?.structure === 'general') {
-    bad(res, 'ייבוא מטבלה זמין רק בקמפיין לפי זוויות');
-    return false;
-  }
-  return true;
-}
-
 /** העלאה מרוכזת — multipart, הבייטים נשמרים במסד */
 r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
   wrap(async (req, res) => {
@@ -1220,12 +1210,16 @@ r.post('/campaigns/:id/bulk/media', requirePerm('content'), wrap(async (req, res
 /**
  * ייבוא תוכן מטבלה. שני שלבים בכוונה: תצוגה מקדימה שלא כותבת כלום,
  * ואז ביצוע — כדי שאף אחד לא יטעין 200 שורות בלי לראות מה ייווצר.
+ * בשני המבנים (סעיף 19): בזוויות שורה = זווית; בכללי שורה N = פוסט N בכל
+ * ערוץ. existing: 'update' — בכללי, טיוטות מייבוא קודם שלא נגעו בהן מתעדכנות
+ * (ברירת המחדל: מדלגים על משבצת תפוסה).
  */
+const importOpts = (b) => ({ markReady: b?.mark_ready === true,
+                             existing: b?.existing === 'update' ? 'update' : 'skip' });
+
 r.post('/campaigns/:id/import/preview', requirePerm('content'), wrap(async (req, res) => {
-  if (!(await anglesOnly(req, res))) return;
   try {
-    res.json(await analyzeImport(req.params.id, req.body?.text,
-      { markReady: req.body?.mark_ready === true }));
+    res.json(await analyzeImport(req.params.id, req.body?.text, importOpts(req.body)));
   } catch (e) {
     return bad(res, e.message);
   }
@@ -1237,7 +1231,6 @@ r.post('/campaigns/:id/import/preview', requirePerm('content'), wrap(async (req,
  */
 r.post('/campaigns/:id/import/analyze', requirePerm('content'), upload.single('file'),
   wrap(async (req, res) => {
-    if (!(await anglesOnly(req, res))) return;
     if (!assistantReady()) {
       return bad(res, 'הניתוח לא זמין — חסר מפתח API בהגדרות השרת', 503);
     }
@@ -1254,17 +1247,16 @@ r.post('/campaigns/:id/import/analyze', requirePerm('content'), upload.single('f
   }));
 
 r.post('/campaigns/:id/import', requirePerm('content'), wrap(async (req, res) => {
-  if (!(await anglesOnly(req, res))) return;
   // נעילת הקמפיין (כמו בהעלאה המרוכזת): המקומות הפנויים נקבעים מול מצב יציב
   await one('select id from campaigns where id = $1 for update', [req.params.id]);
   let out;
   try {
-    out = await runImport(req.params.id, req.body?.text,
-      { markReady: req.body?.mark_ready === true });
+    out = await runImport(req.params.id, req.body?.text, importOpts(req.body));
   } catch (e) {
     return bad(res, e.message);
   }
-  // כמו כל שינוי בתוכן: המנוע משבץ ממה שנכנס, והתשובה אומרת מה (עם "בטל")
+  // כמו כל שינוי בתוכן: המנוע משבץ ממה שנכנס, והתשובה אומרת מה (עם "בטל").
+  // מילוי אחד לכל הייבוא — לא לכל פריט
   const engine = await autoFillCampaign(req.params.id, req.body?.week);
   res.status(201).json({ ...out, engine });
 }));

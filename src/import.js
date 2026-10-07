@@ -17,12 +17,31 @@
  * מה שמיובא נכנס כטיוטה. "לסמן כמוכן" (markReady) מסמן רק ניסוח שעובר את
  * כללי התוכן של הפרסום (readiness.js) — אינסטגרם בלי מדיה נשאר טיוטה.
  * כל ייבוא מקבל מזהה מנה (import_batch), ו"בטל ייבוא" מוחק את מה שלא נגעו בו.
+ *
+ * קמפיין כללי (סעיף 19): אותה טבלה, אבל שורה N = פוסט N בכל עמודת ערוץ —
+ * כל תא הוא פוסט נפרד במשבצת של הערוץ שלו (כמו "המר לכללי"). תא ריק = אין
+ * פוסט. כותרת לא חובה: בלי כותרת היא נגזרת מהטקסט של התא (core/title.js).
+ * משבצת שכבר יש בה פוסט לא נדרסת; פוסט מייבוא קודם שאיש לא נגע בו מאז
+ * ועדיין טיוטה — אפשר לבחור לעדכן (existing: 'update').
  */
 
 import { randomUUID } from 'node:crypto';
 import { one, rows, tx } from './db.js';
 import { freeAngleSlots } from './campaigns.js';
+import { autoLinkNew, normalizeLinkRules } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
+import { deriveTitle } from '../public/js/core/title.js';
+
+/**
+ * פריט ש"איש לא נגע בו" מאז רגע מסוים (since — ביטוי SQL על ci): הפריט
+ * והגרסאות שלו לא השתנו מאז (טריגרי updated_at בסכימה), ולא נוספו לו
+ * קבצים. משותף ל"בטל ייבוא" (מאז היצירה) ולעדכון בייבוא חוזר (מאז הייבוא
+ * האחרון שכתב אותו — imported_at).
+ */
+const untouchedSince = (since) => `(ci.updated_at <= ${since}
+  and not exists (select 1 from content_variants v
+                   where v.content_id = ci.id and v.updated_at > ${since})
+  and not exists (select 1 from content_assets a where a.content_id = ci.id))`;
 
 /** שמות אפשריים לעמודות הקבועות */
 const ALIASES = {
@@ -122,7 +141,7 @@ function parseKind(raw, fallback = 'value') {
  * מנתח את הטבלה מול קמפיין מסוים ומחזיר בדיוק מה ייווצר.
  * לא כותב כלום — זה מה שמאפשר להראות תצוגה מקדימה לפני האישור.
  */
-export async function analyzeImport(campaignId, text, { markReady = false } = {}) {
+export async function analyzeImport(campaignId, text, { markReady = false, existing: mode = 'skip' } = {}) {
   const campaign = await one('select * from campaigns where id = $1', [campaignId]);
   if (!campaign) throw new Error('לא נמצא קמפיין כזה');
 
@@ -136,10 +155,14 @@ export async function analyzeImport(campaignId, text, { markReady = false } = {}
     `select ch.id, ch.name, ch.platform from campaign_channels cc
        join channels ch on ch.id = cc.channel_id
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [campaignId]);
-  const existing = await rows('select title, sort_order from content_items where campaign_id = $1',
-    [campaignId]);
 
   const { cols, channelCols, unknown } = mapHeader(table[0], channels);
+  if (campaign.structure === 'general') {
+    return analyzeGeneral(campaign, table, { cols, channelCols, unknown, myChannels },
+      { markReady, update: mode === 'update' });
+  }
+  const existing = await rows('select title, sort_order from content_items where campaign_id = $1',
+    [campaignId]);
   if (cols.title === -1) {
     throw new Error(
       `לא נמצאה עמודת כותרת. השורה הראשונה חייבת לכלול עמודה בשם "כותרת". ` +
@@ -232,6 +255,7 @@ export async function analyzeImport(campaignId, text, { markReady = false } = {}
   }
 
   return {
+    structure: 'angles',
     campaign: { id: campaign.id, name: campaign.name },
     columns: {
       title: table[0][cols.title],
@@ -257,11 +281,12 @@ export async function analyzeImport(campaignId, text, { markReady = false } = {}
  * מבצע את הייבוא. מריץ ניתוח טרי כדי שלא ייכתב משהו על סמך תצוגה ישנה.
  * כל הפריטים מקבלים מזהה מנה אחד (import_batch) — בשביל "בטל ייבוא".
  */
-export async function runImport(campaignId, text, { markReady = false } = {}) {
-  const plan = await analyzeImport(campaignId, text, { markReady });
+export async function runImport(campaignId, text, { markReady = false, existing = 'skip' } = {}) {
+  const plan = await analyzeImport(campaignId, text, { markReady, existing });
   if (plan.errors.length) {
     throw new Error(`יש שגיאות בטבלה: ${plan.errors.slice(0, 3).join(' · ')}`);
   }
+  if (plan.structure === 'general') return runGeneral(campaignId, plan);
   if (!plan.items.length) throw new Error('אין מה לייבא — כל השורות כבר קיימות או ריקות');
 
   const campaign = await one('select endpoint_id from campaigns where id = $1', [campaignId]);
@@ -302,24 +327,262 @@ export async function runImport(campaignId, text, { markReady = false } = {}) {
  * @returns {Promise<{removed:number, kept:number}>}
  */
 export async function undoImport(campaignId, batch) {
+  // קמפיין כללי: גם העוקבות שקישור העמודות יצר לפריטי המנה (autoLinkNew) —
+  // הן נמחקות רק עם המקור שלהן, ורק כשגם בהן לא נגעו
   const items = await rows(
-    `select ci.id,
-            (ci.updated_at = ci.created_at
-             and not exists (select 1 from content_variants v
-                              where v.content_id = ci.id and v.updated_at > ci.created_at)
-             and not exists (select 1 from content_assets a where a.content_id = ci.id)
+    `select ci.id, ci.linked_to_id, ci.import_batch = $2 as own,
+            (${untouchedSince('ci.created_at')}
              and not exists (select 1 from posts p
                               where p.content_id = ci.id
                                 and (p.status in ('published','publishing','approved')
                                      or p.created_at < ci.created_at))) as untouched
        from content_items ci
-      where ci.campaign_id = $1 and ci.import_batch = $2
+      where ci.campaign_id = $1
+        and (ci.import_batch = $2
+             or ci.linked_to_id in (select id from content_items
+                                     where campaign_id = $1 and import_batch = $2))
       for update of ci`,
     [campaignId, batch]);
-  const gone = items.filter((x) => x.untouched).map((x) => x.id);
-  if (gone.length) {
-    await rows('delete from posts where content_id = any($1::int[]) returning id', [gone]);
-    await rows('delete from content_items where id = any($1::int[]) returning id', [gone]);
+  const own = items.filter((x) => x.own);
+  const gone = own.filter((x) => x.untouched).map((x) => x.id);
+  const copies = items.filter((x) => !x.own && x.untouched && gone.includes(x.linked_to_id))
+    .map((x) => x.id);
+  const all = [...copies, ...gone];
+  if (all.length) {
+    await rows('delete from posts where content_id = any($1::int[]) returning id', [all]);
+    await rows('delete from content_items where id = any($1::int[]) returning id', [all]);
   }
-  return { removed: gone.length, kept: items.length - gone.length };
+  return { removed: all.length, kept: own.length - gone.length };
+}
+
+/* ========================= קמפיין כללי (סעיף 19) ========================= */
+
+/**
+ * הפוסטים שכבר יושבים במשבצות של הקמפיין, עם האם ייבוא חוזר רשאי לעדכן
+ * אותם: הגיעו מייבוא (import_batch), איש לא נגע בהם מאז הייבוא האחרון
+ * שכתב אותם, הם עדיין טיוטה, לא מקושרים (קישור משבצות מסנכרן תוכן — עדכון
+ * היה עוקף אותו), ואין להם פוסט שפורסם, באמצע פרסום או מאושר.
+ * @returns {Promise<Map<string, {id:number, updatable:boolean}>>} מפתח "ערוץ:מספר"
+ */
+async function generalSlots(campaignId) {
+  const list = await rows(
+    `select ci.id, ci.slot_channel_id, ci.sort_order,
+            (ci.import_batch is not null and ci.linked_to_id is null
+             and not exists (select 1 from content_items f where f.linked_to_id = ci.id)
+             and coalesce((select v.status from content_variants v
+                            where v.content_id = ci.id and v.channel_id = ci.slot_channel_id),
+                          'draft') = 'draft'
+             and ${untouchedSince('coalesce(ci.imported_at, ci.created_at)')}
+             and not exists (select 1 from posts p where p.content_id = ci.id
+                               and p.status in ('published','publishing','approved'))) as updatable
+       from content_items ci
+      where ci.campaign_id = $1 and ci.slot_channel_id is not null`, [campaignId]);
+  return new Map(list.map((x) => [`${x.slot_channel_id}:${x.sort_order}`, x]));
+}
+
+/**
+ * ניתוח טבלה לקמפיין כללי: שורה N (אחרי הכותרות) ← פוסט N בכל עמודת ערוץ.
+ * לכל תא: create (משבצת ריקה), update (פוסט מייבוא קודם שלא נגעו בו, כשבחרו
+ * לעדכן), או skip. לא כותב כלום.
+ */
+async function analyzeGeneral(campaign, table, { cols, channelCols, unknown, myChannels },
+  { markReady, update }) {
+  const mine = new Set(myChannels.map((ch) => ch.id));
+  const notInCampaign = channelCols.filter((c) => !mine.has(c.channel.id)).map((c) => c.channel.name);
+  const ownCols = channelCols.filter((c) => mine.has(c.channel.id));
+  const slots = await generalSlots(campaign.id);
+
+  const items = [];
+  const errors = [];
+  const skipped = [];
+  let updatable = 0;
+
+  table.slice(1).forEach((raw, i) => {
+    const line = i + 2;                 // שורה 1 היא הכותרות
+    const index = i + 1;                // שורה N בטבלה = פוסט N
+    const rowTitle = cols.title === -1 ? '' : String(raw[cols.title] ?? '').trim();
+    const kind = parseKind(cols.kind === -1 ? '' : raw[cols.kind]);
+    if (kind === null) {
+      errors.push(`שורה ${line}: סוג לא מוכר "${String(raw[cols.kind]).trim()}" — מכירתי / ערך / משולב`);
+      return;
+    }
+    const body = cols.body === -1 ? '' : String(raw[cols.body] ?? '').trim();
+    const own = ownCols
+      .map(({ index: col, channel }) => ({ channel, body: String(raw[col] ?? '').trim() }))
+      .filter((v) => v.body !== '');
+    // עמודת הטקסט הכללית — לכל ערוץ של הקמפיין שאין לו תא משלו בשורה הזו
+    const general = body
+      ? myChannels.filter((ch) => !own.some((v) => v.channel.id === ch.id))
+        .map((channel) => ({ channel, body, general: true }))
+      : [];
+    const cells = [...own, ...general];
+    if (!cells.length) {
+      skipped.push(`שורה ${line}: אין טקסט לאף ערוץ — לא נוצר פוסט ${index}`);
+      return;
+    }
+
+    const variants = cells.map((v) => {
+      const at = slots.get(`${v.channel.id}:${index}`);
+      let action = 'create';
+      if (at) {
+        if (at.updatable) updatable += 1;
+        action = at.updatable && update ? 'update' : 'skip';
+        if (action === 'skip') {
+          skipped.push(`${v.channel.name} · פוסט ${index}: ${at.updatable
+            ? 'יש בו טיוטה מייבוא קודם (לא מעדכנים)' : 'כבר יש בו פוסט'}`);
+        }
+      }
+      // "מוכן" רק למה שעובר את כללי התוכן — בייבוא אין קבצים
+      const block = contentBlocker({ platform: v.channel.platform, variant: { body: v.body } });
+      return {
+        channel_id: v.channel.id, channel_name: v.channel.name, body: v.body,
+        from_general: !!v.general, action, content_id: at?.id ?? null,
+        title: rowTitle || deriveTitle({ body: v.body, channelName: v.channel.name, index }),
+        status: markReady && !block ? 'ready' : 'draft', ready_block: block,
+      };
+    });
+
+    items.push({
+      line, index, title: rowTitle, kind, body,
+      evergreen: cols.evergreen !== -1 && TRUE_WORDS.has(norm(raw[cols.evergreen])),
+      reuse_after_days: cols.reuse === -1 || !String(raw[cols.reuse] ?? '').trim()
+        ? null : Number(raw[cols.reuse]) || null,
+      variants,
+    });
+  });
+
+  const write = items.flatMap((it) => it.variants).filter((v) => v.action !== 'skip');
+  const writtenChannels = new Set(write.map((v) => v.channel_id));
+  const name = (id) => myChannels.find((ch) => ch.id === id)?.name ?? '';
+
+  // קישור עמודות: פוסט חדש בעמודת מקור מועתק לעמודות היעד שלה (autoLinkNew) —
+  // אלא אם הטבלה ממלאת בעצמה את עמודת היעד, ואז העתקה הייתה מכפילה אותה
+  const rules = normalizeLinkRules(campaign.link_rules ?? [])
+    .filter((r) => mine.has(r.from) && mine.has(r.to));
+  const linkFrom = [];
+  const warnings = [];
+  for (const from of new Set(rules.map((r) => r.from))) {
+    if (!writtenChannels.has(from)) continue;
+    const targets = rules.filter((r) => r.from === from).map((r) => r.to);
+    const filled = targets.filter((to) => writtenChannels.has(to));
+    if (filled.length) {
+      warnings.push(`קישור העמודות של ${name(from)} לא חל על הייבוא — הטבלה ממלאת גם את ` +
+        `${filled.map(name).join(', ')}`);
+    } else {
+      linkFrom.push(from);
+      warnings.push(`פוסטים חדשים ב${name(from)} יועתקו גם ל${targets.map(name).join(', ')} ` +
+        '(קישור העמודות של הקמפיין)');
+    }
+  }
+
+  if (unknown.length) warnings.unshift(`עמודות שלא זוהו ולא ייובאו: ${unknown.join(', ')}`);
+  if (notInCampaign.length) {
+    warnings.unshift(`הערוצים ${notInCampaign.join(', ')} לא משויכים לקמפיין — העמודות שלהם לא ` +
+      'ייובאו (מוסיפים את הערוץ לקמפיין ומייבאים שוב)');
+  }
+  if (!ownCols.length && cols.body === -1) {
+    warnings.unshift('אין עמודות של ערוצי הקמפיין ואין עמודת טקסט — אין מה לייבא');
+  }
+  const generalTo = myChannels.filter((ch) =>
+    write.some((v) => v.from_general && v.channel_id === ch.id));
+  if (generalTo.length) {
+    warnings.push(`עמודת "${String(table[0][cols.body]).trim()}" נכנסת כפוסט לכל ערוץ של הקמפיין ` +
+      `שאין לו עמודה משלו: ${generalTo.map((ch) => ch.name).join(', ')}`);
+  }
+  if (markReady) {
+    const blocked = new Map();
+    for (const v of write) {
+      if (v.ready_block) blocked.set(v.ready_block, (blocked.get(v.ready_block) ?? 0) + 1);
+    }
+    for (const [reason, n] of blocked) {
+      warnings.push(`${n === 1 ? 'פוסט אחד יישאר' : `${n} פוסטים יישארו`} טיוטה: ${reason}`);
+    }
+  }
+
+  return {
+    structure: 'general',
+    campaign: { id: campaign.id, name: campaign.name },
+    columns: {
+      title: cols.title === -1 ? null : table[0][cols.title],
+      channels: ownCols.map((c) => c.channel.name),
+      unknown,
+    },
+    items,
+    errors,
+    skipped,
+    warnings,
+    link_from: linkFrom,
+    totals: {
+      rows: table.length - 1,
+      to_create: write.filter((v) => v.action === 'create').length,
+      to_update: write.filter((v) => v.action === 'update').length,
+      // כמה משבצות תפוסות אפשר לעדכן (טיוטות מייבוא קודם שלא נגעו בהן) —
+      // לתיבת "עדכן טיוטות" בתצוגה המקדימה, גם כשלא בחרו בה
+      updatable,
+      variants: write.length,
+      ready: write.filter((v) => v.status === 'ready').length,
+      skipped: skipped.length,
+      errors: errors.length,
+    },
+  };
+}
+
+/**
+ * כתיבת ייבוא לקמפיין כללי: פוסט חדש לכל תא create, עדכון במקום לכל update
+ * (הטקסט, הכותרת, הסוג והמצב — imported_at מתקדם, כך שייבוא נוסף עדיין יראה
+ * אותו "לא נגעו בו"). פוסט שעודכן שומר על מזהה המנה שלו: "בטל ייבוא" של
+ * המנה הזו מוחק רק את מה שהיא יצרה. מילוי אחד לקמפיין — בנתיב, אחרי זה.
+ */
+async function runGeneral(campaignId, plan) {
+  if (!plan.totals.variants) {
+    throw new Error('אין מה לייבא — כל התאים ריקים או שהמשבצות כבר תפוסות');
+  }
+  const campaign = await one('select endpoint_id from campaigns where id = $1', [campaignId]);
+  const batch = randomUUID();
+  const created = [];
+  let updated = 0;
+
+  await tx(async (client) => {
+    for (const item of plan.items) {
+      for (const v of item.variants) {
+        if (v.action === 'create') {
+          const row = (await client.query(
+            `insert into content_items (endpoint_id, campaign_id, kind, title, body,
+                                        ready_channel_ids, sort_order, evergreen, reuse_after_days,
+                                        slot_channel_id, import_batch, imported_at)
+             values ($1,$2,$3,$4,$5,$6::int[],$7,$8,$9,$10,$11, now()) returning id`,
+            [campaign.endpoint_id, campaignId, item.kind, v.title, v.body, [v.channel_id],
+             item.index, item.evergreen, item.reuse_after_days, v.channel_id, batch]
+          )).rows[0];
+          await client.query(
+            `insert into content_variants (content_id, channel_id, body, status)
+             values ($1,$2,$3,$4)`, [row.id, v.channel_id, v.body, v.status]);
+          created.push({ id: row.id, channel_id: v.channel_id });
+        } else if (v.action === 'update') {
+          await client.query(
+            `update content_items set title = $2, kind = $3, body = $4, evergreen = $5,
+                    reuse_after_days = $6, imported_at = now()
+              where id = $1`,
+            [v.content_id, v.title, item.kind, v.body, item.evergreen, item.reuse_after_days]);
+          await client.query(
+            `insert into content_variants (content_id, channel_id, body, status)
+             values ($1,$2,$3,$4)
+             on conflict (content_id, channel_id) do update set body = $3, status = $4`,
+            [v.content_id, v.channel_id, v.body, v.status]);
+          updated += 1;
+        }
+      }
+    }
+  });
+
+  // קישור עמודות — רק בעמודות שהטבלה לא ממלאת את היעד שלהן (analyzeGeneral)
+  let copied = 0;
+  const linkFrom = new Set(plan.link_from);
+  for (const c of created) {
+    if (linkFrom.has(c.channel_id)) copied += (await autoLinkNew(c.id)).linked;
+  }
+
+  return { structure: 'general', created: created.length, updated, copied,
+           variants: plan.totals.variants, ready: plan.totals.ready,
+           skipped: plan.skipped, batch };
 }
