@@ -58,9 +58,15 @@ test('unplacedOf — טיוטה נספרת (המנוע משבץ גם טיוטה)
 
 test('unplacedOf — פוסט שנכשל נחשב "יש פוסט" (המנוע לא ישבץ שוב), ולא תופס מקום', () => {
   const items = [1, 2, 3].map((id) => item(id, { 10: 'ready' }));
-  const posts = [post(1, 10, 'failed', '2030-01-07T10:00:00')];
-  const r = unplacedOf(camp, items, [ch], posts, [camp], { gapDays: 7, today: '2030-01-06' });
+  // נכשל הבוקר — לא עלה לאוויר, המקום שלו פנוי (takesRoom, כמו במנוע)
+  const posts = [post(1, 10, 'failed', '2030-01-06T08:00:00')];
+  const now = new Date('2030-01-06T12:00:00');
+  const r = unplacedOf(camp, items, [ch], posts, [camp], { gapDays: 7, now, today: '2030-01-06' });
   assert.deepEqual(r.by_channel[10], { without: 2, free: 2, unplaced: 0 });
+  // נכשל שהמועד שלו עוד לפניו (נדיר) — תופס מקום כמו קודם, כמו במנוע
+  const ahead = [post(1, 10, 'failed', '2030-01-07T10:00:00')];
+  const r2 = unplacedOf(camp, items, [ch], ahead, [camp], { gapDays: 7, now, today: '2030-01-06' });
+  assert.deepEqual(r2.by_channel[10], { without: 2, free: 1, unplaced: 1 });
 });
 
 test('unplacedOf — באמצע הקמפיין נמדד רק מה שנשאר: שבוע אחרון = מקום לפוסט אחד', () => {

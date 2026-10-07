@@ -39,6 +39,17 @@ test('planClashFixes — פורסם / בפרסום / נכשל / ממתין לא�
   assert.equal(b.moves.length, 0);
 });
 
+test('planClashFixes — נכשל שהמועד שלו עבר לא תופס את היום (takesRoom); עוד לפניו — תופס', () => {
+  const now = new Date('2030-01-08T12:00:00');
+  const past = planClashFixes([p(1, '2030-01-08', 'failed'), p(2, '2030-01-08', 'scheduled',
+    { scheduled_at: '2030-01-08T16:00:00' })],
+  { channels: ch(), settings: { min_gap_days: 7 }, now, today: '2030-01-08' });
+  assert.deepEqual(past, { groups: [], moves: [] });
+  const ahead = planClashFixes([p(1, '2030-01-09', 'failed'), p(2, '2030-01-09')],
+    { channels: ch(), settings: { min_gap_days: 7 }, now, today: '2030-01-08' });
+  assert.deepEqual(ahead.moves.map((m) => m.id), [2]);
+});
+
 test('planClashFixes — התנגשות ביום שעבר לא נוגעים בה', () => {
   const r = planClashFixes([p(1, '2030-01-03'), p(2, '2030-01-03')],
     { channels: ch(), settings: { min_gap_days: 7 }, today });

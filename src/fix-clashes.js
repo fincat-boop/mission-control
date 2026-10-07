@@ -5,7 +5,7 @@ import { pool, query, rows, one } from './db.js';
 import { ymd } from './board.js';
 import {
   addGroupDay, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES, linkDayTaken, nearestDays,
-  removeGroupDay,
+  removeGroupDay, takesRoom,
 } from './engine.js';
 import { windowAllows } from './respace.js';
 
@@ -22,7 +22,8 @@ import { windowAllows } from './respace.js';
  * השעה הפנויה הבאה עד 22:00, ובלעדיה היום לא מתאים.
  *
  * רק התנגשויות מהיום והלאה. זז רק מתוכנן / מאושר — מה שפורסם, בפרסום, נכשל
- * או ממתין לאישור נשאר במקום (כמו ב-respace) ונספר כתפוס. הכול בארגון אחד.
+ * או ממתין לאישור נשאר במקום (כמו ב-respace) ונספר כתפוס; נכשל — רק כשהמועד
+ * שלו עוד לפניו (takesRoom). הכול בארגון אחד.
  *
  *   node src/fix-clashes.js                הרצה יבשה, ארגון 1
  *   node src/fix-clashes.js --org 2        ארגון אחר
@@ -41,10 +42,13 @@ const LOOKAHEAD_DAYS = 14;
  * @returns {{groups: {endpoint_name, channel_name, day, kinds:string[], stay:object[],
  *            moves:{post:object, to:Date}[], stuck:object[]}[], moves:{id:number, at:Date}[]}}
  */
-export function planClashFixes(posts, { channels = [], settings = null, today = ymd(new Date()) } = {}) {
+export function planClashFixes(posts, { channels = [], settings = null, now = new Date(),
+                                         today = ymd(now) } = {}) {
   const blocked = new Map(channels.map((c) => [c.id, (c.blocked_days ?? []).map(Number)]));
   const dayOf = (p) => ymd(new Date(p.scheduled_at));
-  const onBoard = posts.filter((p) => ON_BOARD.includes(p.status));
+  // נכשל שהמועד שלו עבר לא עלה לאוויר — לא תופס יום, מרווח, שעה או מכירתי
+  // ליום (takesRoom, כמו במנוע), ולכן גם לא "מתנגש"
+  const onBoard = posts.filter((p) => ON_BOARD.includes(p.status) && takesRoom(p, now));
   const live = onBoard.filter((p) => p.endpoint_id);
   const maxPromoPerDay = settings?.max_promo_per_day ?? 1;
   const hourOf = (p) => new Date(p.scheduled_at).getHours();

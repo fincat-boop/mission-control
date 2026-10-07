@@ -125,37 +125,53 @@ r.post('/urgent/preview', requirePerm('content'), wrap(async (req, res) => {
   res.json(await planUrgent(req.body ?? {}));
 }));
 
-/** אישור: משבץ בפועל לפי אותה תוכנית */
+/**
+ * אישור: משבץ בפועל לפי אותה תוכנית. התכנון והכתיבה תחת נעילת המנוע של
+ * הארגון (lockEngine, כמו /engine/apply) — מילוי אוטומטי או מבצע דחוף נוסף
+ * שרצים במקביל ראו את אותה משבצת פנויה ושובצו שניהם. התצוגה המקדימה לא
+ * כותבת, ולכן בלי נעילה.
+ */
 r.post('/urgent/commit', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
-  const plan = await planUrgent(b);
-  if (plan.errors?.length) return bad(res, plan.errors.join(' · '));
-  if (plan.placements.length === 0) return bad(res, 'לא נמצא שטח פנוי למבצע הדחוף');
-
-  const needsApproval = !(req.user.is_owner || req.user.perm_approve);
-  // מפתח אחד לכל הפוסטים של המבצע — "אשר את כל המבצע" בחלון הפוסט
-  const group = crypto.randomUUID();
-  const created = [];
-  for (const p of plan.placements) {
-    const post = await one(
-      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at,
-                          status, assignee_id, urgent, note, urgent_group)
-       values ($1,$2,$3,'promo',$4,$5,$6,true,$7,$8) returning *`,
-      [p.channel_id, b.endpoint_id ?? null, b.title, p.scheduled_at,
-       needsApproval ? 'pending_approval' : 'scheduled',
-       b.assignee_id ?? req.user.id, p.note ?? null, group]
-    );
-    created.push(post);
-    if (needsApproval) {
-      await query(
-        `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent)
-         values ($1,$2,'approve',$3,$4,true)`,
-        [`לאשר: ${b.title}`, `${p.channel_name} · ${p.day_label} · דורש הרשאת אישור`,
-         post.id, b.endpoint_id ?? null]
-      );
-    }
+  try {
+    await lockEngine();
+  } catch (e) {
+    if (e?.code !== '55P03') throw e;
+    return bad(res, 'המנוע ממלא כרגע את הלוח בבקשה אחרת — נסו לאשר שוב בעוד רגע', 503);
   }
-  res.status(201).json({ posts: created, pending: needsApproval });
+  // התכנון והכתיבה ביחד בשרשרת של התהליך (withEngineLock), כמו applyWeek
+  const out = await withEngineLock(async () => {
+    const plan = await planUrgent(b);
+    if (plan.errors?.length) return { error: plan.errors.join(' · ') };
+    if (plan.placements.length === 0) return { error: 'לא נמצא שטח פנוי למבצע הדחוף' };
+
+    const needsApproval = !(req.user.is_owner || req.user.perm_approve);
+    // מפתח אחד לכל הפוסטים של המבצע — "אשר את כל המבצע" בחלון הפוסט
+    const group = crypto.randomUUID();
+    const created = [];
+    for (const p of plan.placements) {
+      const post = await one(
+        `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at,
+                            status, assignee_id, urgent, note, urgent_group)
+         values ($1,$2,$3,'promo',$4,$5,$6,true,$7,$8) returning *`,
+        [p.channel_id, b.endpoint_id ?? null, b.title, p.scheduled_at,
+         needsApproval ? 'pending_approval' : 'scheduled',
+         b.assignee_id ?? req.user.id, p.note ?? null, group]
+      );
+      created.push(post);
+      if (needsApproval) {
+        await query(
+          `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent)
+           values ($1,$2,'approve',$3,$4,true)`,
+          [`לאשר: ${b.title}`, `${p.channel_name} · ${p.day_label} · דורש הרשאת אישור`,
+           post.id, b.endpoint_id ?? null]
+        );
+      }
+    }
+    return { posts: created, pending: needsApproval };
+  });
+  if (out.error) return bad(res, out.error);
+  res.status(201).json(out);
 }));
 
 export default r;
