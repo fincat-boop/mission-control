@@ -659,7 +659,7 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
   let out;
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
   const shift = apart
-    ? await revalidateCampaignPosts(scope.id, { linksOnly: true, contentIds: [out.follower.id] })
+    ? await revalidateCampaignPosts(scope.id, { rules: { linksApart: true }, contentIds: [out.follower.id] })
     : null;
   const engine = await fillFor(out.source, req.body?.week);
   res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, shift, engine });
@@ -711,7 +711,7 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
   }
   const out = await applyLinkPlan(plan);
   // מה שירד מהלוח משובץ מחדש על כל התקופה של הקמפיין, לא רק בשבוע שמוצג
-  const shift = tighten ? await revalidateCampaignPosts(c.id, { linksOnly: true }) : null;
+  const shift = tighten ? await revalidateCampaignPosts(c.id, { rules: { linksApart: true } }) : null;
   const engine = shift?.rescheduled
     ? await autoFillCampaign(c.id, req.body?.week)
     : await autoFill(req.body?.week);

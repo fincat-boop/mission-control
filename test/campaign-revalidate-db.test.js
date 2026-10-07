@@ -170,6 +170,27 @@ test('קיצור הסיום: מה שאחרי הסיום החדש יורד ומש
   }
 });
 
+test('קיצור הסיום בודק רק את החלון — פוסט ידני קרוב מדי לשכן (אחרי אזהרה) נשאר', { skip }, async () => {
+  const x = await setup('קיצור ידני', {
+    starts: 1, ends: 30, gap: 7,
+    // יום 4 הוצב ידנית בתוך המרווח מיום 2 (ואושר); יום 25 ייצא מהחלון
+    posts: [{ day: 2 }, { day: 4, status: 'approved' }, { day: 25 }],
+  });
+  try {
+    const r = await call('PATCH', `/campaigns/${x.camp}`,
+      { starts_on: inDays(1), ends_on: inDays(15), period: 'custom' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual(r.json.shift, { kept: 2, rescheduled: 1, approved: 0 });
+    const manual = await q1('select status, scheduled_at from posts where id = $1', [x.posts[1].post]);
+    assert.equal(manual?.status, 'approved', 'הפוסט הידני נשאר מאושר');
+    assert.equal(new Date(manual.scheduled_at).getTime(), at(4).getTime());
+    assert.ok(await exists(x.posts[0].post));
+    assert.ok(!(await exists(x.posts[2].post)));
+  } finally {
+    await cleanup(x);
+  }
+});
+
 test('מרווח 7 ← 14: פוסטים קרובים מדי יורדים, ומה שחוזר שומר על 14 ימים', { skip }, async () => {
   const x = await setup('מרווח', {
     starts: 1, ends: 70, gap: 7,

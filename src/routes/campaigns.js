@@ -721,8 +721,8 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   // והפוסטים נשארים מאחור, מנותקים מהחלון שהם אמורים לשרת.
   const shiftDays = b.starts_on && before.starts_on && b.starts_on !== before.starts_on
     ? daysBetweenDates(before.starts_on, b.starts_on) : 0;
-  // בלי הזזה: שינוי שמהדק את הכללים (סיום מוקדם יותר, מרווח גדול יותר) —
-  // הפוסטים שכבר בלוח נבדקים מחדש מולם. הזזה בודקת את כל אלה בעצמה
+  // בלי הזזה: שינוי שמהדק כלל (סיום מוקדם יותר, מרווח גדול יותר) — הפוסטים
+  // שכבר בלוח נבדקים מחדש מול הכלל הזה בלבד. הזזה בודקת את כולם בעצמה
   const revalidate = !shiftDays &&
     tightensCampaignRules(before, b, await one('select * from engine_settings limit 1'));
   // ההזזה / הבדיקה והמילוי שאחריה תחת אותה נעילת מנוע של הארגון, עד ה-commit —
@@ -737,7 +737,7 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   // אחרי השמירה: הפוסטים נבדקים מול החלון, המרווח והקישורים החדשים.
   // מה שלא עובר את הכללים יורד מהלוח, והמילוי שמיד אחרי משבץ אותו מחדש
   const shift = revalidate
-    ? await revalidateCampaignPosts(c.id)
+    ? await revalidateCampaignPosts(c.id, { rules: revalidate })
     : await shiftCampaignPosts(c.id, shiftDays);
 
   // שינוי במה שהקמפיין צריך או מתי — כל התקופה שלו; שאר השדות (שם, מטרה)
@@ -752,20 +752,23 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
 const dateKey = (v) => (v == null || v === '' ? null : String(v).slice(0, 10));
 
 /**
- * העריכה b (אחרי applyPeriod ו-gapDaysError) מהדקת כלל שפוסטים שכבר בלוח
- * עלולים לשבור: הסיום הוקדם (גם דרך תקופה קצרה יותר), נקבע תאריך התחלה
- * לקמפיין שלא היה לו (בלי הזזה — אין ממה להזיז), או שהמרווח בפועל גדל
- * (effectiveGap — גם ריק ← הכללי). שם, מטרה, נתח וכו' — לא.
+ * אילו כללים העריכה b (אחרי applyPeriod ו-gapDaysError) מהדקת, כך שפוסטים
+ * שכבר בלוח עלולים לשבור אותם: window — הסיום הוקדם (גם דרך תקופה קצרה
+ * יותר) או שנקבע תאריך התחלה לקמפיין שלא היה לו (בלי הזזה — אין ממה
+ * להזיז); gap — המרווח בפועל גדל (effectiveGap — גם ריק ← הכללי). רק אלה
+ * נבדקים: פוסט שהוצב ידנית אחרי אזהרה על כלל אחר נשאר. שם, מטרה, נתח — כלום.
  * @param settings engine_settings — המרווח הכללי, כשלקמפיין אין משלו
+ * @returns {{window?:true, gap?:true}|null} null — שום כלל לא התהדק
  */
 export function tightensCampaignRules(before, b, settings) {
+  const rules = {};
   const oldEnd = dateKey(before.ends_on);
   const newEnd = b.ends_on !== undefined ? dateKey(b.ends_on) : oldEnd;
-  if (newEnd && (!oldEnd || newEnd < oldEnd)) return true;
-  if (dateKey(b.starts_on) && !dateKey(before.starts_on)) return true;
+  if (newEnd && (!oldEnd || newEnd < oldEnd)) rules.window = true;
+  if (dateKey(b.starts_on) && !dateKey(before.starts_on)) rules.window = true;
   if (b.min_gap_days !== undefined &&
-      effectiveGap(b, settings) > effectiveGap(before, settings)) return true;
-  return false;
+      effectiveGap(b, settings) > effectiveGap(before, settings)) rules.gap = true;
+  return Object.keys(rules).length ? rules : null;
 }
 
 /** מספר ימים בין שני תאריכים, בלי להיתקל במעבר שעון */

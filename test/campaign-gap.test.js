@@ -68,22 +68,25 @@ test('העוזר: min_gap_days בסכימה 1–30 או null, ונבדק בהצ�
   }
 });
 
-test('tightensCampaignRules — רק מה שמהדק כלל: סיום מוקדם, התחלה חדשה, מרווח גדול', () => {
+test('tightensCampaignRules — רק הכללים שהתהדקו: חלון (סיום מוקדם / התחלה חדשה), מרווח', () => {
   const before = { starts_on: '2030-11-01', ends_on: '2030-11-30', min_gap_days: null };
   const settings = { min_gap_days: 7 };
   const t = (b) => tightensCampaignRules(before, b, settings);
-  assert.equal(t({ name: 'אחר', goal: 'x' }), false);
-  assert.equal(t({ starts_on: '2030-11-01', ends_on: '2030-11-30' }), false);
-  assert.equal(t({ ends_on: '2030-12-15' }), false, 'הארכה');
-  assert.equal(t({ ends_on: '2030-11-20' }), true, 'קיצור');
-  assert.equal(t({ ends_on: null }), false, 'בלי סוף — רחב יותר');
-  assert.equal(tightensCampaignRules({ ...before, ends_on: null }, { ends_on: '2030-11-20' }, settings),
-    true, 'סוף חדש לקמפיין פתוח');
-  assert.equal(tightensCampaignRules({ ...before, starts_on: null }, { starts_on: '2030-11-05' }, settings),
-    true, 'התחלה חדשה לקמפיין בלי התחלה');
-  assert.equal(t({ min_gap_days: 7 }), false, 'אותו מרווח בפועל (הכללי)');
-  assert.equal(t({ min_gap_days: 10 }), true);
-  assert.equal(t({ min_gap_days: 3 }), false);
-  assert.equal(tightensCampaignRules({ ...before, min_gap_days: 3 }, { min_gap_days: null }, settings),
-    true, 'ריק ← הכללי הגדול יותר');
+  const W = { window: true };
+  const G = { gap: true };
+  assert.equal(t({ name: 'אחר', goal: 'x' }), null);
+  assert.equal(t({ starts_on: '2030-11-01', ends_on: '2030-11-30' }), null);
+  assert.equal(t({ ends_on: '2030-12-15' }), null, 'הארכה');
+  assert.deepEqual(t({ ends_on: '2030-11-20' }), W, 'קיצור');
+  assert.equal(t({ ends_on: null }), null, 'בלי סוף — רחב יותר');
+  assert.deepEqual(tightensCampaignRules({ ...before, ends_on: null }, { ends_on: '2030-11-20' }, settings),
+    W, 'סוף חדש לקמפיין פתוח');
+  assert.deepEqual(tightensCampaignRules({ ...before, starts_on: null }, { starts_on: '2030-11-05' }, settings),
+    W, 'התחלה חדשה לקמפיין בלי התחלה');
+  assert.equal(t({ min_gap_days: 7 }), null, 'אותו מרווח בפועל (הכללי)');
+  assert.deepEqual(t({ min_gap_days: 10 }), G);
+  assert.equal(t({ min_gap_days: 3 }), null);
+  assert.deepEqual(tightensCampaignRules({ ...before, min_gap_days: 3 }, { min_gap_days: null }, settings),
+    G, 'ריק ← הכללי הגדול יותר');
+  assert.deepEqual(t({ ends_on: '2030-11-20', min_gap_days: 10 }), { window: true, gap: true });
 });
