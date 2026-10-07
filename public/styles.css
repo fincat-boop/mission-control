@@ -441,6 +441,16 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 /* חלון ההתאמה (לא כל הפוסטים נכנסים בזמן) — חלק נוסף בתוך חלון האישור */
 .confirm-dlg.wide { width: min(480px, 92vw); }
 #confirmExtra h3 { margin-bottom: 16px; }
+/* "לא אושר שיצא" — שורה לכל פוסט: תיבה מסומנת מראש, מתי וערוץ, "לא יצא" */
+.uclist { max-height: min(420px, 55vh); overflow-y: auto; border-block: 1px solid var(--border); margin-bottom: 16px; }
+.ucrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+.ucrow:last-child { border-bottom: 0; }
+.ucrow label { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.ucrow input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.uctx { min-width: 0; }
+.uctx b { display: block; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uctx span { font-size: 12px; color: var(--muted); }
+.ucrow .btn { flex-shrink: 0; }
 .fitrows {
   display: grid; grid-template-columns: minmax(0, 1fr) max-content max-content;
   gap: 8px 20px; padding: 12px 0; border-block: 1px solid var(--border); font-size: 13px;

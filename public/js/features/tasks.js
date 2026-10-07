@@ -3,7 +3,7 @@ import { goToTab, refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { $, $$, copyText, esc, run, toast } from '../core/dom.js';
 import { can, state } from '../core/state.js';
 import { openPostPreview } from '../ui/postDialog.js';
-import { hhmm, fmtDate } from '../core/format.js';
+import { HE_DAYS, hhmm, fmtDate } from '../core/format.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openGeneric } from '../ui/dialog.js';
 
@@ -130,6 +130,9 @@ export async function renderTasks({ force = false } = {}) {
       if (b.dataset.post) await openPostPreview(b.dataset.post);
     })));
 
+  $$('#tasks [data-unconfirmed]').forEach((b) =>
+    b.addEventListener('click', run(openUnconfirmed)));
+
   $$('#tasks [data-task-pick]').forEach((cb) =>
     cb.addEventListener('change', () => {
       const id = Number(cb.dataset.taskPick);
@@ -186,6 +189,54 @@ export async function renderTasks({ force = false } = {}) {
     })));
 }
 
+/** "יום ראשון 5.10 · 10:00" — מתי היה המועד, לשורת חלון האישור */
+const whenLabel = (iso) => {
+  const d = new Date(iso);
+  return `${HE_DAYS[d.getDay()]} ${fmtDate(d)} · ${hhmm(iso)}`;
+};
+
+/**
+ * "לא אושר שיצא" (סעיף 2): פוסטים שהמועד שלהם עבר ואף אחד לא סימן. כמעט
+ * תמיד הם יצאו — ולכן כולם מסומנים מראש, ו"סמן שפורסמו" מאשר בבת אחת. מה
+ * שלא יצא: "לא יצא" פותח את הפוסט (שם קובעים מועד חדש או מוחקים).
+ */
+async function openUnconfirmed() {
+  const { posts } = await api('/posts/unconfirmed');
+  if (!posts.length) {
+    toast('אין פוסטים שממתינים לאישור שיצאו.');
+    await rerender();
+    return;
+  }
+  const rowsHtml = posts.map((p) => `<div class="ucrow">
+      <label><input type="checkbox" data-uc="${p.id}" checked>
+        <span class="uctx"><b>${p.urgent ? '⚡ ' : ''}${esc(p.title)}</b>
+          <span>${esc(whenLabel(p.scheduled_at))} · ${esc(p.channel_name)}</span></span></label>
+      <button type="button" class="btn small" data-uc-open="${p.id}">לא יצא</button>
+    </div>`).join('');
+  let openId = null;
+  const picked = confirmDialog(
+    'המועד של הפוסטים האלה עבר ואף אחד לא סימן שפורסמו. מה שיצא — נשאר מסומן; מה שלא יצא — מורידים את הסימון או לוחצים "לא יצא".',
+    {
+      okLabel: 'סמן שפורסמו',
+      html: `<div class="uclist">${rowsHtml}</div>`,
+      read: (el) => [...el.querySelectorAll('[data-uc]:checked')].map((x) => Number(x.dataset.uc)),
+    });
+  // החלון כבר מצויר (confirmDialog ממלא אותו לפני שהוא מחכה) — "לא יצא" סוגר
+  // אותו ופותח את הפוסט
+  $$('#confirmExtra [data-uc-open]').forEach((b) => b.addEventListener('click', () => {
+    openId = b.dataset.ucOpen;
+    $('#confirmDlg').close();
+  }));
+  const ids = await picked;
+  if (openId) return openPostPreview(openId);
+  if (!ids) return;
+  if (!ids.length) return toast('לא סומן אף פוסט.', true);
+  const r = await api('/posts/publish-bulk', { method: 'POST', body: { ids } });
+  toast((r.marked === 1 ? 'פוסט אחד סומן כפורסם' : `${r.marked} פוסטים סומנו כפורסמו`) +
+        (r.skipped ? ` · ${r.skipped} כבר לא היו במצב שאפשר לסמן` : '.'));
+  await Promise.all([rerender(), refreshBoard()]);
+}
+
 const ALERT_TONE = {
   crit: { color: 'var(--st-crit)', label: 'חוסם' },
   warn: { color: 'var(--st-warn)', label: 'דורש טיפול' },
@@ -207,7 +258,9 @@ function alertsPanel({ alerts, counts }) {
         <b style="color:${tone.color}">${esc(a.title)}</b>
         <span>${esc(a.detail)}</span>
       </div>
-      ${a.tab ? `<button class="btn small act" data-goto="${esc(a.tab)}"
+      ${a.action === 'unconfirmed'
+        ? '<button class="btn small act" data-unconfirmed>פתח</button>'
+        : a.tab ? `<button class="btn small act" data-goto="${esc(a.tab)}"
         data-campaign="${a.campaign_id ?? ''}" data-endpoint="${a.endpoint_id ?? ''}"
         data-post="${a.post_id ?? ''}">פתח</button>` : ''}
     </div>`;

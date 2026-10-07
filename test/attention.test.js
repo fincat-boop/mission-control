@@ -5,7 +5,8 @@ import {
   MANUAL_SUB_NOT_READY, MANUAL_SUB_READY, MANUAL_SUB_TITLE_ONLY, WA_SUB_READY, localHour,
   publishTaskSubtitle, publishTaskTitle, waTaskAction,
 } from '../src/publish/runner.js';
-import { endpointAirStatus, failedPostAlerts, missedPostAlerts } from '../src/alerts.js';
+import { endpointAirStatus, failedPostAlerts } from '../src/alerts.js';
+import { unconfirmedAlert } from '../src/unconfirmed.js';
 import { approveTaskBlocked, groupTasks, localYmd } from '../src/routes/tasks.js';
 
 /* ========================= משימת וואטסאפ: מה עושים ========================= */
@@ -60,12 +61,19 @@ test('failedPostAlerts — חוסם, id יציב, קישור לפוסט, השג�
   assert.match(a.detail, /פייסבוק · .* · אין חיבור$/);
 });
 
-test('missedPostAlerts — דורש טיפול, id יציב, קישור לפוסט', () => {
-  const [a] = missedPostAlerts([{ id: 18, title: 'כרטיס', channel_name: 'וואטסאפ', scheduled_at: '2026-10-05T07:00:00Z' }]);
-  assert.equal(a.id, 'post-missed-18');
+test('unconfirmedAlert — התראה מרוכזת אחת, דורש טיפול, רק למי שיכול לסמן', () => {
+  assert.deepEqual(unconfirmedAlert([]), []);
+  const [one] = unconfirmedAlert([{ id: 18 }]);
+  assert.equal(one.title, 'פוסט אחד לא אושר שיצא');
+  const all = unconfirmedAlert([{ id: 18 }, { id: 19 }, { id: 20 }]);
+  assert.equal(all.length, 1);
+  const [a] = all;
+  assert.equal(a.id, 'unconfirmed');
   assert.equal(a.level, 'warn');
-  assert.equal(a.title, 'עבר המועד ולא פורסם: כרטיס');
-  assert.equal(a.post_id, 18);
+  assert.equal(a.title, '3 פוסטים לא אושר שיצאו');
+  assert.equal(a.action, 'unconfirmed');
+  assert.equal(a.perm, 'content');
+  assert.equal(a.post_id, undefined);
 });
 
 test('endpointAirStatus — נקודה חדשה בלי פוסטים לא מתריעה לפני שעבר הקצב שלה', () => {

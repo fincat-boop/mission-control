@@ -294,3 +294,127 @@ test('1 — נסגרת לבד: פורסם, הוזז ליום אחר, נגמר ה
   assert.equal(ex.done, true);
   assert.equal(ex.meta.auto_closed, 'expired');
 });
+
+/* ========================= 2 — "לא אושר שיצא" ========================= */
+
+/** ארגון נקי לסעיפים שסופרים פוסטים — הבקשות הבאות רצות בו (org, ids) */
+async function freshOrg(name) {
+  org = (await db.pool.query('insert into orgs (name) values ($1) returning id', [name])).rows[0].id;
+  ids = await inOrg(async () => {
+    await db.query('insert into engine_settings default values');
+    const ep = (await db.one(
+      "insert into endpoints (name, importance, created_at) values ('קורס', 9, now() - interval '60 days') returning id")).id;
+    const ep2 = (await db.one(
+      "insert into endpoints (name, importance, created_at) values ('ייעוץ', 9, now() - interval '60 days') returning id")).id;
+    const ch = async (n, platform, active = true) => (await db.one(
+      'insert into channels (name, platform, max_per_week, active) values ($1,$2,7,$3) returning id',
+      [n, platform, active])).id;
+    const fb = await ch('פייסבוק', 'facebook');
+    const wa = await ch('וואטסאפ', 'whatsapp');
+    const nl = await ch('ניוזלטר', 'newsletter');
+    const off = await ch('כבוי', 'manual', false);
+    const ready = (await db.one(
+      "insert into content_items (endpoint_id, kind, title) values ($1, 'value', 'מוכן') returning id", [ep])).id;
+    return { ep, ep2, fb, wa, nl, off, ready };
+  });
+}
+
+test('2 — התראה מרוכזת אחת: מי נספר ומי לא; משימת היום מכסה; חלון האישור = אותה רשימה', { skip }, async () => {
+  await freshOrg('unconfirmed-test');
+  const day = 60 * 24;
+  const paused = await inOrg(async () => {
+    const ca = (await db.one(
+      `insert into campaigns (endpoint_id, name, starts_on, ends_on, paused_at)
+       values ($1, 'מושהה', current_date - 10, current_date + 5, now()) returning id`, [ids.ep])).id;
+    return (await db.one(
+      "insert into content_items (endpoint_id, kind, title, campaign_id) values ($1,'value','מ',$2) returning id",
+      [ids.ep, ca])).id;
+  });
+  const p = {
+    a: await post({ title: 'לפני יומיים', at: -2 * day }),
+    urgent: await post({ title: 'דחוף', channel: ids.wa, content: null, urgent: true, at: -40 * day }),
+    approved: await post({ title: 'מאושר', status: 'approved', at: -3 * day, channel: ids.wa }),
+    manualNoContent: await post({ title: 'ידני בלי תוכן', content: null, at: -4 * day, channel: ids.wa }),
+    old: await post({ title: 'לפני 100 יום', at: -100 * day }),
+    grace: await post({ title: 'לפני 10 דקות', at: -10, channel: ids.wa }),
+    nl: await post({ title: 'ניוזלטר', channel: ids.nl, at: -2 * day }),
+    off: await post({ title: 'ערוץ כבוי', channel: ids.off, at: -2 * day }),
+    paused: await post({ title: 'מושהה', content: paused, at: -2 * day, channel: ids.wa }),
+    hole: await post({ title: 'ממלא מקום', content: null, autoHole: true, at: -day, channel: ids.wa }),
+    pending: await post({ title: 'ממתין', status: 'pending_approval', at: -2 * day, channel: ids.wa }),
+    tasked: await post({ title: 'עם משימה', at: -90, channel: ids.wa, endpoint: ids.ep2 }),
+  };
+  const task = await q1(
+    `insert into tasks (title, kind, post_id, due_on, meta)
+     values ('לפרסם היום', 'publish', $1, current_date, '{"publish_day": true}') returning id`, [p.tasked]);
+
+  const expected = [p.urgent, p.manualNoContent, p.approved, p.a].sort((x, y) => x - y);
+  const { buildAlerts } = await import('../src/alerts.js');
+  let { alerts } = await inOrg(() => buildAlerts(null));
+  const agg = alerts.filter((a) => a.id === 'unconfirmed');
+  assert.equal(agg.length, 1);
+  assert.equal(agg[0].title, '4 פוסטים לא אושר שיצאו');
+  assert.ok(!alerts.some((a) => a.id.startsWith('post-missed-')));
+  // אותה רשימה בחלון
+  const list = await call('GET', '/posts/unconfirmed');
+  assert.deepEqual(list.json.posts.map((x) => x.id).sort((x, y) => x - y), expected);
+
+  // המשימה פגה — עכשיו גם הוא ברשימה
+  await inOrg(() => db.query('update tasks set done = true where id = $1', [task.id]));
+  ({ alerts } = await inOrg(() => buildAlerts(null)));
+  assert.equal(alerts.find((a) => a.id === 'unconfirmed').title, '5 פוסטים לא אושר שיצאו');
+
+  // משתמש בלי הרשאת תוכן לא רואה אותה (אין לו מה לעשות איתה)
+  const viewer = { is_owner: false, perm_content: false };
+  ({ alerts } = await inOrg(() => buildAlerts(viewer)));
+  assert.ok(!alerts.some((a) => a.id === 'unconfirmed'));
+});
+
+test('2 — "סמן שפורסמו": מרוכז, אותו כלל סטטוס, published_at = המועד, משימות נסגרות', { skip }, async () => {
+  const day = 60 * 24;
+  const a = await post({ title: 'מרוכז א', at: -2 * day, channel: ids.wa });
+  const b = await post({ title: 'מרוכז ב', at: -3 * day, channel: ids.wa, status: 'approved' });
+  const pend = await post({ title: 'ממתין לאישור', at: -2 * day, channel: ids.wa, status: 'pending_approval' });
+  await q1("insert into tasks (title, kind, post_id) values ('x', 'general', $1) returning id", [a]);
+
+  assert.equal((await call('POST', '/posts/publish-bulk', { ids: [] })).status, 400);
+  assert.equal((await call('POST', '/posts/publish-bulk', { ids: ['x'] })).status, 400);
+  currentUser = { id: null, is_owner: false, perm_content: false };
+  assert.equal((await call('POST', '/posts/publish-bulk', { ids: [a] })).status, 403);
+  currentUser = { id: null, name: 'בדיקה', is_owner: true };
+
+  const r = await call('POST', '/posts/publish-bulk', { ids: [a, b, pend, 99999999] });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(r.json, { marked: 2, skipped: 2 });
+  for (const id of [a, b]) {
+    const row = await q1('select status, published_at, scheduled_at from posts where id = $1', [id]);
+    assert.equal(row.status, 'published');
+    assert.equal(new Date(row.published_at).getTime(), new Date(row.scheduled_at).getTime());
+  }
+  assert.equal((await q1('select status from posts where id = $1', [pend])).status, 'pending_approval');
+  assert.equal((await q1('select count(*)::int as n from tasks where post_id = $1 and not done', [a])).n, 0);
+});
+
+test('2 — לא ידוע ≠ לא יצא: נקודה שהפוסט שלה לא סומן לא "לא מפרסמת", והוותק במנוע נמדד ממנו', { skip }, async () => {
+  const day = 60 * 24;
+  const ep = async (n) => (await q1(
+    "insert into endpoints (name, importance, created_at) values ($1, 9, now() - interval '60 days') returning id",
+    [n])).id;
+  const unmarked = await ep('לא סומן');   // פוסט אחד לפני 3 ימים שלא סומן
+  const offOnly = await ep('ערוץ כבוי');  // אותו פוסט, בערוץ מושבת — לא נספר
+  await post({ title: 'יצא ולא סומן', endpoint: unmarked, at: -3 * day, channel: ids.wa });
+  await post({ title: 'ערוץ מושבת', endpoint: offOnly, at: -3 * day, channel: ids.off });
+
+  const { buildAlerts } = await import('../src/alerts.js');
+  const { alerts } = await inOrg(() => buildAlerts(null));
+  assert.ok(!alerts.some((a) => a.id === `endpoint-air-${unmarked}`), 'לא סומן — נספר כאילו יצא');
+  assert.ok(alerts.some((a) => a.id === `endpoint-air-${offOnly}`), 'ערוץ מושבת — לא נספר');
+
+  const engine = await import('../src/engine.js');
+  const eps = await qa('select * from endpoints where id = any($1)', [[unmarked, offOnly]]);
+  const settings = await q1('select * from engine_settings limit 1');
+  const debts = await inOrg(() => engine.computeDebts(eps, settings, null));
+  const since = debts.parts(unmarked).daysSince;
+  assert.ok(since != null && Math.abs(since - 3) < 0.1, `daysSince=${since}`);
+  assert.equal(debts.parts(offOnly).daysSince, null);
+});

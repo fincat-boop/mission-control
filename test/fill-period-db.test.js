@@ -527,17 +527,16 @@ test('נקודה ותיקה שלא פורסמה: שווה לוותיקה ביו�
   await cleanup(a);
 });
 
-test('ותק: פוסט שנכשל או שהמועד שלו עבר ולא יצא לא נספר — הנקודה עדיין מחכה', { skip }, async () => {
+test('ותק: פוסט שנכשל לא נספר — הנקודה עדיין מחכה; פוסט שלא אושר שיצא נספר לפי המועד', { skip }, async () => {
   const week = weekMeta(inDays(7));
   const a = await fresh('רק נכשלו', { maxPerWeek: 1 });
   const b = await q1("insert into endpoints (name, importance) values ('פורסמה לפני 12 יום', 5) returning id");
   await items(a.ep, a.ch, 2, { prefix: 'א' });
   await items(b.id, a.ch, 2, { prefix: 'ב' });
-  // א: נכשל שלשום, ומתוכנן שהמועד שלו עבר אתמול ולא יצא. ב: פורסם לפני 12 יום (עד השבוע ≈ 16/12 ≈ 1.3)
+  // א: נכשל שלשום. ב: פורסם לפני 12 יום (עד השבוע ≈ 16/12 ≈ 1.3)
   await q(
     `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status) values
-       ($1, $2, 'נכשל', 'value', now() - interval '2 days', 'failed'),
-       ($1, $2, 'באיחור', 'value', now() - interval '1 day', 'scheduled')`, [a.ch, a.ep]);
+       ($1, $2, 'נכשל', 'value', now() - interval '2 days', 'failed')`, [a.ch, a.ep]);
   await q(
     `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, published_at, status)
      values ($1, $2, 'פורסם', 'value', now() - interval '12 days', now() - interval '12 days', 'published')`,
@@ -548,6 +547,22 @@ test('ותק: פוסט שנכשל או שהמועד שלו עבר ולא יצא 
   assert.equal(mine.length, 1);
   assert.equal(mine[0].endpoint_id, a.ep, `זכתה ${mine[0].endpoint_name} (${mine[0].reason})`);
   assert.match(mine[0].reason, /עוד לא פורסמה מעולם/);
+
+  // מתוכנן שהמועד שלו עבר אתמול ולא סומן — "לא אושר שיצא": לא ידוע ≠ לא יצא
+  // (סעיף 2 בשיפורי ההתנהגות; קודם הוא לא נספר, והנקודה נראתה רעבה)
+  await q(
+    `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status) values
+       ($1, $2, 'באיחור', 'value', now() - interval '1 day', 'scheduled')`, [a.ch, a.ep]);
+  const parts = await inOrg(async () => {
+    const eps = await db.rows('select * from endpoints where id = any($1::int[]) order by id', [[a.ep, b.id]]);
+    const settings = await db.one('select * from engine_settings limit 1');
+    const debts = await engine.computeDebts(eps, settings, null, week);
+    return { a: debts.parts(a.ep), b: debts.parts(b.id) };
+  });
+  assert.ok(parts.a.daysSince != null, 'הפוסט שלא סומן נספר');
+  assert.ok(Math.abs(parts.b.daysSince - parts.a.daysSince - 11) < 0.1,
+    `${parts.a.daysSince} / ${parts.b.daysSince}`);
+  assert.ok(parts.a.staleness < parts.b.staleness);
 
   await inOrg(async () => {
     await db.query('delete from posts where endpoint_id = $1', [b.id]);

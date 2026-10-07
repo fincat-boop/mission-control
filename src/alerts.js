@@ -6,6 +6,7 @@ import { postsOnBlockedDays } from './respace.js';
 import { suppressTaskedAlerts } from './task-lifecycle.js';
 import { backupAlerts, readBackupLayers } from './backup-status.js';
 import { mediaReady } from './media.js';
+import { UNCONFIRMED_SQL, unconfirmedAlert, unconfirmedPosts } from './unconfirmed.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -60,17 +61,9 @@ export async function buildAlerts(user = null) {
                              join campaigns ca on ca.id = ci.campaign_id
                             where ci.id = p.content_id and ca.paused_at is not null)
          order by p.scheduled_at`);
-  // המועד עבר ואף אחד לא פרסם/סימן. חצי שעה חסד — וואטסאפ נשלח ידנית,
-  // ופרסום אוטומטי עוד יכול להיות בדרך.
-  const missed = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
-          from posts p left join channels c on c.id = p.channel_id
-         where p.status in ('scheduled','approved') and p.published_at is null
-           and not exists (select 1 from content_items ci
-                             join campaigns ca on ca.id = ci.campaign_id
-                            where ci.id = p.content_id and ca.paused_at is not null)
-           and p.scheduled_at between now() - interval '7 days'
-                                  and now() - interval '30 minutes'
-         order by p.scheduled_at`);
+  // המועד עבר ואף אחד לא סימן שפורסם — "לא אושר שיצא" (unconfirmed.js).
+  // התראה מרוכזת אחת במקום התראה לכל פוסט, ובלי חיתוך של שבוע.
+  const unconfirmed = await unconfirmedPosts();
   // משימות פתוחות (שלא נדחו) שכבר מכסות התראה על אותו פוסט — suppressTaskedAlerts
   const openTasks = await rows(`select post_id, kind from tasks
          where not done and post_id is not null and kind in ('approve','write')
@@ -82,11 +75,10 @@ export async function buildAlerts(user = null) {
 
   alerts.push(...campaignAlerts(campaigns, today));
 
-  // חסר תוכן — התראה אחת לפוסט; פוסט בלי תוכן שהמועד שלו עבר מקבל אותה
-  // במקום "עבר המועד" (missedWithoutNoText)
-  const { noText, missed: missedShown } = missedWithoutNoText(
-    missingContentAlerts(withoutContent, { alertHours }), missed, openTasks);
-  alerts.push(...failedPostAlerts(failed), ...missedPostAlerts(missedShown));
+  // חסר תוכן — התראה אחת לפוסט. ממלא מקום של המנוע (auto_hole) שהמועד שלו
+  // עבר מקבל אותה, ולא נכנס ל"לא אושר שיצא" (UNCONFIRMED_SQL) — סימן אחד
+  const noText = missingContentAlerts(withoutContent, { alertHours });
+  alerts.push(...failedPostAlerts(failed), ...unconfirmedAlert(unconfirmed));
 
   for (const e of endpoints) {
     const cadence = effectiveCadenceDays(e);
@@ -383,19 +375,6 @@ export function failedPostAlerts(list) {
   }));
 }
 
-/** התראה לכל פוסט שהמועד שלו עבר והוא לא פורסם ולא סומן "פורסם" */
-export function missedPostAlerts(list) {
-  return list.map((p) => ({
-    id: `post-missed-${p.id}`,
-    level: 'warn',
-    title: `עבר המועד ולא פורסם: ${p.title}`,
-    detail: [p.channel_name, shortWhen(p.scheduled_at),
-             'מפרסמים ומסמנים "פורסם", או משבצים מחדש'].filter(Boolean).join(' · '),
-    tab: 'board',
-    post_id: p.id,
-  }));
-}
-
 /**
  * "חסר תוכן" — התראה אחת לכל פוסט מתוכנן בלי תוכן (שורות מהשאילתה ב-
  * buildAlerts). טהורה.
@@ -405,7 +384,7 @@ export function missedPostAlerts(list) {
  * עלתה, ו"חסר תוכן לפוסט שמתפרסם בקרוב" (content_alert_hours). עכשיו אחת,
  * עם id אחד (no-text-<post>), כך שמשימת "לכתוב" פתוחה על הפוסט מכסה אותה
  * (suppressTaskedAlerts — סימן אחד לכל פוסט):
- *   המועד עבר (עד יומיים)    — crit, במקום "עבר המועד ולא פורסם"
+ *   המועד עבר (עד יומיים)    — crit (ממלא מקום של המנוע לא נכנס ל"לא אושר שיצא")
  *   בתוך content_alert_hours — crit
  *   אחרת (auto_hole, עד שבוע) — warn
  */
@@ -446,19 +425,6 @@ export function missingContentAlerts(list, { alertHours = 48, now = new Date() }
 }
 
 /**
- * פוסט בלי תוכן שהמועד שלו עבר: "חסר תוכן" מחליף את "עבר המועד" — אבל רק
- * כשהיא באמת מוצגת. משימת "לכתוב" פתוחה מכסה את "חסר תוכן"
- * (suppressTaskedAlerts), ומשימה לא מכסה "עבר המועד" — אחרת פוסט שהמועד
- * שלו עבר היה נשאר בלי שום התראה. טהורה.
- * @returns {{noText:object[], missed:object[]}} מה שנשאר מכל אחת
- */
-export function missedWithoutNoText(noText, missed, openTasks = []) {
-  const shown = suppressTaskedAlerts(noText, openTasks);
-  const covered = new Set(shown.map((a) => a.post_id));
-  return { noText: shown, missed: missed.filter((p) => !covered.has(p.id)) };
-}
-
-/**
  * האם נקודת קצה עברה את הקצב שלה בלי פרסום. null = בסדר.
  * נקודה שעוד לא פורסם ממנה כלום נמדדת מיום שנוספה — אחרת נקודה חדשה
  * מקבלת "לא מפרסמת" חוסם בדקה הראשונה, לפני שהיה לה בכלל סיכוי.
@@ -471,13 +437,19 @@ export function endpointAirStatus(e, now = new Date()) {
   return { days_since: daysSince, days_over: daysRef };
 }
 
-/** נקודות קצה שעברו את הקצב שהוגדר להן בלי פרסום */
+/**
+ * נקודות קצה שעברו את הקצב שהוגדר להן בלי פרסום. "הפרסום האחרון" כולל גם
+ * פוסט שלא אושר שיצא (UNCONFIRMED_SQL, לפי המועד שלו): לא ידוע ≠ לא יצא
+ * (החלטה ה1 — הוא לא מסומן אוטומטית, אבל גם לא מפיל את הנקודה ל"לא מפרסמת").
+ */
 async function endpointsWithoutAir() {
   const list = await rows(
     `select e.id, e.name, e.importance, e.created_at,
-            max(p.published_at) as last_at
+            max(case when p.status = 'published' then p.published_at
+                     else p.scheduled_at end) as last_at
        from endpoints e
-       left join posts p on p.endpoint_id = e.id and p.status = 'published'
+       left join posts p on p.endpoint_id = e.id
+                        and (p.status = 'published' or ${UNCONFIRMED_SQL})
       where e.active = true
       group by e.id, e.name, e.importance, e.created_at`
   );

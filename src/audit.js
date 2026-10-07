@@ -98,6 +98,12 @@ function describe(req, payload, deletedName) {
     const [action, summary] = special[key];
     return { action, entity, entity_id: /^\d+$/.test(id ?? '') ? id : null, summary };
   }
+  // סימון מרוכז מחלון "לא אושר שיצא" — כמה פוסטים, מתוך התשובה
+  if (entity === 'posts' && id === 'publish-bulk') {
+    const n = payload?.marked ?? 0;
+    return { action: 'publish', entity, entity_id: null,
+      summary: n === 1 ? 'סימן פוסט אחד כפורסם (אישור מרוכז)' : `סימן ${n} פוסטים כפורסמו (אישור מרוכז)` };
+  }
   // שמירה מרוכזת מטבלת התוצאות (PUT /results) — כמה פוסטים, מתוך התשובה
   if (entity === 'results' && !id && req.method === 'PUT') {
     const n = (payload?.saved ?? 0) + (payload?.cleared ?? 0);

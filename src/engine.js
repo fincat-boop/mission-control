@@ -778,12 +778,16 @@ export function stalenessOf(lastAt, reference, endpoint, cap = 3) {
 
 /** חוב האוויר של כל נקודה לשבוע המתוכנן. מיוצא לבדיקות. */
 export async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {
-  // הפוסט האחרון של כל נקודה לפני נקודת הייחוס, משני סוגים:
+  // הפוסט האחרון של כל נקודה לפני נקודת הייחוס, משלושה סוגים:
   //  - מה שפורסם (מתי שפורסם), בכל זמן לפני הייחוס;
   //  - מה שעוד עתיד לצאת (מתוכנן/מאושר/ממתין/בפרסום, scheduled_at >= עכשיו)
   //    ולפני הייחוס — שבוע עתידי רואה מה כבר שובץ לפניו.
-  // לא נספרים: נכשל, ומה שהמועד שלו עבר ולא יצא — הם לא באמת עלו לאוויר,
-  // והנקודה עדיין מחכה. קודם נמדד מהיום לפי הפרסום האחרון בלבד, ושבוע
+  //  - מה שהמועד שלו עבר ולא סומן ("לא אושר שיצא" — UNCONFIRMED_SQL ב-
+  //    unconfirmed.js, משוכפל כאן): לפי המועד. לא ידוע ≠ לא יצא — כמעט הכול
+  //    מתפרסם ביד ולא מסומן, ובלי זה הנקודה נראתה רעבה והמנוע דחס אליה עוד.
+  //    החלטה ה1: הפוסט לא מסומן "פורסם" אוטומטית; הוא רק לא מפיל את הוותק.
+  // לא נספרים: נכשל, וממלא מקום של המנוע בלי תוכן (auto_hole) שעבר — הם לא
+  // באמת עלו לאוויר. קודם נמדד מהיום לפי הפרסום האחרון בלבד, ושבוע
   // עתידי התעלם ממה שכבר שובץ לפניו — בלאק פריידי קיבל 0/12 משבצות.
   // בשבוע הנוכחי (ייחוס = עכשיו) אין "עתיד לפני הייחוס", ולכן זה בדיוק
   // הפרסום האחרון, כמו קודם. שיבוץ של קמפיין מושהה לא נספר (לא על הלוח).
@@ -797,7 +801,13 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
         and ((p.status = 'published' and coalesce(p.published_at, p.scheduled_at) < $1)
           or (p.status = any($3::text[]) and p.published_at is null
               and p.scheduled_at >= $2 and p.scheduled_at < $1
-              and ca.paused_at is null))
+              and ca.paused_at is null)
+          or (p.status in ('scheduled', 'approved') and p.published_at is null
+              and p.scheduled_at < $2::timestamptz - interval '30 minutes' and p.scheduled_at < $1
+              and ca.paused_at is null
+              and (p.content_id is not null or p.urgent or not p.auto_hole)
+              and exists (select 1 from channels uc where uc.id = p.channel_id
+                             and uc.active and uc.platform <> 'newsletter')))
       group by p.endpoint_id`,
     [reference, now, UPCOMING_STATUSES]
   );

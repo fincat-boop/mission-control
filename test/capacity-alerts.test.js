@@ -1,7 +1,7 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generalGridFor, paceOf } from '../src/campaigns.js';
+import { generalGridFor, paceDone, paceOf } from '../src/campaigns.js';
 import { campaignAlerts } from '../src/alerts.js';
 
 /**
@@ -46,4 +46,25 @@ test('paceOf — היעד הוא הנדרש ברשת, כלומר הקיבולת 
   assert.match(a.detail, /לפי המקום שיש לקמפיין בערוצים היו אמורים לצאת עד היום 2 פוסטים, יצאו 1/);
   // אין מקום בכלל (רשת 0) — אין קצב לפגר אחריו
   assert.equal(paceOf(c, '2030-01-15', 0, { total_cells: 0 }), null);
+});
+
+test('paceDone — מה שפורסם ומה שלא אושר שיצא נספרים "יצאו"; ניוזלטר/ערוץ מושבת/חסד/נכשל — לא', () => {
+  const now = new Date('2030-01-15T12:00:00Z');
+  const ago = (min) => new Date(now.getTime() - min * 60000).toISOString();
+  const channels = new Map([
+    [1, { id: 1, active: true, platform: 'facebook' }],
+    [2, { id: 2, active: true, platform: 'newsletter' }],
+    [3, { id: 3, active: false, platform: 'manual' }],
+  ]);
+  const posts = [
+    { status: 'published', channel_id: 1, scheduled_at: ago(60 * 48) },
+    { status: 'scheduled', channel_id: 1, scheduled_at: ago(60 * 24) },  // לא אושר שיצא
+    { status: 'approved', channel_id: 1, scheduled_at: ago(60) },        // לא אושר שיצא
+    { status: 'scheduled', channel_id: 1, scheduled_at: ago(10) },       // חצי שעה חסד
+    { status: 'scheduled', channel_id: 2, scheduled_at: ago(60 * 24) },  // ניוזלטר
+    { status: 'scheduled', channel_id: 3, scheduled_at: ago(60 * 24) },  // ערוץ מושבת
+    { status: 'failed', channel_id: 1, scheduled_at: ago(60 * 24) },
+    { status: 'pending_approval', channel_id: 1, scheduled_at: ago(60 * 24) },
+  ];
+  assert.equal(paceDone(posts, channels, now), 3);
 });

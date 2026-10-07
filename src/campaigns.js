@@ -877,7 +877,7 @@ export async function campaignsWithHealth() {
       status: statusOf({ c, today, grid, myChannels, ahead, noRoom, unplaced: room.unplaced }),
       // למה אין לקמפיין משבצות (null = יש) — המסך מסביר את זה במקום "אין תאריכים"
       no_room_reason: noRoom,
-      pace: paceOf(c, today, published, grid),
+      pace: paceOf(c, today, paceDone(myPosts, channelById), grid),
       content: shaped,
       grid: grid.angles,
       // זוויות שאין להן מקום ברשת (מעבר לתכנון / כפולות) — מוצגות מתחת לה
@@ -952,6 +952,24 @@ function baseStatus({ c, today, grid, myChannels, ahead, noRoom }) {
     return { key: 'full_ahead', label: 'מלא מהיום והלאה', tone: 'good' };
   }
   return { key: 'full', label: `מלא — ${grid.ready}/${grid.total_cells}`, tone: 'good' };
+}
+
+/**
+ * כמה מהפוסטים של הקמפיין נספרים "יצאו" לקצב: מה שפורסם, וגם מה שלא אושר
+ * שיצא — מתוכנן/מאושר שהמועד שלו עבר לפני יותר מחצי שעה, בערוץ פעיל שאינו
+ * ניוזלטר (UNCONFIRMED_SQL ב-unconfirmed.js). לא ידוע ≠ לא יצא: כמעט הכול
+ * מתפרסם ביד ולא מסומן (החלטה ה1 — לא מסמנים אוטומטית, רק לא מפילים את הקצב).
+ * channelById — הערוצים לפי מזהה (active, platform).
+ */
+export function paceDone(myPosts, channelById, now = new Date()) {
+  const cutoff = now.getTime() - 30 * 60000;
+  return myPosts.filter((p) => {
+    if (p.status === 'published') return true;
+    if (!['scheduled', 'approved'].includes(p.status) || p.published_at) return false;
+    const ch = channelById.get(p.channel_id);
+    return !!ch?.active && ch.platform !== 'newsletter' &&
+      new Date(p.scheduled_at).getTime() < cutoff;
+  }).length;
 }
 
 /**

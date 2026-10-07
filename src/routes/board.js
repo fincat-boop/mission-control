@@ -14,6 +14,7 @@ import { assetView } from '../media.js';
 import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
 import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
+import { unconfirmedPosts } from '../unconfirmed.js';
 
 /** פוסט שתופס את היום שלו על הלוח — אותם מצבים כמו במנוע (LIVE ב-gap.js) */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
@@ -572,6 +573,53 @@ r.post('/posts/:id/publish', requirePerm('content'), wrap(async (req, res) => {
     ...post, channel_name: ch?.name, platform: ch?.platform,
   });
   res.json({ post });
+}));
+
+/** כמה פוסטים אפשר לסמן בבת אחת (כמו BULK_MAX של המשימות) */
+export const PUBLISH_BULK_MAX = 200;
+
+/** רשימת מזהים לסימון מרוכז: 1–200 מספרים שלמים חיוביים. { ids } או { error } */
+export function parsePostIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return { error: 'לא נבחרו פוסטים' };
+  if (ids.length > PUBLISH_BULK_MAX) return { error: `אפשר לסמן עד ${PUBLISH_BULK_MAX} פוסטים בבת אחת` };
+  const ok = ids.every((v) => /^\d+$/.test(String(v)) && Number(v) > 0 && Number(v) <= 2147483647);
+  if (!ok) return { error: 'רשימת הפוסטים לא תקינה' };
+  return { ids: [...new Set(ids.map(Number))] };
+}
+
+/** "לא אושר שיצא" — השורות של חלון האישור (אותה רשימה שההתראה סופרת) */
+r.get('/posts/unconfirmed', wrap(async (_req, res) => {
+  res.json({ posts: await unconfirmedPosts() });
+}));
+
+/**
+ * "סמן שפורסמו" מחלון האישור: אותו כלל כמו סימון בודד (MARKABLE_STATUSES,
+ * published_at = המועד כשהוא עבר) בפקודה אחת. מה שכבר לא במצב שמותר לסמן
+ * (סומן בינתיים, נמחק, ממתין לאישור) — מדולג ונספר ב-skipped.
+ */
+r.post('/posts/publish-bulk', requirePerm('content'), wrap(async (req, res) => {
+  const parsed = parsePostIds(req.body?.ids);
+  if (parsed.error) return bad(res, parsed.error);
+  const posts = await rows(
+    `update posts p set status = 'published', published_at = ${MARK_PUBLISHED_AT_SQL}
+      where p.id = any($1::int[]) and p.status = any($2) returning *`,
+    [parsed.ids, MARKABLE_STATUSES]
+  );
+  if (posts.length) {
+    const marked = posts.map((p) => p.id);
+    await query(
+      'update tasks set done = true, done_at = now() where post_id = any($1::int[]) and done = false',
+      [marked]);
+    // אירוע ל-HUB לכל פוסט — כמו בסימון בודד, אבל בלי לחכות: עשרות קריאות
+    // ברצף היו מחזיקות את הבקשה (ואת הטרנזקציה) פתוחה. לא זורק לעולם.
+    const chans = new Map((await rows('select id, name, platform from channels where id = any($1::int[])',
+      [[...new Set(posts.map((p) => p.channel_id))]])).map((c) => [c.id, c]));
+    for (const post of posts) {
+      const ch = chans.get(post.channel_id);
+      void emitPostEvent('post_published', { ...post, channel_name: ch?.name, platform: ch?.platform });
+    }
+  }
+  res.json({ marked: posts.length, skipped: parsed.ids.length - posts.length });
 }));
 
 /** ביטול "פורסם" — חוזר למתוכנן, למקרה שסימנו בטעות */
