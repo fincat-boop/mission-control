@@ -726,7 +726,7 @@ async function titleFromContent(item, sentBody) {
   if (!String(body).trim()) {
     const v = await one(
       `select v.body from content_variants v join channels ch on ch.id = v.channel_id
-        where v.content_id = $1 and btrim(v.body) <> ''
+        where v.content_id = $1 and btrim(v.body) <> '' and ch.platform <> 'newsletter'
           and ($2::int is null or v.channel_id = $2)
         order by ch.sort_order, ch.id limit 1`, [item.id, item.slot_channel_id]);
     body = v?.body ?? item.body ?? '';

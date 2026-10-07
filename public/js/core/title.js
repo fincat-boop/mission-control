@@ -17,8 +17,10 @@ export const TITLE_MAX = 60;
 export function firstLineTitle(text, max = TITLE_MAX) {
   const line = String(text ?? '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim())
     .find(Boolean) ?? '';
-  if (line.length <= max) return line;
-  const cut = line.slice(0, max);
+  // לפי תווים (code points), לא יחידות UTF-16 — אמוג'י לא נחתך לחצי
+  const chars = Array.from(line);
+  if (chars.length <= max) return line;
+  const cut = chars.slice(0, max).join('');
   const space = cut.lastIndexOf(' ');
   return `${(space >= max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

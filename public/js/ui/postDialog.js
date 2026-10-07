@@ -723,7 +723,7 @@ export async function openPostPreview(postId) {
     ? `<div class="pvmeta" style="margin-top:10px">✉️ נושא: <b>${esc(vMeta.subject)}</b></div>` : '';
   // ניוזלטר: התצוגה מה-HUB במקום הטקסט הגולמי, ושורות המצב מול ה-HUB
   const nlInput = post.platform === 'newsletter' && variant
-    ? previewInput({ subject: vMeta.subject, body: variant.body, title: post.title,
+    ? previewInput({ subject: vMeta.subject, body: variant.body, title: post.post_title ?? post.title,
         scheduledAt: post.scheduled_at, templateId: vMeta.template_id, fieldValues: vMeta.field_values })
     : null;
   const nlNotes = newsletterPostNotes(post);

@@ -352,7 +352,8 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
 
   // ניוזלטר שהועבר ל-HUB: האם השתנה משהו בלוח מאז (השינוי לא יגיע לשם)
   if (p.platform === 'newsletter') {
-    p.hub_stale = hubStale({ post: p, variant });
+    // הטביעה בהעברה חושבה מ-posts.title (מה שה-runner שולח), לא מכותרת התוכן שמוצגת
+    p.hub_stale = hubStale({ post: { ...p, title: p.post_title ?? p.title }, variant });
     p.hub_unverified = hubUnverified(p);
   }
 

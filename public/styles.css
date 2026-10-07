@@ -534,6 +534,7 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 /* מתג (טיוטה ↔ מוכן לפרסום): checkbox עם role=switch, הטקסט אומר את המצב הנוכחי */
 .tswitch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px;
   color: var(--ink-2); user-select: none; white-space: nowrap; }
+.tswitch[hidden] { display: none; }
 .tswitch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .tswitch .tr { position: relative; width: 32px; height: 18px; border-radius: 9px; flex: none;
   background: var(--border); transition: background .15s; }
