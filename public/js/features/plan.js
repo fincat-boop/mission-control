@@ -1163,7 +1163,20 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     extras = pickExtras(baseMeta);
     $('#vextras').innerHTML = extrasHtml({ platform, meta: extras, files: slotAssets });
     $('#gen___meta').value = extrasKey(extras);
+    addLinkRow();
     paintNote();
+  };
+  /** "קשר לערוץ אחר" — שורה אחרונה בתוך "אפשרויות נוספות" (פוסט קיים שיש לאן לקשר) */
+  const addLinkRow = () => {
+    const list = $('#vextras .vx-list');
+    if (!list || !item || !linkTargets(campaign, item).length) return;
+    list.insertAdjacentHTML('beforeend', `<div class="vx vx-act">
+      <span class="vx-l">קישור לערוץ אחר</span>
+      <span class="vx-sum">אותו תוכן גם בערוץ נוסף</span>
+      <button type="button" class="btn small" id="genLinkOne">קשר לערוץ אחר</button></div>`);
+    $('#genLinkOne').addEventListener('click', run(async () => {
+      if (await closeGeneric()) openLinkOne(campaign, saved ?? item, reload);
+    }));
   };
 
   /* ---------- שמירה אוטומטית (כל ערוץ חוץ מניוזלטר) ----------
@@ -1181,10 +1194,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   // המאזינים על #genBody (שנשאר בין פתיחות) — מוסרים בסגירה
   const ac = new AbortController();
   const readyEl = () => $('#slotReady');
-  const paintToggle = () => {
-    const on = readyEl().checked;
-    $('#slotReadyL').textContent = on ? 'מוכן לפרסום' : 'טיוטה';
-  };
   const values = () => {
     const val = genValues();
     return { title: (val.title ?? '').trim(), kind: val.kind, body: val.body ?? '',
@@ -1266,7 +1275,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           $('#gen_body').value = cur?.body ?? '';
           readyEl().checked = cur?.status === 'ready';
           readyNow = readyEl().checked;
-          paintToggle();
           base = cur?.updated_at ?? null;
           resetExtras(cur?.meta);
           lastKey = keyOf(values());
@@ -1280,7 +1288,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
       // "מוכן" שנדחה (חסר משהו לערוץ) — חוזרים לטיוטה ושומרים את השאר
       if (e.status === 400 && wantReady && !readyNow) {
         readyEl().checked = false;
-        paintToggle();
         note = `נשאר טיוטה — ${e.message}`;
         again = true;
         return;
@@ -1307,7 +1314,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
       } catch (e) {
         if (wantReady) {
           readyEl().checked = false;
-          paintToggle();
         }
         unsaved = true;
         genState(`לא נשמר — ${e.message}`, 'err');
@@ -1320,7 +1326,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     readyNow = (last.variant?.status ?? (wantReady ? 'ready' : 'draft')) === 'ready';
     if (readyEl().checked !== readyNow) {
       readyEl().checked = readyNow;
-      paintToggle();
     }
     lastKey = keyOf({ ...p, status: readyNow ? 'ready' : 'draft' });
     unsaved = keyOf(values()) !== lastKey || pickedFiles().length > 0;
@@ -1368,10 +1373,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   openGeneric({
     guardDirty: mail ? true : () => unsaved,
     autosave: !mail,
-    head: mail ? '' : `<label class="tswitch" data-tt="פוסט מוכן נכנס ללוח; טיוטה מחכה">
+    head: mail ? '' : `<label class="tswitch" data-tt="כבוי = טיוטה">
       <input type="checkbox" role="switch" id="slotReady"${readyNow ? ' checked' : ''}>
-      <span class="tr" aria-hidden="true"></span><span class="tl" id="slotReadyL">${
-        readyNow ? 'מוכן לפרסום' : 'טיוטה'}</span></label>`,
+      <span class="tr" aria-hidden="true"></span><span class="tl">מוכן לפרסום</span></label>`,
     beforeClose: mail ? undefined : async () => {
       if (timer || saving || unsaved) await saveNow();
     },
@@ -1401,8 +1405,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     ],
     extraActions: (item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
-      : '') + (item && !mail && linkTargets(campaign, item).length
-      ? '<button class="btn" id="genLinkOne">קשר לערוץ אחר</button>' : ''),
+      : ''),
     // ניוזלטר בלבד — בשאר הערוצים אין כפתור שמירה, הכול נשמר לבד
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
@@ -1452,14 +1455,10 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
         $('#genBody').addEventListener('change', (e) => {
           if (e.target.matches('#gen_kind, #gen___files')) schedule(0);
         }, { signal: ac.signal });
-        readyEl().addEventListener('change', () => {
-          paintToggle();
-          schedule(0);
-        });
+        // התווית קבועה ("מוכן לפרסום") — טקסט שמתחלף היה מזיז את המתג
+        readyEl().addEventListener('change', () => schedule(0));
       }
-      $('#genLinkOne')?.addEventListener('click', run(async () => {
-        if (await closeGeneric()) openLinkOne(campaign, saved ?? item, reload);
-      }));
+      if (!mail) addLinkRow();
       $('#genDelete')?.addEventListener('click', run(async () => {
         const names = partners.map(slotLabel).join(', ');
         const question = !partners.length ? 'למחוק את הפוסט הזה?'
