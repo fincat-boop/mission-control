@@ -138,8 +138,19 @@ table.grid.wboard { table-layout: fixed; }
 .pst.auto > i { background: var(--st-good); }
 /* בלי תוכן — מסגרת מקווקוות: משבצת שמחכה */
 .post.missing { outline: 1.5px dashed color-mix(in srgb, var(--on, #fff) 70%, transparent); outline-offset: -4px; }
-/* פורסם — הכרטיס נשאר, דהוי; המצב אומר "פורסם" */
-.post.published { opacity: .5; }
+/* פורסם — הכרטיס נשאר, דהוי, ודגל "פורסם" גדול באלכסון מעליו (מחוץ לדהייה).
+   inset:0 + margin:auto ממרכז בדיוק, בלי תלות בכיוון RTL */
+.post.published { overflow: hidden; }
+.post.published .published-inner { opacity: .45; }
+.post.published .pub-stamp {
+  position: absolute; inset: 0; margin: auto;
+  width: fit-content; height: fit-content;
+  transform: rotate(-10deg);
+  font-size: 14px; font-weight: 800; letter-spacing: .04em; white-space: nowrap;
+  color: #fff; border: 2px solid #fff; border-radius: 6px;
+  padding: 2px 9px; background: var(--st-good);
+  box-shadow: 0 0 12px 3px rgba(52,199,89,.85), 0 2px 4px rgba(0,0,0,.4);
+}
 .post.failed { outline: 2px solid var(--st-crit); outline-offset: -1px; }
 
 /* יש תוכן בטיוטה שעוד לא אושר לאף ערוץ — פחות דחוף מ"אין תוכן בכלל" */

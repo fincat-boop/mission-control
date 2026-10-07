@@ -369,10 +369,22 @@ function postCard(p) {
   const missing = p.status === 'hole' || (!p.content_id && p.status !== 'published');
   const cls = ['post', p.status === 'published' && 'published', missing && 'missing',
     p.status === 'failed' && 'failed'].filter(Boolean).join(' ');
-  return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}"
-    style="--ep:${epColor(p.endpoint_id)};--on:${inkOn(epColor(p.endpoint_id))}">
+  const lines = `
     <span class="pep">${p.urgent ? '⚡ ' : ''}${esc(p.endpoint_name ?? '')}</span>
-    <div class="meta"><i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>${esc(p.time ?? '')}${who}</div>
+    <div class="meta"><i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>${esc(p.time ?? '')}${who}</div>`;
+  const style = `--ep:${epColor(p.endpoint_id)};--on:${inkOn(epColor(p.endpoint_id))}`;
+  // פורסם: הכרטיס נשאר (צבע, נקודה, שעה), דהוי — ודגל "פורסם" גדול באלכסון
+  // מעליו, מחוץ לדהייה. שורת המצב רק כשחסרות תוצאות (ריקה — אותו גובה)
+  if (p.status === 'published') {
+    return `<div class="${cls}" ${clickable} data-tt="${esc(p.has_results ? tip : `אין תוצאות עדיין · ${tip}`)}"
+      style="${style}">
+      <div class="published-inner">${lines}
+        ${p.has_results ? '<div class="pst"></div>' : '<div class="pst"><span class="h">אין תוצאות עדיין</span></div>'}
+      </div>
+      <span class="pub-stamp">✓ פורסם</span>
+    </div>`;
+  }
+  return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}" style="${style}">${lines}
     ${statusLine(tag)}
   </div>`;
 }
