@@ -1,4 +1,4 @@
-import { currentOrg, one, query, rows } from '../db.js';
+import { currentOrg, one, query, rows, withOrg } from '../db.js';
 import { isPlatformOrg } from '../platform.js';
 import { decryptSecret } from './crypto.js';
 import { postFirstComment, publishFacebook, publishInstagram } from './meta.js';
@@ -21,7 +21,8 @@ import { contentBlocker, coverAsset, isStory, postMedia } from './readiness.js';
  * publishTick רץ כל דקה (server.js), לכל ארגון בנפרד:
  *   פוסט בסטטוס approved שהגיע זמנו → publishing → קריאת API → published.
  *   כשל → failed + משימה דחופה. שום דבר לא נעלם בשקט — הכול נרשם
- *   ב-publish_log וביומן הפעולות.
+ *   ב-publish_log וביומן הפעולות. כל שלב בטרנזקציה קצרה משלו, ואף אחת
+ *   לא פתוחה בזמן הקריאה לפלטפורמה (publishOne).
  *
  * וואטסאפ (קבוצה) — אין API רשמי, ולכן חצי-אוטומטי: כשמגיע הזמן נוצרת
  * משימה דחופה עם הטקסט המוכן, והמשתמש שולח ומסמן "פורסם" בעצמו.
@@ -40,8 +41,11 @@ export const STUCK_NEWSLETTER_CAP_HOURS = 72; // ניוזלטר שה-HUB עוד 
 
 export const TOO_LATE_ERROR =
   'המועד עבר מזמן — הפרסום לא בוצע כדי לא להפתיע. משבצים מחדש או מפרסמים ידנית.';
+// גם פוסט שעלה ושמירת התוצאה שלו נכשלה (publishOne) נגמר כאן — ולכן
+// "ייתכן שכבר עלה" ובדיקה בעמוד לפני כל פרסום חוזר
 export const STUCK_SOCIAL_ERROR =
-  'הפרסום נקטע באמצע — בודקים בעמוד אם הפוסט עלה, ואז מסמנים פורסם או מפרסמים שוב';
+  'הפרסום נקטע באמצע וייתכן שהפוסט כבר עלה — בודקים בעמוד לפני שמפרסמים שוב: ' +
+  'אם הוא שם מסמנים "פורסם", ורק אם לא — מפרסמים שוב';
 export const STUCK_NEWSLETTER_ERROR =
   'ה-HUB לא ענה על הניוזלטר יממה אחרי המועד — בודקים ב-HUB מה קרה לקמפיין, ואז מסמנים פורסם או מעבירים שוב';
 export const STUCK_NEWSLETTER_CAP_ERROR =
@@ -62,10 +66,9 @@ export const emitPostEvent = (type, post, extra = {}, opts = {}) =>
   emitHubEventSafe(postEventInput(type, post, { ...opts, extra }));
 
 /**
- * כתיבה "על הדרך" בתוך טרנזקציית הטיק. catch רגיל לא מספיק: שגיאת SQL
- * מבטלת את כל הטרנזקציה, ואז גם הפרסום שאחריה נכשל, וה-commit מגלגל
- * אחורה פוסטים שכבר יצאו (והם יוצאים שוב בטיק הבא). savepoint תוחם את
- * הכישלון לכתיבה הזו בלבד.
+ * כתיבה "על הדרך" בתוך טרנזקציה (שלב בטיק, בקשה). catch רגיל לא מספיק:
+ * שגיאת SQL מבטלת את כל הטרנזקציה, ואז גם הכתיבות שאחריה נכשלות וה-commit
+ * מתגלגל אחורה (db.js זורק על זה). savepoint תוחם את הכישלון לכתיבה הזו בלבד.
  */
 export async function bestEffort(label, fn) {
   await query('savepoint best_effort');
@@ -150,7 +153,9 @@ async function loadPostBrief(postId) {
  * האיפוס לא יהפוך אותה ל"סיבה שלא זיהינו".
  * @returns {Promise<{ok:false, error:string}|null>} null = הפוסט כבר לא היה בסטטוס המותר
  */
-export async function failPost(post, err, { title, from = null, notify = true, internal = false } = {}) {
+export async function failPost(post, err, {
+  title, from = null, notify = true, internal = false, deferNotify = false,
+} = {}) {
   const raw = typeof err === 'string' ? err : err?.message ?? String(err);
   const { message, who } = internal
     ? { message: raw, who: 'owner' }
@@ -163,12 +168,17 @@ export async function failPost(post, err, { title, from = null, notify = true, i
 
   const attempt = await logPublish(post, false, { error: raw });
   await logActivity('publish_failed', post, `${title}: "${post.title}" — ${message}`);
+  // deferNotify — האירוע חוזר לקורא (notify) והוא שולח אותו אחרי ה-commit:
+  // שלא יצא אירוע על כשל שהתגלגל אחורה, ושה-HUB לא יחזיק טרנזקציה פתוחה
+  let event = null;
   if (notify) {
-    await emitPostEvent('post_publish_failed', post, { error: message, who },
-      { attempt: attempt ?? Date.now(), email: await ownerEmail() });
+    const args = ['post_publish_failed', post, { error: message, who },
+      { attempt: attempt ?? Date.now(), email: await ownerEmail() }];
+    if (deferNotify) event = () => emitPostEvent(...args);
+    else await emitPostEvent(...args);
   }
   await recordFailedTask(post, title, message, who);
-  return { ok: false, error: message };
+  return { ok: false, error: message, ...(event ? { notify: event } : {}) };
 }
 
 /** הפוסט + הערוץ + החיבור + הגרסה + הקבצים — כל מה שצריך לפרסום אחד */
@@ -306,149 +316,293 @@ async function recordCommentFailed(post, comment, err) {
 }
 
 /**
- * פרסום פוסט אחד, מקצה לקצה. allowedFrom קובע מאילו סטטוסים מותר
- * לתפוס אותו (הטיק תופס רק approved; "פרסם עכשיו" גם scheduled/failed).
- * @returns {{ok: boolean, post?: object, error?: string}}
+ * תפיסת פוסט לפרסום — UPDATE מותנה, אטומי: רק מי שהעביר ל-publishing
+ * ממשיך, בלי פרסום כפול. publishing_started_at — לזיהוי פרסום שנתקע
+ * באמצע (failStuckPublishing).
+ * $3 (dueOnly, הטיק) — בודקים שוב, ברגע התפיסה, את כל מה שהכניס את הפוסט
+ * לרשימת הטיק: הזמן הגיע, המתג של הארגון דולק, הערוץ פעיל ובפרסום
+ * אוטומטי, הקמפיין לא מושהה. פוסט שהוזז קדימה, הושהה או שהערוץ שלו כובה
+ * בזמן שהטיק עבר על הרשימה — לא יוצא.
  */
-export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
-  // תפיסה אטומית: רק מי שהצליח להעביר ל-publishing ממשיך — בלי פרסום כפול
-  // publishing_started_at — לזיהוי פרסום שנתקע באמצע (failStuckPublishing)
-  const claimed = await one(
-    `update posts set status = 'publishing', publishing_started_at = now()
-      where id = $1 and status = any($2) returning id`,
-    [postId, allowedFrom]
-  );
-  if (!claimed) return { ok: false, error: 'הפוסט לא במצב שמאפשר פרסום' };
+const CLAIM_SQL =
+  `update posts p set status = 'publishing', publishing_started_at = now()
+    where p.id = $1 and p.status = any($2)
+      and (not $3::boolean or (
+            p.scheduled_at <= now()
+        and exists (select 1 from engine_settings s where s.autopublish_enabled)
+        and exists (select 1 from channels c
+                      join channel_connections cc on cc.channel_id = c.id
+                     where c.id = p.channel_id and c.active and cc.auto_enabled)
+        and not exists (select 1 from content_items ci
+                          join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)))
+    returning p.id`;
 
-  const fail = async (post, error) => {
-    if (post) {
-      return (await failPost(post, error, { title: `פרסום אוטומטי נכשל — ${post.channel_name}` })) ??
-        { ok: false, error: friendlyPublishError(error, { platform: post.platform }).message };
-    }
-    // בלי פרטי הפוסט (השליפה עצמה נכשלה) — רק הסטטוס, אין למי לשייך משימה
-    const { message } = friendlyPublishError(error);
-    await query(`update posts set status = 'failed', publish_error = $2 where id = $1`, [postId, message]);
-    return { ok: false, error: message };
-  };
+/** הפוסט עלה, אבל שמירת התוצאה נכשלה פעמיים — לעולם לא מפרסמים שוב לבד */
+export const PUBLISHED_UNSAVED_ERROR =
+  'הפוסט נשלח לפלטפורמה, אבל שמירת התוצאה במערכת נכשלה — לא מפרסמים שוב. ' +
+  'בודקים בעמוד, ואם הוא שם מסמנים "פורסם"';
 
-  let payload;
+/**
+ * כתיבת התוצאה של פוסט שכבר נתפס (published / failed) — טרנזקציה קצרה
+ * משלה, וניסיון חוזר אחד. נכשל פעמיים — זורק: הפוסט נשאר publishing,
+ * ו-failStuckPublishing סוגר אותו אחרי STUCK_SOCIAL_MINUTES עם "ייתכן
+ * שכבר עלה". fn כותב למסד בלבד (אירועים — אחרי ה-commit), ולכן בטוח לחזור.
+ */
+async function recordOutcome(orgId, fn) {
   try {
-    payload = await loadPayload(postId);
+    return await withOrg(orgId, fn);
   } catch (e) {
-    return fail(null, `שליפת נתוני הפוסט נכשלה: ${e.message}`);
-  }
-  if (!payload) return fail(null, 'הפוסט נעלם');
-
-  const { post, variant, assets } = payload;
-  const blocker = publishBlocker(payload);
-  if (blocker) return fail(post, blocker);
-
-  const media = postMedia({ variant, assets });
-  const text = variant.body?.trim() ?? '';
-  const options = publishOptions({ platform: post.platform, variant, media });
-
-  try {
-    let result;
-    if (post.platform === 'newsletter') {
-      // ניוזלטר לא נוצר ב-HUB מכאן לעולם — רק "העבר ל-HUB" (transferNewsletter)
-      // יוצר, ושם בעל העסק מאשר. פוסט שהגיע לכאן לא הועבר: כשל עם הסבר.
-      return (await failPost(post, NOT_TRANSFERRED_ERROR, {
-        title: `ניוזלטר לא הועבר ל-HUB — ${post.channel_name}`, internal: true,
-      })) ?? { ok: false, error: NOT_TRANSFERRED_ERROR };
-    } else if (post.platform === 'facebook') {
-      const token = decryptToken(post);
-      if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
-      result = await publishFacebook({
-        pageId: post.page_id, token, message: text, assets: facebookAssets(media),
-        link: options.link, altText: options.altText,
-      });
-    } else {
-      // אינסטגרם מושך מ-URL ציבורי — ראו publishInstagramPost
-      const token = decryptToken(post);
-      if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
-      result = await publishInstagramPost({ post, token, text, media, options,
-                                            cover: coverAsset({ variant, assets }) });
-    }
-
-    const updated = await one(
-      `update posts set status = 'published', published_at = now(),
-              external_id = $2, external_url = $3, publish_error = null
-        where id = $1 returning *`,
-      [post.id, result.id, result.url]
-    );
-    await query(
-      `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
-      [post.id]);
-    await logPublish(post, true, { externalId: result.id });
-    // תגובה ראשונה — רק עכשיו, כשהפוסט כבר רשום "פורסם"
-    if (options.comment && result.commentTarget) {
-      const err = await postFirstComment(result.commentTarget, decryptToken(post), options.comment);
-      if (err) await recordCommentFailed(post, options.comment, err);
-    }
-    await logActivity('publish', post, `פורסם אוטומטית — "${post.title}" ל${post.channel_name}`);
-    await emitPostEvent('post_published', post,
-      { external_id: result.id, ...(result.url ? { external_url: result.url } : {}) });
-    console.log(`פורסם אוטומטית: פוסט #${post.id} ("${post.title}") ל${post.channel_name}`);
-    return { ok: true, post: updated };
-  } catch (e) {
-    // השגיאה עצמה (עם code/status) — friendlyPublishError מתרגם לפיה
-    return fail(post, e);
+    console.error('שמירת תוצאת הפרסום נכשלה — מנסים שוב:', e.message);
+    return withOrg(orgId, fn);
   }
 }
 
-/** הטיק לארגון אחד: מפרסם את מה שאושר והגיע זמנו, ומכין משימות וואטסאפ */
-export async function publishTickForOrg() {
+/**
+ * כשל של פוסט שכבר נתפס (publishing) → failed, בטרנזקציה משלו; האירוע ל-HUB
+ * אחרי ה-commit. post=null — השליפה עצמה נכשלה: רק הסטטוס, אין למי לשייך
+ * משימה. גם השמירה הזו נכשלה — הפוסט נשאר publishing עד שיזוהה כתקוע
+ * (לא חוזר ל-approved ולא מתפרסם שוב לבד).
+ */
+async function failClaimed(orgId, postId, post, error, opts = {}) {
+  const fallback = () => (opts.internal ? String(error)
+    : friendlyPublishError(error, { platform: post?.platform }).message);
+  let out;
+  try {
+    out = await recordOutcome(orgId, async () => {
+      if (!post) {
+        const { message } = friendlyPublishError(error);
+        await query(`update posts set status = 'failed', publish_error = $2
+                      where id = $1 and status = 'publishing'`, [postId, message]);
+        return { ok: false, error: message };
+      }
+      return (await failPost(post, error, {
+        title: `פרסום אוטומטי נכשל — ${post.channel_name}`, from: ['publishing'],
+        deferNotify: true, ...opts,
+      })) ?? { ok: false, error: fallback() };
+    });
+  } catch (e) {
+    console.error(`סימון פוסט #${postId} כנכשל לא נשמר — נשאר publishing עד שיזוהה כתקוע:`, e.message);
+    return { ok: false, error: fallback() };
+  }
+  await out.notify?.();
+  return { ok: false, error: out.error };
+}
+
+/**
+ * שלב ההכנה, בטרנזקציה קצרה: הפוסט, הגרסה והקבצים, מה חוסם, והטוקן.
+ * מחזיר את כל מה שהקריאה ל-Graph צריכה — או { post, error, failOpts }.
+ */
+async function preparePublish(postId) {
+  const payload = await loadPayload(postId);
+  if (!payload) return { post: null, error: 'הפוסט נעלם' };
+
+  const { post, variant, assets } = payload;
+  const blocker = publishBlocker(payload);
+  if (blocker) return { post, error: blocker };
+  if (post.platform === 'newsletter') {
+    // ניוזלטר לא נוצר ב-HUB מכאן לעולם — רק "העבר ל-HUB" (transferNewsletter)
+    // יוצר, ושם בעל העסק מאשר. פוסט שהגיע לכאן לא הועבר: כשל עם הסבר.
+    return { post, error: NOT_TRANSFERRED_ERROR,
+             failOpts: { title: `ניוזלטר לא הועבר ל-HUB — ${post.channel_name}`, internal: true } };
+  }
+  const token = decryptToken(post);
+  if (!token) return { post, error: 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ' };
+
+  const media = postMedia({ variant, assets });
+  return {
+    post, token, media,
+    text: variant.body?.trim() ?? '',
+    options: publishOptions({ platform: post.platform, variant, media }),
+    cover: post.platform === 'instagram' ? coverAsset({ variant, assets }) : null,
+  };
+}
+
+/** הקריאה לפלטפורמה — בלי טרנזקציה פתוחה (יכולה לקחת דקות בוידאו לאינסטגרם) */
+function sendToPlatform({ post, token, text, media, options, cover }) {
+  if (post.platform === 'facebook') {
+    return publishFacebook({
+      pageId: post.page_id, token, message: text, assets: facebookAssets(media),
+      link: options.link, altText: options.altText,
+    });
+  }
+  // אינסטגרם מושך מ-URL ציבורי — ראו publishInstagramPost
+  return publishInstagramPost({ post, token, text, media, options, cover });
+}
+
+/** שמירת ההצלחה: published + סגירת משימות + publish_log + יומן — טרנזקציה אחת */
+async function markPublished(post, result) {
+  const updated = await one(
+    `update posts set status = 'published', published_at = now(),
+            external_id = $2, external_url = $3, publish_error = null
+      where id = $1 returning *`,
+    [post.id, result.id, result.url]
+  );
+  if (!updated) return null; // השורה נעלמה — אין מה לשמור עליה
+  await query(
+    `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
+    [post.id]);
+  await logPublish(post, true, { externalId: result.id });
+  await logActivity('publish', post, `פורסם אוטומטית — "${post.title}" ל${post.channel_name}`);
+  return updated;
+}
+
+/**
+ * פרסום פוסט אחד, מקצה לקצה, בשלבים — אף טרנזקציה לא פתוחה בזמן הקריאה
+ * לפלטפורמה:
+ *   1. תפיסה (approved → publishing), טרנזקציה קצרה שנשמרת מיד.
+ *   2. הכנה — שליפה, חוסמים, טוקן — טרנזקציה קצרה.
+ *   3. הקריאה ל-Graph, בלי טרנזקציה.
+ *   4. התוצאה (published / failed + משימות + publish_log + יומן) —
+ *      טרנזקציה קצרה, עם ניסיון חוזר אחד (recordOutcome).
+ *   5. אחרי ה-commit: התגובה הראשונה (צריכה את המזהה החיצוני; כשל שלה
+ *      נרשם בטרנזקציה משלו) והאירוע ל-HUB (עם הגבלת זמן, hub-events.js).
+ * קודם הכול רץ בטרנזקציה אחת של הטיק: שגיאת SQL אחרי קריאה ל-Graph ביטלה
+ * אותה, ה-commit התגלגל אחורה, וכל מה שיצא באותו טיק חזר ל-approved ויצא
+ * שוב בדקה הבאה. פוסט שהתפיסה שלו נשמרה לא חוזר לפרסום לבד לעולם: כשל
+ * בכל שלב = failed, ושמירה שנכשלה = נשאר publishing עד failStuckPublishing.
+ *
+ * כל שלב ב-withOrg משלו (RLS של הארגון) — גם כשנקרא מתוך בקשה ("פרסם
+ * עכשיו"): לא תלוי בטרנזקציית הבקשה ולא בחיבור שלה. ולכן אסור לקרוא לה
+ * כשהטרנזקציה של הקורא מחזיקה נעילה על שורת הפוסט (ראו withOrg).
+ *
+ * allowedFrom קובע מאילו סטטוסים מותר לתפוס (הטיק — רק approved; "פרסם
+ * עכשיו" גם scheduled/failed). dueOnly — הטיק: התפיסה בודקת שוב שהפוסט
+ * עדיין אמור לצאת עכשיו (CLAIM_SQL). orgId — ברירת מחדל: הארגון של ההקשר.
+ * @returns {{ok: boolean, post?: object, error?: string}}
+ */
+export async function publishOne(postId,
+  { allowedFrom = ['approved'], dueOnly = false, orgId = currentOrg() } = {}) {
+  if (orgId == null) throw new Error('publishOne רץ רק בהקשר של ארגון');
+
+  const claimed = await withOrg(orgId, () => one(CLAIM_SQL, [postId, allowedFrom, dueOnly]));
+  if (!claimed) return { ok: false, error: 'הפוסט לא במצב שמאפשר פרסום' };
+
+  let prep;
+  try {
+    prep = await withOrg(orgId, () => preparePublish(postId));
+  } catch (e) {
+    prep = { post: null, error: `שליפת נתוני הפוסט נכשלה: ${e.message}` };
+  }
+  if (prep.error) return failClaimed(orgId, postId, prep.post, prep.error, prep.failOpts);
+
+  const { post, token, options } = prep;
+  let result;
+  try {
+    result = await sendToPlatform(prep);
+  } catch (e) {
+    // השגיאה עצמה (עם code/status) — friendlyPublishError מתרגם לפיה
+    return failClaimed(orgId, postId, post, e);
+  }
+
+  let updated;
+  try {
+    updated = await recordOutcome(orgId, () => markPublished(post, result));
+  } catch (e) {
+    console.error(`חמור: פוסט #${post.id} ("${post.title}") עלה ל${post.channel_name} ` +
+      `(מזהה ${result.id}${result.url ? `, ${result.url}` : ''}) — אבל שמירת התוצאה נכשלה פעמיים. ` +
+      'הוא נשאר publishing ויסומן כתקוע; לא לפרסם שוב:', e);
+    return { ok: false, error: PUBLISHED_UNSAVED_ERROR };
+  }
+  if (!updated) {
+    console.error(`חמור: פוסט #${post.id} עלה (מזהה ${result.id}) אבל השורה שלו כבר לא במסד`);
+  }
+
+  // תגובה ראשונה — רק עכשיו, כשהפוסט כבר רשום "פורסם"
+  if (options.comment && result.commentTarget) {
+    const err = await postFirstComment(result.commentTarget, token, options.comment);
+    if (err) {
+      await withOrg(orgId, () => recordCommentFailed(post, options.comment, err))
+        .catch((e) => console.error(`רישום כשל התגובה לפוסט #${post.id} נכשל:`, e.message));
+    }
+  }
+  await emitPostEvent('post_published', post,
+    { external_id: result.id, ...(result.url ? { external_url: result.url } : {}) });
+  console.log(`פורסם אוטומטית: פוסט #${post.id} ("${post.title}") ל${post.channel_name}`);
+  return { ok: true, post: updated };
+}
+
+/**
+ * שלב בטיק — טרנזקציה קצרה משלו. כשל נרשם בלוג ולא עוצר את שאר הטיק
+ * (ובפרט לא מגלגל אחורה פוסטים שכבר יצאו). מחזיר undefined בכשל.
+ */
+async function tickStep(orgId, label, fn) {
+  try {
+    return await withOrg(orgId, fn);
+  } catch (e) {
+    console.error(label, e.message);
+    return undefined;
+  }
+}
+
+/** פוסט שאושר ופוספס ביותר מ-MAX_LATE_HOURS — נכשל, בטרנזקציה משלו */
+async function failTooLate(orgId, id) {
+  // אותו מסלול כשל כמו כל השאר: משימה, publish_log, יומן ואירוע ל-HUB
+  const out = await tickStep(orgId, `סימון פוסט #${id} שאיחר כנכשל נכשל:`, async () => {
+    const post = await loadPostBrief(id);
+    return post ? failPost(post, TOO_LATE_ERROR, {
+      title: `פרסום אוטומטי לא בוצע — ${post.channel_name}`, from: ['approved'], internal: true,
+      deferNotify: true,
+    }) : null;
+  });
+  await out?.notify?.();
+}
+
+/**
+ * הטיק לארגון אחד: מפרסם את מה שאושר והגיע זמנו, ומכין משימות וואטסאפ.
+ * בלי טרנזקציה אחת לכל הטיק — כל שלב (ובפרסום: כל שלב של כל פוסט) רץ
+ * ב-withOrg קצר משלו, כך שכשל באחד לא מבטל את מה שכבר נשמר באחרים.
+ */
+export async function publishTickForOrg(orgId = currentOrg()) {
+  if (orgId == null) throw new Error('publishTickForOrg רץ רק בהקשר של ארגון');
+
   // סגירת ניוזלטרים שכבר נשלחו ל-HUB רצה גם כשמתג-העל כבוי — היא משלימה
   // פעולה שכבר אושרה ויצאה, לא מתחילה חדשה.
-  const hubState = (await bestEffort('בדיקת סטטוס ניוזלטרים נכשלה:', pollNewsletterOutcomes)) ??
-    new Map();
+  const hubState = (await tickStep(orgId, 'בדיקת סטטוס ניוזלטרים נכשלה:',
+    () => pollNewsletterOutcomes())) ?? new Map();
 
   // פרסום שנתקע ב-publishing (תהליך שנפל באמצע, ניוזלטר שה-HUB לא סגר) —
   // גם כשהמתג כבוי: זה פוסט שכבר יצא לדרך, לא פרסום חדש. לניוזלטר — לפי
   // מה שה-HUB ענה בבדיקה של הטיק הזה (hubState)
-  await bestEffort('סגירת פרסומים תקועים נכשלה:', () => failStuckPublishing(new Date(), hubState));
+  await tickStep(orgId, 'סגירת פרסומים תקועים נכשלה:',
+    () => failStuckPublishing(new Date(), hubState));
 
   // וואטסאפ נשלח ידנית — המשימה שלו לא תלויה במתג הפרסום האוטומטי
-  await bestEffort('הכנת משימות וואטסאפ נכשלה:', whatsappPrep);
+  await whatsappPrep(orgId);
 
   // ניוזלטר שהגיע מועדו ולא הועבר ל-HUB — משימה, לא שליחה (וגם לא תלוי
   // במתג: שום דבר לא יוצא מכאן)
-  await bestEffort('בדיקת ניוזלטרים שלא הועברו נכשלה:', newsletterNotTransferred);
-
-  const settings = await one('select autopublish_enabled from engine_settings limit 1');
-  if (!settings?.autopublish_enabled) return;
+  await tickStep(orgId, 'בדיקת ניוזלטרים שלא הועברו נכשלה:', newsletterNotTransferred);
 
   // פוסטים שאושרו והגיע זמנם. איחור גדול מדי לא מתפרסם — נכשל עם הסבר.
   // קמפיין מושהה לא יוצא — גם פוסט שאושר לפני ההשהיה (הלוח כבר מסתיר אותו).
   // ניוזלטר לא כאן: הוא לא נשלח מהטיק (newsletterNotTransferred / transferNewsletter).
-  const due = await rows(
-    `select p.id, p.scheduled_at < now() - ($1 || ' hours')::interval as too_late
-       from posts p
-       join channels c on c.id = p.channel_id and c.active
-       left join channel_connections cc on cc.channel_id = c.id
-      where p.status = 'approved' and p.scheduled_at <= now()
-        and cc.auto_enabled = true and c.platform <> 'newsletter'
-        and not exists (select 1 from content_items ci
-                          join campaigns ca on ca.id = ci.campaign_id
-                         where ci.id = p.content_id and ca.paused_at is not null)
-      order by p.scheduled_at`,
-    [MAX_LATE_HOURS]
-  );
+  // התפיסה של כל פוסט בודקת את כל זה שוב (CLAIM_SQL) — הרשימה יכולה להתיישן.
+  const due = (await tickStep(orgId, 'שליפת הפוסטים שהגיע זמנם נכשלה:', async () => {
+    const settings = await one('select autopublish_enabled from engine_settings limit 1');
+    if (!settings?.autopublish_enabled) return [];
+    return rows(
+      `select p.id, p.scheduled_at < now() - ($1 || ' hours')::interval as too_late
+         from posts p
+         join channels c on c.id = p.channel_id and c.active
+         left join channel_connections cc on cc.channel_id = c.id
+        where p.status = 'approved' and p.scheduled_at <= now()
+          and cc.auto_enabled = true and c.platform <> 'newsletter'
+          and not exists (select 1 from content_items ci
+                            join campaigns ca on ca.id = ci.campaign_id
+                           where ci.id = p.content_id and ca.paused_at is not null)
+        order by p.scheduled_at`,
+      [MAX_LATE_HOURS]
+    );
+  })) ?? [];
 
   for (const { id, too_late } of due) {
     if (too_late) {
-      // אותו מסלול כשל כמו כל השאר: משימה, publish_log, יומן ואירוע ל-HUB
-      await bestEffort(`סימון פוסט #${id} שאיחר כנכשל נכשל:`, async () => {
-        const post = await loadPostBrief(id);
-        if (post) {
-          await failPost(post, TOO_LATE_ERROR, {
-            title: `פרסום אוטומטי לא בוצע — ${post.channel_name}`, from: ['approved'], internal: true,
-          });
-        }
-      });
+      await failTooLate(orgId, id);
       continue;
     }
-    await publishOne(id).catch((e) => console.error(`פרסום פוסט #${id} נכשל:`, e.message));
+    await publishOne(id, { orgId, dueOnly: true })
+      .catch((e) => console.error(`פרסום פוסט #${id} נכשל:`, e.message));
   }
 }
 
@@ -587,8 +741,9 @@ export function waTaskAction({ ready, task_id, task_done, task_ready }) {
  * כך שתיקון בגרסה אחרי יצירת המשימה מגיע גם לכפתור.
  * due_on — התאריך המקומי של המועד, לא UTC (פוסט ב-01:00 שייך ליום שלו).
  */
-async function whatsappPrep() {
-  const due = await rows(
+async function whatsappPrep(orgId) {
+  // הרשימה בטרנזקציה קצרה, וכל משימה בטרנזקציה משלה — כשל באחת לא מבטל את האחרות
+  const due = (await tickStep(orgId, 'הכנת משימות וואטסאפ נכשלה:', () => rows(
     `select p.id, p.title, p.endpoint_id, p.assignee_id,
             (p.scheduled_at at time zone 'Asia/Jerusalem')::date as due_on,
             coalesce(v.status = 'ready', false) as ready, v.body,
@@ -610,32 +765,38 @@ async function whatsappPrep() {
         and p.scheduled_at between now() - interval '24 hours'
                                and now() + ($1 || ' minutes')::interval`,
     [WA_AHEAD_MINUTES]
-  );
+  ))) ?? [];
 
   for (const p of due) {
     const action = waTaskAction(p);
+    if (!action) continue;
     const subtitle = p.ready ? WA_SUB_READY : WA_SUB_NOT_READY;
-    if (action === 'insert') {
-      await query(
-        `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
-         values ($1,$2,'publish',$3,$4,true,$5,$6,$7)`,
-        [`לשלוח בוואטסאפ: ${p.title}`, subtitle, p.id, p.endpoint_id, p.due_on,
-         JSON.stringify({
-           wa_send: true, wa_ready: p.ready, body: p.ready ? p.body : null,
-           // האחראי של הפוסט שולח — פעם אחת (task-lifecycle.js autoAssignee)
-           ...(p.assignee_id ? { assignee_auto: true } : {}),
-         }),
-         p.assignee_id ?? null]
-      );
-      console.log(`נוצרה משימת וואטסאפ לפוסט #${p.id} ("${p.title}")${p.ready ? '' : ' — הטקסט עוד לא מוכן'}`);
-    } else if (action === 'update') {
-      await query(
-        `update tasks set subtitle = $2,
-                meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('wa_ready', $3::boolean)
-          where id = $1 and done = false`,
-        [p.task_id, subtitle, p.ready]
-      );
-    }
+    await tickStep(orgId, `משימת וואטסאפ לפוסט #${p.id} נכשלה:`, () => writeWaTask(p, action, subtitle));
+  }
+}
+
+/** כתיבת משימת הוואטסאפ של פוסט אחד לפי waTaskAction (insert / update) */
+async function writeWaTask(p, action, subtitle) {
+  if (action === 'insert') {
+    await query(
+      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
+       values ($1,$2,'publish',$3,$4,true,$5,$6,$7)`,
+      [`לשלוח בוואטסאפ: ${p.title}`, subtitle, p.id, p.endpoint_id, p.due_on,
+       JSON.stringify({
+         wa_send: true, wa_ready: p.ready, body: p.ready ? p.body : null,
+         // האחראי של הפוסט שולח — פעם אחת (task-lifecycle.js autoAssignee)
+         ...(p.assignee_id ? { assignee_auto: true } : {}),
+       }),
+       p.assignee_id ?? null]
+    );
+    console.log(`נוצרה משימת וואטסאפ לפוסט #${p.id} ("${p.title}")${p.ready ? '' : ' — הטקסט עוד לא מוכן'}`);
+  } else if (action === 'update') {
+    await query(
+      `update tasks set subtitle = $2,
+              meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('wa_ready', $3::boolean)
+        where id = $1 and done = false`,
+      [p.task_id, subtitle, p.ready]
+    );
   }
 }
 

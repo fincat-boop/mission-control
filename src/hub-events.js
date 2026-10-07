@@ -18,6 +18,12 @@ export const hubEventsReady = () => !!(process.env.HUB_API_URL && process.env.HU
 const base = () => String(process.env.HUB_API_URL ?? '').replace(/\/+$/, '');
 
 /**
+ * כמה מחכים ל-HUB לכל היותר. אירוע נשלח גם מטיק הפרסום — HUB שנתקע בלי
+ * לענות לא יעכב את שאר הפוסטים (וגם לא יחזיק בקשה פתוחה).
+ */
+export const HUB_EVENT_TIMEOUT_MS = 10000;
+
+/**
  * שולח אירוע. זורק על כשל — לזרימות שבהן הקורא רוצה לדעת.
  * @param {{id:string, type:string, occurredAt?:string|Date, email?:string,
  *          data?:Record<string,unknown>}} input
@@ -41,6 +47,7 @@ export async function emitHubEvent(input, fetchImpl = fetch) {
       ...(email ? { email: String(email) } : {}),
       ...(data ? { data } : {}),
     }),
+    signal: AbortSignal.timeout(HUB_EVENT_TIMEOUT_MS),
   });
   let body = null;
   try { body = await res.json(); } catch { /* לא-JSON — נטופל לפי הסטטוס */ }
