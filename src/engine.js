@@ -61,7 +61,10 @@ export async function planWeek(anchorDate, {
   // לבחור אותה נקודה — אחרת המפתחות שהמשתמש סימן לא יימצאו בהצעה הטרייה
   const endpoints = await rows('select * from endpoints where active = true order by id');
   // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
-  // תוכן של קמפיין מושהה לא נכנס לתכנון.
+  // תוכן של קמפיין מושהה או לא פעיל (active = false) לא נכנס לתכנון — כמו
+  // הקיבולת (capacity.js) ומילוי התקופה (campaignFillWeeks), שכבר מדלגים
+  // על קמפיין לא פעיל. פוסטים שכבר על הלוח לקמפיין כזה נשארים (existing
+  // למטה סופר אותם) — המנוע רק לא מוסיף.
   //
   // ready_channel_ids — רק גרסה שסומנה "מוכן". eligible_channel_ids — גם
   // טיוטה: השיבוץ הולך לפי האסטרטגיה, לא לפי אם כבר נכתב טקסט סופי.
@@ -87,7 +90,7 @@ export async function planWeek(anchorDate, {
           from content_items ci
           left join content_variants v on v.content_id = ci.id
           left join campaigns ca on ca.id = ci.campaign_id
-         where (ca.id is null or ca.paused_at is null)
+         where (ca.id is null or (ca.active and ca.paused_at is null))
            -- משבצת של קמפיין כללי שהמדיה שלה הוסרה מהקמפיין: נשמרת, לא משובצת
            and (ci.slot_channel_id is null or exists (
                  select 1 from campaign_channels cc
@@ -485,7 +488,7 @@ export async function recordDismissals(list, { weeks = [] } = {}) {
 
 /**
  * תוכן שאפשר לשייך לפוסט בערוץ channelId: יש לו ניסוח לערוץ (מוכן או
- * טיוטה), הקמפיין שלו לא מושהה, והתאריך (אם נתון) בתוך חלון הקמפיין.
+ * טיוטה), הקמפיין שלו פעיל ולא מושהה, והתאריך (אם נתון) בתוך חלון הקמפיין.
  * endpointId null = מכל נקודות הקצה (פוסט שעוד אין לו נקודה).
  * מוכן קודם; בתוך כל קבוצה — מה שעוד לא שובץ בערוץ הזה, ואז הוותיק.
  */

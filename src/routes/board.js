@@ -435,7 +435,7 @@ r.get('/posts/candidates', wrap(async (req, res) => {
 /**
  * שיוך תוכן לפוסט שאין לו תוכן ("חסר תוכן"). אותם כללים כמו המנוע: ניסוח
  * לערוץ הזה, אותה נקודת קצה (תוכן תמיד שייך לנקודה — ראו content_items),
- * קמפיין לא מושהה ותאריך בתוך החלון שלו. משימות "לכתוב"/"החלפה" נסגרות.
+ * קמפיין פעיל ולא מושהה ותאריך בתוך החלון שלו. משימות "לכתוב"/"החלפה" נסגרות.
  */
 r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res) => {
   const contentId = Number(req.body?.content_id);
@@ -460,7 +460,8 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
 
   const c = await one(
     `select ci.id, ci.title, ci.kind, ci.endpoint_id, ${candidateColumnsSql()},
-            ca.name as campaign_name, ca.paused_at, ca.starts_on, ca.ends_on,
+            ca.name as campaign_name, ca.paused_at, ca.active as campaign_active,
+            ca.starts_on, ca.ends_on,
             v.status as variant_status,
             (select active from endpoints where id = ci.endpoint_id) as endpoint_active,
             ci.slot_channel_id is null or exists (
@@ -490,6 +491,8 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
   }
   if (c.campaign_id) {
     if (c.paused_at) return bad(res, `הקמפיין "${c.campaign_name}" מושהה`, 409);
+    // קמפיין לא פעיל — כמו מושהה לשיבוץ (candidateFilterSql): הרשימה לא מציעה אותו
+    if (!c.campaign_active) return bad(res, `הקמפיין "${c.campaign_name}" לא פעיל`, 409);
     const day = post.local_date;
     if ((c.starts_on && c.starts_on > day) || (c.ends_on && c.ends_on < day)) {
       return bad(res, `הפוסט מחוץ לתאריכי הקמפיין "${c.campaign_name}"` +
