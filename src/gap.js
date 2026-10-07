@@ -12,10 +12,13 @@
 import { one } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import { effectiveGap } from './capacity.js';
-import { LINK_LIVE_STATUSES } from './engine.js';
+import { LINK_LIVE_STATUSES, takesRoom, takesRoomSql } from './engine.js';
 
 const LIVE = "('scheduled','approved','publishing','failed','published','pending_approval')";
 const LIVE_LIST = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
+// מהחיים — רק מה שתופס מקום: נכשל שהמועד שלו עבר לא עלה לאוויר (takesRoom,
+// כמו במנוע), ולכן לא נספר במרווח ובמכסות
+const ROOM = takesRoomSql('p');
 
 /**
  * ברירת המחדל הכללית למרווח — engine_settings.min_gap_days (ברירת מחדל 7).
@@ -70,7 +73,7 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
             abs(p.scheduled_at::date - $3::date) as days
        from posts p join channels c on c.id = p.channel_id
       where p.endpoint_id = $1 and p.channel_id = $2
-        and p.status in ${LIVE}
+        and p.status in ${LIVE} and ${ROOM}
         and ($4::int is null or p.id <> $4)
         and abs(p.scheduled_at::date - $3::date) between 1 and $5
       order by days, p.scheduled_at
@@ -176,7 +179,7 @@ const KIND_CAP = { promo: 'max_promo_per_week', value: 'max_value_per_week',
  * פוסט ידני שחורג מהמכסות שהמנוע מכבד: פוסטים בשבוע בערוץ (max_per_week —
  * התקרה, כולל השטח ששמור לדחופים), תקרה לסוג בערוץ (max_*_per_week) ומכירתי
  * ליום בכל הערוצים (max_promo_per_day). השבוע — ראשון עד שבת, כמו בלוח.
- * נספרים הפוסטים החיים (LIVE), בלי הפוסט עצמו (excludePostId).
+ * נספרים הפוסטים החיים שתופסים מקום (LIVE + takesRoom), בלי הפוסט עצמו (excludePostId).
  *
  * פוסט שזז בתוך אותה משבצת (אותו ערוץ ושבוע / אותו סוג / אותו יום) כבר היה
  * נספר בה — ואז אין אזהרה, גם אם המשבצת כבר מעל המכסה (אושרה קודם). אחרת
@@ -199,7 +202,7 @@ export async function capWarning({ channelId, when, kind, excludePostId = null }
   const cur = excludePostId
     ? await one('select channel_id, kind, status, scheduled_at from posts where id = $1', [excludePostId])
     : null;
-  const curLive = cur && LIVE_LIST.includes(cur.status);
+  const curLive = cur && LIVE_LIST.includes(cur.status) && takesRoom(cur);
   const curAt = curLive ? new Date(cur.scheduled_at) : null;
   const sameWeek = curLive && cur.channel_id === Number(channelId) && curAt >= from && curAt <= to;
 
@@ -210,7 +213,7 @@ export async function capWarning({ channelId, when, kind, excludePostId = null }
        from posts p
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
-      where p.channel_id = $1 and p.status = any($4)
+      where p.channel_id = $1 and p.status = any($4) and ${ROOM}
         and (ca.paused_at is null or p.status = 'published')
         and p.scheduled_at >= $2 and p.scheduled_at <= $3
         and ($6::int is null or p.id <> $6)`,
@@ -235,7 +238,7 @@ export async function capWarning({ channelId, when, kind, excludePostId = null }
          from posts p
          left join content_items ci on ci.id = p.content_id
          left join campaigns ca     on ca.id = ci.campaign_id
-        where p.kind = 'promo' and p.status = any($2)
+        where p.kind = 'promo' and p.status = any($2) and ${ROOM}
           and (ca.paused_at is null or p.status = 'published')
           and (p.scheduled_at at time zone 'Asia/Jerusalem')::date
             = ($1::timestamptz at time zone 'Asia/Jerusalem')::date

@@ -1,6 +1,7 @@
 import { one, rows } from './db.js';
 import { weekStart, ymd } from './board.js';
 import { gapWarning } from './gap.js';
+import { takesRoomSql } from './engine.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const DEFAULT_TIME = '10:00';
@@ -76,12 +77,14 @@ export async function planUrgent(input) {
     return { ok: false, errors: ['הערוצים שנבחרו לא פעילים'], placements: [], warnings: [], displaced: [] };
   }
 
-  // כל מה שכבר משובץ בטווח הרלוונטי, כולל שבוע אחורה כדי לספור קיבולת שבועית נכון
+  // כל מה שכבר משובץ בטווח הרלוונטי, כולל שבוע אחורה כדי לספור קיבולת שבועית נכון.
+  // נכשל שהמועד שלו עבר לא עלה לאוויר ולא תופס מקום (takesRoom, כמו במנוע)
   const countFrom = weekStart(today);
   const existing = await rows(
     `select id, channel_id, endpoint_id, kind, scheduled_at
-       from posts
+       from posts p
       where status in ('scheduled','approved','publishing','failed','published','pending_approval')
+        and ${takesRoomSql('p')}
         and scheduled_at >= $1 and scheduled_at <= $2`,
     [countFrom, lastDay]
   );

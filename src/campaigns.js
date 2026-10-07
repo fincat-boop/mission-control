@@ -684,6 +684,12 @@ export function missingAhead(rows, today, days = null) {
 const HAS_POST = ['scheduled', 'approved', 'publishing', 'published', 'pending_approval', 'failed'];
 /** פוסט שעוד יוצא, או יצא — תופס מקום בקיבולת של החלון שבו הוא יושב */
 const TAKES_ROOM = ['scheduled', 'approved', 'publishing', 'published', 'pending_approval'];
+/**
+ * תופס מקום בקיבולת — אותו כלל כמו במנוע (takesRoom ב-engine.js): נכשל
+ * שהמועד שלו עבר לא תופס, נכשל שהמועד שלו עוד לפניו (נדיר) — תופס.
+ */
+const takesRoomNow = (p, now) => TAKES_ROOM.includes(p.status) ||
+  (p.status === 'failed' && new Date(p.scheduled_at) > now);
 
 /** הגרסה של פריט לערוץ, כשהיא מועמדת לשיבוץ (מוכן או טיוטה — המנוע משבץ גם טיוטה) */
 const variantFor = (it, ch, statuses) => {
@@ -713,7 +719,7 @@ const variantFor = (it, ch, statuses) => {
  *            {without:number, free:number, unplaced:number}>}}
  */
 export function unplacedOf(c, items, myChannels, myPosts, concurrent = [],
-                           { gapDays = 7, today = ymd(new Date()) } = {}) {
+                           { gapDays = 7, now = new Date(), today = ymd(now) } = {}) {
   const out = { unplaced: 0, waiting: 0, by_channel: {} };
   if (!c.starts_on || !c.ends_on) return out;
   const from = c.starts_on > today ? c.starts_on : today;
@@ -727,7 +733,7 @@ export function unplacedOf(c, items, myChannels, myPosts, concurrent = [],
   for (const ch of myChannels) {
     const without = items.filter((it) => variantFor(it, ch, ['ready', 'draft']) &&
       !posted.has(`${it.id}:${ch.id}`)).length;
-    const taken = myPosts.filter((p) => p.channel_id === ch.id && TAKES_ROOM.includes(p.status) &&
+    const taken = myPosts.filter((p) => p.channel_id === ch.id && takesRoomNow(p, now) &&
       ymd(new Date(p.scheduled_at)) >= from).length;
     // ערוץ לא פעיל או נקודת קצה לא פעילה — המנוע לא משבץ שם בכלל
     const room = ch.active === false || c.endpoint_active === false

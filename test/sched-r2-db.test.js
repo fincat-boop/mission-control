@@ -89,3 +89,32 @@ test('קמפיין לא פעיל — התוכן שלו לא משובץ ולא מ
     assert.ok(list.some((c) => c.id === id));
   });
 });
+
+/* ========================= פוסט שנכשל ========================= */
+
+/** פוסט על הלוח של הנקודה בערוץ */
+const post = (x, contentId, at, status) => inOrg(() => db.query(
+  `insert into posts (channel_id, endpoint_id, content_id, kind, title, status, scheduled_at)
+   values ($1, $2, $3, 'value', 'פוסט', $4, $5)`, [x.ch, x.ep, contentId, status, at]));
+
+for (const [status, expectPlaced] of [['failed', true], ['scheduled', false], ['published', false]]) {
+  test(`פוסט ${status} ביום שני שעבר, max_per_week=1 — ${expectPlaced ? 'משבצת נוספת באותו שבוע' : 'אין מקום'}`,
+    { skip }, async () => {
+      const x = await fresh(`נכשל ${status}`, { maxPerWeek: 1 });
+      const a = await item(x, `זווית א ${status}`);
+      const b = await item(x, `זווית ב ${status}`);
+      await post(x, a, '2031-06-16T10:00:00', status);   // שני
+      await inOrg(async () => {
+        const now = new Date('2031-06-18T08:00:00');      // רביעי בבוקר
+        const plan = await engine.planWeek('2031-06-15', { holes: false, now });
+        const got = mine(plan, x);
+        if (!expectPlaced) {
+          assert.deepEqual(got, []);
+          return;
+        }
+        // התוכן של הפוסט שנכשל לא משובץ שוב לבד — המשבצת הולכת לתוכן אחר
+        assert.deepEqual(got.map((p) => p.content_id), [b]);
+        assert.ok(new Date(got[0].scheduled_at) > now);
+      });
+    });
+}

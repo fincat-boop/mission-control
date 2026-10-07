@@ -101,7 +101,7 @@ export async function planWeek(anchorDate, {
   // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
   // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
   // שכבר קרתה, בדיוק כמו ב-board.js.
-  const existing = await rows(
+  const onBoard = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status,
             p.title, p.published_at, p.auto_hole
        from posts p
@@ -112,6 +112,10 @@ export async function planWeek(anchorDate, {
         and (ca.paused_at is null or p.status = 'published')`,
     [from, to]
   );
+  // מה שתופס מקום — קיבולת, אותו יום, חורים, מילוי מרוסן. פוסט שנכשל ושהמועד
+  // שלו עבר לא עלה לאוויר ולא תופס (takesRoom); התוכן שלו נשאר חסום לשבוע
+  // (usedContent למטה, מכל onBoard)
+  const existing = onBoard.filter((p) => takesRoom(p, now));
   const campaigns = await rows('select * from campaigns where active = true and paused_at is null');
   // תוכן שהמשתמש הוריד מהשבוע הזה (מחיקת פוסט / ביטול מילוי) — לא חוזר
   const dismissals = await rows('select content_id, channel_id from engine_dismissals where week_start = $1', [week.start]);
@@ -137,7 +141,7 @@ export async function planWeek(anchorDate, {
     { projectedPromoCap: onlyCampaignId != null });
 
   // תוכן שכבר משובץ השבוע — או שהמשתמש הוריד מהשבוע — לא יוצע שוב לאותו ערוץ
-  const usedContent = blockedContent(existing, dismissals);
+  const usedContent = blockedContent(onBoard, dismissals);
 
   // ההיסטוריה המלאה של כל פריט תוכן בכל ערוץ — בלעדיה תוכן חד-פעמי היה
   // חוזר לאוויר בכל שבוע שבו הוא לא במקרה משובץ
@@ -146,7 +150,7 @@ export async function planWeek(anchorDate, {
   // כל הפוסטים החיים של כל נקודה בכל ערוץ סביב השבוע — לבדיקת המרווח מול
   // השכן הקרוב לשני הכיוונים (ראו contentGap / nearestDays), גם בשיוך תוכן
   // לפוסטים חסרי תוכן וגם בשיבוץ חדש
-  const pairDates = await postDatesPerEndpointChannel(from, to, settings);
+  const pairDates = await postDatesPerEndpointChannel(from, to, settings, now);
 
   // הימים שבהם כבר יוצא פוסט של כל קבוצת קישור (מקור + עוקבות), בכל ערוץ —
   // פוסט מקושר לא יוצא באותו יום כשהקמפיין מבקש (links_apart)
@@ -691,6 +695,22 @@ function addDaysKey(dateKey, n) {
 
 /** הסטטוסים של פוסט שתופס שטח — אותם שהמנוע סופר כקיימים על הלוח */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
+
+/**
+ * האם פוסט חי תופס מקום: תקציב שבועי, מרווח, אותו יום, מכירתי ליום ותקרה
+ * לסוג. פוסט שנכשל ושהמועד שלו עבר לא עלה לאוויר — הוא לא תופס מקום, ומשבצת
+ * אחרת יכולה להיכנס במקומו באותו שבוע (קודם הוא אכל אחד מ-max_per_week וחסם
+ * את המרווח, ושום דבר לא החליף אותו). התוכן שלו עדיין "יש לו פוסט" (HAS_POST
+ * ב-campaigns.js, contentHistory כאן) — המנוע לא משבץ אותו שוב לבד; המשתמש
+ * מטפל דרך משימת הכישלון (ניסיון חוזר או הזזה). נכשל שהמועד שלו עוד לפניו
+ * (נדיר) — תופס מקום כמו קודם.
+ */
+export const takesRoom = (p, now = new Date()) =>
+  p.status !== 'failed' || new Date(p.scheduled_at) > now;
+
+/** אותו כלל כביטוי SQL. p — כינוי טבלת posts; now — ביטוי זמן (פרמטר או now()) */
+export const takesRoomSql = (p = 'p', now = 'now()') =>
+  `(${p}.status <> 'failed' or ${p}.scheduled_at > ${now})`;
 /** פוסט שעוד עתיד לצאת — נספר בוותק כשהמועד שלו לפני השבוע המתוכנן */
 const UPCOMING_STATUSES = ['scheduled', 'approved', 'publishing', 'pending_approval'];
 
@@ -1576,17 +1596,19 @@ async function contentHistory() {
  * קמפיין — או הכללי אם גדול יותר); פוסט רחוק מזה לא משנה שום החלטה.
  * אותם מצבים כמו בלוח (LIVE ב-gap.js).
  */
-async function postDatesPerEndpointChannel(from, to, settings) {
+async function postDatesPerEndpointChannel(from, to, settings, now = new Date()) {
   const horizon = Math.max(30, effectiveGap(null, settings));
+  // נכשל שהמועד שלו עבר לא חוסם מרווח (takesRoom)
   const r = await rows(
     `select endpoint_id, channel_id, scheduled_at
-       from posts
+       from posts p
       where endpoint_id is not null
         and status in ('scheduled','approved','publishing','failed','published','pending_approval')
+        and ${takesRoomSql('p', '$4::timestamptz')}
         and scheduled_at >= $1::timestamptz - make_interval(days => $3)
         and scheduled_at <= $2::timestamptz + make_interval(days => $3)
       order by scheduled_at`,
-    [from, to, horizon]
+    [from, to, horizon, now]
   );
   const map = new Map();
   for (const x of r) {
