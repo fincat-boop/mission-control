@@ -24,6 +24,9 @@ export const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: isLocal ? false : { rejectUnauthorized: false },
   max: 8,
+  // "פרסם עכשיו" מחזיק את חיבור הבקשה ופותח חיבור נוסף לכל שלב (runner.js).
+  // כשכל החיבורים תפוסים כך — שגיאה אחרי חצי דקה, לא המתנה לנצח
+  connectionTimeoutMillis: 30000,
 });
 
 /* ========================= הקשר טננט (מולטי-טננט) =========================
