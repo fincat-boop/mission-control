@@ -66,7 +66,7 @@ export function unconfirmedAlert(list) {
   return [{
     id: 'unconfirmed',
     level: 'warn',
-    title: n === 1 ? 'פוסט אחד לא אושר שיצא' : `${n} פוסטים לא אושר שיצאו`,
+    title: n === 1 ? 'פוסט אחד לא סומן כפורסם' : `${n} פוסטים לא סומנו כפורסמו`,
     detail: 'המועד עבר ואף אחד לא סימן שפורסמו — מסמנים ברשימה מה יצא; ' +
             'מה שלא יצא משבצים מחדש או מוחקים',
     perm: 'content',

@@ -69,7 +69,7 @@ export async function renderBoard() {
       const drop = editable && !blocked
         ? `data-drop-channel="${ch.id}" data-drop-date="${day.date}"` : '';
       // הוספה ידנית של פוסט — לא נוגעת בכלום אחר בלוח, רק פותחת משבצת חדשה
-      const add = editable && !blocked
+      const add = editable && !blocked && day.date >= today
         ? `<button type="button" class="addslot" data-add-slot
              data-channel="${ch.id}" data-date="${day.date}"
              data-channel-name="${esc(ch.name)}" title="הוסף פוסט">+</button>` : '';
@@ -260,7 +260,7 @@ function phoneDays(b, editable) {
       .flatMap((ch) => (ch.days.find((x) => x.date === d.date)?.posts ?? [])
         .map((p) => ({ ...p, channel_name: ch.name })))
       .sort((x, y) => new Date(x.scheduled_at) - new Date(y.scheduled_at));
-    const add = editable
+    const add = editable && d.date >= today
       ? `<button type="button" class="btn small mday-add" data-add-day="${d.date}"
            aria-label="הוסף פוסט ליום ${esc(d.label)}">+ פוסט</button>` : '';
     return `<section class="mday${d.date === today ? ' today' : ''}">

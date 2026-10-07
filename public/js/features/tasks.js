@@ -224,7 +224,7 @@ const whenLabel = (iso) => {
 async function openUnconfirmed() {
   const { posts } = await api('/posts/unconfirmed');
   if (!posts.length) {
-    toast('אין פוסטים שממתינים לאישור שיצאו.');
+    toast('אין פוסטים שממתינים לסימון.');
     await rerender();
     return;
   }
@@ -236,7 +236,7 @@ async function openUnconfirmed() {
     </div>`).join('');
   let openId = null;
   const picked = confirmDialog(
-    'המועד של הפוסטים האלה עבר ואף אחד לא סימן שפורסמו. מה שיצא — נשאר מסומן; מה שלא יצא — מורידים את הסימון או לוחצים "לא יצא".',
+    'לא סומנו כפורסמו: המועד עבר ואף אחד לא סימן. מה שיצא — נשאר מסומן. מה שלא יצא — מורידים את הסימון, או "לא יצא" כדי לשבץ מחדש או למחוק.',
     {
       okLabel: 'סמן שפורסמו',
       html: `<div class="uclist">${rowsHtml}</div>`,

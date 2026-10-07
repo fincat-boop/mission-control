@@ -43,7 +43,11 @@ export function openAddPost(channelId, date, channelName) {
   $('#apContext').textContent = pickChannel ? fmtDate(date) : `${channelName} · ${fmtDate(date)}`;
   $('#apTitle').value = '';
   $('#apKind').value = 'value';
-  $('#apTime').value = '10:00';
+  // היום אחרי 10:00 — השעה העגולה הבאה (שרת דוחה מועד שעבר)
+  const now = new Date();
+  const isToday = date === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const h = isToday ? Math.min(23, Math.max(10, now.getHours() + 1)) : 10;
+  $('#apTime').value = `${String(h).padStart(2, '0')}:00`;
   $('#addPostDlg').showModal();
   $('#apTitle').focus();
   run(refreshContentOptions)();

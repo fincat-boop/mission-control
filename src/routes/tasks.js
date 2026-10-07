@@ -37,8 +37,8 @@ export function isUrgentTask(t, today) {
   return due != null && due <= today;
 }
 
-/** משימה שנסגרה לבד כי פג תוקפה — לא "הושלמה" (אף אחד לא עשה אותה) */
-export const isExpiredTask = (t) => !!t.done && t.meta?.auto_closed === 'expired';
+/** משימה שנסגרה לבד כי פג תוקפה או שהפוסט הוזז ליום אחר — לא "הושלמה" (אף אחד לא עשה אותה) */
+export const isExpiredTask = (t) => !!t.done && ['expired', 'moved'].includes(t.meta?.auto_closed);
 
 const byUrgencyThenDue = (a, b) =>
   (b.urgent - a.urgent) ||

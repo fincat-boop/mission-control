@@ -353,7 +353,7 @@ test('2 — התראה מרוכזת אחת: מי נספר ומי לא; משימ�
   let { alerts } = await inOrg(() => buildAlerts(null));
   const agg = alerts.filter((a) => a.id === 'unconfirmed');
   assert.equal(agg.length, 1);
-  assert.equal(agg[0].title, '4 פוסטים לא אושר שיצאו');
+  assert.equal(agg[0].title, '4 פוסטים לא סומנו כפורסמו');
   assert.ok(!alerts.some((a) => a.id.startsWith('post-missed-')));
   // אותה רשימה בחלון
   const list = await call('GET', '/posts/unconfirmed');
@@ -362,7 +362,7 @@ test('2 — התראה מרוכזת אחת: מי נספר ומי לא; משימ�
   // המשימה פגה — עכשיו גם הוא ברשימה
   await inOrg(() => db.query('update tasks set done = true where id = $1', [task.id]));
   ({ alerts } = await inOrg(() => buildAlerts(null)));
-  assert.equal(alerts.find((a) => a.id === 'unconfirmed').title, '5 פוסטים לא אושר שיצאו');
+  assert.equal(alerts.find((a) => a.id === 'unconfirmed').title, '5 פוסטים לא סומנו כפורסמו');
 
   // משתמש בלי הרשאת תוכן לא רואה אותה (אין לו מה לעשות איתה)
   const viewer = { is_owner: false, perm_content: false };

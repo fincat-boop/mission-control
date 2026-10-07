@@ -459,6 +459,7 @@ async function endpointsWithoutAir() {
               where n.endpoint_id = e.id
                 and n.status in ('scheduled', 'approved', 'pending_approval', 'publishing')
                 and n.scheduled_at >= now()
+                and not (n.auto_hole and n.content_id is null)
                 and not exists (select 1 from content_items nci
                                   join campaigns nca on nca.id = nci.campaign_id
                                  where nci.id = n.content_id and nca.paused_at is not null)

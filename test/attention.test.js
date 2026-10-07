@@ -64,13 +64,13 @@ test('failedPostAlerts — חוסם, id יציב, קישור לפוסט, השג�
 test('unconfirmedAlert — התראה מרוכזת אחת, דורש טיפול, רק למי שיכול לסמן', () => {
   assert.deepEqual(unconfirmedAlert([]), []);
   const [one] = unconfirmedAlert([{ id: 18 }]);
-  assert.equal(one.title, 'פוסט אחד לא אושר שיצא');
+  assert.equal(one.title, 'פוסט אחד לא סומן כפורסם');
   const all = unconfirmedAlert([{ id: 18 }, { id: 19 }, { id: 20 }]);
   assert.equal(all.length, 1);
   const [a] = all;
   assert.equal(a.id, 'unconfirmed');
   assert.equal(a.level, 'warn');
-  assert.equal(a.title, '3 פוסטים לא אושר שיצאו');
+  assert.equal(a.title, '3 פוסטים לא סומנו כפורסמו');
   assert.equal(a.action, 'unconfirmed');
   assert.equal(a.perm, 'content');
   assert.equal(a.post_id, undefined);

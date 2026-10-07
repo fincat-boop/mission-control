@@ -99,25 +99,27 @@ export async function backupNow() {
 
 /**
  * מבצע דחוף נושא רק כותרת קצרה, לא תוכן מלא (ראו openUrgent ב-app.js).
- * אם המועד עבר ואף אחד לא סימן שהוא יצא בפועל — השיבוץ תפס משבצת
- * פנויה לשווא, ועדיף לשחרר אותה מאשר להשאיר "רפאים" על הלוח.
+ * מבצע שחיכה לאישור ואף אחד לא אישר אותו עד אחרי המועד — לא יצא, והוא
+ * רק תופס משבצת; משחררים אותה. מבצע שאושר (scheduled) לא נמחק: אם לא סומן
+ * שפורסם הוא עובר לרשימת "לא סומנו כפורסמו" (unconfirmed.js) — לא ידוע ≠ לא
+ * יצא, ומחיקה הייתה מוחקת גם את מה שיצא בפועל (החלטה ה1, שיפורי התנהגות).
  */
 export async function cleanupStaleUrgent() {
   await forEachOrg(async () => {
     const stale = await rows(
       `delete from posts
         where urgent = true
-          and status in ('scheduled','pending_approval')
+          and status = 'pending_approval'
           and scheduled_at < now() - ($1 || ' hours')::interval
         returning id, title, channel_id`,
       [URGENT_GRACE_HOURS]
     );
 
     if (!stale.length) return;
-    console.log(`${stale.length} שיבוצי מבצע דחוף בלי תוכן נמחקו אוטומטית (עברו ${URGENT_GRACE_HOURS} שעות בלי סימון פרסום)`);
+    console.log(`${stale.length} מבצעים דחופים שלא אושרו נמחקו אוטומטית (עברו ${URGENT_GRACE_HOURS} שעות אחרי המועד בלי אישור)`);
     for (const p of stale) {
       await logSystem('delete', 'posts', String(p.id),
-        `נמחק אוטומטית — מבצע דחוף "${p.title}" עבר ${URGENT_GRACE_HOURS} שעות בלי סימון כפורסם`);
+        `נמחק אוטומטית — מבצע דחוף "${p.title}" עבר ${URGENT_GRACE_HOURS} שעות אחרי המועד בלי אישור`);
     }
   });
 }
