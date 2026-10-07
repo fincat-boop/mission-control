@@ -303,7 +303,7 @@ function generalPreview(plan, list, readyNote) {
   const t = plan.totals;
   const head = t.errors ? 'יש שגיאות — שום דבר לא ייובא'
     : t.variants === 0 ? 'אין מה לייבא — כל התאים ריקים או שהמשבצות כבר תפוסות'
-    : [`ייווצרו ${t.to_create} פוסטים`, t.to_update ? `יעודכנו ${t.to_update} טיוטות` : '']
+    : [t.to_create ? `ייווצרו ${t.to_create} פוסטים` : '', t.to_update ? `יעודכנו ${t.to_update} טיוטות` : '']
       .filter(Boolean).join(' · ') + ` (${readyNote})`;
   const tag = { create: '', update: ' (עדכון)', skip: ' (דילוג)' };
   const sample = plan.items.slice(0, 4).map((i) =>

@@ -1200,6 +1200,7 @@ button.btn.tdanger { color: var(--st-crit); }
 .autopub { margin-bottom: 10px; }
 .autopub .fhint { margin-top: 2px; }
 .cbline { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.cbline[hidden] { display: none; }
 
 /* פרטי ערוץ: שלושה בלוקים — קיבולת / חיבור ופרסום / ימים חסומים */
 .chblock { padding: 14px 0 6px; border-bottom: 1px solid var(--border); }
