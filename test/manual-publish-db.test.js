@@ -160,3 +160,31 @@ test('ב1 — published_at: מועד שעבר = המועד עצמו; מועד ע
   const f = await q1('select published_at from posts where id = $1', [futureId]);
   assert.ok(Math.abs(new Date(f.published_at).getTime() - Date.now()) < 60000);
 });
+
+/* ========================= 26 — מבצע דחוף: כותרת בלבד בכוונה ========================= */
+
+test('26 — מבצע דחוף בלי תוכן: לא "חסר תוכן" ולא משימת החלפה; פוסט רגיל — כן', { skip }, async () => {
+  const urgentId = await post({ title: 'מבצע בזק', content: null, urgent: true, at: 120, endpoint: ids.ep2 });
+  const plainId = await post({ title: 'בלי תוכן', content: null, at: 150, channel: ids.wa, endpoint: ids.ep2 });
+  // תוכן מוכן להציע — בערוץ של שני הפוסטים
+  await inOrg(async () => {
+    const c = (await db.one(
+      "insert into content_items (endpoint_id, kind, title) values ($1,'value','חלופה') returning id",
+      [ids.ep])).id;
+    for (const ch of [ids.fb, ids.wa]) {
+      await db.query(
+        "insert into content_variants (content_id, channel_id, status, body) values ($1,$2,'ready','x')", [c, ch]);
+    }
+  });
+
+  const { buildAlerts } = await import('../src/alerts.js');
+  const { alerts } = await inOrg(() => buildAlerts(null));
+  assert.ok(!alerts.some((a) => a.id === `no-text-${urgentId}`), 'דחוף לא מקבל "חסר תוכן"');
+  assert.ok(alerts.some((a) => a.id === `no-text-${plainId}`), 'פוסט רגיל בלי תוכן — כן');
+
+  const { suggestContentSwaps } = await import('../src/maintenance.js');
+  await suggestContentSwaps();
+  const swaps = await qa("select post_id from tasks where kind = 'swap' and post_id = any($1)",
+    [[urgentId, plainId]]);
+  assert.deepEqual(swaps.map((t) => t.post_id), [plainId]);
+});

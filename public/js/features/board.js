@@ -216,7 +216,7 @@ function statusTag(p) {
   const hub = newsletterHubTag(p); // ניוזלטר שהועבר — "ממתין לאישור ב-HUB"
   if (hub) return hub;
   if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
-  if (!p.content_id) return { cls: 'red', label: 'חסר תוכן' };
+  if (!p.content_id) return p.urgent ? URGENT_TAG : { cls: 'red', label: 'חסר תוכן' };
   return p.variant_status === 'ready' ? { cls: 'blue', label: 'יש תוכן' } : { cls: 'yellow', label: 'יש טיוטה' };
 }
 
@@ -330,6 +330,12 @@ function wireBoardDrag() {
   });
 }
 
+/**
+ * מבצע דחוף (/urgent/commit) נולד בלי תוכן — כותרת בלבד, בכוונה. זה לא
+ * "חסר תוכן": לא תגית אדומה ולא מסגרת מקווקוות, אלא התגית הרגילה.
+ */
+const URGENT_TAG = { cls: 'blue', label: 'דחוף · כותרת בלבד' };
+
 // מצבי מסלול הפרסום האוטומטי — תג במקום תגית התוכן, כי הם חזקים ממנה
 const AUTO_TAG = {
   approved:   { cls: 'auto', label: '⚡ פרסום אוטו׳' },
@@ -389,8 +395,9 @@ function postCard(p) {
   // פוסט חסר תוכן (content_id ריק) נשאר הכרטיס הרגיל — צבע הנקודה, כותרת,
   // שעה — אבל במסגרת מקווקוות, כדי שיהיה ברור שהוא מחכה. content_hint אומר
   // אם יש לנקודה כבר משהו לשייך לו בערוץ הזה (טיוטה או מוכן).
-  const missing = !p.content_id;
-  const contentTag = missing
+  const titleOnly = !p.content_id && !!p.urgent;
+  const missing = !p.content_id && !titleOnly;
+  const contentTag = titleOnly ? URGENT_TAG : missing
     ? { cls: 'red', label: 'חסר תוכן' }
     : p.variant_status === 'ready'
       ? { cls: 'blue', label: 'יש תוכן' }

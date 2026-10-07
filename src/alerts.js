@@ -33,7 +33,8 @@ export async function buildAlerts(user = null) {
   const endpoints = await endpointsWithoutAir();
   // פוסטים בלי תוכן: כל מה שיוצא בתוך content_alert_hours, ופוסטים שהמנוע
   // פתח כחסרי תוכן (auto_hole, status='scheduled' — לא 'hole') בשבוע הקרוב
-  // או שהמועד שלהם עבר ביומיים האחרונים (missingContentAlerts)
+  // או שהמועד שלהם עבר ביומיים האחרונים (missingContentAlerts).
+  // מבצע דחוף (urgent) — כותרת בלבד בכוונה (/urgent/commit), לא "חסר תוכן"
   const withoutContent = await rows(
     `select p.id, p.title, p.scheduled_at, p.auto_hole,
             e.name as endpoint_name, c.name as channel_name
@@ -41,6 +42,7 @@ export async function buildAlerts(user = null) {
        left join endpoints e on e.id = p.endpoint_id
        left join channels c  on c.id = p.channel_id
       where p.status = 'scheduled' and p.content_id is null and p.published_at is null
+        and not p.urgent
         and (p.scheduled_at between now() and now() + ($1 || ' hours')::interval
              or (p.auto_hole and p.scheduled_at between now() - interval '${HOLE_PAST_DAYS} days'
                                                     and now() + interval '${HOLE_AHEAD_DAYS} days'))

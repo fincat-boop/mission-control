@@ -137,6 +137,8 @@ export async function suggestContentSwaps() {
        from posts p
        left join endpoints e on e.id = p.endpoint_id
       where p.status = 'scheduled' and p.content_id is null
+        -- מבצע דחוף — כותרת בלבד בכוונה; אין מה "להחליף" בו
+        and not p.urgent
         and p.scheduled_at between now() and now() + ($1 || ' hours')::interval
         and not exists (
           select 1 from tasks t
