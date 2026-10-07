@@ -328,6 +328,40 @@ test('tenantScope: הדפדפן התנתק והנתיב עוד רץ — הטרנ
   }
 });
 
+test('tenantScope: הדפדפן ויתר לפני שהבקשה קיבלה חיבור — הנתיב לא רץ, ואין טרנזקציה שנשארת פתוחה', { skip }, async () => {
+  const { default: express } = await import('express');
+  const app = express();
+  let ran = false;
+  const gone = deferred();
+  // מדמה בקשה שחיכתה בתור ל-pool עד שהדפדפן התנתק: tenantScope מתחיל רק
+  // אחרי ש-'close' כבר קרה (קודם: 'close' ו-'finish' לא הגיעו לעולם, והחיבור
+  // נשאר idle in transaction עד שה-pool כולו נתקע)
+  app.use((req, res, next) => {
+    req.user = { id: null, name: 'בודק', is_owner: true };
+    req.org = org;
+    res.on('close', () => setTimeout(() => { next(); gone.resolve(); }, 20));
+  });
+  app.use(db.tenantScope);
+  app.get('/late', (_req, res) => { ran = true; res.json({ ok: true }); });
+  const server = app.listen(0);
+  const stuck = async () => Number((await db.pool.query(
+    `select count(*) from pg_stat_activity
+      where datname = current_database() and state = 'idle in transaction'`)).rows[0].count);
+  try {
+    const ac = new AbortController();
+    const req = fetch(`http://localhost:${server.address().port}/late`, { signal: ac.signal })
+      .catch(() => null);
+    await new Promise((r) => setTimeout(r, 50));
+    ac.abort();
+    await req;
+    await gone.promise;
+    assert.ok(await until(async () => (await stuck()) === 0), 'טרנזקציה נשארה פתוחה');
+    assert.equal(ran, false, 'הנתיב רץ למרות שאין למי לענות');
+  } finally {
+    server.close();
+  }
+});
+
 test('"פרסם עכשיו": הדפדפן התנתק בזמן הקריאה ל-Graph — הפוסט נרשם "פורסם" עם המזהה', { skip }, async () => {
   const { default: publish } = await import('../src/routes/publish.js');
   const id = await duePost('פרסם עכשיו וניתוק', { at: 120, status: 'scheduled' });
