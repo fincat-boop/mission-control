@@ -14,7 +14,7 @@ const GRAPH = 'https://graph.facebook.com/v23.0';
  * code/subcode/type/status שלה — friendlyPublishError (errors.js) מתרגם
  * לפיהם להודעה בעברית; הטקסט הגולמי נשמר ב-publish_log.
  */
-async function graph(path, { method = 'GET', token, params = {}, form = null } = {}) {
+async function graph(path, { method = 'GET', token, params = {}, form = null, signal } = {}) {
   const url = new URL(`${GRAPH}/${path}`);
   let body;
 
@@ -38,7 +38,7 @@ async function graph(path, { method = 'GET', token, params = {}, form = null } =
     }
   }
 
-  const res = await fetch(url, { method, body });
+  const res = await fetch(url, { method, body, signal });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
     const e = data.error ?? {};
@@ -81,15 +81,19 @@ function mediaArgs(asset, params, field) {
 }
 
 /**
- * תגובה ראשונה מיד אחרי הפרסום. הפוסט כבר באוויר — כשל כאן לא מכשיל אותו,
- * אלא חוזר כ-commentError (runner.js פותח משימה להוסיף אותה ידנית).
+ * תגובה ראשונה אחרי הפרסום — runner.js קורא לה רק אחרי שהפוסט נרשם
+ * "פורסם", כדי שתגובה שנתקעת לא תשאיר פוסט שבאוויר במצב publishing (ומשם
+ * "נכשל" ופרסום כפול). כשל חוזר כשגיאה, לא נזרק (runner פותח משימה).
+ * 30 שניות לכל היותר.
  * נדרשת הרשאה נוספת בטוקן: pages_manage_engagement (פייסבוק) /
  * instagram_manage_comments (אינסטגרם).
  */
-async function firstComment(objectId, token, message) {
-  if (!String(message ?? '').trim()) return null;
+export async function postFirstComment(objectId, token, message) {
+  if (!objectId || !String(message ?? '').trim()) return null;
   try {
-    await graph(`${objectId}/comments`, { method: 'POST', token, params: { message } });
+    await graph(`${objectId}/comments`, {
+      method: 'POST', token, params: { message }, signal: AbortSignal.timeout(30000),
+    });
     return null;
   } catch (e) {
     return e;
@@ -108,17 +112,17 @@ export function facebookMessage(message, link, hasMedia) {
  * פרסום לעמוד פייסבוק. assets = [{url} או {buffer}, mime, filename].
  * וידאו גובר על תמונות (פוסט וידאו); כמה תמונות = פוסט מרובה תמונות.
  * link — בפוסט טקסט: כרטיס תצוגה מקדימה; עם מדיה: בסוף הטקסט.
- * altText — לתמונה בודדת. comment — תגובה ראשונה (ראו firstComment).
- * @returns {{id: string, url: string, commentError: Error|null}}
+ * altText — לתמונה בודדת. commentTarget — על מה נכתבת התגובה הראשונה
+ * (postFirstComment, אחרי הפרסום).
+ * @returns {{id: string, url: string, commentTarget: string}}
  */
 export async function publishFacebook({
-  pageId, token, message, assets = [], link = null, altText = null, comment = null,
+  pageId, token, message, assets = [], link = null, altText = null,
 }) {
   const video = assets.find((a) => isVideo(a.mime));
   const images = assets.filter((a) => isImage(a.mime));
   const text = facebookMessage(message, link, !!(video || images.length));
-  const done = async (id, url, target = id) =>
-    ({ id, url, commentError: await firstComment(target, token, comment) });
+  const done = (id, url) => ({ id, url, commentTarget: id });
 
   if (video) {
     const r = await graph(`${pageId}/videos`, {
@@ -180,12 +184,13 @@ async function waitForContainer(creationId, token, timeoutMs = 5 * 60000) {
  * פרסום לאינסטגרם. media = [{url, video: boolean}] — כתובות ציבוריות.
  * פריט אחד = פוסט תמונה או ריל; כמה תמונות = קרוסלה; story = סטורי (פריט
  * אחד, בלי כיתוב — לסטורי אין). altText — לתמונה בודדת בפיד. לריל: coverUrl
- * (תמונת שער) או thumbOffsetMs (פריים מהסרטון). comment — תגובה ראשונה.
- * @returns {{id: string, url: string, commentError: Error|null}}
+ * (תמונת שער) או thumbOffsetMs (פריים מהסרטון). commentTarget — null בסטורי
+ * (אין בו תגובות).
+ * @returns {{id: string, url: string, commentTarget: string|null}}
  */
 export async function publishInstagram({
   igUserId, token, caption, media, story = false, altText = null,
-  coverUrl = null, thumbOffsetMs = null, comment = null,
+  coverUrl = null, thumbOffsetMs = null,
 }) {
   if (!media?.length) throw new Error('אינסטגרם דורש תמונה או וידאו — אין מדיה לפוסט');
 
@@ -239,7 +244,6 @@ export async function publishInstagram({
 
   const info = await graph(pub.id, { token, params: { fields: 'permalink' } })
     .catch(() => null);
-  // לסטורי אין תגובות
-  const commentError = story ? null : await firstComment(pub.id, token, comment);
-  return { id: pub.id, url: info?.permalink ?? `https://www.instagram.com/`, commentError };
+  return { id: pub.id, url: info?.permalink ?? `https://www.instagram.com/`,
+           commentTarget: story ? null : pub.id };
 }

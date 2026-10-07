@@ -1,7 +1,7 @@
 import { currentOrg, one, query, rows } from '../db.js';
 import { isPlatformOrg } from '../platform.js';
 import { decryptSecret } from './crypto.js';
-import { publishFacebook, publishInstagram } from './meta.js';
+import { postFirstComment, publishFacebook, publishInstagram } from './meta.js';
 import { deletePublicAssets, publicAssetsReady, uploadPublicAsset } from './public-assets.js';
 import { mediaUrl } from '../media.js';
 import { HubMailError, createNewsletter, hubCampaignUrl, hubMailReady, newsletterStatus } from '../hub-mail.js';
@@ -261,8 +261,9 @@ export async function publishInstagramPost({ post, token, text, media, cover = n
     const items = [];
     for (const a of media) items.push({ url: await publicUrl(a), video: isVideo(a.mime) });
     const coverUrl = cover ? await publicUrl(cover) : null;
+    const { story, altText, thumbOffsetMs } = options;
     return await publish({ igUserId: post.ig_user_id, token, caption: text, media: items,
-                           ...options, coverUrl });
+                           story, altText, thumbOffsetMs, coverUrl });
   } finally {
     if (tempKeys.length) await remove(tempKeys);
   }
@@ -355,7 +356,7 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
       if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
       result = await publishFacebook({
         pageId: post.page_id, token, message: text, assets: facebookAssets(media),
-        link: options.link, altText: options.altText, comment: options.comment,
+        link: options.link, altText: options.altText,
       });
     } else {
       // אינסטגרם מושך מ-URL ציבורי — ראו publishInstagramPost
@@ -375,7 +376,11 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
       `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
       [post.id]);
     await logPublish(post, true, { externalId: result.id });
-    if (result.commentError) await recordCommentFailed(post, options.comment, result.commentError);
+    // תגובה ראשונה — רק עכשיו, כשהפוסט כבר רשום "פורסם"
+    if (options.comment && result.commentTarget) {
+      const err = await postFirstComment(result.commentTarget, decryptToken(post), options.comment);
+      if (err) await recordCommentFailed(post, options.comment, err);
+    }
     await logActivity('publish', post, `פורסם אוטומטית — "${post.title}" ל${post.channel_name}`);
     await emitPostEvent('post_published', post,
       { external_id: result.id, ...(result.url ? { external_url: result.url } : {}) });

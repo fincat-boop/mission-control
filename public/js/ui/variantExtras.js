@@ -42,6 +42,8 @@ function sectionBody(key, platform, meta, files) {
         <option value="">פריים מתוך הסרטון</option>
         ${images.map((a) => `<option value="${a.id}"${String(a.id) === cur ? ' selected' : ''}>
           תמונה: ${esc(a.filename)}</option>`).join('')}
+        ${cur && !images.some((a) => String(a.id) === cur)
+          ? `<option value="${esc(cur)}" selected>התמונה שנבחרה הוסרה — בוחרים אחרת</option>` : ''}
       </select>
       <div class="subfield" id="vx_offset_row"${cur ? ' hidden' : ''}>
         <label for="vx_offset">משנייה</label>
@@ -146,7 +148,7 @@ function imageDims(url, onLoad) {
  * השורה מתחת לטקסט: באינסטגרם — מונה תווים/האשטגים/תיוגים, בסטורי — שהטקסט
  * לא יוצא, ואזהרה על תמונה ביחס שהפיד דוחה. בערוץ אחר — ריקה.
  */
-export function paintCaptionNote(el, { platform, text, meta = {}, files = [] }) {
+export function paintCaptionNote(el, { platform, text, meta = {}, files = [], repaint = () => {} }) {
   if (!el) return;
   if (platform !== 'instagram') {
     el.innerHTML = '';
@@ -160,7 +162,6 @@ export function paintCaptionNote(el, { platform, text, meta = {}, files = [] }) 
   }
   const parts = captionCounts(text).map((c) =>
     `<span class="${c.over ? 'over' : ''}">${esc(c.text)}</span>`);
-  const repaint = () => paintCaptionNote(el, { platform, text, meta, files });
   const coverId = Number(meta.cover_asset_id) || null;
   const bad = files
     .filter((a) => isImage(a.mime) && a.id !== coverId)
@@ -168,7 +169,10 @@ export function paintCaptionNote(el, { platform, text, meta = {}, files = [] }) 
       const d = imageDims(a.url ?? `/api/assets/${a.id}`, repaint);
       return d && badFeedRatio(d.w, d.h);
     });
-  el.innerHTML = parts.join('<span class="vsep">·</span>') + bad.map((a) =>
+  const count = files.filter((a) => (isImage(a.mime) || isVideo(a.mime)) && a.id !== coverId).length;
+  const many = count > IG_LIMITS.carousel
+    ? `<div class="over">${count} קבצים — באינסטגרם יוצאים רק ${IG_LIMITS.carousel} הראשונים.</div>` : '';
+  el.innerHTML = parts.join('<span class="vsep">·</span>') + many + bad.map((a) =>
     `<div class="over">"${esc(a.filename)}" גבוהה או רחבה מדי לפיד של אינסטגרם — הפרסום יידחה.
       חותכים ליחס שבין <bdi dir="ltr">4:5</bdi> (לאורך) ל־<bdi dir="ltr">1.91:1</bdi> (לרוחב), או מפרסמים כסטורי.</div>`).join('');
 }

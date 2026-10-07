@@ -5,7 +5,7 @@ import {
   contentBlocker, coverAsset, metaExtrasError, postMedia, validLink,
 } from '../src/publish/readiness.js';
 import { publishInstagramPost, publishOptions } from '../src/publish/runner.js';
-import { facebookMessage, publishFacebook, publishInstagram } from '../src/publish/meta.js';
+import { facebookMessage, postFirstComment, publishFacebook, publishInstagram } from '../src/publish/meta.js';
 import {
   badFeedRatio, captionCounts, extraSummary, extrasFor, extrasKey, mergeExtras, pickExtras,
 } from '../public/js/core/socialRules.js';
@@ -40,8 +40,8 @@ test('contentBlocker — אינסטגרם: כיתוב, האשטגים, תיוג�
   assert.match(at(Array.from({ length: 21 }, (_, i) => `@user${i}`).join(' ')), /תיוגים/);
   // מייל בטקסט הוא לא תיוג
   assert.equal(at(Array.from({ length: 25 }, (_, i) => `a${i}@x.com`).join(' ')), null);
-  const eleven = Array.from({ length: 11 }, (_, i) => img(i + 1));
-  assert.match(at('', eleven), /עד 10 קבצים — יש 11/);
+  // יותר מ-10 לא נחסם — יוצאים 10 הראשונים, כמו לפני השדות החדשים
+  assert.equal(at('', Array.from({ length: 11 }, (_, i) => img(i + 1))), null);
 });
 
 test('contentBlocker — תמונת השער של הריל לא נספרת כפריט (לא הופכת לקרוסלה)', () => {
@@ -120,34 +120,38 @@ async function withGraph(reply, fn) {
   }
 }
 
-test('publishFacebook — טקסט עם קישור: כרטיס (link), ואז תגובה ראשונה על הפוסט', async () => {
+test('publishFacebook — טקסט עם קישור: כרטיס (link); התגובה הראשונה לא נכתבת כאן', async () => {
   const { sent, result } = await withGraph(() => ({ id: 'post1' }), () =>
-    publishFacebook({ pageId: '9', token: 't', message: 'שלום', link: 'https://a.co', comment: 'תגובה' }));
+    publishFacebook({ pageId: '9', token: 't', message: 'שלום', link: 'https://a.co' }));
+  assert.equal(sent.length, 1);
   assert.equal(sent[0].path, '9/feed');
   assert.deepEqual([sent[0].params.message, sent[0].params.link], ['שלום', 'https://a.co']);
-  assert.equal(sent[1].path, 'post1/comments');
-  assert.equal(sent[1].params.message, 'תגובה');
-  assert.equal(result.commentError, null);
+  assert.equal(result.commentTarget, 'post1');
 });
 
-test('publishFacebook — תמונה בודדת: alt_text_custom, קישור בסוף הכיתוב, תגובה על post_id', async () => {
-  const { sent } = await withGraph(() => ({ id: 'ph1', post_id: '9_77' }), () =>
+test('publishFacebook — תמונה בודדת: alt_text_custom, קישור בסוף הכיתוב, יעד התגובה = post_id', async () => {
+  const { sent, result } = await withGraph(() => ({ id: 'ph1', post_id: '9_77' }), () =>
     publishFacebook({ pageId: '9', token: 't', message: 'שלום', link: 'https://a.co',
-      altText: 'תיאור', comment: 'תגובה',
+      altText: 'תיאור',
       assets: [{ url: 'https://pub/p.jpg', mime: 'image/jpeg', filename: 'p.jpg' }] }));
   assert.equal(sent[0].path, '9/photos');
   assert.equal(sent[0].params.alt_text_custom, 'תיאור');
   assert.equal(sent[0].params.caption, 'שלום\n\nhttps://a.co');
   assert.equal(sent[0].params.link, undefined);
-  assert.equal(sent[1].path, '9_77/comments');
+  assert.equal(result.commentTarget, '9_77');
 });
 
-test('publishFacebook — תגובה שנכשלה לא מכשילה את הפוסט: commentError', async () => {
-  const { result } = await withGraph((c) => (c.path.endsWith('/comments')
-    ? { error: { message: '(#200) pages_manage_engagement', code: 200 } } : { id: 'post1' }), () =>
-    publishFacebook({ pageId: '9', token: 't', message: 'שלום', comment: 'תגובה' }));
-  assert.equal(result.id, 'post1');
-  assert.match(result.commentError.message, /pages_manage_engagement/);
+test('postFirstComment — נכתבת על היעד; כשל חוזר כשגיאה ולא נזרק; ריק — כלום', async () => {
+  const ok = await withGraph(() => ({ id: 'c1' }), () => postFirstComment('post1', 't', 'תגובה'));
+  assert.equal(ok.sent[0].path, 'post1/comments');
+  assert.equal(ok.sent[0].params.message, 'תגובה');
+  assert.equal(ok.result, null);
+  const bad = await withGraph(() => ({ error: { message: '(#200) pages_manage_engagement', code: 200 } }),
+    () => postFirstComment('post1', 't', 'תגובה'));
+  assert.match(bad.result.message, /pages_manage_engagement/);
+  const none = await withGraph(() => ({}), () => postFirstComment('post1', 't', '  '));
+  assert.equal(none.sent.length, 0);
+  assert.equal(none.result, null);
 });
 
 const igReply = (c) => {
@@ -158,24 +162,24 @@ const igReply = (c) => {
   return { id: 'c1' };
 };
 
-test('publishInstagram — סטורי: STORIES בלי כיתוב, ובלי תגובה', async () => {
+test('publishInstagram — סטורי: STORIES בלי כיתוב, ואין יעד לתגובה', async () => {
   const { sent, result } = await withGraph(igReply, () => publishInstagram({
-    igUserId: '456', token: 't', caption: 'לא יוצא', story: true, comment: 'לא נכתבת',
+    igUserId: '456', token: 't', caption: 'לא יוצא', story: true,
     media: [{ url: 'https://pub/v.mp4', video: true }] }));
   assert.deepEqual(sent[0].params, { media_type: 'STORIES', video_url: 'https://pub/v.mp4', access_token: 't' });
-  assert.ok(!sent.some((c) => c.path.endsWith('/comments')));
+  assert.equal(result.commentTarget, null);
   assert.equal(result.url, 'https://ig/p/1');
 });
 
-test('publishInstagram — ריל עם שער (cover_url גובר על thumb_offset) ותגובה ראשונה', async () => {
-  const { sent } = await withGraph(igReply, () => publishInstagram({
+test('publishInstagram — ריל עם שער: cover_url גובר על thumb_offset; יעד התגובה = המדיה', async () => {
+  const { sent, result } = await withGraph(igReply, () => publishInstagram({
     igUserId: '456', token: 't', caption: 'כיתוב', coverUrl: 'https://pub/c.jpg', thumbOffsetMs: 3000,
-    comment: '#תג', media: [{ url: 'https://pub/v.mp4', video: true }] }));
+    media: [{ url: 'https://pub/v.mp4', video: true }] }));
   assert.equal(sent[0].params.media_type, 'REELS');
   assert.equal(sent[0].params.cover_url, 'https://pub/c.jpg');
   assert.equal(sent[0].params.thumb_offset, undefined);
-  const comment = sent.find((c) => c.path === 'm1/comments');
-  assert.equal(comment.params.message, '#תג');
+  assert.ok(!sent.some((c) => c.path.endsWith('/comments')));
+  assert.equal(result.commentTarget, 'm1');
 });
 
 test('publishInstagram — ריל בלי שער: thumb_offset; תמונה בודדת: alt_text', async () => {
@@ -196,14 +200,14 @@ test('publishInstagramPost — שער מקובץ ישן: עותק זמני צי�
     post: { ig_user_id: '456' }, token: 't', text: 'כיתוב',
     media: [{ storage_key: null, data: Buffer.from('v'), mime: 'video/mp4', filename: 'v.mp4' }],
     cover: { storage_key: null, data: Buffer.from('c'), mime: 'image/jpeg', filename: 'c.jpg' },
-    options: { comment: 'x', story: false },
+    options: { comment: 'x', story: false, altText: null, thumbOffsetMs: null },
   }, {
     upload: async (a) => ({ url: `https://pub/tmp-${a.filename}`, key: `tmp-${a.filename}` }),
     remove: async (keys) => { removed.push(...keys); },
-    publish: async (a) => { args = a; return { id: 'm1', url: 'u', commentError: null }; },
+    publish: async (a) => { args = a; return { id: 'm1', url: 'u', commentTarget: 'm1' }; },
   });
   assert.equal(args.coverUrl, 'https://pub/tmp-c.jpg');
-  assert.equal(args.comment, 'x');
+  assert.equal(args.comment, undefined);   // התגובה — ב-runner, אחרי שהפוסט נרשם
   assert.deepEqual(removed, ['tmp-v.mp4', 'tmp-c.jpg']);
 });
 
@@ -219,6 +223,7 @@ test('pickExtras / mergeExtras — ריק לא נשמר, שדות של אחרי�
   assert.deepEqual(pickExtras({ format: '', first_comment: '  ', link: 'https://a.co', subject: 'x' }),
     { link: 'https://a.co' });
   assert.equal(extrasKey({ format: null }), extrasKey(undefined));
+  assert.equal(extrasKey({ cover_offset_sec: 0 }), extrasKey({}));
   assert.deepEqual(mergeExtras({ subject: 'נושא', first_comment: 'ישן' }, { alt_text: 'חדש', first_comment: null }),
     { subject: 'נושא', alt_text: 'חדש' });
 });

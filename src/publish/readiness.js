@@ -88,9 +88,7 @@ function instagramBlocker(v, text, media) {
   if (isStory(v)) {
     if (media.length > 1) return `סטורי יוצא עם תמונה או סרטון אחד — יש ${media.length} קבצים`;
   } else {
-    if (media.length > IG_LIMITS.carousel) {
-      return `קרוסלה באינסטגרם עד ${IG_LIMITS.carousel} קבצים — יש ${media.length}`;
-    }
+    // יותר מ-10 קבצים לא נחסם: הפרסום שולח את 10 הראשונים (כמו תמיד), והעורך מזהיר
     if (text.length > IG_LIMITS.caption) {
       return `הכיתוב ארוך מדי לאינסטגרם — ${text.length} תווים מתוך ${IG_LIMITS.caption}`;
     }

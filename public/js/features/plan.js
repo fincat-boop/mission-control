@@ -1826,7 +1826,7 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
   /** מונה הכיתוב / אזהרות יחס התמונה מתחת לטקסט (אינסטגרם) */
   const paintNote = () => paintCaptionNote($('#vnote'), {
     platform: cur.mail ? null : cur.ch.platform, text: cur.body, meta: cur.extras,
-    files: versionAssets(item, cur.v?.id) });
+    files: versionAssets(item, cur.v?.id), repaint: () => paintNote() });
 
   const tabState = (t) => (t.v || t.status !== 'draft' ? CELL[t.status] : CELL.empty);
   const tabLabel = (t) => {

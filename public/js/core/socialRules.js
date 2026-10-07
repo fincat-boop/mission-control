@@ -33,6 +33,7 @@ export function pickExtras(meta) {
     const v = meta?.[k];
     if (v == null || (typeof v === 'string' && !v.trim())) continue;
     if (k === 'format' && v !== 'story') continue;
+    if (k === 'cover_offset_sec' && !(Number(v) > 0)) continue;
     out[k] = v;
   }
   return out;

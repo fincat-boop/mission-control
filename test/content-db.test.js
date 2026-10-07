@@ -317,3 +317,47 @@ test('שדות נוספים לפי פלטפורמה (meta): נשמרים, קיש
   assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.equal(r.json.warn, null);
 });
+
+test('פרסום עם תגובה ראשונה: הפוסט נרשם "פורסם" לפני התגובה; תגובה שנכשלה = משימה, לא כשל', { skip }, async () => {
+  const { publishOne } = await import('../src/publish/runner.js');
+  const { encryptSecret } = await import('../src/publish/crypto.js');
+  const a = await angle(62);
+  const r = await call('PUT', `/content/${a}/variants/${ids.fb}`, { body: 'שלום', status: 'ready',
+    meta: { link: 'https://fincat.co.il/x', first_comment: 'הקישור בתגובה' } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  await q(`insert into channel_connections (channel_id, page_id, access_token_enc, auto_enabled)
+           values ($1, '9', $2, true) on conflict (channel_id) do update set page_id = '9',
+             access_token_enc = excluded.access_token_enc`, [ids.fb, encryptSecret('tok')]);
+  const post = await q1(
+    `insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at, status)
+     values ($1,$2,$3,'עם תגובה','value', now(), 'approved') returning id`, [ids.fb, ids.endpoint, a]);
+
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const path = new URL(url).pathname.replace(/^\/v[\d.]+\//, '');
+    // מה מצב הפוסט ברגע שהתגובה נשלחת — באותה טרנזקציה
+    const status = path.endsWith('/comments')
+      ? (await db.one('select status from posts where id = $1', [post.id])).status : null;
+    seen.push({ path, status, params: Object.fromEntries(opts.body ?? []) });
+    if (path.endsWith('/comments')) {
+      return new Response(JSON.stringify({ error: { message: '(#200) pages_manage_engagement', code: 200 } }),
+        { status: 400 });
+    }
+    return new Response(JSON.stringify({ id: '9_1' }), { status: 200 });
+  };
+  let out;
+  try {
+    out = await db.withOrg(org, () => publishOne(post.id));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.deepEqual(seen.map((s) => s.path), ['9/feed', '9_1/comments']);
+  assert.equal(seen[0].params.link, 'https://fincat.co.il/x');
+  assert.equal(seen[1].status, 'published', 'התגובה נשלחה רק אחרי שהפוסט נרשם');
+  assert.equal((await q1('select status from posts where id = $1', [post.id])).status, 'published');
+  const task = await q1(`select kind, done, title, subtitle from tasks where post_id = $1 and kind = 'general'`, [post.id]);
+  assert.equal(task.done, false);
+  assert.match(task.subtitle, /הקישור בתגובה/);
+});
