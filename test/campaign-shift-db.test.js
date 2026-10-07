@@ -39,7 +39,12 @@ before(async () => {
   const { default: express } = await import('express');
   const { default: campaigns } = await import('../src/routes/campaigns.js');
 
-  await db.migrate();
+  // הסכימה רצה רק כשחסרה העמודה של הבדיקות האלה — migrate במקביל לקבצי
+  // בדיקה אחרים נתקע ב-deadlock של DDL
+  const has = await db.pool.query(
+    `select 1 from information_schema.columns
+      where table_name = 'campaigns' and column_name = 'updated_at'`);
+  if (!has.rowCount) await db.migrate();
   org = (await db.pool.query("insert into orgs (name) values ('campaign-shift-test') returning id")).rows[0].id;
   // מרווח כללי של יום — אותו יום אסור, כל יום אחר מותר
   await inOrg(() => db.query('insert into engine_settings (min_gap_days) values (1)'));
