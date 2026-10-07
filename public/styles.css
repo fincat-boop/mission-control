@@ -1408,7 +1408,6 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .vmail { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--ink-2); }
 .vmail b { color: var(--ink-1); }
 .vacts { margin-inline-end: auto; display: flex; gap: 8px; flex-wrap: wrap; }
-.vacts #markReady { color: var(--st-good); }
 
 /* מה שנוסף לפוסט לפי הפלטפורמה (ui/variantExtras.js): כל אזור שורה מקופלת
    עם סיכום, סגורה כברירת מחדל */
