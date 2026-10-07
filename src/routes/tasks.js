@@ -3,23 +3,14 @@ import { bad, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { weekMeta } from '../board.js';
 import { requirePerm } from '../auth.js';
-import { closeResolvedTasksSafely } from '../task-lifecycle.js';
+import { LOCAL_TZ, closeResolvedTasksSafely, localYmd } from '../task-lifecycle.js';
 
 const r = Router();
 
 /* ========================= משימות ========================= */
 
-export const LOCAL_TZ = 'Asia/Jerusalem';
-
-/**
- * YYYY-MM-DD של הרגע הנתון בשעון ישראל — בלי תלות ב-TZ של התהליך. due_on
- * של משימות נכתב בתאריך המקומי, ולכן גם "היום" שמולו משווים חייב להיות מקומי.
- */
-export function localYmd(d = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: LOCAL_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(d);
-}
+// התאריך המקומי — מוגדר ב-task-lifecycle (גם הטיק והסגירה האוטומטית צריכים אותו)
+export { LOCAL_TZ, localYmd };
 
 /** האם משימה פתוחה נדחתה ("דחה עד מחר") ועוד לא הגיע הזמן שלה */
 export const isSnoozed = (t, now = new Date()) =>

@@ -1,7 +1,10 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { waTaskAction } from '../src/publish/runner.js';
+import {
+  MANUAL_SUB_NOT_READY, MANUAL_SUB_READY, MANUAL_SUB_TITLE_ONLY, WA_SUB_READY, localHour,
+  publishTaskSubtitle, publishTaskTitle, waTaskAction,
+} from '../src/publish/runner.js';
 import { endpointAirStatus, failedPostAlerts, missedPostAlerts } from '../src/alerts.js';
 import { approveTaskBlocked, groupTasks, localYmd } from '../src/routes/tasks.js';
 
@@ -21,6 +24,25 @@ test('waTaskAction — משימה פתוחה שמצב המוכנות שלה הש
 test('waTaskAction — משימה פתוחה במצב הנכון, או משימה שנסגרה: כלום', () => {
   assert.equal(waTaskAction({ ready: false, task_id: 5, task_done: false, task_ready: false }), null);
   assert.equal(waTaskAction({ ready: true, task_id: 5, task_done: true, task_ready: false }), null);
+});
+
+test('משימת "לפרסם היום" — כותרת לפי הערוץ, כותרת משנית לפי מצב הטקסט', () => {
+  assert.equal(publishTaskTitle({ platform: 'whatsapp', title: 'כרטיס', channel_name: 'קבוצה' }),
+    'לשלוח בוואטסאפ: כרטיס');
+  assert.equal(publishTaskTitle({ platform: 'facebook', title: 'כרטיס', channel_name: 'פייסבוק' }),
+    'לפרסם היום בפייסבוק: כרטיס');
+  assert.equal(publishTaskSubtitle({ platform: 'whatsapp', ready: true, content_id: 1 }), WA_SUB_READY);
+  assert.equal(publishTaskSubtitle({ platform: 'instagram', ready: true, content_id: 1 }), MANUAL_SUB_READY);
+  assert.equal(publishTaskSubtitle({ platform: 'instagram', ready: false, content_id: 1 }), MANUAL_SUB_NOT_READY);
+  // מבצע דחוף — כותרת בלבד בכוונה, לא "הטקסט לא מוכן"
+  assert.equal(publishTaskSubtitle({ platform: 'facebook', ready: false, content_id: null, urgent: true }),
+    MANUAL_SUB_TITLE_ONLY);
+});
+
+test('localHour — השעה בישראל, לא לפי TZ של התהליך', () => {
+  assert.equal(localHour(new Date('2026-10-05T02:59:00Z')), 5);  // 05:59 בישראל (UTC+3)
+  assert.equal(localHour(new Date('2026-10-05T03:00:00Z')), 6);
+  assert.equal(localHour(new Date('2026-12-05T04:00:00Z')), 6);  // חורף, UTC+2
 });
 
 /* ========================= התראות: כשל, החמצה, נקודה חדשה ========================= */

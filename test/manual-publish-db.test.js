@@ -188,3 +188,109 @@ test('26 — מבצע דחוף בלי תוכן: לא "חסר תוכן" ולא מ
     [[urgentId, plainId]]);
   assert.deepEqual(swaps.map((t) => t.post_id), [plainId]);
 });
+
+/* ========================= 1 — משימת "לפרסם היום" ========================= */
+
+/** היום (שעון ישראל — TZ של הטסטים) בשעה h, + days ימים */
+const dayAt = (h, days = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  d.setHours(h, 0, 0, 0);
+  return d;
+};
+const minutesUntil = (d) => (d.getTime() - Date.now()) / 60000;
+const dayTasks = (postId) => qa(
+  "select id, title, subtitle, urgent, done, due_on, meta from tasks where kind = 'publish' and post_id = $1",
+  [postId]);
+
+test('1 — בבוקר: משימה לכל פוסט של היום בערוץ ידני; לא ניוזלטר/כבוי/מושהה/בלי כותרת/מחר/אוטומטי', { skip }, async () => {
+  const runner = await import('../src/publish/runner.js');
+  const at18 = minutesUntil(dayAt(18));
+  const ig = (await q1(
+    "insert into channels (name, platform, max_per_week) values ('אינסטגרם', 'instagram', 7) returning id")).id;
+  await inOrg(() => db.query(
+    "insert into channel_connections (channel_id, page_id, auto_enabled) values ($1, '1', true)", [ig]));
+  const paused = await inOrg(async () => {
+    const ca = (await db.one(
+      `insert into campaigns (endpoint_id, name, starts_on, ends_on, paused_at)
+       values ($1, 'מושהה', current_date - 5, current_date + 5, now()) returning id`, [ids.ep2])).id;
+    return (await db.one(
+      "insert into content_items (endpoint_id, kind, title, campaign_id) values ($1,'value','מושהה',$2) returning id",
+      [ids.ep2, ca])).id;
+  });
+
+  const p = {
+    fb: await post({ title: 'פייסבוק היום', at: at18, endpoint: ids.ep2 }),
+    wa: await post({ title: 'וואטסאפ היום', channel: ids.wa, at: at18, endpoint: ids.ep2 }),
+    urgent: await post({ title: 'מבצע', content: null, urgent: true, at: at18, endpoint: null }),
+    nl: await post({ title: 'ניוזלטר', channel: ids.nl, at: at18 }),
+    off: await post({ title: 'כבוי', channel: ids.off, at: at18 }),
+    paused: await post({ title: 'קמפיין מושהה', content: paused, at: at18, channel: ids.wa, endpoint: null }),
+    blank: await post({ title: '  ', at: at18, channel: ids.wa, endpoint: null }),
+    tomorrow: await post({ title: 'מחר', at: minutesUntil(dayAt(18, 1)), endpoint: ids.ep2 }),
+    auto: await post({ title: 'אוטומטי', channel: ig, at: at18 }),
+  };
+
+  // לפני 06:00 — כלום
+  await runner.manualPublishPrep(org, dayAt(5));
+  assert.equal((await dayTasks(p.fb)).length, 0);
+
+  // המתג הכללי דלוק: האינסטגרם המחובר מתפרסם לבד — בלי משימה
+  await inOrg(() => db.query('update engine_settings set autopublish_enabled = true'));
+  await runner.manualPublishPrep(org, dayAt(8));
+  await inOrg(() => db.query('update engine_settings set autopublish_enabled = false'));
+  await runner.manualPublishPrep(org, dayAt(9)); // שוב — לא כפולה
+
+  const fb = await dayTasks(p.fb);
+  assert.equal(fb.length, 1);
+  assert.equal(fb[0].title, 'לפרסם היום בפייסבוק: פייסבוק היום');
+  assert.equal(fb[0].urgent, false);
+  assert.equal(fb[0].meta.publish_day, true);
+  assert.equal(fb[0].due_on, ymdOf(dayAt(12)));
+  const wa = await dayTasks(p.wa);
+  assert.equal(wa.length, 1);
+  assert.equal(wa[0].title, 'לשלוח בוואטסאפ: וואטסאפ היום');
+  assert.equal(wa[0].meta.wa_send, true);
+  assert.equal((await dayTasks(p.urgent))[0]?.subtitle, runner.MANUAL_SUB_TITLE_ONLY);
+  for (const k of ['nl', 'off', 'paused', 'blank', 'tomorrow']) {
+    assert.equal((await dayTasks(p[k])).length, 0, k);
+  }
+  // המתג כבוי עכשיו — האינסטגרם כבר לא מתפרסם לבד, ולכן יש משימה
+  assert.equal((await dayTasks(p.auto)).length, 1);
+});
+
+/** YYYY-MM-DD מקומי */
+const ymdOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${
+  String(d.getDate()).padStart(2, '0')}`;
+
+test('1 — נסגרת לבד: פורסם, הוזז ליום אחר, נגמר היום; פוסט שנוסף מאוחר מקבל משימה', { skip }, async () => {
+  const runner = await import('../src/publish/runner.js');
+  const { closeResolvedTasks } = await import('../src/task-lifecycle.js');
+  const at20 = minutesUntil(dayAt(20));
+  const pub = await post({ title: 'יסומן', at: at20, channel: ids.wa, endpoint: null });
+  const moved = await post({ title: 'יוזז', at: at20, channel: ids.wa, endpoint: null });
+  const stays = await post({ title: 'יפוג', at: at20, channel: ids.wa, endpoint: null });
+  await runner.manualPublishPrep(org, dayAt(10));
+  for (const id of [pub, moved, stays]) assert.equal((await dayTasks(id)).length, 1);
+
+  // נוסף מאוחר יותר באותו יום — הטיק הבא תופס אותו
+  const late = await post({ title: 'מאוחר', at: at20, channel: ids.wa, endpoint: null });
+  await runner.manualPublishPrep(org, dayAt(14));
+  assert.equal((await dayTasks(late)).length, 1);
+
+  await call('POST', `/posts/${pub}/publish`);
+  await inOrg(() => db.query(
+    "update posts set scheduled_at = scheduled_at + interval '1 day' where id = $1", [moved]));
+  await inOrg(() => closeResolvedTasks(dayAt(15)));
+  assert.equal((await dayTasks(pub))[0].done, true);
+  const mv = (await dayTasks(moved))[0];
+  assert.equal(mv.done, true);
+  assert.equal(mv.meta.auto_closed, 'moved');
+  assert.equal((await dayTasks(stays))[0].done, false);
+
+  // למחרת בבוקר — פג תוקף
+  await inOrg(() => closeResolvedTasks(dayAt(7, 1)));
+  const ex = (await dayTasks(stays))[0];
+  assert.equal(ex.done, true);
+  assert.equal(ex.meta.auto_closed, 'expired');
+});

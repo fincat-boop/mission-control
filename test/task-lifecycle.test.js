@@ -39,6 +39,21 @@ test('publish (וואטסאפ) — נסגרת כשפורסם או יממה אח�
   assert.equal(taskCloseReason(task('publish', { post_status: 'published' }), NOW), null);
 });
 
+test('publish (לפרסם היום) — נסגרת כשפורסם, כשהוזז ליום אחר, או כשהיום שלה נגמר', () => {
+  // NOW = 2026-10-05 15:00 בישראל
+  const day = { meta: { publish_day: true }, due_on: '2026-10-05' };
+  const today = { post_local_date: '2026-10-05' };
+  assert.equal(taskCloseReason(task('publish', today, day), NOW), null);
+  assert.equal(taskCloseReason(task('publish', { ...today, post_status: 'published' }, day), NOW), 'published');
+  assert.equal(taskCloseReason(task('publish', { post_local_date: '2026-10-07' }, day), NOW), 'moved');
+  // עבר המועד באותו יום — עוד בתוקף (המשימה מכסה את הפוסט עד סוף היום)
+  assert.equal(taskCloseReason(task('publish', { ...today, post_scheduled_at: at(-5) }, day), NOW), null);
+  // למחרת — פג תוקף, והפוסט עובר לרשימת "לא אושר שיצא"
+  const tomorrow = new Date('2026-10-05T21:30:00Z'); // 00:30 ב-6.10 בישראל
+  assert.equal(taskCloseReason(task('publish', today, day), tomorrow), 'expired');
+  assert.equal(taskCloseReason(task('publish', { post_status: null }, day), NOW), 'post_deleted');
+});
+
 test('failed — נסגרת כשפורסם, כשאושר שוב למועד עתידי, או כשהפוסט נמחק', () => {
   assert.equal(taskCloseReason(task('failed', { post_status: 'failed' }), NOW), null);
   assert.equal(taskCloseReason(task('failed', { post_status: 'published' }), NOW), 'published');
