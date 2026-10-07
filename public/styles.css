@@ -138,8 +138,6 @@ table.grid.wboard { table-layout: fixed; }
 .pst.blue > i { background: var(--accent); }
 .pst.orange > i { background: #ff8a1f; }
 .pst.auto > i { background: var(--st-good); }
-/* בלי תוכן — מסגרת מקווקוות: משבצת שמחכה */
-.post.missing { outline: 1.5px dashed color-mix(in srgb, var(--on, #fff) 70%, transparent); outline-offset: -4px; }
 /* פורסם — הכרטיס נשאר, דהוי, ודגל "פורסם" גדול באלכסון מעליו (מחוץ לדהייה).
    inset:0 + margin:auto ממרכז בדיוק, בלי תלות בכיוון RTL */
 .post.published { overflow: hidden; }

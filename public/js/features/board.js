@@ -212,7 +212,7 @@ function statusTag(p) {
       ? ((p.note ?? '').includes('יש תוכן') ? 'יש טיוטה לשייך' : '')
       : p.content_hint === 'ready' ? 'יש תוכן מוכן לשייך'
       : p.content_hint ? 'יש טיוטה לשייך' : '';
-    if (isMissed(p)) return { cls: 'orange', label: 'המועד עבר', hint: 'אין תוכן' };
+    // בלי תוכן — תמיד "אין תוכן" באדום, גם כשהמועד עבר: זה מה שצריך לטפל בו
     return { cls: 'red', label: 'אין תוכן', hint };
   }
   if (p.status === 'pending_approval') return { cls: 'yellow', label: 'ממתין לאישור' };
@@ -363,8 +363,7 @@ function postCard(p) {
   // ושם הנקודה כתוב בראשו.
   // מתחת: הסוג והשעה, ושורת מצב אחת במילים.
   const tag = statusTag(p);
-  const missing = p.status === 'hole' || (!p.content_id && p.status !== 'published');
-  const cls = ['post', p.status === 'published' && 'published', missing && 'missing',
+  const cls = ['post', p.status === 'published' && 'published',
     p.status === 'failed' && 'failed'].filter(Boolean).join(' ');
   const lines = `
     <span class="pep">${p.urgent ? '⚡ ' : ''}${esc(p.endpoint_name ?? '')}</span>
