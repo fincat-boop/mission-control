@@ -20,6 +20,7 @@ import {
 } from '../links.js';
 import { contentBlocker, metaExtrasError, readyRejection } from '../publish/readiness.js';
 import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
+import { deriveTitle } from '../../public/js/core/title.js';
 
 const r = Router();
 
@@ -390,7 +391,10 @@ const CONTENT_FIELDS = ['endpoint_id', 'campaign_id', 'kind', 'title', 'body',
 
 r.post('/content', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
-  if (!b.title) return bad(res, 'צריך כותרת');
+  // סעיף 23: כותרת ריקה נגזרת מהטקסט (public/js/core/title.js — אותה פונקציה
+  // כמו בטופס). קבצים עוד אין ביצירה, ולכן בלי טקסט — אין ממה לגזור
+  b.title = String(b.title ?? '').trim() || deriveTitle({ body: b.body });
+  if (!b.title) return bad(res, NEED_TITLE);
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג התוכן חייב להיות promo / value / hybrid');
   }
@@ -520,9 +524,15 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   // משבצת מקושרת: נעילת הקמפיין ואז הקבוצה — לפני ש-updateById נועל את
   // הפריט עצמו. עריכה של המקור ושל העוקבת במקביל רצות בתור, לא בדדלוק.
   try { await lockLinkScope(req.params.id); } catch (e) { return linkFail(res, e); }
-  const current = await one('select id, campaign_id, slot_channel_id from content_items where id = $1',
+  const current = await one(
+    'select id, campaign_id, slot_channel_id, sort_order, linked_to_id, body from content_items where id = $1',
     [req.params.id]);
   if (!current) return bad(res, 'לא נמצא תוכן כזה', 404);
+  // סעיף 23: כותרת שנמחקה נגזרת מהתוכן — מהטקסט שנשלח עכשיו, אחרת מהשמור
+  if ('title' in b && !String(b.title ?? '').trim()) {
+    b.title = await titleFromContent(current, b.body);
+    if (!b.title) return bad(res, NEED_TITLE);
+  }
 
   // פוסט של משבצת יוצא מהקמפיין רק לתוכן שוטף: המשבצת שלו יורדת איתו
   // (גרסה אחת למדיה אחת נשארת). לקמפיין אחר הוא לא עובר — שם אין לו משבצת.
@@ -703,6 +713,31 @@ r.post('/content/:id/unlink', requirePerm('content'), wrap(async (req, res) => {
   const engine = await autoFill(req.body?.week);
   res.json({ content, ...out, engine });
 }));
+
+const NEED_TITLE = 'צריך כותרת — או טקסט או קובץ שממנו היא תיגזר';
+
+/**
+ * הכותרת שנגזרת מהתוכן השמור של פריט (סעיף 23): הטקסט שנשלח עכשיו, אחרת
+ * הגרסה של המשבצת / הטקסט הראשון בין הגרסאות, אחרת שמות הקבצים (משבצת
+ * מקושרת — של המקור). '' כשאין ממה לגזור.
+ */
+async function titleFromContent(item, sentBody) {
+  let body = sentBody ?? '';
+  if (!String(body).trim()) {
+    const v = await one(
+      `select v.body from content_variants v join channels ch on ch.id = v.channel_id
+        where v.content_id = $1 and btrim(v.body) <> ''
+          and ($2::int is null or v.channel_id = $2)
+        order by ch.sort_order, ch.id limit 1`, [item.id, item.slot_channel_id]);
+    body = v?.body ?? item.body ?? '';
+  }
+  const files = await rows('select filename from content_assets where content_id = $1 order by id',
+    [item.linked_to_id ?? item.id]);
+  const ch = item.slot_channel_id
+    ? await one('select name from channels where id = $1', [item.slot_channel_id]) : null;
+  return deriveTitle({ body, files: files.map((f) => f.filename), channelName: ch?.name,
+                       index: item.slot_channel_id ? item.sort_order : null });
+}
 
 /** תוכן בקמפיין — כל התקופה של הקמפיין (autoFillCampaign); שוטף — השבוע שמוצג */
 const fillFor = (item, week) =>

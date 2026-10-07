@@ -23,6 +23,7 @@ import { goToSetupTarget } from '../ui/setup.js';
 import {
   copySources, nextEmptySlot, postCampaign, rowPrefill, slotForPost,
 } from '../core/slotRow.js';
+import { deriveTitle, isDerivedTitle, slotTitle } from '../core/title.js';
 
 /* ========================= ניוזלטר ========================= */
 
@@ -1155,12 +1156,27 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
   // המאזינים על #genBody (שנשאר בין פתיחות) — מוסרים בסגירה
   const ac = new AbortController();
   const readyEl = () => $('#slotReady');
+  const pickedFiles = () => [...($('#gen___files')?.files ?? [])];
+  /* סעיף 23: הכותרת לא חוסמת שמירה. שדה ריק = הכותרת נגזרת מהתוכן (שורה
+     ראשונה של הטקסט, שם קובץ, "<ערוץ> · פוסט N") ומוצגת כ-placeholder;
+     כותרת שהמשתמש הקליד לא נדרסת. כותרת שמורה שהיא בדיוק הנגזרת — השדה
+     נפתח ריק וממשיך לגזור (core/title.js). */
+  const derivedTitle = () => deriveTitle({
+    body: $('#gen_body')?.value ?? '', channelName: channel?.name, index,
+    files: [...slotAssets.map((a) => a.filename), ...pickedFiles().map((f) => f.name)] });
+  const autoTitle = !!item && isDerivedTitle(item.title, {
+    body: v?.body ?? item.body, channelName: channel?.name, index,
+    files: slotAssets.map((a) => a.filename) });
+  const paintTitleHint = () => {
+    const el = $('#gen_title');
+    if (el) el.placeholder = derivedTitle() || 'נגזרת מהשורה הראשונה של הטקסט';
+  };
   const values = () => {
     const val = genValues();
-    return { title: (val.title ?? '').trim(), kind: val.kind, body: val.body ?? '',
-      status: readyEl()?.checked ? 'ready' : 'draft' };
+    // אין ממה לגזור (הטקסט נמחק) — פוסט שמור שומר על הכותרת שלו
+    return { title: (val.title ?? '').trim() || derivedTitle() || (saved?.title ?? ''),
+      kind: val.kind, body: val.body ?? '', status: readyEl()?.checked ? 'ready' : 'draft' };
   };
-  const pickedFiles = () => [...($('#gen___files')?.files ?? [])];
   const keyOf = (p) => JSON.stringify([p, extrasKey(extras)]);
   // משבצת חדשה: נקודת ההשוואה היא מה שהטופס נפתח איתו (גם כותרת וסוג
   // שהגיעו מהשורה) — בלי שינוי לא נוצר פוסט ריק, גם לא ב"הבא ›"
@@ -1199,8 +1215,9 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
     const p = values();
     const picked = pickedFiles();
     if (!p.title) {
-      unsaved = !!(p.body || picked.length || saved);
-      genState(saved ? 'לא נשמר — צריך כותרת' : 'יישמר כשתהיה כותרת', 'warn');
+      // אין כותרת ואין ממה לגזור — אין טקסט ואין קבצים: פוסט ריק לא נוצר
+      unsaved = false;
+      genState('');
       return;
     }
     const key = keyOf(p);
@@ -1351,12 +1368,14 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
       `להחליף את הטקסט של ${channel?.name ?? 'הפוסט'} בטקסט של ${sourceLabel(src)}?`,
       { okLabel: 'החלף' }))) return;
     if (src.body.trim()) $('#gen_body').value = src.body;
-    if (!$('#gen_title').value.trim() && src.title) $('#gen_title').value = src.title;
+    // רק קבצים בלי טקסט — הכותרת של המקור, כדי שהפוסט ייווצר לפני ההעתקה
+    else if (!$('#gen_title').value.trim() && src.title) $('#gen_title').value = src.title;
     paintNote();
+    paintTitleHint();
     await saveNow();
     if (!withFiles) return;
     if (!saved) {
-      toast('צריך כותרת לפני שמעתיקים קבצים — כותבים כותרת ומעתיקים שוב.', true);
+      toast('צריך טקסט או כותרת לפני שמעתיקים קבצים — כותבים ומעתיקים שוב.', true);
       return;
     }
     const r = await api(`/content/${saved.id}/copy-assets`, { method: 'POST', body: { from: src.id } });
@@ -1397,7 +1416,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
       ...(partners.length ? [{ name: '__link', type: 'html', html: linkInfo(item, partners) }] : []),
       // משבצת חדשה: הכותרת והסוג מפוסט אחר באותה שורה (סעיף 18)
       { name: 'title', label: mail ? 'כותרת (פנימית — הנושא נכתב בעורך המייל)' : 'כותרת',
-        type: 'text', value: item?.title ?? prefill?.title },
+        type: 'text', value: autoTitle ? '' : (item?.title ?? prefill?.title),
+        placeholder: mail ? slotTitle(channel?.name, index) : 'נגזרת מהשורה הראשונה של הטקסט' },
       { name: 'kind', label: 'סוג', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
         value: item?.kind ?? prefill?.kind },
@@ -1431,8 +1451,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
         title="שומר ופותח את המשבצת הריקה הבאה">הבא ›</button>` : ''),
     // ניוזלטר בלבד — בשאר הערוצים אין כפתור שמירה, הכול נשמר לבד
     onSave: async (val) => {
-      if (!val.title) throw new Error('צריך כותרת');
-      const body = { title: val.title, kind: val.kind, week: state.week };
+      // ניוזלטר: אין כאן טקסט לגזור ממנו — "<ערוץ> · פוסט N" (סעיף 23)
+      const body = { title: val.title || slotTitle(channel?.name, index), kind: val.kind, week: state.week };
       const res = saved
         ? await api(`/content/${saved.id}`, { method: 'PATCH', body })
         : await api('/content', { method: 'POST', body: {
@@ -1472,8 +1492,10 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
             schedule(800);
           },
         });
-        $('#gen_body').addEventListener('input', paintNote);
+        $('#gen_body').addEventListener('input', () => { paintNote(); paintTitleHint(); });
+        $('#gen___files').addEventListener('change', paintTitleHint);
         paintNote();
+        paintTitleHint();
         // הקלדה — אחרי הפסקה; בחירה (סוג, קבצים) — מיד
         $('#genBody').addEventListener('input', (e) => {
           if (e.target.matches('#gen_title, #gen_body')) schedule(800);
