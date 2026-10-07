@@ -490,7 +490,7 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     const planned = plannedDate(c);
     if (planned && day < planned) {
       return bad(res, `"${c.title}" מתוכנן ל-${planned} בקמפיין "${c.campaign_name}"` +
-        ' (קמפיין מוכן) — אי אפשר לשייך אותו לפוסט מוקדם יותר');
+        ' (סומן "סיימתי לכתוב") — אי אפשר לשייך אותו לפוסט מוקדם יותר');
     }
   }
   // פוסט בלי נקודת קצה מקבל את של התוכן — ואז חל עליו אותו כלל כמו בהזזה:

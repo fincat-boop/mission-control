@@ -754,8 +754,8 @@ function campaignHead(c) {
           <button data-crumb="root">כל נקודות הקצה</button><span>›</span>
           <button data-crumb="endpoint">${esc(c.endpoint_name)}</button><span>›</span>
           <h2>${esc(c.name)}</h2>
-          ${c.complete ? `<span class="gst ok" data-tt="סומן מוכן: רק התוכן שנכתב, פרוס על התקופה">
-            <i></i>מוכן</span>` : ''}
+          ${c.complete ? `<span class="gst ok" data-tt="סיימתי לכתוב: רק התוכן שנכתב, פרוס על התקופה">
+            <i></i>סיימתי לכתוב</span>` : ''}
           ${c.recurring ? `<span class="gst na" data-tt="קמפיין מחזורי: משבצים אותו מחדש מלוח האסטרטגיה">
             <i></i>מחזורי</span>` : ''}
         </div>
@@ -876,10 +876,10 @@ const cellLabel = (cell) =>
   (cell.warn ? 'מוכן ⚠' : CELL[cell.state].label) || '—';
 const cellTip = (cell) => cell.warn ?? CELL[cell.state].label;
 
-/** שורת הסבר מתחת לרשת של קמפיין שסומן מוכן */
+/** שורת הסבר מתחת לרשת של קמפיין שסומן "סיימתי לכתוב" */
 function completeLine(c) {
   if (!c.complete) return '';
-  return `<div class="sumline">הקמפיין סומן מוכן: רק מה שנכתב, פרוס על התקופה.
+  return `<div class="sumline">סומן "סיימתי לכתוב": רק מה שנכתב, פרוס על התקופה.
     תוכן שנוסף עכשיו נכנס בסוף ומגדיל אותו. ${can('settings')
       ? 'להחזרת המשבצות הריקות — "פתח מחדש להשלמת תוכן" בתפריט.' : ''}</div>`;
 }
@@ -1570,9 +1570,10 @@ function campaignMenu(c) {
   // ייבוא מטבלה — רק בזוויות. העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
   const angles = c.structure !== 'general';
   const items = [
-    // "קמפיין מוכן" ראשון: רק כשיש מה להשאיר ועל מה לפרוס
+    // "סיימתי לכתוב" ראשון: רק כשיש מה להשאיר ועל מה לפרוס (סעיף 25 — "מוכן"
+    // הוא מצב של תוכן פוסט; על הקמפיין — "סיימתי לכתוב")
     can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
-      '<button type="button" data-act="complete" class="ok">קמפיין מוכן</button>',
+      '<button type="button" data-act="complete" class="ok">סיימתי לכתוב</button>',
     can('settings') && c.content_complete_at &&
       '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
@@ -1641,8 +1642,8 @@ async function completeCampaign(campaign, reload) {
     s.drafts === 1 ? 'אחד מהם טיוטה — הוא ייצא רק אחרי שיסומן מוכן.'
       : s.drafts > 1 ? `${s.drafts} מהם טיוטות — הם ייצאו רק אחרי שיסומנו מוכנים.` : '',
   ].filter(Boolean);
-  const ok = await confirmDialog(`לסמן את "${campaign.name}" כמוכן?\n\n${lines.join('\n')}`,
-    { okLabel: 'קמפיין מוכן', html: fit ? completeFitHtml(fit, cap) : '', read: fit ? readFit : null });
+  const ok = await confirmDialog(`סיימת לכתוב את "${campaign.name}"?\n\n${lines.join('\n')}`,
+    { okLabel: 'סיימתי לכתוב', html: fit ? completeFitHtml(fit, cap) : '', read: fit ? readFit : null });
   if (!ok) return;
   // הבחירה בחלון ההתאמה נשמרת לפני הסימון — הפריסה כבר על המרווח/התקופה החדשים
   if (ok === 'compress') await patchCampaign(campaign.id, { min_gap_days: fit.gap, week: state.week });
@@ -1651,11 +1652,11 @@ async function completeCampaign(campaign, reload) {
   try {
     const res = await api(`/campaigns/${campaign.id}/complete`,
       { method: 'POST', body: { week: state.week } });
-    engineToast(res, 'הקמפיין סומן מוכן — הפוסטים נפרסו על התקופה.');
+    engineToast(res, 'סומן "סיימתי לכתוב" — הפוסטים נפרסו על התקופה.');
   } catch (e) {
     if (!patched) throw e;
     // השינוי כבר נשמר והסימון לא — אומרים בדיוק מה קרה, והמסך מתעדכן למצב האמיתי
-    toast(`${ok === 'compress' ? 'המרווח נשמר' : 'התקופה נשמרה'}, אבל הקמפיין לא סומן מוכן — ${e.message}`,
+    toast(`${ok === 'compress' ? 'המרווח נשמר' : 'התקופה נשמרה'}, אבל הקמפיין לא סומן "סיימתי לכתוב" — ${e.message}`,
       true);
   } finally {
     if (patched) await reload();
@@ -2175,7 +2176,7 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     ],
     saveLabel: 'שמור',
     extraActions: `<span class="vacts">
-        <button type="button" class="btn small" id="markReady">⚡ מוכן לשליחה</button>
+        <button type="button" class="btn small" id="markReady">⚡ מוכן לפרסום</button>
         <button type="button" class="btn" id="vnext" title="שומר את הערוץ הזה ועובר לבא">הבא ›</button>
       </span>`,
     onSave: async () => {
@@ -2272,7 +2273,7 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
           }
           throw e;
         }
-        engineToast(res, `${cur.ch.name} סומן מוכן לשליחה.`);
+        engineToast(res, `${cur.ch.name} סומן מוכן לפרסום.`);
         refreshAround();
         load(cur);
       }));

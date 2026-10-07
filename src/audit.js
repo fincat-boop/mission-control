@@ -74,7 +74,7 @@ function describe(req, payload, deletedName) {
     'campaigns/pause':    ['pause',   `השהה קמפיין ${label}`],
     'campaigns/resume':   ['resume',  `הפעיל מחדש קמפיין ${label}`],
     'campaigns/order':    ['update',  `סידר מחדש את התוכן בקמפיין ${label}`],
-    'campaigns/complete': ['update',  `סימן את הקמפיין ${label} כמוכן — המשבצות הריקות ירדו`],
+    'campaigns/complete': ['update',  `סימן "סיימתי לכתוב" בקמפיין ${label} — המשבצות הריקות ירדו`],
     'campaigns/reopen':   ['update',  `פתח מחדש את הקמפיין ${label} להשלמת תוכן`],
     // label = שם ההרצה החדשה (מהתשובה)
     'campaigns/replace':  ['create',  `שיבץ מחדש קמפיין מחזורי — נוצר ${label}`],

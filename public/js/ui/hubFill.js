@@ -254,7 +254,7 @@ const STATUS_NOTE = {
 };
 
 
-const VARIANT_STATUS = [['draft', 'טיוטה'], ['ready', 'מוכן לשליחה'], ['not_relevant', 'לא רלוונטי למדיה הזו']];
+const VARIANT_STATUS = [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'], ['not_relevant', 'לא רלוונטי למדיה הזו']];
 
 /** שורת מצב: נקודה + טקסט (בלי קפסולה) */
 const dotLine = (cls, text, title = '') =>
