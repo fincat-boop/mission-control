@@ -136,6 +136,7 @@ table.grid.wboard { table-layout: fixed; }
 .pst.red > i { background: var(--st-crit); }
 .pst.yellow > i { background: var(--st-warn); }
 .pst.blue > i { background: var(--accent); }
+.pst.orange > i { background: #ff8a1f; }
 .pst.auto > i { background: var(--st-good); }
 /* בלי תוכן — מסגרת מקווקוות: משבצת שמחכה */
 .post.missing { outline: 1.5px dashed color-mix(in srgb, var(--on, #fff) 70%, transparent); outline-offset: -4px; }
@@ -1303,6 +1304,7 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .mtag.yellow { color: var(--st-warn); }
 .mtag.blue { color: var(--accent); }
 .mtag.auto { color: var(--st-good); }
+.mtag.orange { color: #ff8a1f; }
 @media (max-width: 600px) {
   .toolbar .legend { display: none; }
   .toolbar { gap: 8px; }

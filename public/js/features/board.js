@@ -215,20 +215,20 @@ function statusTag(p) {
       ? ((p.note ?? '').includes('יש תוכן') ? 'יש טיוטה לשייך' : '')
       : p.content_hint === 'ready' ? 'יש תוכן מוכן לשייך'
       : p.content_hint ? 'יש טיוטה לשייך' : '';
-    if (isMissed(p)) return { cls: 'yellow', label: 'המועד עבר', hint: 'אין תוכן' };
+    if (isMissed(p)) return { cls: 'orange', label: 'המועד עבר', hint: 'אין תוכן' };
     return { cls: 'red', label: 'אין תוכן', hint };
   }
   if (p.status === 'pending_approval') return { cls: 'yellow', label: 'ממתין לאישור' };
   if (p.status === 'published') {
     return p.has_results ? { cls: 'auto', label: 'פורסם' } : { cls: 'auto', label: 'פורסם', hint: 'אין תוצאות עדיין' };
   }
-  if (isMissed(p)) return { cls: 'yellow', label: 'המועד עבר', hint: 'לא פורסם' };
+  if (isMissed(p)) return { cls: 'orange', label: 'המועד עבר', hint: 'לא פורסם' };
   const hub = newsletterHubTag(p); // ניוזלטר שהועבר — "ממתין לאישור ב-HUB"
   if (hub) return hub;
   if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
   return p.variant_status === 'ready'
-    ? { cls: 'blue', label: 'מוכן לפרסום' }
-    : { cls: 'yellow', label: 'טיוטה', hint: 'התוכן עוד לא מוכן' };
+    ? { cls: 'auto', label: 'מוכן לפרסום' }
+    : { cls: 'blue', label: 'טיוטה', hint: 'התוכן עוד לא מוכן' };
 }
 
 /** שורת המצב בתחתית הכרטיס: נקודה בגוון + המילים, ופרט משני באפור */
