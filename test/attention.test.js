@@ -7,7 +7,7 @@ import {
 } from '../src/publish/runner.js';
 import { endpointAirStatus, failedPostAlerts } from '../src/alerts.js';
 import { unconfirmedAlert } from '../src/unconfirmed.js';
-import { approveTaskBlocked, groupTasks, localYmd } from '../src/routes/tasks.js';
+import { approveTaskBlocked, groupTasks, isUrgentTask, localYmd } from '../src/routes/tasks.js';
 
 /* ========================= משימת וואטסאפ: מה עושים ========================= */
 
@@ -117,6 +117,41 @@ test('groupTasks — היום / דורש טיפול / הושלם השבוע / מ
   assert.deepEqual(g.attention.map((t) => t.id), [2, 3]);
   assert.deepEqual(g.done_this_week.map((t) => t.id), [4]);
   assert.equal(g.open_count, 3);
+});
+
+test('groupTasks — "בקרוב" נפרד מ"דורש טיפול" ולא נספר בתגית; פג תוקף ≠ הושלם', () => {
+  const all = [
+    { id: 1, kind: 'general', done: false, due_on: '2026-10-05' },
+    { id: 2, kind: 'write', done: false, due_on: '2026-10-09' },             // בקרוב
+    { id: 3, kind: 'approve', done: false, due_on: null, scheduled_at: '2026-10-07T09:00:00Z' }, // לפי הפוסט
+    { id: 4, kind: 'approve', done: false, due_on: null, scheduled_at: '2026-10-04T09:00:00Z' }, // באיחור
+    { id: 5, kind: 'publish', done: true, due_on: '2026-10-04', done_at: '2026-10-05T01:00:00Z',
+      meta: { publish_day: true, auto_closed: 'expired' } },
+    { id: 6, kind: 'publish', done: true, due_on: '2026-10-05', done_at: '2026-10-05T09:00:00Z',
+      meta: { publish_day: true, auto_closed: 'published' } },
+  ];
+  const g = groupTasks(all, { today: '2026-10-05', weekStart: '2026-10-04' });
+  assert.deepEqual(g.today.map((t) => t.id), [1]);
+  assert.deepEqual(g.attention.map((t) => t.id), [4]);
+  assert.deepEqual(g.upcoming.map((t) => t.id).sort(), [2, 3]);
+  assert.equal(g.open_count, 2);
+  assert.deepEqual(g.done_this_week.map((t) => t.id), [6]);
+  assert.deepEqual(g.expired_this_week.map((t) => t.id), [5]);
+});
+
+test('isUrgentTask — משימת מערכת דחופה רק היום/באיחור; ידנית — כמו שסומנה', () => {
+  const today = '2026-10-05';
+  assert.equal(isUrgentTask({ kind: 'swap', urgent: true, due_on: '2026-10-08' }, today), false);
+  assert.equal(isUrgentTask({ kind: 'write', urgent: true, due_on: '2026-10-05' }, today), true);
+  assert.equal(isUrgentTask({ kind: 'publish', urgent: false, due_on: '2026-10-05' }, today), true);
+  assert.equal(isUrgentTask({ kind: 'failed', urgent: true, due_on: '2026-10-01' }, today), true);
+  assert.equal(isUrgentTask({ kind: 'approve', urgent: true, due_on: null }, today), false);
+  assert.equal(isUrgentTask({ kind: 'general', urgent: true, due_on: '2026-12-01' }, today), true);
+  assert.equal(isUrgentTask({ kind: 'general', urgent: false, due_on: '2026-10-01' }, today), false);
+  // הקבוצות מקבלות את הדחיפות המחושבת
+  const g = groupTasks([{ id: 1, kind: 'swap', urgent: true, done: false, due_on: '2026-10-08' }],
+    { today, weekStart: '2026-10-04' });
+  assert.equal(g.upcoming[0].urgent, false);
 });
 
 /* ========================= משימת אישור — הרשאה ========================= */

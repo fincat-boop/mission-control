@@ -17,6 +17,7 @@ const MINE_KEY = 'mc.tasks.mine';
 const view = {
   mine: (() => { try { return localStorage.getItem(MINE_KEY) === '1'; } catch { return false; } })(),
   showSnoozed: false,
+  showExpired: false,
   selecting: false,
   selected: new Set(),
 };
@@ -86,7 +87,9 @@ export async function renderTasks({ force = false } = {}) {
     ? list.filter((x) => x.assignee_id === state.me?.id || (x.kind === 'approve' && can('approve')))
     : list);
   // הבחירה המרובה — רק ממה שמוצג עכשיו (אחרי "שלי"); מה שהוסתר יוצא ממנה
-  const visibleIds = new Set([...mineOnly(t.today), ...mineOnly(t.attention)].map((x) => x.id));
+  const upcoming = t.upcoming ?? [];
+  const visibleIds = new Set([...mineOnly(t.today), ...mineOnly(t.attention), ...mineOnly(upcoming)]
+    .map((x) => x.id));
   for (const id of view.selected) if (!visibleIds.has(id)) view.selected.delete(id);
 
   const group = (title, items, emptyText) => `
@@ -96,17 +99,23 @@ export async function renderTasks({ force = false } = {}) {
     </div>`;
 
   const snoozed = mineOnly(t.snoozed ?? []);
+  const soon = mineOnly(upcoming);
+  // קבוצה מקופלת (נדחו / פג תוקף): כפתור עם מונה, והרשימה רק כשפתוחה
+  const folded = (id, label, items, open) => (items.length ? `<div class="tgroup">
+      <button class="tsnoozed-toggle" id="${id}" aria-expanded="${open}">${esc(label)} (${items.length})</button>
+      ${open ? `<div class="panel">${items.map(taskRow).join('')}</div>` : ''}
+    </div>` : '');
+  // פג תוקף ≠ הושלם: משימה שנסגרה לבד כי היום שלה עבר — אף אחד לא עשה אותה
+  const expired = mineOnly(t.expired_this_week ?? []);
   $('#tasks').innerHTML = `<div class="tasks">
     ${alertsPanel(alertData)}
     ${tasksToolbar()}
     ${group('היום', mineOnly(t.today), view.mine ? 'אין לך משימות להיום.' : 'אין משימות להיום.')}
     ${group('דורש טיפול', mineOnly(t.attention), 'הכול מטופל.')}
-    ${snoozed.length ? `<div class="tgroup">
-      <button class="tsnoozed-toggle" id="taskSnoozedToggle" aria-expanded="${view.showSnoozed}">
-        נדחו (${snoozed.length})</button>
-      ${view.showSnoozed ? `<div class="panel">${snoozed.map(taskRow).join('')}</div>` : ''}
-    </div>` : ''}
+    ${soon.length ? group('בקרוב', soon, '') : ''}
+    ${folded('taskSnoozedToggle', 'נדחו', snoozed, view.showSnoozed)}
     ${group('הושלם השבוע', mineOnly(t.done_this_week), 'עוד לא הושלמו משימות השבוע.')}
+    ${folded('taskExpiredToggle', 'פג תוקף השבוע', expired, view.showExpired)}
   </div>`;
 
   wireToolbar();
@@ -146,6 +155,18 @@ export async function renderTasks({ force = false } = {}) {
 
   $$('#tasks [data-task-done]').forEach((cb) =>
     cb.addEventListener('change', run(async () => {
+      // וי על משימת פרסום צמודה לפוסט = "סמן שפורסם" בפועל (הנתיב השמור — הוא
+      // גם סוגר את המשימה). נכשל — ההודעה מוצגת והמשימה נשארת פתוחה
+      if (cb.checked && cb.dataset.postPublish) {
+        try {
+          await api(`/posts/${cb.dataset.postPublish}/publish`, { method: 'POST' });
+          toast('סומן כפורסם.');
+        } catch (e) {
+          toast(e.message, true);
+        }
+        await Promise.all([rerender(), refreshBoard()]);
+        return;
+      }
       await api(`/tasks/${cb.dataset.taskDone}`, { method: 'PATCH', body: { done: cb.checked } });
       await rerender();
     })));
@@ -289,9 +310,15 @@ function checkbox(t) {
       locked ? ' disabled data-tt="רק מי שמורשה לאשר יכול לסגור או למחוק משימת אישור"' : ''}>`;
   }
   const locked = approveLocked(t);
-  return `<input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}${
+  // משימת פרסום של פוסט: הווי מסמן את הפוסט "פורסם" (לא רק סוגר את המשימה)
+  const act = isPublishAction(t)
+    ? ` data-post-publish="${t.post_id}" aria-label="סמן שפורסם" data-tt="מסמן את הפוסט כפורסם"` : '';
+  return `<input type="checkbox" data-task-done="${t.id}" ${t.done ? 'checked' : ''}${act}${
     locked ? ' disabled data-tt="רק מי שמורשה לאשר יכול לסגור משימת אישור"' : ''}>`;
 }
+
+/** משימה פתוחה שהפעולה שלה היא "סמן שפורסם" (לפרסם היום / וואטסאפ) */
+const isPublishAction = (t) => !t.done && t.kind === 'publish' && !!t.post_id;
 
 const isSnoozedRow = (t) => !t.done && t.snoozed_until && new Date(t.snoozed_until) > new Date();
 
@@ -403,6 +430,10 @@ function wireToolbar() {
   $('#taskAdd')?.addEventListener('click', openNewTask);
   $('#taskSnoozedToggle')?.addEventListener('click', run(async () => {
     view.showSnoozed = !view.showSnoozed;
+    await rerender();
+  }));
+  $('#taskExpiredToggle')?.addEventListener('click', run(async () => {
+    view.showExpired = !view.showExpired;
     await rerender();
   }));
   $('#taskBulkDone')?.addEventListener('click', run(() => bulk('done')));

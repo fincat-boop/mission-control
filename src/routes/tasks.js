@@ -17,24 +17,68 @@ export const isSnoozed = (t, now = new Date()) =>
   !t.done && t.snoozed_until != null && new Date(t.snoozed_until) > now;
 
 /**
+ * היעד של משימה: due_on, ולמשימת מערכת בלי due_on (אישור) — היום של הפוסט
+ * שלה (scheduled_at מה-join ב-GET /tasks). 'YYYY-MM-DD' או null.
+ */
+export function dueOf(t) {
+  if (t.due_on) return t.due_on;
+  if (t.kind !== 'general' && t.scheduled_at) return localYmd(new Date(t.scheduled_at));
+  return null;
+}
+
+/**
+ * דחופה? משימה ידנית ("general") — כמו שסומנה. משימת מערכת — רק כשהיעד
+ * שלה היום או עבר (מחושב בקריאה, לא הדגל השמור: הצעת החלפה או משימת כתיבה
+ * לשבוע הבא נוצרות "דחופות", והתגית איבדה משמעות).
+ */
+export function isUrgentTask(t, today) {
+  if (t.kind === 'general') return !!t.urgent;
+  const due = dueOf(t);
+  return due != null && due <= today;
+}
+
+/** משימה שנסגרה לבד כי פג תוקפה — לא "הושלמה" (אף אחד לא עשה אותה) */
+export const isExpiredTask = (t) => !!t.done && t.meta?.auto_closed === 'expired';
+
+const byUrgencyThenDue = (a, b) =>
+  (b.urgent - a.urgent) ||
+  ((dueOf(a) ?? '9999') < (dueOf(b) ?? '9999') ? -1 : (dueOf(a) ?? '9999') > (dueOf(b) ?? '9999') ? 1 : 0) ||
+  (a.id - b.id);
+
+/**
  * חלוקת המשימות לקבוצות של הטאב. due_on מגיע כמחרוזת 'YYYY-MM-DD'.
- * משימה שנדחתה לא נכנסת להיום/דורש טיפול ולא למונה — רק לקבוצת "נדחו".
+ *   today     — היעד היום
+ *   attention — "דורש טיפול": באיחור, או בלי יעד
+ *   upcoming  — "בקרוב": היעד אחרי היום
+ *   snoozed   — נדחו (לא בשום קבוצה אחרת ולא במונה)
+ *   done_this_week / expired_this_week — מה שנסגר מתחילת השבוע; מה שפג
+ *               תוקפו (נסגר לבד בלי שאיש עשה אותו) בנפרד
+ * open_count — מה שדורש טיפול עכשיו: היום + דורש טיפול (בלי "בקרוב").
+ * urgent של כל משימה מחושב מחדש (isUrgentTask).
  */
 export function groupTasks(all, { today, weekStart, now = new Date() }) {
-  const open = all.filter((t) => !t.done && !isSnoozed(t, now));
+  const list = all.map((t) => ({ ...t, urgent: t.done ? !!t.urgent : isUrgentTask(t, today) }))
+    .sort(byUrgencyThenDue);
+  const open = list.filter((t) => !t.done && !isSnoozed(t, now));
+  const closedThisWeek = list.filter((t) => t.done && t.done_at && localYmd(new Date(t.done_at)) >= weekStart);
+  const todayList = open.filter((t) => dueOf(t) === today);
+  const attention = open.filter((t) => dueOf(t) == null || dueOf(t) < today);
   return {
-    today: open.filter((t) => t.due_on === today),
-    attention: open.filter((t) => t.due_on !== today),
-    snoozed: all.filter((t) => isSnoozed(t, now)),
-    done_this_week: all.filter(
-      (t) => t.done && t.done_at && localYmd(new Date(t.done_at)) >= weekStart
-    ),
-    open_count: open.length,
+    today: todayList,
+    attention,
+    upcoming: open.filter((t) => dueOf(t) != null && dueOf(t) > today),
+    snoozed: list.filter((t) => isSnoozed(t, now)),
+    done_this_week: closedThisWeek.filter((t) => !isExpiredTask(t)),
+    expired_this_week: closedThisWeek.filter(isExpiredTask),
+    open_count: todayList.length + attention.length,
   };
 }
 
 /** תנאי SQL למשימה פתוחה שלא נדחתה — אותו כלל כמו isSnoozed */
-const OPEN_SQL = 'not done and (snoozed_until is null or snoozed_until <= now())';
+const OPEN_SQL = 't.done = false and (t.snoozed_until is null or t.snoozed_until <= now())';
+/** היעד ב-SQL — אותו כלל כמו dueOf (t = tasks, p = הפוסט שלה) */
+const DUE_SQL = `coalesce(t.due_on, case when t.kind <> 'general'
+                   then (p.scheduled_at at time zone '${LOCAL_TZ}')::date end)`;
 
 /**
  * משימות פתוחות + מה שנסגר בשבועיים האחרונים (הטאב מציג רק "הושלם השבוע").
@@ -69,10 +113,15 @@ r.get('/tasks', wrap(async (req, res) => {
 /** מונה זול לתגית בטאב ולרענון התקופתי — בלי לשלוף את כל המשימות */
 r.get('/tasks/count', wrap(async (_req, res) => {
   await closeResolvedTasksSafely();
+  // אותם כללים כמו groupTasks: "בקרוב" לא נספר, דחיפות של משימת מערכת לפי היעד
   const c = await one(
-    `select count(*) filter (where ${OPEN_SQL})::int as open_count,
-            count(*) filter (where ${OPEN_SQL} and urgent)::int as urgent_count
-       from tasks`
+    `select count(*) filter (where ${OPEN_SQL}
+                               and (${DUE_SQL} is null or ${DUE_SQL} <= $1::date))::int as open_count,
+            count(*) filter (where ${OPEN_SQL}
+                               and case when t.kind = 'general' then t.urgent
+                                        else ${DUE_SQL} <= $1::date end)::int as urgent_count
+       from tasks t left join posts p on p.id = t.post_id`,
+    [localYmd()]
   );
   res.json(c);
 }));

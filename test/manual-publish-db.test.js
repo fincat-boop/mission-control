@@ -430,3 +430,38 @@ test('28 — הצעת החלפה פתוחה מכסה את "חסר תוכן" של
   ({ alerts } = await inOrg(() => buildAlerts(null)));
   assert.ok(!alerts.some((a) => a.id === `no-text-${id}`));
 });
+
+/* ========================= 27 — רשימת המשימות ========================= */
+
+test('27 — המונה סופר רק "דורש טיפול" (היום/באיחור/בלי יעד); דחוף של מערכת לפי היעד; פג תוקף בנפרד', { skip }, async () => {
+  await freshOrg('tasks-list-test');
+  const ins = (kind, due, x = {}) => q1(
+    `insert into tasks (title, kind, due_on, urgent, done, done_at, meta, post_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+    [`${kind} ${due}`, kind, due, x.urgent ?? true, x.done ?? false, x.done ? new Date() : null,
+     x.meta ?? null, x.post ?? null]);
+  const today = ymdOf(new Date());
+  const later = ymdOf(dayAt(12, 5));
+  const earlier = ymdOf(dayAt(12, -1));
+  const soonPost = await post({ title: 'בעוד 3 ימים', at: 60 * 24 * 3, channel: ids.wa, status: 'pending_approval' });
+  const t = {
+    todayWrite: (await ins('write', today)).id,
+    lateSwap: (await ins('swap', earlier)).id,
+    soonSwap: (await ins('swap', later)).id,                                       // בקרוב, לא דחוף
+    approveSoon: (await ins('approve', null, { post: soonPost })).id,              // יעד = יום הפוסט
+    manual: (await ins('general', null, { urgent: false })).id,                    // בלי יעד — דורש טיפול
+    expired: (await ins('publish', earlier, { done: true, meta: { publish_day: true, auto_closed: 'expired' } })).id,
+  };
+  const c = await call('GET', '/tasks/count');
+  assert.equal(c.status, 200, JSON.stringify(c.json));
+  assert.deepEqual(c.json, { open_count: 3, urgent_count: 2 });
+
+  const g = (await call('GET', '/tasks')).json;
+  assert.deepEqual(g.today.map((x) => x.id), [t.todayWrite]);
+  assert.deepEqual(g.attention.map((x) => x.id).sort((a, b) => a - b), [t.lateSwap, t.manual]);
+  assert.deepEqual(g.upcoming.map((x) => x.id).sort((a, b) => a - b), [t.soonSwap, t.approveSoon]);
+  assert.equal(g.upcoming.find((x) => x.id === t.soonSwap).urgent, false);
+  assert.equal(g.open_count, 3);
+  assert.ok(!g.done_this_week.some((x) => x.id === t.expired));
+  assert.deepEqual(g.expired_this_week.map((x) => x.id), [t.expired]);
+});
