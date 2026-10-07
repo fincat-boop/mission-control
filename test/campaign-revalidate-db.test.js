@@ -237,3 +237,63 @@ test('"לא באותו יום" נדלק: זוג מקושר באותו יום מ�
     await cleanup(x);
   }
 });
+
+test('קישור למשבצת שכבר משובצת באותו יום: הפוסט שלה עובר ליום אחר', { skip }, async () => {
+  const x = await setup('קישור', {
+    starts: 1, ends: 30, channels: 2,
+    posts: [{ day: 5, ch: 0 }, { day: 5, ch: 1 }],
+  });
+  try {
+    const r = await call('POST', `/content/${x.posts[0].content}/link`,
+      { target_content_id: x.posts[1].content, replace: true });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const linked = await q1('select linked_to_id from content_items where id = $1', [x.posts[1].content]);
+    assert.equal(linked.linked_to_id, x.posts[0].content);
+    // רק הפוסטים של העוקבת נבדקים; המקור קבוע
+    assert.deepEqual(r.json.shift, { kept: 0, rescheduled: 1, approved: 0 });
+    assert.ok(await exists(x.posts[0].post));
+    const all = await campaignPosts(x.camp);
+    const source = all.filter((p) => p.content_id === x.posts[0].content);
+    const follower = all.filter((p) => p.content_id === x.posts[1].content);
+    assert.equal(follower.length, 1, 'העוקבת שובצה מחדש');
+    assert.notEqual(ymd(new Date(follower[0].scheduled_at)), ymd(new Date(source[0].scheduled_at)));
+  } finally {
+    await cleanup(x);
+  }
+});
+
+test('קישור כשהכלל כבוי — הפוסטים נשארים באותו יום, בלי בדיקה מחדש', { skip }, async () => {
+  const x = await setup('קישור כבוי', {
+    starts: 1, ends: 30, channels: 2, apart: false,
+    posts: [{ day: 5, ch: 0 }, { day: 5, ch: 1 }],
+  });
+  try {
+    const r = await call('POST', `/content/${x.posts[0].content}/link`,
+      { target_content_id: x.posts[1].content, replace: true });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.shift, null);
+    assert.ok(await exists(x.posts[1].post));
+  } finally {
+    await cleanup(x);
+  }
+});
+
+test('קישור בודק רק "לא באותו יום" — פוסט של העוקבת ביום אחר נשאר, גם קרוב לשכן', { skip }, async () => {
+  const x = await setup('קישור מרווח', {
+    starts: 1, ends: 30, channels: 2, gap: 7,
+    // בערוץ השני: פוסט ביום 4 ופוסט ביום 6 (הוצב ידנית, בתוך המרווח)
+    posts: [{ day: 5, ch: 0 }, { day: 6, ch: 1, status: 'approved' }, { day: 4, ch: 1 }],
+  });
+  try {
+    const r = await call('POST', `/content/${x.posts[0].content}/link`,
+      { target_content_id: x.posts[1].content, replace: true });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual(r.json.shift, { kept: 1, rescheduled: 0, approved: 0 });
+    const kept = await q1('select status, scheduled_at from posts where id = $1', [x.posts[1].post]);
+    assert.equal(kept.status, 'approved');
+    assert.equal(new Date(kept.scheduled_at).getTime(), at(6).getTime());
+    assert.ok(await exists(x.posts[2].post), 'פוסט שלא נגע בקישור לא נבדק');
+  } finally {
+    await cleanup(x);
+  }
+});

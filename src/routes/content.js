@@ -646,10 +646,23 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
  * יעד עם תוכן דורש replace: true (אחרת 409 עם needs_confirm).
  */
 r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
+  // קישור למשבצת שכבר משובצת: הפוסטים שלה נשארים במועדים שלהם ומעכשיו יוצאים
+  // עם התוכן של המקור — ואם אחד מהם באותו יום כמו פוסט של הקבוצה, "לא באותו
+  // יום" (links_apart) נשבר בלי התראה. לכן בקמפיין שהכלל דולק בו — נעילת
+  // המנוע לפני כל כתיבה, ואחרי הקישור הפוסטים של העוקבת נבדקים מחדש מול
+  // הכלל הזה בלבד (משבצת חדשה / ריקה — אין מה לבדוק; המילוי משבץ לפי הכלל)
+  const scope = await one(
+    `select ca.id, ca.links_apart from content_items ci join campaigns ca on ca.id = ci.campaign_id
+      where ci.id = $1`, [Number(req.params.id) || 0]);
+  const apart = !!scope && scope.links_apart !== false;
+  if (apart && !(await lockEngineOr503(res))) return;
   let out;
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
+  const shift = apart
+    ? await revalidateCampaignPosts(scope.id, { linksOnly: true, contentIds: [out.follower.id] })
+    : null;
   const engine = await fillFor(out.source, req.body?.week);
-  res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, engine });
+  res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, shift, engine });
 }));
 
 /**
@@ -698,7 +711,7 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
   }
   const out = await applyLinkPlan(plan);
   // מה שירד מהלוח משובץ מחדש על כל התקופה של הקמפיין, לא רק בשבוע שמוצג
-  const shift = tighten ? await revalidateCampaignPosts(c.id) : null;
+  const shift = tighten ? await revalidateCampaignPosts(c.id, { linksOnly: true }) : null;
   const engine = shift?.rescheduled
     ? await autoFillCampaign(c.id, req.body?.week)
     : await autoFill(req.body?.week);
