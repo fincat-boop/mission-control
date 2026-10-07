@@ -724,6 +724,27 @@ do $$ begin
   end if;
 end $$;
 
+-- ואותו דבר לקמפיין: טופס העריכה שולח את updated_at שהוא נפתח איתו, והשרת
+-- דוחה (409) שמירה על קמפיין שהשתנה בינתיים — לשונית ישנה לא מחזירה תאריכים,
+-- ערוצים או תקופה שמישהו אחר שינה. טריגר ולא עדכון בכל נתיב: כל שינוי בשורה
+-- (עריכה, השהיה, מוכן, קישורים, מחזורי, המרה) מקדם אותו, גם נתיב שעוד ייכתב.
+alter table campaigns
+  add column if not exists updated_at timestamptz not null default now();
+create or replace function touch_campaign() returns trigger
+language plpgsql as $$
+begin
+  if row(new.*) is distinct from row(old.*) then
+    new.updated_at := now();
+  end if;
+  return new;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgname = 'campaigns_touch') then
+    create trigger campaigns_touch before update on campaigns
+      for each row execute function touch_campaign();
+  end if;
+end $$;
+
 -- ייבוא מטבלה: כל ייבוא מקבל מזהה מנה אחד — "בטל ייבוא" מוחק את הפריטים של
 -- המנה שאיש לא נגע בהם מאז (src/import.js, undoImport)
 alter table content_items add column if not exists import_batch uuid;

@@ -14,6 +14,7 @@ import { isDate, rerunPeriod, runName } from '../../public/js/core/period.js';
 import { ymd } from '../board.js';
 import { lockEngine } from '../engine.js';
 import { shiftCampaignPosts } from '../campaign-shift.js';
+import { STALE_CAMPAIGN, staleCampaign } from '../variant-lock.js';
 
 const r = Router();
 
@@ -609,8 +610,14 @@ r.post('/campaigns/:id/to-general', requirePerm('settings'), wrap(async (req, re
 r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   const b = { ...(req.body ?? {}) };
 
-  const before = await one('select * from campaigns where id = $1', [req.params.id]);
+  // for update: שתי שמירות על אותו בסיס לא עוברות שתיהן את הבדיקה למטה
+  const before = await one('select * from campaigns where id = $1 for update', [req.params.id]);
   if (!before) return bad(res, 'לא נמצא קמפיין כזה', 404);
+  // נעילה אופטימית: הטופס שולח את updated_at שהקמפיין נטען איתו. לשונית
+  // ישנה הייתה מחזירה תאריכים (וגוררת את הפוסטים אחורה), ערוצים ותקופה
+  if (staleCampaign(before, b.base_updated_at)) {
+    return res.status(409).json({ error: STALE_CAMPAIGN, stale: true });
+  }
 
   // תאריך שבור היה מגיע ל-SQL ונופל ב-500. תאריך שעבר מותר — קמפיין שכבר
   // התחיל נערך כרגיל; ההזזה למטה דואגת ששום פוסט לא יזוז לעבר
@@ -627,7 +634,8 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     return bad(res, 'ערך לא תקין לקמפיין מחזורי');
   }
   // רק הדגל השתנה — אין מה לשבץ, והמילוי האוטומטי לא רץ
-  if (Object.keys(req.body ?? {}).filter((k) => k !== 'week').join() === 'recurring') {
+  if (Object.keys(req.body ?? {}).filter((k) => k !== 'week' && k !== 'base_updated_at')
+    .join() === 'recurring') {
     const campaign = await one('update campaigns set recurring = $2 where id = $1 returning *',
       [before.id, b.recurring]);
     return res.json({ campaign, moved_posts: 0, engine: EMPTY_FILL });

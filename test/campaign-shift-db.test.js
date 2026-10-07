@@ -245,3 +245,63 @@ test('תאריך שבור בעריכה — 400 עם הודעה, לא 500', { ski
   assert.equal(r2.status, 400);
   await cleanup(x);
 });
+
+/* ---------- לשונית ישנה: נעילה אופטימית (campaigns.updated_at) ---------- */
+
+test('לשונית ישנה (base_updated_at ישן) — 409, ושום דבר לא משתנה', { skip }, async () => {
+  const x = await setup('ישנה', { starts: 2, ends: 30, posts: [{ day: 6 }] });
+  const loaded = await q1('select updated_at, starts_on, name from campaigns where id = $1', [x.camp]);
+  // לשונית ב' מזיזה את הקמפיין
+  const moved = await call('PATCH', `/campaigns/${x.camp}`,
+    { starts_on: inDays(5), base_updated_at: loaded.updated_at });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  const afterB = await q1('select updated_at, starts_on from campaigns where id = $1', [x.camp]);
+  assert.notEqual(new Date(afterB.updated_at).getTime(), new Date(loaded.updated_at).getTime(),
+    'הטריגר קידם את updated_at');
+  const postB = await q1('select scheduled_at from posts where id = $1', [x.posts[0].post]);
+  assert.equal(ymd(new Date(postB.scheduled_at)), inDays(9));
+
+  // לשונית א' (נפתחה לפני) שומרת שם ותאריך ישן — נדחית, בלי לגרור אחורה
+  const stale = await call('PATCH', `/campaigns/${x.camp}`,
+    { name: 'שם חדש', starts_on: inDays(2), base_updated_at: loaded.updated_at });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.json.stale, true);
+  assert.match(stale.json.error, /שונה בינתיים/);
+  const now = await q1('select name, starts_on, updated_at from campaigns where id = $1', [x.camp]);
+  assert.equal(now.name, loaded.name);
+  assert.equal(now.starts_on, afterB.starts_on);
+  assert.equal(new Date(now.updated_at).getTime(), new Date(afterB.updated_at).getTime());
+  const postA = await q1('select scheduled_at from posts where id = $1', [x.posts[0].post]);
+  assert.equal(new Date(postA.scheduled_at).getTime(), new Date(postB.scheduled_at).getTime());
+
+  // בלי base_updated_at (קוראים אחרים) — אין בדיקה, כמו קודם
+  const legacy = await call('PATCH', `/campaigns/${x.camp}`, { goal: 'מטרה' });
+  assert.equal(legacy.status, 200, JSON.stringify(legacy.json));
+  await cleanup(x);
+});
+
+test('שינוי שם בלבד — הפוסטים לא זזים; כל עדכון אחר של השורה מקדם את updated_at', { skip }, async () => {
+  const x = await setup('שם', { starts: 2, ends: 30, posts: [{ day: 6, status: 'approved' }, { day: 9 }] });
+  const before = await q('select id, status, scheduled_at from posts where id = any($1::int[]) order by id',
+    [x.posts.map((p) => p.post)]);
+  const loaded = await q1('select updated_at from campaigns where id = $1', [x.camp]);
+  const r = await call('PATCH', `/campaigns/${x.camp}`,
+    { name: 'שם אחר', week: inDays(0), base_updated_at: loaded.updated_at });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.campaign.name, 'שם אחר');
+  assert.deepEqual(r.json.shift, { moved: 0, rescheduled: 0, approved: 0 });
+  const afterRows = await q('select id, status, scheduled_at from posts where id = any($1::int[]) order by id',
+    [x.posts.map((p) => p.post)]);
+  assert.deepEqual(afterRows.map((p) => [p.id, p.status, new Date(p.scheduled_at).getTime()]),
+    before.map((p) => [p.id, p.status, new Date(p.scheduled_at).getTime()]));
+
+  // השהיה (נתיב אחר, update ישיר) — גם מקדמת; עדכון בלי שינוי — לא
+  const t1 = (await q1('select updated_at from campaigns where id = $1', [x.camp])).updated_at;
+  await q('update campaigns set paused_at = now() where id = $1', [x.camp]);
+  const t2 = (await q1('select updated_at from campaigns where id = $1', [x.camp])).updated_at;
+  assert.ok(new Date(t2) > new Date(t1));
+  await q('update campaigns set name = name where id = $1', [x.camp]);
+  const t3 = (await q1('select updated_at from campaigns where id = $1', [x.camp])).updated_at;
+  assert.equal(new Date(t3).getTime(), new Date(t2).getTime());
+  await cleanup(x);
+});

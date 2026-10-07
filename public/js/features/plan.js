@@ -16,7 +16,7 @@ import {
   sameShortage, shortChannels, totalCapacity, validGap,
 } from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
-import { shiftNote } from '../core/campaignEdit.js';
+import { changedCampaignFields, shiftNote, tidyCampaignDates } from '../core/campaignEdit.js';
 import { extrasHtml, paintCaptionNote, readExtras, wireExtras } from '../ui/variantExtras.js';
 import { extrasFor, extrasKey, mergeExtras, pickExtras } from '../core/socialRules.js';
 import { goToSetupTarget } from '../ui/setup.js';
@@ -621,6 +621,14 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
     ?? (campaign?.starts_on && campaign?.ends_on
       ? inferPeriod(campaign.starts_on, campaign.ends_on)
       : campaign?.starts_on && structure !== 'general' ? 'open' : '1m');
+  // בעריכה: הטופס כפי שנפתח — נשלח רק מה שהשתנה מולו (changedCampaignFields).
+  // ערוצים לא פעילים לא מופיעים בטופס, ולכן גם לא בנקודת ההשוואה
+  const active = new Set(state.channels.filter((c) => c.active).map((c) => c.id));
+  const initial = campaign && !duplicate ? {
+    name: campaign.name, endpoint_id: campaign.endpoint_id, goal: campaign.goal,
+    starts_on: campaign.starts_on, period, ends_on: campaign.ends_on,
+    channel_ids: (campaign.channels ?? []).map((c) => c.id).filter((id) => active.has(id)),
+  } : null;
 
   openGeneric({
     guardDirty: true,
@@ -666,8 +674,7 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         throw new Error('בקמפיין כללי צריך תאריך יעד לפוסט הראשון — ממנו נפרסים הפוסטים');
       }
       // בלי תאריך לפוסט הראשון אין ממה לחשב סיום — הקמפיין נשמר בלי תאריכים
-      if (!v.starts_on && v.period !== 'custom') delete v.period;
-      if (v.period !== 'custom') delete v.ends_on;
+      tidyCampaignDates(v);
       v.week = state.week;
       // לפני השמירה: האם הפוסטים נכנסים בזמן. בשכפול הנתח והמרווח עוברים מהמקור
       const fit = await askFit(
@@ -685,9 +692,21 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
         await reload();
         return false;
       }
-      const res = campaign
-        ? await patchCampaign(campaign.id, v)
-        : await api('/campaigns', { method: 'POST', body: v });
+      let res;
+      try {
+        // עריכה: רק מה שהשתנה, עם updated_at שהקמפיין נטען איתו — השרת דוחה
+        // (409) אם הקמפיין שונה בינתיים, במקום שלשונית ישנה תדרוס אותו
+        res = campaign
+          ? await patchCampaign(campaign.id, {
+            ...changedCampaignFields(initial, v), ...fit,
+            week: v.week, base_updated_at: campaign.updated_at ?? null })
+          : await api('/campaigns', { method: 'POST', body: v });
+      } catch (e) {
+        if (e.status !== 409 || !e.payload?.stale) throw e;
+        toast(e.message, true);
+        await reload();
+        return false;
+      }
       engineToast(res, campaign ? `הקמפיין נשמר. ${shiftNote(res.shift)}`.trim() : 'הקמפיין נוצר.');
       await reload();
       return false;
