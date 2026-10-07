@@ -112,9 +112,10 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
   line-height: 1.4; cursor: pointer; background: var(--panel-2); color: var(--ink-1);
   border: 1px solid var(--border); border-inline-start: 4px solid var(--ep, var(--muted)); }
 .post:hover { border-color: color-mix(in srgb, var(--ink-2) 45%, var(--border)); border-inline-start-color: var(--ep); }
-.post .pep { display: flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600;
-  color: var(--ep, var(--muted)); margin-bottom: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.post .ep { font-weight: 600; display: block; }
+/* שם הנקודה נשבר לשתי שורות לכל היותר — שורה אחת בלי שבירה הייתה מרחיבה
+   את עמודות הטבלה מעבר למסך */
+.post .pep { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 12px; font-weight: 600; color: var(--ink-1); }
 .post .meta { color: var(--ink-2); font-size: 10.5px; margin-top: 3px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .post .kind {
   font-style: normal; font-size: 9.5px; font-weight: 600;
@@ -131,9 +132,8 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
 .pst.auto { color: var(--st-good); }
 /* בלי תוכן — מסגרת מקווקוות: משבצת שמחכה */
 .post.missing { border-style: dashed; border-inline-start-style: solid; }
-.post.missing .ep { color: var(--ink-2); font-weight: 500; }
 /* פורסם — הכרטיס נשאר, דהוי; המצב אומר "פורסם" */
-.post.published .pep, .post.published .ep, .post.published .meta { opacity: .55; }
+.post.published .pep, .post.published .meta { opacity: .55; }
 .post.failed { border-color: var(--st-crit); border-inline-start-color: var(--ep); }
 
 /* יש תוכן בטיוטה שעוד לא אושר לאף ערוץ — פחות דחוף מ"אין תוכן בכלל" */

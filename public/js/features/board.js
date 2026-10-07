@@ -359,21 +359,21 @@ function postCard(p) {
   const payload = esc(JSON.stringify(p));
   // התצוגה פתוחה לכולם; הגרירה בלבד מוגבלת להרשאת תוכן
   const clickable = `data-post-id="${p.id}" data-post="${payload}"`;
-  const tip = `${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}${p.urgent ? ' · דחוף' : ''}` +
-              `${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
+  // הכותרת לא בכרטיס (קטן ומהיר לסריקה) — רק בריחוף ובחלון הפוסט
+  const title = p.status === 'hole' ? '' : p.title;
+  const tip = `${title ? `${title} · ` : ''}${p.endpoint_name ?? ''} · ${KIND_HE[p.kind]}` +
+              `${p.urgent ? ' · דחוף' : ''}${p.assignee_name ? ` · אחראי: ${p.assignee_name}` : ''}`;
 
   // כרטיס ניטרלי: נקודת הקצה היא פס בצבע שלה בצד, והשם שלה כתוב בראש הכרטיס
   // (קודם הכרטיס כולו היה בצבע הנקודה — וכמה נקודות בגוון דומה לא היו נבדלות).
-  // מתחת: הכותרת, הסוג והשעה, ושורת מצב אחת במילים.
+  // מתחת: הסוג והשעה, ושורת מצב אחת במילים.
   const tag = statusTag(p);
   const missing = p.status === 'hole' || (!p.content_id && p.status !== 'published');
-  const title = p.status === 'hole' ? KIND_HE[p.kind] : p.title;
   const cls = ['post', p.status === 'published' && 'published', missing && 'missing',
     p.status === 'failed' && 'failed'].filter(Boolean).join(' ');
   return `<div class="${cls}" ${clickable} data-tt="${esc(tip)}"
     style="--ep:${epColor(p.endpoint_id)}">
-    <span class="pep">${esc(p.endpoint_name ?? '')}</span>
-    <span class="ep">${p.urgent ? '⚡ ' : ''}${esc(title)}</span>
+    <span class="pep">${p.urgent ? '⚡ ' : ''}${esc(p.endpoint_name ?? '')}</span>
     <div class="meta"><i class="kind ${p.kind}">${esc(KIND_HE[p.kind])}</i>${esc(p.time ?? '')}${who}</div>
     ${statusLine(tag)}
   </div>`;
