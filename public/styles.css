@@ -129,8 +129,9 @@ table.grid.wboard { table-layout: fixed; }
 .pst { margin-top: 3px; font-size: 11px; font-weight: 600; }
 /* על רקע צבעוני הטקסט בצבע הכרטיס; הגוון של המצב בנקודה, עם טבעת כהה
    כדי שתיראה גם על כרטיס באותו גוון */
-.pst > i { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-  box-shadow: 0 0 0 1.5px rgba(0,0,0,.45); margin-inline-end: 6px; vertical-align: 0; }
+/* הטבעת היא border בתוך הקופסה (לא צל) — השורה ב-overflow:hidden, וצל נחתך בקצה */
+.pst > i { display: inline-block; box-sizing: border-box; width: 10px; height: 10px; border-radius: 50%;
+  border: 1.5px solid rgba(0,0,0,.45); margin-inline-end: 6px; vertical-align: -1px; }
 .pst .h { font-weight: 400; opacity: .8; }
 .pst.red > i { background: var(--st-crit); }
 .pst.yellow > i { background: var(--st-warn); }
