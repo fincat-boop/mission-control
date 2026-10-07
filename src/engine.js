@@ -218,7 +218,8 @@ export async function planWeek(anchorDate, {
     let hour = slot.dateKey === today ? Math.max(DEFAULT_HOUR, now.getHours() + 1) : DEFAULT_HOUR;
     // התנגשות שעה באותו ערוץ באותו יום — מזיזים שעה קדימה
     while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
-    if (hour > 22) continue; // היום כבר נגמר
+    // היום כבר נגמר, או שגם 22:00 תפוסה (הלולאה נעצרת עליה — קודם שובץ שם שני)
+    if (hour > 22 || usage.hourTaken(slot.channel_id, slot.dateKey, hour)) continue;
     at.setHours(hour, 0, 0, 0);
     if (at <= now) continue;
 
@@ -1445,6 +1446,7 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
 
     let hour = HOLE_HOUR;
     while (usage.hourTaken(target.id, day.date, hour) && hour < 22) hour += 1;
+    if (usage.hourTaken(target.id, day.date, hour)) continue; // עד 22:00 הכול תפוס
     // תופסים בפועל את המקום כדי ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת פנויה.
     usage.take(target.id, day.date, 'value', hour);
     sameDay.add(`${e.id}:${target.id}:${day.date}`);

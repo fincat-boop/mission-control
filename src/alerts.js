@@ -145,13 +145,17 @@ export async function buildAlerts(user = null) {
   // פוסט שיושב על יום שהערוץ חסם. חסימת יום מפנה אוטומטית את מי שאפשר
   // (relocateBlocked), אבל פוסט שלא נמצא לו יום חוקי נשאר במקום — וזה חייב
   // להיראות, אחרת הוא יוצא לאוויר ביום שהוגדר סגור.
+  // פוסט מאושר מתפרסם לבד במועד שלו — ולכן הכותרת אומרת את זה במפורש.
   for (const p of await postsOnBlockedDays()) {
     const d = new Date(p.scheduled_at);
     alerts.push({
       id: `blocked-day-${p.id}`,
       level: 'crit',
-      title: `פוסט על יום חסום — ${p.channel_name}`,
-      detail: `${p.title} · ${HE_DAYS[d.getDay()]} ${d.toLocaleDateString('he-IL')} · ` +
+      title: p.status === 'approved'
+        ? 'פוסט מאושר ביום שנחסם — יתפרסם ביום הזה אם לא יוזז'
+        : `פוסט על יום חסום — ${p.channel_name}`,
+      detail: `${p.status === 'approved' ? `${p.channel_name} · ` : ''}` +
+              `${p.title} · ${HE_DAYS[d.getDay()]} ${d.toLocaleDateString('he-IL')} · ` +
               'צריך להזיז אותו ידנית או לפתוח את היום',
       tab: 'board',
       post_id: p.id,
