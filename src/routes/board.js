@@ -34,6 +34,11 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
   }
+  // מועד שעבר לא יתפרסם לעולם (כמו בהזזה — moveBlocker). אותו יום בשעה
+  // מאוחרת יותר — בסדר.
+  const when = new Date(b.scheduled_at);
+  if (Number.isNaN(when.getTime())) return bad(res, 'המועד לא תקין');
+  if (when.getTime() < Date.now()) return bad(res, 'אי אפשר לשבץ פוסט לזמן שעבר');
   // אותם כללים קשיחים כמו בהזזה: יום שהערוץ חסם, ושני פוסטים לאותה נקודת
   // קצה באותו ערוץ באותו יום
   const target = await one('select name, blocked_days, active from channels where id = $1', [b.channel_id]);
@@ -57,13 +62,16 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
     return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
   }
 
+  // פוסט ידני נולד תמיד "מתוכנן": status מהגוף לא נקרא — אחרת אפשר ליצור
+  // פוסט מאושר (או "פורסם") בלי הרשאת אישור. מעברי סטטוס — רק בנתיבים
+  // הייעודיים (approve / publish / reject).
   const post = await one(
     `insert into posts (channel_id, endpoint_id, content_id, title, kind,
                         scheduled_at, status, assignee_id, urgent, note)
-     values ($1,$2,$3,$4,$5,$6,coalesce($7,'scheduled'),$8,coalesce($9,false),$10)
+     values ($1,$2,$3,$4,$5,$6,'scheduled',$7,coalesce($8,false),$9)
      returning *`,
     [b.channel_id, b.endpoint_id ?? null, b.content_id ?? null, b.title, b.kind,
-     b.scheduled_at, b.status ?? null, b.assignee_id ?? null, b.urgent ?? false, b.note ?? null]
+     b.scheduled_at, b.assignee_id ?? null, b.urgent ?? false, b.note ?? null]
   );
   res.status(201).json({ post });
 }));
@@ -524,14 +532,36 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
              approval_reset: done.approval_reset });
 }));
 
+/** מאילו מצבים מותר לסמן "פורסם" ביד — לא ממתין לאישור, לא באמצע פרסום, לא פעמיים */
+export const MARKABLE_STATUSES = ['scheduled', 'approved', 'failed'];
+
+/**
+ * published_at של סימון ידני: המועד המתוכנן כשהוא כבר עבר (השעה האמיתית
+ * לא ידועה, ושעת הלחיצה — שבוע אחרי, לפעמים — בטוח לא נכונה), אחרת עכשיו.
+ * אותו ביטוי בסימון בודד ובסימון המרוכז.
+ */
+export const MARK_PUBLISHED_AT_SQL =
+  'case when p.scheduled_at < now() then p.scheduled_at else now() end';
+
+export const MARK_STATUS_ERROR = {
+  published: 'הפוסט כבר מסומן כפורסם',
+  publishing: 'הפוסט מתפרסם ממש עכשיו — אי אפשר לסמן אותו ביד',
+  pending_approval: 'הפוסט ממתין לאישור — קודם מאשרים או דוחים אותו',
+};
+
 /** סימון "פורסם" — מעדכן גם את המשימה הצמודה */
 r.post('/posts/:id/publish', requirePerm('content'), wrap(async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return bad(res, 'לא נמצא שיבוץ כזה', 404);
   const post = await one(
-    `update posts set status = 'published', published_at = now()
-      where id = $1 returning *`,
-    [req.params.id]
+    `update posts p set status = 'published', published_at = ${MARK_PUBLISHED_AT_SQL}
+      where p.id = $1 and p.status = any($2) returning *`,
+    [req.params.id, MARKABLE_STATUSES]
   );
-  if (!post) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  if (!post) {
+    const cur = await one('select status from posts where id = $1', [req.params.id]);
+    if (!cur) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+    return bad(res, MARK_STATUS_ERROR[cur.status] ?? 'אי אפשר לסמן את הפוסט הזה כפורסם', 409);
+  }
   await query(
     `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
     [post.id]
