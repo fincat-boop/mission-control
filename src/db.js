@@ -62,9 +62,33 @@ export async function one(text, params) {
 }
 
 /**
+ * COMMIT שבודק שהוא באמת נשמר. Postgres לא זורק על COMMIT של טרנזקציה
+ * שאחת השאילתות בה נכשלה (והשגיאה נתפסה בקוד) — הוא מגלגל אחורה בשקט
+ * ומחזיר את הפקודה 'ROLLBACK'. בלי הבדיקה, כל מה שנכתב בטרנזקציה נעלם
+ * והקורא חושב שהצליח (בטיק הפרסום: פוסטים שכבר יצאו חזרו ל-approved
+ * ויצאו שוב בטיק הבא).
+ */
+export class CommitRolledBackError extends Error {
+  constructor() {
+    super('הטרנזקציה לא נשמרה: שאילתה בתוכה נכשלה, וה-COMMIT התגלגל אחורה');
+    this.name = 'CommitRolledBackError';
+  }
+}
+
+async function commitOrThrow(client) {
+  const r = await client.query('commit');
+  if (r.command !== 'COMMIT') throw new CommitRolledBackError();
+}
+
+/**
  * מריץ fn בתוך הקשר של ארגון: client ייעודי מה-pool, טרנזקציה, ו-
  * app.current_org מוגדר. משמש את ה-middleware לכל בקשה, ואת עבודות
- * הרקע כדי לרוץ per-org.
+ * הרקע כדי לרוץ per-org. COMMIT שהתגלגל אחורה — זורק (commitOrThrow).
+ *
+ * מקונן (withOrg בתוך withOrg או בתוך בקשה) — client חדש וטרנזקציה נפרדת
+ * שנשמרת בעצמה; השאילתות בתוך fn הולכות אליו (tenantContext.run), ואחריו
+ * חוזרות לחיצוני. אסור כשהטרנזקציה החיצונית מחזיקה נעילה על שורה שהפנימית
+ * כותבת: הפנימית תחכה לחיצונית, שמחכה לה.
  */
 export async function withOrg(orgId, fn) {
   const client = await pool.connect();
@@ -77,7 +101,7 @@ export async function withOrg(orgId, fn) {
     // דולף לבקשה הבאה שתקבל את אותו חיבור מה-pool.
     await client.query("select set_config('app.current_org', $1, true)", [String(orgId)]);
     const out = await tenantContext.run({ client, orgId }, () => fn(client));
-    await client.query('commit');
+    await commitOrThrow(client);
     return out;
   } catch (err) {
     try { await client.query('rollback'); } catch { /* החיבור כבר שבור */ }
@@ -104,7 +128,7 @@ export async function tx(fn) {
   try {
     await client.query('begin');
     const out = await fn(client);
-    await client.query('commit');
+    await commitOrThrow(client);
     return out;
   } catch (err) {
     await client.query('rollback');

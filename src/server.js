@@ -80,7 +80,15 @@ function tenantScope(req, res, next) {
     res.on('finish', resolve);
     res.on('close', resolve);
     next();
-  })).catch(next);
+  })).catch((err) => {
+    // ה-commit רץ אחרי שהתשובה כבר יצאה, ולכן COMMIT שהתגלגל אחורה
+    // (CommitRolledBackError) כבר לא יכול להפוך ל-500 — לפחות לא בשקט
+    if (res.headersSent) {
+      console.error(`הבקשה ${req.method} ${req.originalUrl} לא נשמרה במסד:`, err);
+      return;
+    }
+    next(err);
+  });
 }
 
 app.use('/api', csrfGuard, loadUser, tenantScope, audit, api);
