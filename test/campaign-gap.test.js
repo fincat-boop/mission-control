@@ -1,7 +1,7 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gapDaysError, shareError } from '../src/routes/campaigns.js';
+import { gapDaysError, shareError, tightensCampaignRules } from '../src/routes/campaigns.js';
 
 /* ========================= מרווח לקמפיין — אימות הקלט ========================= */
 
@@ -66,4 +66,24 @@ test('העוזר: min_gap_days בסכימה 1–30 או null, ונבדק בהצ�
       assert.match(r.error, /בין 1 ל-30/);
     }
   }
+});
+
+test('tightensCampaignRules — רק מה שמהדק כלל: סיום מוקדם, התחלה חדשה, מרווח גדול', () => {
+  const before = { starts_on: '2030-11-01', ends_on: '2030-11-30', min_gap_days: null };
+  const settings = { min_gap_days: 7 };
+  const t = (b) => tightensCampaignRules(before, b, settings);
+  assert.equal(t({ name: 'אחר', goal: 'x' }), false);
+  assert.equal(t({ starts_on: '2030-11-01', ends_on: '2030-11-30' }), false);
+  assert.equal(t({ ends_on: '2030-12-15' }), false, 'הארכה');
+  assert.equal(t({ ends_on: '2030-11-20' }), true, 'קיצור');
+  assert.equal(t({ ends_on: null }), false, 'בלי סוף — רחב יותר');
+  assert.equal(tightensCampaignRules({ ...before, ends_on: null }, { ends_on: '2030-11-20' }, settings),
+    true, 'סוף חדש לקמפיין פתוח');
+  assert.equal(tightensCampaignRules({ ...before, starts_on: null }, { starts_on: '2030-11-05' }, settings),
+    true, 'התחלה חדשה לקמפיין בלי התחלה');
+  assert.equal(t({ min_gap_days: 7 }), false, 'אותו מרווח בפועל (הכללי)');
+  assert.equal(t({ min_gap_days: 10 }), true);
+  assert.equal(t({ min_gap_days: 3 }), false);
+  assert.equal(tightensCampaignRules({ ...before, min_gap_days: 3 }, { min_gap_days: null }, settings),
+    true, 'ריק ← הכללי הגדול יותר');
 });
