@@ -216,3 +216,30 @@ test('אישור דחוף: מילוי אחר מחזיק את נעילת המנו
   assert.equal(ok.status, 201);
   server.close();
 });
+
+/* ========================= שיוך תוכן ריק במילוי ========================= */
+
+for (const [body, writeOpen] of [['', true], ['טקסט אמיתי', false]]) {
+  test(`המנוע ממלא פוסט חסר תוכן ב${body ? 'תוכן עם טקסט — "לכתוב" נסגרת' : 'כותרת בלבד — "לכתוב" נשארת פתוחה'}`,
+    { skip }, async () => {
+      const x = await fresh(`שיוך ${body || 'ריק'}`);
+      const id = await item(x, `זווית ${body || 'ריקה'}`, { body });
+      const { postId, taskId } = await inOrg(async () => {
+        const p = (await db.one(
+          `insert into posts (channel_id, endpoint_id, kind, title, status, scheduled_at, auto_hole)
+           values ($1, $2, 'value', 'חסר תוכן', 'scheduled', '2031-07-09T12:00:00', true)
+           returning id`, [x.ch, x.ep])).id;
+        const t = (await db.one(
+          `insert into tasks (title, kind, post_id, endpoint_id) values ('לכתוב', 'write', $1, $2)
+           returning id`, [p, x.ep])).id;
+        return { postId: p, taskId: t };
+      });
+      const out = await inOrg(() => engine.applyWeek('2031-07-06', { holes: false }));
+      const mineAttach = out.attached_items.find((a) => a.post_id === postId);
+      assert.equal(mineAttach?.content_id, id);
+      const t = await inOrg(() => db.one('select done from tasks where id = $1', [taskId]));
+      assert.equal(t.done, !writeOpen);
+      // "בטל" פותח רק מה שהשיוך באמת סגר
+      assert.deepEqual(mineAttach.closed_task_ids, writeOpen ? [] : [taskId]);
+    });
+}

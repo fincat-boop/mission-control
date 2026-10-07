@@ -544,19 +544,8 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     content_id: c.id, title: c.title, kind: c.kind, endpoint_id: c.endpoint_id,
   });
   if (!done) return bad(res, 'הפוסט השתנה בינתיים — רעננו ונסו שוב', 409);
-  // תוכן בלי טקסט ובלי מדיה (כותרת בלבד) עדיין "חסר תוכן" (סעיף 20): משימת
-  // "לכתוב" שהשיוך סגר (attachToPost) נפתחת שוב — נסגרת כשהתוכן מוכן
-  // (taskCloseReason). הצעת החלפה נשארת סגורה: נבחר תוכן משלו.
-  const variant = await one(
-    'select status, body, meta from content_variants where content_id = $1 and channel_id = $2',
-    [c.id, post.channel_id]);
-  const files = await rows(itemAssetsSql('a.id, a.mime, a.variant_id'), [c.id, post.channel_id]);
-  const platform = (await one('select platform from channels where id = $1', [post.channel_id]))?.platform;
-  if (done.closed_task_ids.length && contentState({ platform, variant, assets: files }).empty) {
-    await query(
-      `update tasks set done = false, done_at = null
-        where id = any($1::int[]) and kind = 'write'`, [done.closed_task_ids]);
-  }
+  // תוכן בלי טקסט ובלי מדיה (כותרת בלבד): "לכתוב" נשארת פתוחה — attachToPost,
+  // אותו כלל כמו במילוי של המנוע
   res.json({ post: done.post, draft: c.variant_status !== 'ready',
              approval_reset: done.approval_reset });
 }));

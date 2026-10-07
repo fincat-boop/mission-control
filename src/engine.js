@@ -4,6 +4,8 @@ import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
 import { averageShares, channelBudget, effectiveGap } from './capacity.js';
+import { isEmptyContent } from './publish/readiness.js';
+import { itemAssetsSql } from './links.js';
 
 /**
  * מנוע השיבוץ.
@@ -433,6 +435,12 @@ export async function applyWeek(anchorDate, {
  * נפתר. פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן": האישור ניתן לפוסט בלי
  * התוכן הזה. מחזיר null אם בינתיים כבר יש לפוסט תוכן, הוא יצא לאוויר,
  * או שהמועד שלו עבר. משמש גם את המנוע וגם את "שייך תוכן" בחלון הפוסט.
+ *
+ * תוכן בלי טקסט ובלי מדיה לערוץ (כותרת בלבד — isEmptyContent) עדיין "חסר
+ * תוכן" (סעיף 20): "לכתוב" נשארת פתוחה — נסגרת כשהתוכן מוכן
+ * (taskCloseReason). הצעת החלפה נסגרת בכל מקרה: נבחר תוכן משלו. קודם רק
+ * השיוך הידני פתח אותה מחדש, והמנוע סגר אותה על פוסט ריק. closed_task_ids
+ * — רק מה שנשאר סגור, ש"בטל" יפתח מחדש.
  * @returns {Promise<{post:object, closed_task_ids:number[], approval_reset:boolean}|null>}
  */
 export async function attachToPost(postId, c) {
@@ -449,11 +457,18 @@ export async function attachToPost(postId, c) {
     [postId, c.content_id, c.title, c.kind, c.endpoint_id]
   );
   if (!post) return null;
+  const variant = await one(
+    'select status, body, meta from content_variants where content_id = $1 and channel_id = $2',
+    [c.content_id, post.channel_id]);
+  const files = await rows(itemAssetsSql('a.id, a.mime, a.variant_id'), [c.content_id, post.channel_id]);
+  const platform = (await one('select platform from channels where id = $1', [post.channel_id]))?.platform;
+  const empty = isEmptyContent({ platform, variant, assets: files });
   const closed = await rows(
     `update tasks set done = true, done_at = now()
-      where post_id = $1 and kind in ('write','swap') and done = false
+      where post_id = $1 and done = false
+        and (kind = 'swap' or (kind = 'write' and not $2::boolean))
       returning id`,
-    [postId]
+    [postId, empty]
   );
   const { old_status: oldStatus, ...row } = post;
   return {
