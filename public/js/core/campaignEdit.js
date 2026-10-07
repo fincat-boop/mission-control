@@ -53,6 +53,8 @@ export function changedCampaignFields(initial, values) {
  * מה קרה לפוסטים כשהקמפיין זז בזמן (shift מ-PATCH /campaigns/:id). ריק כשלא
  * זז כלום. מה שלא התאים לתאריך החדש ירד מהלוח ושובץ מחדש לפי הכללים — ומאושר
  * שירד צריך אישור מחדש.
+ * בדיקה בלי הזזה (revalidateCampaignPosts — סיום מוקדם, מרווח גדול, "לא
+ * באותו יום", קישור) מחזירה kept במקום moved: מה שירד — "כדי לעמוד בכללים".
  */
 export function shiftNote(shift) {
   if (!shift || !(shift.moved || shift.rescheduled)) return '';
@@ -64,8 +66,10 @@ export function shiftNote(shift) {
     const approved = !shift.approved ? ''
       : shift.approved === 1 ? ' (אחד מהם היה מאושר ויצטרך אישור מחדש)'
         : ` (${shift.approved} מהם היו מאושרים ויצטרכו אישור מחדש)`;
+    const why = 'kept' in shift ? 'כדי לעמוד בהגדרות החדשות של הקמפיין'
+      : 'כי התאריך החדש לא התאים';
     parts.push(`${postsLabel(shift.rescheduled)} ${shift.rescheduled === 1 ? 'שובץ' : 'שובצו'} ` +
-      `מחדש כי התאריך החדש לא התאים${approved}`);
+      `מחדש ${why}${approved}`);
   }
   return `${parts.join(', ')}.`;
 }

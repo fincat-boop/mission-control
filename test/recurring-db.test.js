@@ -293,10 +293,11 @@ test('"מוכן" עובר להרצה של קמפיין מחזורי, אבל לא
   const run = await campaign(r.json.campaign.id);
   assert.ok(run.content_complete_at, 'ההרצה מוכנה כמו התבנית');
 
-  // שכפול רגיל של אותו קמפיין מוכן — מתחיל לא מוכן, לא מחזורי ובלי template_id
+  // שכפול רגיל של אותו קמפיין מוכן — מתחיל לא מוכן, לא מחזורי ובלי template_id.
+  // אחרי ההרצה (1.5–31.5), כדי לא לחפוף לה
   const tpl = await campaign(id);
   const d = await call('POST', `/campaigns/${id}/duplicate`, {
-    name: 'מוכן (עותק)', endpoint_id: ids.endpoint, starts_on: '2027-05-01', period: '1m',
+    name: 'מוכן (עותק)', endpoint_id: ids.endpoint, starts_on: '2027-07-01', period: '1m',
     channel_ids: [ids.ig, ids.yt, ids.nl],
   });
   assert.equal(d.status, 201, JSON.stringify(d.json));
@@ -310,6 +311,47 @@ test('"מוכן" עובר להרצה של קמפיין מחזורי, אבל לא
     `select v.meta from content_variants v join content_items ci on ci.id = v.content_id
       where ci.campaign_id = $1 and v.channel_id = $2`, [dup.id, ids.nl]);
   assert.equal(meta.meta.subject, 'נפתחה ההרשמה');
+});
+
+test('הרצה חופפת לתבנית או להרצה קודמת — 409 עם השם והתאריכים; יום אחרי הסוף — עובר', { skip }, async () => {
+  const id = await template('חפיפה', { start: '2027-08-01' });   // 1.8–31.8
+  await call('PATCH', `/campaigns/${id}`, { recurring: true });
+  const before = (await q('select count(*)::int as n from campaigns')).at(0).n;
+
+  // חופף לתבנית עצמה
+  const onTpl = await call('POST', `/campaigns/${id}/replace`, { starts_on: '2027-08-20' });
+  assert.equal(onTpl.status, 409, JSON.stringify(onTpl.json));
+  assert.equal(onTpl.json.error,
+    "הסבב החדש חופף לסבב 'חפיפה' (1.8–31.8). בוחרים תאריך התחלה אחרי 31.8.");
+  assert.equal((await q('select count(*)::int as n from campaigns')).at(0).n, before, 'לא נוצר כלום');
+
+  // יום אחרי הסוף — עובר; ואז הרצה שחופפת להרצה הזו (לא לתבנית) נדחית
+  const next = await call('POST', `/campaigns/${id}/replace`, { starts_on: '2027-09-01', period: '2w' });
+  assert.equal(next.status, 201, JSON.stringify(next.json));
+  const onRun = await call('POST', `/campaigns/${id}/replace`, { starts_on: '2027-09-10' });
+  assert.equal(onRun.status, 409);
+  assert.match(onRun.json.error, /חופף לסבב 'חפיפה · ספטמבר 2027' \(1\.9–14\.9\)/);
+  // מסתיים לפני הרצה מאוחרת יותר שכבר קיימת — ההצעה היא לסיים לפניה
+  const late = await call('POST', `/campaigns/${id}/replace`,
+    { starts_on: '2027-07-20', period: 'custom', ends_on: '2027-08-05' });
+  assert.equal(late.status, 409);
+  assert.match(late.json.error, /בוחרים תקופה שמסתיימת לפני 1\.8/);
+
+  // שכפול של התבנית או של הרצה — אותה בדיקה; בנקודת קצה אחרת — אין חפיפה
+  const dupRun = await call('POST', `/campaigns/${next.json.campaign.id}/duplicate`, {
+    name: 'עותק', endpoint_id: ids.endpoint, starts_on: '2027-08-31', period: '1w',
+    channel_ids: [ids.ig],
+  });
+  assert.equal(dupRun.status, 409);
+  assert.match(dupRun.json.error, /חופף לסבב/);
+  const other = await q1("insert into endpoints (name, importance) values ('אחרת', 5) returning id");
+  const dupOther = await call('POST', `/campaigns/${id}/duplicate`, {
+    name: 'עותק אחר', endpoint_id: other.id, starts_on: '2027-08-10', period: '1w',
+    channel_ids: [ids.ig],
+  });
+  assert.equal(dupOther.status, 201, JSON.stringify(dupOther.json));
+  const after = await call('POST', `/campaigns/${id}/replace`, { starts_on: '2027-09-15' });
+  assert.equal(after.status, 201, JSON.stringify(after.json));
 });
 
 test('תקופה ידנית / בלי סוף: אותו מספר ימים, ובלי תאריך סיום צריך לבחור', { skip }, async () => {

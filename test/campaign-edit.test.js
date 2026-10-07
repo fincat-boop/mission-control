@@ -16,6 +16,13 @@ test('shiftNote — כמה זזו, כמה שובצו מחדש וכמה מאוש�
     '3 פוסטים שובצו מחדש כי התאריך החדש לא התאים (2 מהם היו מאושרים ויצטרכו אישור מחדש).');
 });
 
+test('shiftNote — בדיקה בלי הזזה (kept): רק מה שירד, עם הסיבה של הכללים', () => {
+  assert.equal(shiftNote({ kept: 4, rescheduled: 0, approved: 0 }), '');
+  assert.equal(shiftNote({ kept: 2, rescheduled: 2, approved: 1 }),
+    '2 פוסטים שובצו מחדש כדי לעמוד בהגדרות החדשות של הקמפיין ' +
+    '(אחד מהם היה מאושר ויצטרך אישור מחדש).');
+});
+
 const INITIAL = {
   name: 'בלאק פריידי', endpoint_id: 3, goal: null, starts_on: '2030-11-20', period: '2w',
   ends_on: '2030-12-03', channel_ids: [2, 5],
