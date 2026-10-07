@@ -207,7 +207,7 @@ r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, 
   const draft = { ...(before ?? {}) };
   for (const k of PREVIEW_FIELDS) if (b[k] !== undefined) draft[k] = b[k];
   if (b.assume_complete === true) {
-    if (!before) return bad(res, 'אפשר לבדוק סימון "מוכן" רק לקמפיין שכבר נשמר');
+    if (!before) return bad(res, 'אפשר לבדוק סימון "סיימתי לכתוב" רק לקמפיין שכבר נשמר');
     draft.content_complete_at = before.content_complete_at ?? new Date().toISOString();
   }
   const endpoint = await one('select id from endpoints where id = $1', [draft.endpoint_id]);
