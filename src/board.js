@@ -1,5 +1,7 @@
 import { one, rows } from './db.js';
 import { contentHints } from './candidates.js';
+import { itemAssetsSql } from './links.js';
+import { contentState } from './publish/readiness.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const HE_MONTHS = [
@@ -90,8 +92,10 @@ export async function buildBoard(anchorDate) {
     // יוכל להראות "יש תוכן" (מוכן) לעומת "יש טיוטה", לא רק "יש/אין".
     rows(
       `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status,
+              v.body as variant_body, v.meta as variant_meta, chn.platform,
               pr.post_id is not null as has_results
          from posts p
+         left join channels chn     on chn.id = p.channel_id
          left join users u          on u.id = p.assignee_id
          left join endpoints e      on e.id = p.endpoint_id
          left join content_items ci on ci.id = p.content_id
@@ -113,6 +117,15 @@ export async function buildBoard(anchorDate) {
   // קמפיין מוכן — כך שהרמז לא מבטיח תוכן שהרשימה לא תציג.
   const hints = await contentHints(posts, ymd);
   for (const p of posts) p.content_hint = hints.get(p.id) ?? null;
+
+  // תוכן ריק (כותרת בלבד) = "אין תוכן", ו"מוכן" שלא יעבור את בדיקת הפרסום =
+  // "מוכן ⚠" — אותם כללים כמו בטבלת הקמפיין (סעיפים 20–21)
+  const states = await postContentStates(posts);
+  for (const p of posts) {
+    const st = states.get(p.id);
+    p.content_empty = st?.empty ?? false;
+    p.ready_warn = st?.warn ?? null;
+  }
 
   const hybridWeight = Number(settings?.hybrid_weight ?? 0.5);
 
@@ -206,6 +219,33 @@ export async function buildBoard(anchorDate) {
   };
 }
 
+/**
+ * מצב התוכן של פוסטים שיש להם תוכן משויך, בשאילתת קבצים אחת: Map(post_id →
+ * {empty, warn}) מ-contentState (readiness.js) — "חסר תוכן" (טיוטה בלי טקסט
+ * ובלי מדיה) ו"מוכן ⚠ <סיבה>". הקבצים — מה שהפריט יוצא איתו בערוץ
+ * (itemAssetsSql: משבצת מקושרת — של המקור), כמו בפרסום ובטבלה.
+ * @param list [{id, content_id, channel_id, platform, variant_status, variant_body, variant_meta}]
+ *        (variant_status null = אין גרסה לערוץ)
+ */
+export async function postContentStates(list) {
+  const mine = list.filter((p) => p.content_id);
+  const out = new Map();
+  if (!mine.length) return out;
+  const files = await rows(
+    `select x.post_id, f.id, f.mime, f.variant_id
+       from unnest($1::int[], $2::int[], $3::int[]) as x(post_id, content_id, channel_id)
+       cross join lateral (${itemAssetsSql('a.id, a.mime, a.variant_id',
+         { item: 'x.content_id', channel: 'x.channel_id' })}) f`,
+    [mine.map((p) => p.id), mine.map((p) => p.content_id), mine.map((p) => p.channel_id)]);
+  for (const p of mine) {
+    const variant = p.variant_status == null ? null
+      : { status: p.variant_status, body: p.variant_body, meta: p.variant_meta };
+    out.set(p.id, contentState({ platform: p.platform, variant,
+                                 assets: files.filter((f) => f.post_id === p.id) }));
+  }
+  return out;
+}
+
 export function shapePost(p) {
   return {
     id: p.id,
@@ -215,6 +255,9 @@ export function shapePost(p) {
     content_id: p.content_id,
     variant_status: p.variant_status,
     content_hint: p.content_hint ?? null,
+    // סעיפים 20–21: תוכן משויך בלי טקסט ובלי מדיה; "מוכן" שלא יעבור פרסום
+    content_empty: !!p.content_empty,
+    ready_warn: p.ready_warn ?? null,
     title: p.title,
     kind: p.kind,
     status: p.status,

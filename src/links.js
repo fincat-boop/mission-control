@@ -31,14 +31,16 @@ export const assetOwnerId = (x) => x.linked_to_id ?? x.id;
  * המקור (בכללי לכל פריט יש גרסה אחת, ולכן קובץ של הגרסה של המקור הוא קובץ
  * של התוכן). לפריט לא מקושר — בדיוק כמו קודם: המשותפים + של הגרסה למדיה.
  * @param cols עמודות מ-content_assets בכינוי a
+ * @param ref ביטויי SQL לפריט ולמדיה במקום $1/$2 — לשאילתה מרוכזת על כמה
+ *        פוסטים (lateral, postContentStates ב-board.js)
  */
-export const itemAssetsSql = (cols) => `
+export const itemAssetsSql = (cols, { item = '$1', channel = '$2' } = {}) => `
   select ${cols}
     from content_items ci
     join content_assets a on a.content_id = coalesce(ci.linked_to_id, ci.id)
     left join content_variants av on av.id = a.variant_id
-   where ci.id = $1
-     and (a.variant_id is null or ci.linked_to_id is not null or av.channel_id = $2)
+   where ci.id = ${item}
+     and (a.variant_id is null or ci.linked_to_id is not null or av.channel_id = ${channel})
    order by a.variant_id nulls last, a.id`;
 
 /**

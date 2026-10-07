@@ -1,7 +1,7 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contentBlocker, readyRejection } from '../src/publish/readiness.js';
+import { contentBlocker, contentState, isEmptyContent, readyRejection } from '../src/publish/readiness.js';
 import { publishBlocker } from '../src/publish/runner.js';
 import { readyWarn } from '../src/campaigns.js';
 
@@ -81,4 +81,49 @@ test('readyWarn — משבצת מקושרת רואה את הקבצים של המ
   const follower = { linked_to_id: 3, assets: [],
                      variant_assets: [{ variant_id: 4, mime: 'video/mp4' }] };
   assert.equal(readyWarn(follower, v, ig), null);
+});
+
+/* ========================= סעיפים 20–21: ריק / "מוכן ⚠" ========================= */
+
+test('isEmptyContent — כותרת בלבד (בלי טקסט ובלי מדיה) ריק; טקסט, תמונה או קישור פייסבוק — לא', () => {
+  assert.equal(isEmptyContent({ platform: 'facebook', variant: { body: ' \n\t ' } }), true);
+  assert.equal(isEmptyContent({ platform: 'facebook', variant: null }), true);
+  assert.equal(isEmptyContent({ platform: 'whatsapp', variant: { body: 'שלום' } }), false);
+  assert.equal(isEmptyContent({ platform: 'instagram', variant: { body: '' },
+    assets: [{ mime: 'image/jpeg' }] }), false);
+  // מסמך הוא לא מדיה לפוסט
+  assert.equal(isEmptyContent({ platform: 'facebook', variant: { body: '' },
+    assets: [{ mime: 'application/pdf' }] }), true);
+  assert.equal(isEmptyContent({ platform: 'facebook',
+    variant: { body: '', meta: { link: 'https://x.co' } } }), false);
+  // קישור יוצא רק בפייסבוק
+  assert.equal(isEmptyContent({ platform: 'whatsapp',
+    variant: { body: '', meta: { link: 'https://x.co' } } }), true);
+  // ניוזלטר: גוף או שדה שמולא בעורך ה-HUB (אותו כלל כמו ההעברה)
+  assert.equal(isEmptyContent({ platform: 'newsletter', variant: { body: '', meta: { subject: 'נ' } } }), true);
+  assert.equal(isEmptyContent({ platform: 'newsletter',
+    variant: { body: '', meta: { field_values: { 'תוכן': 'x' } } } }), false);
+});
+
+test('contentBlocker נשען על isEmptyContent — אותה הגדרה של "אין טקסט"', () => {
+  for (const platform of ['facebook', 'whatsapp', 'manual']) {
+    for (const variant of [{ body: '' }, { body: 'x' }, null]) {
+      const empty = isEmptyContent({ platform, variant });
+      assert.equal(/אין טקסט ואין מדיה/.test(contentBlocker({ platform, variant }) ?? ''), empty);
+    }
+  }
+});
+
+test('contentState — warn רק לגרסה "מוכן", וריק גובר על warn', () => {
+  assert.deepEqual(contentState({ platform: 'instagram', variant: { status: 'ready', body: 'כיתוב' } }),
+    { empty: false, warn: 'אינסטגרם דורש תמונה או וידאו — אין מדיה לפוסט' });
+  assert.deepEqual(contentState({ platform: 'instagram', variant: { status: 'draft', body: 'כיתוב' } }),
+    { empty: false, warn: null });
+  assert.deepEqual(contentState({ platform: 'facebook', variant: { status: 'ready', body: '' } }),
+    { empty: true, warn: null });
+  // אותה תשובה כמו התא בטבלה (readyWarn) לאותה גרסה וקבצים
+  const v = { id: 1, status: 'ready', body: 'x'.repeat(2300) };
+  const item = { assets: [{ mime: 'image/png' }], variant_assets: [] };
+  assert.equal(contentState({ platform: 'instagram', variant: v, assets: item.assets }).warn,
+    readyWarn(item, v, { platform: 'instagram' }));
 });

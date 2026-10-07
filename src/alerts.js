@@ -1,6 +1,6 @@
 import { currentOrg, one, rows } from './db.js';
 import { isPlatformOrg } from './platform.js';
-import { effectiveCadenceDays, ymd } from './board.js';
+import { effectiveCadenceDays, postContentStates, ymd } from './board.js';
 import { campaignsWithHealth } from './campaigns.js';
 import { postsOnBlockedDays } from './respace.js';
 import { COVERING_TASK_KINDS, suppressTaskedAlerts } from './task-lifecycle.js';
@@ -35,21 +35,34 @@ export async function buildAlerts(user = null) {
   // פוסטים בלי תוכן: כל מה שיוצא בתוך content_alert_hours, ופוסטים שהמנוע
   // פתח כחסרי תוכן (auto_hole, status='scheduled' — לא 'hole') בשבוע הקרוב
   // או שהמועד שלהם עבר ביומיים האחרונים (missingContentAlerts).
-  // מבצע דחוף (urgent) — כותרת בלבד בכוונה (/urgent/commit), לא "חסר תוכן"
-  const withoutContent = await rows(
-    `select p.id, p.title, p.scheduled_at, p.auto_hole,
-            e.name as endpoint_name, c.name as channel_name
+  // מבצע דחוף (urgent) — כותרת בלבד בכוונה (/urgent/commit), לא "חסר תוכן".
+  // תוכן משויך בלי טקסט ובלי מדיה (טיוטה עם כותרת בלבד) — גם "חסר תוכן"
+  // (סעיף 20). ההחלטה — isEmptyContent (readiness.js), אותה הגדרה כמו הלוח
+  // והפרסום; בשאילתה רק החלון (48 שעות / שבוע לממלאי מקום), לא כלל משלה.
+  const noContentCandidates = await rows(
+    `select p.id, p.title, p.scheduled_at, p.auto_hole, p.content_id, p.channel_id,
+            e.name as endpoint_name, c.name as channel_name, c.platform,
+            v.status as variant_status, v.body as variant_body, v.meta as variant_meta
        from posts p
        left join endpoints e on e.id = p.endpoint_id
        left join channels c  on c.id = p.channel_id
-      where p.status = 'scheduled' and p.content_id is null and p.published_at is null
+       left join content_variants v on v.content_id = p.content_id and v.channel_id = p.channel_id
+      where p.status = 'scheduled' and p.published_at is null
         and not p.urgent
+        -- תוכן ריק שהמועד שלו עבר נספר ב"לא סומנו כפורסמו" (UNCONFIRMED_SQL) — סימן אחד
+        and (p.content_id is null or p.scheduled_at >= now())
+        -- פוסט של קמפיין מושהה לא על הלוח — אין מה לכתוב לו עכשיו
+        and not exists (select 1 from content_items ci join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)
         and (p.scheduled_at between now() and now() + ($1 || ' hours')::interval
              or (p.auto_hole and p.scheduled_at between now() - interval '${HOLE_PAST_DAYS} days'
                                                     and now() + interval '${HOLE_AHEAD_DAYS} days'))
       order by p.scheduled_at`,
     [alertHours]
   );
+  const contentStates = await postContentStates(noContentCandidates);
+  const withoutContent = noContentCandidates.filter((p) =>
+    !p.content_id || contentStates.get(p.id)?.empty);
   const pending = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
           from posts p left join channels c on c.id = p.channel_id
          where p.status = 'pending_approval' order by p.scheduled_at`);
@@ -395,7 +408,9 @@ export function missingContentAlerts(list, { alertHours = 48, now = new Date() }
   const soonUntil = now.getTime() + alertHours * 3600000;
   return list.map((p) => {
     const at = new Date(p.scheduled_at).getTime();
-    const where = [p.channel_name, shortWhen(p.scheduled_at)].filter(Boolean);
+    // תוכן משויך בלי טקסט ובלי מדיה (סעיף 20) — אומרים שיש רק כותרת
+    const where = [p.channel_name, shortWhen(p.scheduled_at),
+                   p.content_id ? 'יש רק כותרת' : null].filter(Boolean);
     if (at <= now.getTime()) {
       return {
         id: `no-text-${p.id}`,
