@@ -191,7 +191,7 @@ export async function runFixClashes({ apply = false, orgId = null, log = console
     return plan;
   }
   for (const m of moves) {
-    await query('update posts set scheduled_at = $1 where id = $2', [m.at, m.id]);
+    await query('update posts set scheduled_at = $1 where id = $2 and status = any($3)', [m.at, m.id, MOVABLE]);
   }
   log(`\n${moves.length} פוסטים הוזזו.`);
   return plan;

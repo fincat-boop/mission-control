@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import helmet from 'helmet';
-import { migrate, pool, withOrg } from './db.js';
+import { migrate, pool, tenantScope } from './db.js';
 import { loadUser } from './auth.js';
 import { csrfGuard } from './csrf.js';
 import { audit } from './audit.js';
@@ -70,19 +70,7 @@ app.use(cookieParser());
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-// כל בקשה מאומתת רצה בתוך הקשר הטננט של המשתמש (withOrg): set role app_user
-// + app.current_org, וכל השאילתות בבקשה מסוננות ע"י RLS. בקשות אנונימיות
-// (login/logout/me — req.org ריק) רצות על ה-pool כרגיל, וזה גם ה-bootstrap
-// שמגלה את הארגון של המשתמש.
-function tenantScope(req, res, next) {
-  if (!req.org) return next();
-  withOrg(req.org, () => new Promise((resolve) => {
-    res.on('finish', resolve);
-    res.on('close', resolve);
-    next();
-  })).catch(next);
-}
-
+// כל בקשה מאומתת רצה בתוך הקשר הטננט של המשתמש (tenantScope ב-db.js).
 app.use('/api', csrfGuard, loadUser, tenantScope, audit, api);
 
 // נתיב /api שלא נתפס הוא שגיאה, לא בקשה לדף
@@ -137,6 +125,14 @@ const server = app.listen(port, () => {
 // אין תלות בגורם חיצוני (cron וכו') — מספיק כל עוד יש instance אחד.
 const HOUR = 3600000;
 let tickRunning = false;
+
+async function publishTickAllOrgs() {
+  const { rows: orgs } = await pool.query('select id from orgs order by id');
+  for (const { id } of orgs) {
+    await publishTickForOrg(id).catch((e) =>
+      console.error(`טיק הפרסום נכשל לארגון ${id}:`, e.message));
+  }
+}
 const timers = [
   setTimeout(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 2 * 60000),
   setInterval(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 24 * HOUR),
@@ -152,12 +148,15 @@ const timers = [
   setInterval(() => { mediaMaintenance().catch((e) => console.error('תחזוקת מדיה נכשלה:', e)); }, HOUR),
   // פרסום אוטומטי: כל דקה, לכל ארגון. הטיק עצמו בודק את מתג-העל של הארגון
   // ויוצא מיד כשהוא כבוי — הריצה הריקה זולה.
-  // טיק לא מתחיל כשהקודם עוד רץ: פרסום לאינסטגרם יכול לחכות דקות, ובזמן
-  // הזה הטרנזקציה שלו פתוחה — טיק מקביל לא רואה את מה שכתב (משימות כפולות).
+  // בלי withOrg סביב הטיק: הוא פותח טרנזקציה קצרה משלו לכל שלב (runner.js),
+  // כך שקריאה ל-Graph לא רצה בתוך טרנזקציה, וכשל בשלב אחד לא מבטל את מה
+  // שכבר נשמר. ארגון שהטיק שלו נכשל — נרשם בלוג, וממשיכים לבא.
+  // טיק לא מתחיל כשהקודם עוד רץ: פרסום לאינסטגרם יכול לחכות דקות, וטיק
+  // מקביל היה עובר על אותן רשימות (משימות וואטסאפ כפולות).
   setInterval(() => {
     if (tickRunning) return;
     tickRunning = true;
-    forEachOrg(() => publishTickForOrg())
+    publishTickAllOrgs()
       .catch((e) => console.error('טיק הפרסום האוטומטי נכשל:', e))
       .finally(() => { tickRunning = false; });
   }, 60000),
