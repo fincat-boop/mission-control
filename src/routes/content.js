@@ -18,7 +18,7 @@ import {
   linkRulesPlan, linkSlots, linkedBetween, lockLinkScope, mediaOwner, normalizeLinkRules,
   releaseLinks, syncFrom, unlink,
 } from '../links.js';
-import { contentBlocker, readyRejection } from '../publish/readiness.js';
+import { contentBlocker, metaExtrasError, readyRejection } from '../publish/readiness.js';
 import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
 
 const r = Router();
@@ -49,7 +49,7 @@ function linkFail(res, e) {
 async function readyReason(contentId, channelId, variant, { assets } = {}) {
   const ch = await one('select platform from channels where id = $1', [channelId]);
   if (!ch) return null;
-  const files = assets ?? (contentId ? await rows(itemAssetsSql('a.mime'), [contentId, channelId]) : []);
+  const files = assets ?? (contentId ? await rows(itemAssetsSql('a.id, a.mime'), [contentId, channelId]) : []);
   return contentBlocker({ platform: ch.platform, variant, assets: files });
 }
 
@@ -104,6 +104,8 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
   const slotErr = await slotChannelError(req.params.id, req.params.channelId);
   if (slotErr) return bad(res, slotErr);
   const status = ['draft', 'ready', 'not_relevant'].includes(b.status) ? b.status : 'draft';
+  const metaErr = metaExtrasError(b.meta);
+  if (metaErr) return bad(res, metaErr);
 
   const before = await one(
     `select id, body, status, meta, updated_at from content_variants
@@ -937,7 +939,7 @@ async function readyWarns(contentId) {
       where (ci.id = $1 or ci.linked_to_id = $1) and v.status = 'ready'`, [contentId]);
   const out = [];
   for (const v of ready) {
-    const assets = await rows(itemAssetsSql('a.mime'), [v.content_id, v.channel_id]);
+    const assets = await rows(itemAssetsSql('a.id, a.mime'), [v.content_id, v.channel_id]);
     out.push({ content_id: v.content_id, channel_id: v.channel_id,
                warn: contentBlocker({ platform: v.platform, variant: v, assets }) });
   }

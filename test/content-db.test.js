@@ -282,3 +282,38 @@ test('עריכת טקסט בעוקבת שנשארה טיוטה: העוקבת ט�
   assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.deepEqual(await variant(b, ids.ig), { body: 'מהמקור', status: 'draft', meta: null });
 });
+
+test('שדות נוספים לפי פלטפורמה (meta): נשמרים, קישור לא תקין נדחה, שער לא נספר ב"מוכן"', { skip }, async () => {
+  const a = await angle(60);
+  // פייסבוק: קישור javascript: לא נשמר בכלל — גם לא כטיוטה
+  let r = await call('PUT', `/content/${a}/variants/${ids.fb}`,
+    { body: 'טקסט', status: 'draft', meta: { link: 'javascript:alert(1)' } });
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /הקישור לא תקין/);
+
+  // קישור לבד מספיק ל"מוכן" בפייסבוק; meta של אחרים (נושא) נשמר כמו שנשלח
+  r = await call('PUT', `/content/${a}/variants/${ids.fb}`,
+    { body: '', status: 'ready', meta: { link: 'https://fincat.co.il/x', first_comment: 'תגובה' } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual((await variant(a, ids.fb)).meta, { link: 'https://fincat.co.il/x', first_comment: 'תגובה' });
+  // שמירה בלי meta — לא נוגעת בקיים
+  r = await call('PUT', `/content/${a}/variants/${ids.fb}`, { body: 'טקסט', status: 'ready' });
+  assert.equal((await variant(a, ids.fb)).meta.first_comment, 'תגובה');
+
+  // אינסטגרם: סרטון + תמונה = קרוסלה של 2. כסטורי — נדחה, אלא אם התמונה היא השער
+  const b = await angle(61);
+  for (const [name, type] of [['v.mp4', 'video/mp4'], ['c.png', 'image/png']]) {
+    const form = new FormData();
+    form.append('files', new Blob([Buffer.from('DATA')], { type }), name);
+    assert.equal((await call('POST', `/content/${b}/variants/${ids.ig}/assets`, null, { form })).status, 201);
+  }
+  const cover = await q1(`select id from content_assets where content_id = $1 and filename = 'c.png'`, [b]);
+  r = await call('PUT', `/content/${b}/variants/${ids.ig}`,
+    { body: '', status: 'ready', meta: { format: 'story' } });
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /סטורי יוצא עם תמונה או סרטון אחד — יש 2/);
+  r = await call('PUT', `/content/${b}/variants/${ids.ig}`,
+    { body: '', status: 'ready', meta: { format: 'story', cover_asset_id: cover.id } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.warn, null);
+});

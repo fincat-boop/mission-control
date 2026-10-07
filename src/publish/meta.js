@@ -81,26 +81,59 @@ function mediaArgs(asset, params, field) {
 }
 
 /**
+ * תגובה ראשונה מיד אחרי הפרסום. הפוסט כבר באוויר — כשל כאן לא מכשיל אותו,
+ * אלא חוזר כ-commentError (runner.js פותח משימה להוסיף אותה ידנית).
+ * נדרשת הרשאה נוספת בטוקן: pages_manage_engagement (פייסבוק) /
+ * instagram_manage_comments (אינסטגרם).
+ */
+async function firstComment(objectId, token, message) {
+  if (!String(message ?? '').trim()) return null;
+  try {
+    await graph(`${objectId}/comments`, { method: 'POST', token, params: { message } });
+    return null;
+  } catch (e) {
+    return e;
+  }
+}
+
+/** הטקסט לפייסבוק: בפוסט עם מדיה אין כרטיס קישור, ולכן הקישור נכנס לסוף הטקסט */
+export function facebookMessage(message, link, hasMedia) {
+  const text = String(message ?? '');
+  const url = String(link ?? '').trim();
+  if (!url || !hasMedia || text.includes(url)) return text;
+  return text.trim() ? `${text.trimEnd()}\n\n${url}` : url;
+}
+
+/**
  * פרסום לעמוד פייסבוק. assets = [{url} או {buffer}, mime, filename].
  * וידאו גובר על תמונות (פוסט וידאו); כמה תמונות = פוסט מרובה תמונות.
- * @returns {{id: string, url: string}}
+ * link — בפוסט טקסט: כרטיס תצוגה מקדימה; עם מדיה: בסוף הטקסט.
+ * altText — לתמונה בודדת. comment — תגובה ראשונה (ראו firstComment).
+ * @returns {{id: string, url: string, commentError: Error|null}}
  */
-export async function publishFacebook({ pageId, token, message, assets = [] }) {
+export async function publishFacebook({
+  pageId, token, message, assets = [], link = null, altText = null, comment = null,
+}) {
   const video = assets.find((a) => isVideo(a.mime));
   const images = assets.filter((a) => isImage(a.mime));
+  const text = facebookMessage(message, link, !!(video || images.length));
+  const done = async (id, url, target = id) =>
+    ({ id, url, commentError: await firstComment(target, token, comment) });
 
   if (video) {
     const r = await graph(`${pageId}/videos`, {
-      method: 'POST', token, ...mediaArgs(video, { description: message }, 'file_url'),
+      method: 'POST', token, ...mediaArgs(video, { description: text }, 'file_url'),
     });
-    return { id: r.id, url: `https://www.facebook.com/${pageId}/videos/${r.id}` };
+    return done(r.id, `https://www.facebook.com/${pageId}/videos/${r.id}`);
   }
 
   if (images.length === 1) {
     const r = await graph(`${pageId}/photos`, {
-      method: 'POST', token, ...mediaArgs(images[0], { caption: message }, 'url'),
+      method: 'POST', token,
+      ...mediaArgs(images[0], { caption: text, alt_text_custom: altText || null }, 'url'),
     });
-    return { id: r.post_id ?? r.id, url: `https://www.facebook.com/${r.post_id ?? r.id}` };
+    const id = r.post_id ?? r.id;
+    return done(id, `https://www.facebook.com/${id}`);
   }
 
   if (images.length > 1) {
@@ -112,14 +145,16 @@ export async function publishFacebook({ pageId, token, message, assets = [] }) {
       });
       ids.push(r.id);
     }
-    const params = { message };
+    const params = { message: text };
     ids.forEach((id, i) => { params[`attached_media[${i}]`] = JSON.stringify({ media_fbid: id }); });
     const r = await graph(`${pageId}/feed`, { method: 'POST', token, params });
-    return { id: r.id, url: `https://www.facebook.com/${r.id}` };
+    return done(r.id, `https://www.facebook.com/${r.id}`);
   }
 
-  const r = await graph(`${pageId}/feed`, { method: 'POST', token, params: { message } });
-  return { id: r.id, url: `https://www.facebook.com/${r.id}` };
+  const r = await graph(`${pageId}/feed`, {
+    method: 'POST', token, params: { message: text, link: String(link ?? '').trim() || null },
+  });
+  return done(r.id, `https://www.facebook.com/${r.id}`);
 }
 
 /* ========================= אינסטגרם ========================= */
@@ -143,25 +178,42 @@ async function waitForContainer(creationId, token, timeoutMs = 5 * 60000) {
 
 /**
  * פרסום לאינסטגרם. media = [{url, video: boolean}] — כתובות ציבוריות.
- * פריט אחד = פוסט תמונה או ריל; כמה תמונות = קרוסלה.
- * @returns {{id: string, url: string}}
+ * פריט אחד = פוסט תמונה או ריל; כמה תמונות = קרוסלה; story = סטורי (פריט
+ * אחד, בלי כיתוב — לסטורי אין). altText — לתמונה בודדת בפיד. לריל: coverUrl
+ * (תמונת שער) או thumbOffsetMs (פריים מהסרטון). comment — תגובה ראשונה.
+ * @returns {{id: string, url: string, commentError: Error|null}}
  */
-export async function publishInstagram({ igUserId, token, caption, media }) {
+export async function publishInstagram({
+  igUserId, token, caption, media, story = false, altText = null,
+  coverUrl = null, thumbOffsetMs = null, comment = null,
+}) {
   if (!media?.length) throw new Error('אינסטגרם דורש תמונה או וידאו — אין מדיה לפוסט');
 
   let creationId;
 
-  if (media.length === 1) {
+  if (story) {
+    if (media.length > 1) throw new Error('סטורי יוצא עם תמונה או סרטון אחד');
     const m = media[0];
     const r = await graph(`${igUserId}/media`, {
       method: 'POST', token,
       params: m.video
-        ? { media_type: 'REELS', video_url: m.url, caption }
-        : { image_url: m.url, caption },
+        ? { media_type: 'STORIES', video_url: m.url }
+        : { media_type: 'STORIES', image_url: m.url },
+    });
+    creationId = r.id;
+  } else if (media.length === 1) {
+    const m = media[0];
+    const r = await graph(`${igUserId}/media`, {
+      method: 'POST', token,
+      params: m.video
+        ? { media_type: 'REELS', video_url: m.url, caption,
+            cover_url: coverUrl || null,
+            thumb_offset: coverUrl || thumbOffsetMs == null ? null : String(thumbOffsetMs) }
+        : { image_url: m.url, caption, alt_text: altText || null },
     });
     creationId = r.id;
   } else {
-    // קרוסלה: עד 10 פריטים, כל אחד קונטיינר-ילד משלו
+    // קרוסלה: עד 10 פריטים, כל אחד קונטיינר-ילד משלו (readiness.js חוסם יותר)
     const children = [];
     for (const m of media.slice(0, 10)) {
       const r = await graph(`${igUserId}/media`, {
@@ -187,5 +239,7 @@ export async function publishInstagram({ igUserId, token, caption, media }) {
 
   const info = await graph(pub.id, { token, params: { fields: 'permalink' } })
     .catch(() => null);
-  return { id: pub.id, url: info?.permalink ?? `https://www.instagram.com/` };
+  // לסטורי אין תגובות
+  const commentError = story ? null : await firstComment(pub.id, token, comment);
+  return { id: pub.id, url: info?.permalink ?? `https://www.instagram.com/`, commentError };
 }

@@ -8,6 +8,7 @@ import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
 import { AUTO_PLATFORMS, choosePrimary, editPatch, isMissed, nextFreeSlot, postFacts,
          publishingStuck, rescheduleApproves } from '../core/postActions.js';
 import { newsletterHubTag } from '../core/hubFill.js';
+import { pickExtras } from '../core/socialRules.js';
 import { mountHubPreview, newsletterPostNotes, openInHub, previewInput,
          transferToHub } from './hubFill.js';
 
@@ -705,6 +706,20 @@ export async function openPostPreview(postId) {
         scheduledAt: post.scheduled_at, templateId: vMeta.template_id, fieldValues: vMeta.field_values })
     : null;
   const nlNotes = newsletterPostNotes(post);
+  // מה שנוסף לגרסה מעבר לטקסט (סוג פרסום, קישור, תגובה ראשונה) — גם למי
+  // שמפרסם ידנית. התגובה הראשונה עם כפתור העתקה משלה.
+  const ex = ['facebook', 'instagram'].includes(post.platform) ? pickExtras(vMeta) : {};
+  const extrasLines = [
+    ex.format === 'story' ? '<div>סוג פרסום: <b>סטורי</b></div>' : '',
+    // לחיץ רק http/https (השרת לא שומר אחר — כאן ליתר ביטחון)
+    ex.link ? `<div>קישור: ${/^https?:\/\//i.test(ex.link)
+      ? `<a href="${esc(ex.link)}" target="_blank" rel="noopener" dir="ltr">${esc(ex.link)}</a>`
+      : `<span dir="ltr">${esc(ex.link)}</span>`}</div>` : '',
+    // בסטורי אין תיאור תמונה ואין תגובות — מה שנשאר שמור מפוסט רגיל לא מוצג
+    ex.alt_text && ex.format !== 'story' ? `<div>תיאור תמונה: ${esc(ex.alt_text)}</div>` : '',
+    ex.first_comment && ex.format !== 'story' ? `<div>תגובה ראשונה: ${esc(ex.first_comment)}
+      <button type="button" class="btn small" id="pCopyComment">העתק תגובה</button></div>` : '',
+  ].join('');
 
   $('#postDlgTitle').textContent = post.title;
   $('#postPreview').innerHTML = `
@@ -730,6 +745,8 @@ export async function openPostPreview(postId) {
               : `<div class="pvempty">${post.platform === 'newsletter'
                 ? 'אין עדיין תוכן לניוזלטר — ממלאים דרך "פתח בתוכן".'
                 : 'אין עדיין טקסט לגרסה של הערוץ הזה.'}</div>`}
+
+    ${extrasLines ? `<div class="pvextras">${extrasLines}</div>` : ''}
 
     ${body && variant && variant.status !== 'ready' && post.status !== 'published'
       ? `<div class="pvwarn">הגרסה במצב "${variant.status === 'draft' ? 'טיוטה' : 'לא רלוונטי'}" —
@@ -767,6 +784,11 @@ export async function openPostPreview(postId) {
   wireCopyLinks($('#postPreview'));
   if (nlInput) mountHubPreview($('#pNlPreview'), () => nlInput, { head: 'כך ייראה המייל אצל הנמען (מה-HUB)' });
   // מעתיק בדיוק את מה שהתצוגה מראה — לשליחה ידנית (וואטסאפ) או להדבקה
+  const commentBtn = $('#pCopyComment');
+  commentBtn?.addEventListener('click', run(async () => {
+    await copyText(ex.first_comment, commentBtn.parentElement);
+    toast('התגובה הועתקה.');
+  }));
   const copyBtn = $('#pCopyBody');
   copyBtn?.addEventListener('click', run(async () => {
     await copyText(body, copyBtn.parentElement);

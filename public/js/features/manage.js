@@ -187,7 +187,7 @@ function connectionBlock(c, conn, ro, hubReady) {
              data-conn-id-field="${c.id}" ${ro ? 'disabled' : ''}>
     </div>
     <div class="prow">
-      <label for="chtok-${c.id}">Access Token (${isFb ? 'של העמוד' : 'עם הרשאות instagram_content_publish'})</label>
+      <label for="chtok-${c.id}">Access Token (${isFb ? 'של העמוד; לתגובה ראשונה צריך גם pages_manage_engagement' : 'עם הרשאות instagram_content_publish; לתגובה ראשונה גם instagram_manage_comments'})</label>
       <input id="chtok-${c.id}" type="password" dir="ltr" data-conn-token="${c.id}"
              placeholder="${conn?.has_token ? 'שמור ✓ — מזינים רק כדי להחליף' : 'מדביקים כאן'}"
              ${ro ? 'disabled' : ''}>

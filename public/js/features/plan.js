@@ -16,6 +16,8 @@ import {
   sameShortage, shortChannels, totalCapacity, validGap,
 } from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
+import { extrasHtml, paintCaptionNote, readExtras, wireExtras } from '../ui/variantExtras.js';
+import { extrasFor, extrasKey, mergeExtras, pickExtras } from '../core/socialRules.js';
 import { goToSetupTarget } from '../ui/setup.js';
 
 /* ========================= ניוזלטר ========================= */
@@ -1747,6 +1749,17 @@ function versionFiles(item, variantId) {
           ...(item.assets ?? []).map((a) => assetLine(a, false))].join('');
 }
 
+/**
+ * הקבצים שהגרסה יוצאת איתם, כרשימה (לא HTML): המשותפים + של הגרסה. משבצת
+ * ומשבצת מקושרת — כל הקבצים של המקור (כמו readyWarn בשרת).
+ */
+function versionAssets(item, variantId) {
+  const all = item.variant_assets ?? [];
+  const own = item.linked_to_id || item.slot_channel_id
+    ? all : all.filter((a) => variantId && a.variant_id === variantId);
+  return [...(item.assets ?? []), ...own];
+}
+
 /** כמה מילויים של המנוע (שמירה של כמה ערוצים) כאחד — להודעה אחת עם "בטל" אחד */
 function mergeFills(list) {
   const fills = list.map((r) => r?.engine).filter(Boolean);
@@ -1788,11 +1801,15 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
   const tabs = chans.map((ch) => {
     const v = item.variants.find((x) => x.channel_id === ch.id) ?? null;
     return { ch, mail: ch.platform === 'newsletter', v, body: v?.body ?? '',
-             status: v?.status ?? 'draft', files: [], base: v?.updated_at ?? null };
+             status: v?.status ?? 'draft', files: [], base: v?.updated_at ?? null,
+             extras: pickExtras(v?.meta) };
   });
   let cur = tabs.find((t) => t.ch.id === channelId) ?? tabs[0];
+  // האזורים המקופלים (סוג פרסום, תגובה ראשונה...) — רק בערוץ עם פלטפורמה
+  const hasExtras = (t) => !t.mail && extrasFor(t.ch.platform).length > 0;
+  const extrasDirty = (t) => extrasKey(t.extras) !== extrasKey(t.v?.meta);
   const dirty = (t) => !t.mail && (t.body !== (t.v?.body ?? '') ||
-    t.status !== (t.v?.status ?? 'draft') || t.files.length > 0);
+    t.status !== (t.v?.status ?? 'draft') || t.files.length > 0 || extrasDirty(t));
   const statusOptions = [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
                   ['not_relevant', 'לא רלוונטי לערוץ הזה']];
 
@@ -1802,7 +1819,14 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     cur.body = $('#gen_body').value;
     cur.status = $('#gen_status').value;
     cur.files = [...($('#gen___files')?.files ?? [])];
+    // ערכים שנשמרו ואין להם שדה כרגע (שער כשאין סרטון) נשארים
+    if (hasExtras(cur)) cur.extras = pickExtras({ ...cur.extras, ...readExtras($('#vextras')) });
   };
+
+  /** מונה הכיתוב / אזהרות יחס התמונה מתחת לטקסט (אינסטגרם) */
+  const paintNote = () => paintCaptionNote($('#vnote'), {
+    platform: cur.mail ? null : cur.ch.platform, text: cur.body, meta: cur.extras,
+    files: versionAssets(item, cur.v?.id) });
 
   const tabState = (t) => (t.v || t.status !== 'draft' ? CELL[t.status] : CELL.empty);
   const tabLabel = (t) => {
@@ -1839,16 +1863,23 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     cur = t;
     $('#genTitle').textContent = `${item.title} — ${t.ch.name}`;
     $('#genBody .stalebox')?.remove();
-    for (const f of ['body', 'status', '__files', '__copy']) {
+    for (const f of ['body', 'status', '__files', '__copy', '__note']) {
       $(`#genBody [data-field="${f}"]`).hidden = t.mail;
     }
+    $('#genBody [data-field="__extras"]').hidden = !hasExtras(t);
     $('#genBody [data-field="__mail"]').hidden = !t.mail;
     if (t.mail) {
       // מצב + נושא מיד, ומצב ההעברה ל-HUB כשהפוסטים נטענים (ui/hubFill.js)
       describeMailVariant($('#vmailState'), { item, channelId: t.ch.id, variant: t.v,
                                               statusLabel: t.v ? CELL[t.status].label : null });
     } else {
-      $('#genBody label[for="gen_body"]').textContent = `הטקסט כפי שהוא ייצא ב${t.ch.name}`;
+      $('#genBody label[for="gen_body"]').textContent = t.ch.platform === 'instagram'
+        ? `הכיתוב — הטקסט שמופיע מתחת לפוסט ב${t.ch.name}`
+        : `הטקסט כפי שהוא ייצא ב${t.ch.name}`;
+      const assets = versionAssets(item, t.v?.id);
+      $('#vextras').innerHTML = hasExtras(t)
+        ? extrasHtml({ platform: t.ch.platform, meta: t.extras, files: assets }) : '';
+      paintNote();
       $('#gen_body').value = t.body;
       $('#gen_status').value = t.status;
       $('#genBody label[for="gen___files"]').textContent = `תמונות וסרטונים ל${t.ch.name}`;
@@ -1888,7 +1919,9 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     let res;
     try {
       res = await api(`/content/${item.id}/variants/${t.ch.id}`, { method: 'PUT', body: {
-        body: t.body, status: t.status, base_updated_at: t.base, week: state.week } });
+        body: t.body, status: t.status, base_updated_at: t.base, week: state.week,
+        // meta נשלח רק כשהאזורים השתנו — שאר ה-meta (של אחרים) נשמר כמו שהוא
+        ...(extrasDirty(t) ? { meta: mergeExtras(t.v?.meta, t.extras) } : {}) } });
     } catch (e) {
       if (e.status !== 409 || !e.payload?.stale) throw new Error(`${t.ch.name}: ${e.message}`);
       // מישהו אחר שמר את הגרסה הזו — מציעים לטעון אותה; הטקסט שלך נשאר להעתקה
@@ -1899,13 +1932,14 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
       if (!ok) throw new Error(`${t.ch.name}: לא נשמר — הגרסה השתנתה מאז שנפתחה.`);
       const cur0 = e.payload.current;
       Object.assign(t, { v: cur0, body: cur0?.body ?? '', status: cur0?.status ?? 'draft',
-                         base: cur0?.updated_at ?? null });
+                         base: cur0?.updated_at ?? null, extras: pickExtras(cur0?.meta) });
       load(t);
       showMine(mine);
       throw new Error(`${t.ch.name}: הגרסה השמורה נטענה — הטקסט שלך מוצג למעלה להעתקה.`);
     }
     const v = res.variant;
-    Object.assign(t, { v, body: v.body, status: v.status, base: v.updated_at });
+    Object.assign(t, { v, body: v.body, status: v.status, base: v.updated_at,
+                       extras: pickExtras(v.meta) });
     item.variants = [...item.variants.filter((x) => x.channel_id !== t.ch.id), v];
     paintCellInPlace(campaign, item, t.ch.id, v.status, res.warn);
     return res;
@@ -1970,8 +2004,10 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
           <button type="button" class="btn small" id="vcopyBtn">העתק לכאן</button>
         </div>` },
       { name: 'body', label: '', type: 'textarea', value: '' },
+      { name: '__note', type: 'html', html: '<div class="vnote" id="vnote" aria-live="polite" hidden></div>' },
       { name: 'status', label: 'מצב', type: 'select', value: 'draft', options: statusOptions },
       { name: '__files', label: '', type: 'files', existing: '<div id="vfiles"></div>' },
+      { name: '__extras', type: 'html', html: '<div class="vextras" id="vextras"></div>' },
       { name: '__mail', type: 'html', html: `<div class="vmail">
           <p>הניוזלטר נכתב בעורך המייל — נושא, תבנית ותוכן. מצב: <b id="vmailState"></b></p>
           <button type="button" class="btn" id="vmailOpen">שמור ועבור לעורך המייל</button>
@@ -2030,7 +2066,15 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
 
       // נקודת "לא נשמר" על הלשונית מתעדכנת תוך כדי
       ['#gen_body', '#gen_status', '#gen___files'].forEach((sel) =>
-        $(sel).addEventListener(sel === '#gen_body' ? 'input' : 'change', () => { sync(); paintTabs(); }));
+        $(sel).addEventListener(sel === '#gen_body' ? 'input' : 'change', () => {
+          sync(); paintTabs(); paintNote();
+        }));
+      // האזורים מצוירים מחדש בכל מעבר לשונית; המאזין על המעטפת — פעם אחת
+      wireExtras($('#vextras'), {
+        files: () => versionAssets(item, cur.v?.id),
+        keep: () => cur.extras,
+        onChange: () => { sync(); paintTabs(); paintNote(); },
+      });
       $('#vcopyBtn').addEventListener('click', run(async () => {
         sync();
         const src = tabs.find((t) => t.ch.id === Number($('#vcopyFrom').value));

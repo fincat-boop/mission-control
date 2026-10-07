@@ -159,7 +159,7 @@ async function keepDraftWhereNotReady(ids) {
       where ci.id = any($1::int[]) and v.status = 'ready'`, [ids]);
   const out = [];
   for (const r of ready) {
-    const assets = await rows(itemAssetsSql('a.mime'), [r.id, r.channel_id]);
+    const assets = await rows(itemAssetsSql('a.id, a.mime'), [r.id, r.channel_id]);
     const reason = contentBlocker({ platform: r.platform, variant: r, assets });
     if (!reason) continue;
     await query(`update content_variants set status = 'draft'

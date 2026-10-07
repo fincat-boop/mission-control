@@ -13,7 +13,7 @@ import {
   cleanFieldValues, hubWaitState, newsletterBlocker, newsletterClockStart, newsletterDigest,
   nextHubRef, reusableHubStatus, transferBlocker,
 } from './newsletter.js';
-import { contentBlocker } from './readiness.js';
+import { contentBlocker, coverAsset, isStory, postMedia } from './readiness.js';
 
 /**
  * מסלול הפרסום האוטומטי.
@@ -221,11 +221,12 @@ export function publishBlocker({ post, variant, assets }) {
   // כמו בסימון "מוכן" (readiness.js)
   const missing = contentBlocker({ platform: post.platform, variant, assets });
   if (missing) return missing;
-  const media = assets.filter((a) => isImage(a.mime) || isVideo(a.mime));
+  const media = postMedia({ variant, assets });
+  const cover = post.platform === 'instagram' ? coverAsset({ variant, assets }) : null;
   if (post.platform === 'instagram' && !publicAssetsReady()) {
     return 'הגשת מדיה ציבורית לא מוגדרת (R2_PUBLIC_*) — נדרשת לאינסטגרם';
   }
-  if (media.some((a) => a.storage_key && !mediaUrl(a.storage_key))) {
+  if ([...media, ...(cover ? [cover] : [])].some((a) => a.storage_key && !mediaUrl(a.storage_key))) {
     return 'הכתובת הציבורית של המדיה לא מוגדרת (R2_PUBLIC_BASE_URL) — אי אפשר לשלוח את הקבצים';
   }
   return null;
@@ -244,26 +245,59 @@ export const facebookAssets = (media) => media.map((a) => (a.storage_key
  * שלו כמו שהוא. קובץ ישן (bytea) — עותק זמני ב-bucket הציבורי, שנמחק
  * ב-finally. רק העותקים הזמניים נמחקים: הקבצים הקבועים לעולם לא.
  */
-export async function publishInstagramPost({ post, token, text, media }, deps = {}) {
+export async function publishInstagramPost({ post, token, text, media, cover = null, options = {} },
+  deps = {}) {
   const {
     upload = uploadPublicAsset, remove = deletePublicAssets, publish = publishInstagram,
   } = deps;
   const tempKeys = [];
+  const publicUrl = async (a) => {
+    if (a.storage_key) return mediaUrl(a.storage_key);
+    const { url, key } = await upload({ buffer: a.data, mime: a.mime, filename: a.filename });
+    tempKeys.push(key);
+    return url;
+  };
   try {
     const items = [];
-    for (const a of media) {
-      if (a.storage_key) {
-        items.push({ url: mediaUrl(a.storage_key), video: isVideo(a.mime) });
-        continue;
-      }
-      const { url, key } = await upload({ buffer: a.data, mime: a.mime, filename: a.filename });
-      tempKeys.push(key);
-      items.push({ url, video: isVideo(a.mime) });
-    }
-    return await publish({ igUserId: post.ig_user_id, token, caption: text, media: items });
+    for (const a of media) items.push({ url: await publicUrl(a), video: isVideo(a.mime) });
+    const coverUrl = cover ? await publicUrl(cover) : null;
+    return await publish({ igUserId: post.ig_user_id, token, caption: text, media: items,
+                           ...options, coverUrl });
   } finally {
     if (tempKeys.length) await remove(tempKeys);
   }
+}
+
+/**
+ * מה שנוסף לגרסה מעבר לטקסט ולקבצים (meta — ראו readiness.js), בצורה
+ * שהפרסום ב-meta.js מקבל. רק לתמונה בודדת יש תיאור תמונה.
+ */
+export function publishOptions({ platform, variant, media }) {
+  const m = variant?.meta ?? {};
+  const str = (x) => String(x ?? '').trim() || null;
+  const singleImage = media.length === 1 && isImage(media[0].mime);
+  const opts = { comment: str(m.first_comment), altText: singleImage ? str(m.alt_text) : null };
+  if (platform === 'facebook') return { ...opts, link: str(m.link) };
+  const sec = Number(m.cover_offset_sec);
+  return { ...opts, story: isStory(variant),
+           thumbOffsetMs: Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : null };
+}
+
+/**
+ * התגובה הראשונה לא נכתבה, אבל הפוסט כבר באוויר — לא כשל של הפוסט: משימה
+ * להוסיף אותה ידנית (עם הטקסט להעתקה) ושורה ביומן.
+ */
+async function recordCommentFailed(post, comment, err) {
+  const { message } = friendlyPublishError(err, { platform: post.platform });
+  console.error(`תגובה ראשונה לפוסט #${post.id} נכשלה:`, err?.message ?? err);
+  await logActivity('publish_comment_failed', post,
+    `התגובה הראשונה לא נכתבה — "${post.title}" ב${post.channel_name}: ${message}`);
+  await bestEffort('יצירת משימת תגובה ראשונה נכשלה:', () => query(
+    `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on)
+     values ($1,$2,'general',$3,$4,true,(now() at time zone 'Asia/Jerusalem')::date)`,
+    [`להוסיף תגובה ראשונה ידנית — ${post.channel_name}`,
+     `"${post.title}" פורסם, אבל התגובה הראשונה לא נכתבה (${message}). הטקסט: ${comment}`,
+     post.id, post.endpoint_id]));
 }
 
 /**
@@ -304,8 +338,9 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
   const blocker = publishBlocker(payload);
   if (blocker) return fail(post, blocker);
 
-  const media = assets.filter((a) => isImage(a.mime) || isVideo(a.mime));
+  const media = postMedia({ variant, assets });
   const text = variant.body?.trim() ?? '';
+  const options = publishOptions({ platform: post.platform, variant, media });
 
   try {
     let result;
@@ -320,12 +355,14 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
       if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
       result = await publishFacebook({
         pageId: post.page_id, token, message: text, assets: facebookAssets(media),
+        link: options.link, altText: options.altText, comment: options.comment,
       });
     } else {
       // אינסטגרם מושך מ-URL ציבורי — ראו publishInstagramPost
       const token = decryptToken(post);
       if (!token) return fail(post, 'פענוח הטוקן נכשל — מזינים אותו מחדש בהגדרות הערוץ');
-      result = await publishInstagramPost({ post, token, text, media });
+      result = await publishInstagramPost({ post, token, text, media, options,
+                                            cover: coverAsset({ variant, assets }) });
     }
 
     const updated = await one(
@@ -338,6 +375,7 @@ export async function publishOne(postId, { allowedFrom = ['approved'] } = {}) {
       `update tasks set done = true, done_at = now() where post_id = $1 and done = false`,
       [post.id]);
     await logPublish(post, true, { externalId: result.id });
+    if (result.commentError) await recordCommentFailed(post, options.comment, result.commentError);
     await logActivity('publish', post, `פורסם אוטומטית — "${post.title}" ל${post.channel_name}`);
     await emitPostEvent('post_published', post,
       { external_id: result.id, ...(result.url ? { external_url: result.url } : {}) });

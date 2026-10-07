@@ -344,6 +344,10 @@ table.utable { width: 100%; border-collapse: collapse; }
   background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px;
 }
 .pvcopy { display: flex; justify-content: flex-end; margin-top: 6px; }
+.pvextras { display: grid; gap: 6px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+.pvextras b { color: var(--ink-1); }
+.pvextras .btn { margin-inline-start: 6px; }
 .pvempty { margin-top: 14px; color: var(--st-warn); font-size: 12.5px; }
 .pvwarn { margin-top: 10px; color: var(--st-warn); font-size: 12px; }
 .pvauto { margin-top: 10px; color: var(--st-good); font-size: 12.5px; }
@@ -1365,6 +1369,37 @@ button.oxychip { font: inherit; font-size: 12.5px; cursor: pointer; }
 .vmail b { color: var(--ink-1); }
 .vacts { margin-inline-end: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .vacts #markReady { color: var(--st-good); }
+
+/* מה שנוסף לפוסט לפי הפלטפורמה (ui/variantExtras.js): כל אזור שורה מקופלת
+   עם סיכום, סגורה כברירת מחדל */
+.vextras { display: grid; border: 1px solid var(--border); border-radius: 8px; }
+.vextras:empty { display: none; }
+.vx + .vx { border-top: 1px solid var(--border); }
+.vx[hidden] { display: none; }
+.vx summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px; font-size: 13px; }
+.vx summary::-webkit-details-marker { display: none; }
+.vx summary::after { content: "‹"; color: var(--muted); transition: transform .15s; }
+.vx[open] summary::after { transform: rotate(-90deg); }
+.vx summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+.vx-l { flex: none; color: var(--ink-1); }
+.vx-sum { flex: 1 1 0; min-width: 0; margin-inline-start: auto; text-align: end; font-size: 12px;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-sum.set { color: var(--ink-2); }
+.vx-b { padding: 2px 14px 14px; }
+.vx-b textarea { min-height: 64px; }
+.vx-radios { display: grid; grid-template-columns: 1fr 1fr; }
+.vx-radios label { align-items: flex-start; }
+@media (max-width: 560px) { .vx-radios { grid-template-columns: 1fr; } }
+.vx-radios label input { margin-top: 2px; }
+.vx-radios label .d { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.vx-b .subfield label { display: inline; margin: 0; }
+/* מונה הכיתוב ואזהרות יחס התמונה, צמוד מתחת לטקסט */
+.vnote { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: -4px; font-size: 11.5px; color: var(--muted); }
+.vnote[hidden] { display: none; }
+.vnote .vsep { color: var(--border); }
+.vnote .over { color: var(--st-crit); }
+.vnote div.over { flex-basis: 100%; line-height: 1.6; }
 
 /* כפתור הפעולה הבאה בתוך מצב ריק */
 .empty .empty-act { margin-top: 14px; }
