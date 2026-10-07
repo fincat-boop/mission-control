@@ -256,10 +256,11 @@
 
 <!-- דיאלוג כללי (הוספת ערוץ / נקודה / קמפיין / תוכן / משתמש) -->
 <dialog id="genDlg">
-  <h3 id="genTitle"></h3>
+  <div class="ghead"><h3 id="genTitle"></h3><span id="genHead"></span></div>
   <div id="genBody"></div>
   <div class="dactions">
     <span id="genExtra" style="display:contents"></span>
+    <span id="genState" class="gstate" aria-live="polite"></span>
     <button class="btn" id="genCancel">ביטול</button>
     <button class="btn primary" id="genSave">שמור</button>
   </div>

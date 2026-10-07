@@ -4,7 +4,7 @@ import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from 
 import { describeMailVariant, openNewsletterEditor } from '../ui/hubFill.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
-import { closeGeneric, markGenericClean, openGeneric } from '../ui/dialog.js';
+import { closeGeneric, genState, genValues, markGenericClean, openGeneric } from '../ui/dialog.js';
 import { confirmDialog } from '../core/confirm.js';
 import { openImport } from '../ui/importDialog.js';
 import {
@@ -59,7 +59,8 @@ export async function renderPlan() {
   else if (endpoint) body = campaignList(endpoint, campaigns, content);
   else body = endpointList(campaigns, content);
 
-  $('#plan').innerHTML = crumbs + body;
+  // בקמפיין הפירורים הם חלק מהכותרת שלו (campaignHead) — שורה אחת, לא שתיים
+  $('#plan').innerHTML = (campaign ? '' : crumbs) + body;
   wirePlan(campaign, endpointId, content);
 }
 
@@ -731,26 +732,35 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
 /* ========================= תוכן ========================= */
 
 
-/** כותרת הקמפיין במסך התוכן — משותפת לזוויות, לכללי ולמצבים הריקים */
+/**
+ * כותרת הקמפיין במסך התוכן — משותפת לזוויות, לכללי ולמצבים הריקים.
+ * שתי שורות צפופות: פירורי הלחם (השם הוא האחרון) עם התגים, ומתחת הפרטים
+ * וחוקי ההעתקה. תפריט שלוש הנקודות בקצה השמאלי, מעל קצה הטבלה.
+ */
 function campaignHead(c) {
   const range = c.starts_on && c.ends_on
     ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
+  const facts = [
+    esc(range),
+    c.share_pct != null && `נתח קבוע ${c.share_pct}%`,
+    c.min_gap_days != null && `מרווח ${daysLabel(c.min_gap_days)}`,
+    c.goal && esc(c.goal),
+  ].filter(Boolean).map((x) => `<span>${x}</span>`);
+  const links = linkRulesInline(c);
   return `
-    <div class="cbhead">
-      <div>
-        <div class="ctitle">
+    <div class="cbhead chead${c.structure === 'general' ? ' gbleed' : ''}">
+      <div class="ch-main">
+        <div class="crumbs">
+          <button data-crumb="root">כל נקודות הקצה</button><span>›</span>
+          <button data-crumb="endpoint">${esc(c.endpoint_name)}</button><span>›</span>
           <h2>${esc(c.name)}</h2>
           ${c.complete ? `<span class="gst ok" data-tt="סומן מוכן: רק התוכן שנכתב, פרוס על התקופה">
             <i></i>מוכן</span>` : ''}
           ${c.recurring ? `<span class="gst na" data-tt="קמפיין מחזורי: משבצים אותו מחדש מלוח האסטרטגיה">
             <i></i>מחזורי</span>` : ''}
         </div>
-        <p class="sub">${esc(c.endpoint_name)} · ${esc(range)}
-          ${c.share_pct != null ? `· נתח קבוע ${c.share_pct}%` : ''}
-          ${c.min_gap_days != null ? `· מרווח ${daysLabel(c.min_gap_days)}` : ''}
-          ${c.goal ? `· ${esc(c.goal)}` : ''}</p>
+        <p class="sub">${facts.join('<i class="dot">·</i>')}${links ? `<i class="dot">·</i>${links}` : ''}</p>
       </div>
-      <div class="spacer"></div>
       ${campaignMenu(c)}
     </div>`;
 }
@@ -910,13 +920,14 @@ const canLinkIn = (c) => c.structure === 'general' && can('content') &&
 const linkRules = (c) => (c.link_rules ?? []).filter((r) =>
   c.channels.some((ch) => ch.id === r.from) && c.channels.some((ch) => ch.id === r.to));
 
-/** "אינסטגרם רילס ← יוטיוב שורטס · …" — שורה מעל הטבלה, כשיש חוקים */
-function linkRulesLine(c) {
+/** "אינסטגרם רילס ← יוטיוב שורטס · …" — בשורת הפרטים של הכותרת, כשיש חוקים */
+function linkRulesInline(c) {
+  if (c.structure !== 'general') return '';
   const rules = linkRules(c);
   if (!rules.length) return '';
   const names = rules.map((r) => `${channelName(r.from)} ← ${channelName(r.to)}`).join(' · ');
-  return `<div class="glinks">${LINK_ICON}<span>מועתק אוטומטית: ${esc(names)}</span>
-    ${canLinkIn(c) ? '<button type="button" class="btn small" data-link-rules>שינוי</button>' : ''}</div>`;
+  return `<span class="glinks">${LINK_ICON}<span>מועתק אוטומטית: ${esc(names)}</span>
+    ${canLinkIn(c) ? '<button type="button" class="linkbtn" data-link-rules>שינוי</button>' : ''}</span>`;
 }
 
 /**
@@ -994,75 +1005,6 @@ function openLinkRules(campaign, reload) {
   }
 }
 
-/* ---------- קישור של פוסט בודד (מתוך הפוסט) ---------- */
-
-/**
- * לאילו ערוצים אפשר לקשר את הפוסט: לא ניוזלטר, ולא ערוץ שכבר יש בו פוסט
- * מאותה קבוצה (המקור או עוקבת). קישור שרשרת אין — הקישור הוא תמיד מהמקור.
- */
-function linkTargets(c, item) {
-  if (!can('content') || c.structure !== 'general') return [];
-  const root = c.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
-  const busy = new Set([root, ...c.content.filter((x) => x.linked_to_id === root.id)]
-    .map((x) => x.slot_channel_id));
-  return c.channels.filter((ch) => ch.platform !== 'newsletter' && !busy.has(ch.id));
-}
-
-/**
- * חלון קטן: ערוץ, ואז משבצת — "הפנויה הבאה" או משבצת מסוימת (ריקה, או עם
- * תוכן שלא מקושר — הוא יוחלף). התוכן של הפוסט (או המקור שלו) הופך למשותף.
- */
-function openLinkOne(campaign, item, reload) {
-  const root = campaign.content.find((x) => x.id === (item.linked_to_id ?? item.id)) ?? item;
-  const targets = linkTargets(campaign, item);
-  const slotOptions = (channelId) => {
-    const col = campaign.slots.find((x) => x.channel_id === channelId);
-    const list = (col?.slots ?? []).filter((s) => !s.extra || s.content);
-    const free = list.find((s) => !s.content)?.index ?? Math.max(0, ...list.map((s) => s.index)) + 1;
-    const pickable = list.filter((s) => !s.content || (!s.content.linked_to_id &&
-      !campaign.content.some((x) => x.linked_to_id === s.content.id)));
-    return [[`next:${free}`, `המשבצת הפנויה הבאה (#${free})`],
-      ...pickable.map((s) => [String(s.index), `#${s.index}${s.date ? ` · ${fmtDate(s.date)}` : ''}${
-        s.content ? ` · ${s.content.title} — יוחלף` : ' · ריקה'}`])];
-  };
-
-  openGeneric({
-    title: `קישור "${root.title}" לערוץ אחר`,
-    saveLabel: 'קשר',
-    fields: [
-      { name: '__h', type: 'html', html: `<p class="fhint" style="margin:0">התוכן של ${
-        esc(slotLabel(root))} (טקסט, קבצים ומצב) יהיה משותף לשני הפוסטים, וכל אחד ייצא במועד
-        של הערוץ שלו.</p>` },
-      { name: 'channel_id', label: 'לאיזה ערוץ', type: 'select',
-        options: targets.map((ch) => [ch.id, ch.name]) },
-      { name: 'slot', label: 'לאיזו משבצת', type: 'select', options: slotOptions(targets[0].id) },
-    ],
-    onOpen: () => {
-      $('#gen_channel_id').addEventListener('change', (e) => {
-        $('#gen_slot').innerHTML = slotOptions(Number(e.target.value)).map(([v, l]) =>
-          `<option value="${esc(v)}">${esc(l)}</option>`).join('');
-      });
-    },
-    onSave: async (v) => {
-      const raw = String(v.slot);
-      const index = Number(raw.replace('next:', ''));
-      const occupied = campaign.content.find((x) =>
-        x.slot_channel_id === v.channel_id && x.sort_order === index);
-      if (occupied && !(await confirmDialog(
-        `התוכן של "${occupied.title}" יוחלף בתוכן של "${root.title}" — הטקסט, הקבצים והמצב. להמשיך?`,
-        { okLabel: 'קשר והחלף', danger: true }))) return { keepOpen: true };
-      const res = await api(`/content/${root.id}/link`, { method: 'POST', body: {
-        target_campaign_slot: { channel_id: v.channel_id, sort_order: index },
-        replace: !!occupied, week: state.week,
-      } });
-      engineToast(res, `${slotLabel(root)} ו${channelName(v.channel_id)} #${index} מקושרים — ` +
-        'תוכן אחד, כל אחד במועד של הערוץ שלו.' + downgradeNote(res.downgraded));
-      await reload();
-      return false;
-    },
-  });
-}
-
 /**
  * קמפיין כללי: אותה טבלה כמו בזוויות — עמודה לכל ערוץ, שורה לכל מספר פוסט —
  * בלי זווית משותפת. כל תא עומד בפני עצמו, עם הניסוח והמועד של הערוץ שלו.
@@ -1071,7 +1013,6 @@ function generalBoard(c, notice = '') {
   return `
     ${campaignHead(c)}
     ${notice}
-    ${linkRulesLine(c)}
     ${boardTable(c)}
     ${completeLine(c)}
     ${c.orphaned ? `<div class="sumline">
@@ -1151,8 +1092,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   // לשלוח). כאן רק הכותרת והסוג — והשמירה ממשיכה ישר לעורך.
   const mail = channel?.platform === 'newsletter';
   // לפריט של מדיה אחת אין "משותף" מול "של המדיה" — כל הקבצים שלו, וכולם ניתנים להסרה
-  const files = [...(item?.assets ?? []), ...(item?.variant_assets ?? [])]
-    .map((a) => assetLine(a, true, false)).join('');
+  const slotAssets = [...(item?.assets ?? []), ...(item?.variant_assets ?? [])];
+  const filesHtml = () => slotAssets.map((a) => assetLine(a, true, false)).join('');
   // משבצת מקושרת: שורת "מקושר ל:" בראש הטופס, עם ניתוק לכל משבצת
   const partners = linkPartners(campaign, item);
   // הגרסה שהטופס נפתח איתה — השרת דוחה שמירה מעל גרסה שמישהו שמר בינתיים
@@ -1163,7 +1104,6 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
   // שדות הפרסום הנוספים (ui/variantExtras.js) — אותם אזורים כמו בעורך הגרסאות.
   // baseMeta — ה-meta השמור; נשלח רק כשהאזורים השתנו
   const platform = channel?.platform;
-  const slotAssets = [...(item?.assets ?? []), ...(item?.variant_assets ?? [])];
   let baseMeta = v?.meta ?? null;
   let extras = pickExtras(baseMeta);
   const paintNote = () => paintCaptionNote($('#vnote'), {
@@ -1177,8 +1117,206 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
     paintNote();
   };
 
+  /* ---------- שמירה אוטומטית (כל ערוץ חוץ מניוזלטר) ----------
+     כל שינוי נשמר לבד: הקלדה — אחרי הפסקה קצרה, בחירה (סוג, מצב, קבצים) —
+     מיד. שמירה אחת בכל רגע; שינוי שהגיע באמצע נשמר מיד אחריה. פוסט חדש
+     נוצר כשיש לו כותרת. "מוכן" שהשרת דוחה — הטקסט נשמר כטיוטה, והסיבה
+     מוצגת. */
+  let readyNow = v?.status === 'ready'; // המצב השמור
+  let timer = null;
+  let saving = null;
+  let again = false;
+  let unsaved = false;
+  let stale = false; // גרסה שהשתנתה בינתיים ולא נטענה — לא שומרים מעליה
+  let note = '';
+  // המאזינים על #genBody (שנשאר בין פתיחות) — מוסרים בסגירה
+  const ac = new AbortController();
+  const readyEl = () => $('#slotReady');
+  const values = () => {
+    const val = genValues();
+    return { title: (val.title ?? '').trim(), kind: val.kind, body: val.body ?? '',
+      status: readyEl()?.checked ? 'ready' : 'draft' };
+  };
+  const pickedFiles = () => [...($('#gen___files')?.files ?? [])];
+  const keyOf = (p) => JSON.stringify([p, extrasKey(extras)]);
+  let lastKey = item ? keyOf({ title: item.title ?? '', kind: item.kind, body: v?.body ?? item?.body ?? '',
+    status: readyNow ? 'ready' : 'draft' }) : null;
+
+  /** תיבת הקבצים מחדש, מהפריט הטרי שאחרי הרענון */
+  const repaintFiles = () => {
+    const fresh = state.campaigns.find((c) => c.id === campaign.id)?.content
+      .find((x) => x.id === saved?.id);
+    if (!fresh) return;
+    slotAssets.splice(0, slotAssets.length, ...(fresh.assets ?? []), ...(fresh.variant_assets ?? []));
+    $('#slotFiles').innerHTML = filesHtml();
+    wireFiles();
+    paintNote();
+  };
+  const wireFiles = () => {
+    wireCopyLinks($('#slotFiles'));
+    $$('#slotFiles [data-del-asset]').forEach((b) =>
+      b.addEventListener('click', run(async () => {
+        if (!(await deleteAssetAsk(b))) return;
+        filesChanged = true;
+        const at = slotAssets.findIndex((a) => a.id === Number(b.dataset.delAsset));
+        if (at >= 0) slotAssets.splice(at, 1);
+        paintNote();
+      })));
+  };
+
+  async function saveOnce() {
+    if (stale) {
+      unsaved = true;
+      genState('לא נשמר — הפוסט השתנה מאז שנפתח. סגור ופתח מחדש.', 'err');
+      return;
+    }
+    const p = values();
+    const picked = pickedFiles();
+    if (!p.title) {
+      unsaved = !!(p.body || picked.length || saved);
+      genState(saved ? 'לא נשמר — צריך כותרת' : 'יישמר כשתהיה כותרת', 'warn');
+      return;
+    }
+    const key = keyOf(p);
+    if (key === lastKey && !picked.length) {
+      // אין מה לשלוח (למשל אחרי "מוכן" שנדחה וחזר לטיוטה השמורה)
+      unsaved = false;
+      if (note) genState(`נשמר. ${note}`, 'warn');
+      else if ($('#genState').textContent === 'שומר…') genState('נשמר');
+      note = '';
+      return;
+    }
+    genState('שומר…');
+    const wantReady = p.status === 'ready';
+    const body = { ...p, week: state.week,
+      ...(extrasKey(extras) !== extrasKey(baseMeta) ? { meta: mergeExtras(baseMeta, extras) } : {}) };
+    const fills = [];
+    let res;
+    try {
+      // פוסט קיים: קבצים קודם — "מוכן" נבדק מול המדיה שכבר עלתה
+      if (saved && picked.length) await uploadPicked(saved.id, picked);
+      if (saved) {
+        res = await api(`/content/${saved.id}`, { method: 'PATCH',
+          body: { ...body, base_updated_at: base } });
+      } else {
+        // פוסט חדש עם קבצים נוצר קודם כטיוטה; "מוכן" אחרי שהקבצים עלו
+        res = await api('/content', { method: 'POST', body: {
+          ...body, status: picked.length && wantReady ? 'draft' : body.status,
+          campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
+        } });
+      }
+    } catch (e) {
+      if (e.status === 409 && e.payload?.stale) {
+        let loaded = false;
+        await staleReload(e, p.body, (cur) => {
+          loaded = true;
+          $('#gen_body').value = cur?.body ?? '';
+          readyEl().checked = cur?.status === 'ready';
+          readyNow = readyEl().checked;
+          base = cur?.updated_at ?? null;
+          resetExtras(cur?.meta);
+          lastKey = keyOf(values());
+        });
+        stale = !loaded;
+        unsaved = stale;
+        genState(loaded ? 'הגרסה השמורה נטענה — הטקסט שלך מוצג למעלה להעתקה'
+          : 'לא נשמר — הפוסט השתנה מאז שנפתח. סגור ופתח מחדש.', loaded ? 'warn' : 'err');
+        return;
+      }
+      // "מוכן" שנדחה (חסר משהו לערוץ) — חוזרים לטיוטה ושומרים את השאר
+      if (e.status === 400 && wantReady && !readyNow) {
+        readyEl().checked = false;
+        note = `נשאר טיוטה — ${e.message}`;
+        again = true;
+        return;
+      }
+      unsaved = true;
+      genState(`לא נשמר — ${e.message}`, 'err');
+      return;
+    }
+    const created = !saved;
+    saved = res.content;
+    base = res.variant?.updated_at ?? base;
+    if (res.variant) baseMeta = res.variant.meta ?? null;
+    fills.push(res);
+    if (created) $('#genTitle').textContent = `${channel?.name ?? ''} · פוסט ${index}`;
+    if (created && picked.length) {
+      try {
+        await uploadPicked(saved.id, picked, () => reload());
+        if (wantReady) {
+          const r2 = await api(`/content/${saved.id}`, { method: 'PATCH',
+            body: { status: 'ready', base_updated_at: base, week: state.week } });
+          base = r2.variant?.updated_at ?? base;
+          fills.push(r2);
+        }
+      } catch (e) {
+        if (wantReady) {
+          readyEl().checked = false;
+        }
+        unsaved = true;
+        genState(`לא נשמר — ${e.message}`, 'err');
+        await reload();
+        repaintFiles();
+        return;
+      }
+    }
+    const last = fills[fills.length - 1];
+    readyNow = (last.variant?.status ?? (wantReady ? 'ready' : 'draft')) === 'ready';
+    if (readyEl().checked !== readyNow) {
+      readyEl().checked = readyNow;
+    }
+    lastKey = keyOf({ ...p, status: readyNow ? 'ready' : 'draft' });
+    unsaved = keyOf(values()) !== lastKey || pickedFiles().length > 0;
+    const extra = `${warnNote(last.warn)}${downgradeNote(fills.flatMap((f) => f.downgraded ?? []))}`.trim();
+    const msg = [note, extra].filter(Boolean).join(' ');
+    note = '';
+    genState(msg ? `נשמר. ${msg}` : 'נשמר', msg ? 'warn' : '');
+    // המנוע שיבץ משהו — אומרים מה, עם "בטל"; שמירה רגילה בלי טוסט
+    const merged = mergeFills(fills);
+    if (merged.engine?.placed || merged.engine?.attached) engineToast(merged, 'נשמר.');
+    await reload();
+    if (picked.length) repaintFiles();
+    markGenericClean();
+  }
+
+  /** שומר עכשיו (ומה שהשתנה בינתיים — מיד אחרי) */
+  function saveNow() {
+    clearTimeout(timer);
+    timer = null;
+    if (saving) {
+      again = true;
+      return saving;
+    }
+    saving = (async () => {
+      try {
+        do {
+          again = false;
+          await saveOnce();
+        } while (again);
+      } catch (e) {
+        unsaved = true;
+        genState(`לא נשמר — ${e.message}`, 'err');
+      } finally {
+        saving = null;
+      }
+    })();
+    return saving;
+  }
+  const schedule = (ms) => {
+    unsaved = true;
+    clearTimeout(timer);
+    timer = setTimeout(saveNow, ms);
+  };
+
   openGeneric({
-    guardDirty: true,
+    guardDirty: mail ? true : () => unsaved,
+    autosave: !mail,
+    head: mail ? '' : `<label class="tswitch" data-tt="כבוי = טיוטה">
+      <input type="checkbox" role="switch" id="slotReady"${readyNow ? ' checked' : ''}>
+      <span class="tr" aria-hidden="true"></span><span class="tl">מוכן לפרסום</span></label>`,
+    beforeClose: mail ? undefined : async () => {
+      if (timer || saving || unsaved) await saveNow();
+    },
     title: `${channel?.name ?? ''} · פוסט ${index}${item ? '' : ' — חדש'}`,
     saveLabel: mail ? 'שמור והמשך לעריכת המייל' : undefined,
     fields: [
@@ -1195,94 +1333,45 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
           type: 'textarea', value: v?.body ?? item?.body },
         { name: '__note', type: 'html',
           html: '<div class="vnote" id="vnote" aria-live="polite" hidden></div>' },
-        { name: '__files', label: 'תמונות, סרטונים ומסמכים', type: 'files', existing: files },
+        { name: '__files', label: 'תמונות, סרטונים ומסמכים', type: 'files',
+          existing: `<div id="slotFiles">${filesHtml()}</div>` },
         { name: '__extras', type: 'html', html: `<div class="vextras" id="vextras">${
           extrasHtml({ platform, meta: extras, files: slotAssets })}</div>` },
-        // מפתח האזורים — כדי ש"לסגור בלי לשמור?" יתפוס גם שינוי בהם
+        // מפתח האזורים — כדי ששינוי בהם ייחשב שינוי
         { name: '__meta', type: 'hidden', hidden: true, value: extrasKey(extras) },
-        { name: 'status', label: 'מצב', type: 'radio',
-          options: [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום']],
-          value: v?.status === 'ready' ? 'ready' : 'draft' },
       ]),
     ],
     extraActions: (item && can('content')
       ? '<button class="btn" id="genDelete" style="color:var(--st-crit);margin-inline-end:auto">מחק פוסט</button>'
-      : '') + (item && !mail && linkTargets(campaign, item).length
-      ? '<button class="btn" id="genLinkOne">קשר לערוץ אחר</button>' : ''),
+      : ''),
+    // ניוזלטר בלבד — בשאר הערוצים אין כפתור שמירה, הכול נשמר לבד
     onSave: async (val) => {
       if (!val.title) throw new Error('צריך כותרת');
-      const input = $('#gen___files');
-      const picked = mail ? [] : [...(input?.files ?? [])];
-      const wantReady = !mail && val.status === 'ready';
-      const body = mail
-        ? { title: val.title, kind: val.kind, week: state.week }
-        : { title: val.title, kind: val.kind, body: val.body ?? '',
-            status: val.status, week: state.week,
-            ...(extrasKey(extras) !== extrasKey(baseMeta) ? { meta: mergeExtras(baseMeta, extras) } : {}) };
-
-      // פוסט קיים: קבצים קודם — "מוכן" נבדק מול המדיה שכבר עלתה
-      if (saved && picked.length) await uploadPicked(saved.id, picked);
-
-      let res;
-      try {
-        if (saved) {
-          res = await api(`/content/${saved.id}`, { method: 'PATCH',
-            body: mail ? body : { ...body, base_updated_at: base } });
-        } else {
-          // פוסט חדש עם קבצים נוצר קודם כטיוטה; "מוכן" אחרי שהקבצים עלו
-          res = await api('/content', { method: 'POST', body: {
-            ...body, status: picked.length && wantReady ? 'draft' : body.status,
-            campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index,
-          } });
-        }
-      } catch (e) {
-        return staleReload(e, val.body, (cur) => {
-          $('#gen_body').value = cur?.body ?? '';
-          const st = cur?.status === 'ready' ? 'ready' : 'draft';
-          $(`[name="gen_status"][value="${st}"]`).checked = true;
-          base = cur?.updated_at ?? null;
-          resetExtras(cur?.meta);
-        });
-      }
-      const created = !saved;
-      // מכאן הטופס עורך את מה שנשמר: "שמור" שוב לא יוצר פוסט כפול במשבצת תפוסה
+      const body = { title: val.title, kind: val.kind, week: state.week };
+      const res = saved
+        ? await api(`/content/${saved.id}`, { method: 'PATCH', body })
+        : await api('/content', { method: 'POST', body: {
+          ...body, campaign_id: campaign.id, slot_channel_id: channelId, sort_order: index } });
       saved = res.content;
-      base = res.variant?.updated_at ?? base;
-      if (res.variant) baseMeta = res.variant.meta ?? null;
-      const fills = [res];
-      if (created) $('#genTitle').textContent = `${channel?.name ?? ''} · פוסט ${index}`;
-      if (created && picked.length) {
-        await uploadPicked(saved.id, picked, () => reload());
-        if (wantReady) {
-          const r2 = await api(`/content/${saved.id}`, { method: 'PATCH',
-            body: { status: 'ready', base_updated_at: base, week: state.week } });
-          base = r2.variant?.updated_at ?? base;
-          fills.push(r2);
-        }
-      }
-      const last = fills[fills.length - 1];
-      engineToast(mergeFills(fills),
-        `נשמר.${warnNote(last.warn)}${downgradeNote(fills.flatMap((f) => f.downgraded ?? []))}`);
+      engineToast(res, 'נשמר.');
       await reload();
-      if (mail) {
-        // הפריט הטרי (עם הגרסה שלו) — אחרי הרענון. העורך נפתח רק אחרי שהטופס
-        // הזה נסגר: שניהם משתמשים באותו דיאלוג.
-        const fresh = state.campaigns.find((c) => c.id === campaign.id);
-        const freshItem = fresh?.content.find((x) => x.id === saved.id);
-        if (freshItem) {
-          setTimeout(() => openVariantForm({ item: freshItem, channelId, campaign: fresh }, reload));
-        }
-        toast('נשמר — ממשיכים לנושא ולתוכן של המייל.');
+      // הפריט הטרי (עם הגרסה שלו) — אחרי הרענון. העורך נפתח רק אחרי שהטופס
+      // הזה נסגר: שניהם משתמשים באותו דיאלוג.
+      const fresh = state.campaigns.find((c) => c.id === campaign.id);
+      const freshItem = fresh?.content.find((x) => x.id === saved.id);
+      if (freshItem) {
+        setTimeout(() => openVariantForm({ item: freshItem, channelId, campaign: fresh }, reload));
       }
+      toast('נשמר — ממשיכים לנושא ולתוכן של המייל.');
       return false;
     },
-    onClose: () => { if (filesChanged) reload(); },
+    onClose: () => {
+      clearTimeout(timer);
+      ac.abort();
+      if (filesChanged) reload();
+    },
     onOpen: () => {
-      wireCopyLinks($('#genBody'));
-      $$('#genBody [data-del-asset]').forEach((b) =>
-        b.addEventListener('click', run(async () => {
-          if (await deleteAssetAsk(b)) filesChanged = true;
-        })));
+      wireFiles();
       if (!mail) {
         wireExtras($('#vextras'), {
           files: () => slotAssets,
@@ -1292,14 +1381,21 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
             extras = pickExtras({ ...extras, ...readExtras($('#vextras')) });
             $('#gen___meta').value = extrasKey(extras);
             paintNote();
+            schedule(800);
           },
         });
         $('#gen_body').addEventListener('input', paintNote);
         paintNote();
+        // הקלדה — אחרי הפסקה; בחירה (סוג, קבצים) — מיד
+        $('#genBody').addEventListener('input', (e) => {
+          if (e.target.matches('#gen_title, #gen_body')) schedule(800);
+        }, { signal: ac.signal });
+        $('#genBody').addEventListener('change', (e) => {
+          if (e.target.matches('#gen_kind, #gen___files')) schedule(0);
+        }, { signal: ac.signal });
+        // התווית קבועה ("מוכן לפרסום") — טקסט שמתחלף היה מזיז את המתג
+        readyEl().addEventListener('change', () => schedule(0));
       }
-      $('#genLinkOne')?.addEventListener('click', run(async () => {
-        if (await closeGeneric()) openLinkOne(campaign, saved ?? item, reload);
-      }));
       $('#genDelete')?.addEventListener('click', run(async () => {
         const names = partners.map(slotLabel).join(', ');
         const question = !partners.length ? 'למחוק את הפוסט הזה?'
@@ -1307,6 +1403,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
             ? `למחוק את הפוסט הזה? רק המשבצת הזו נמחקת — התוכן נשאר ב${names}.`
             : `למחוק את הפוסט הזה? המשבצות המקושרות (${names}) יישארו עם עותק משלהן של התוכן.`;
         if (!(await confirmDialog(question, { okLabel: 'מחק פוסט', danger: true }))) return;
+        clearTimeout(timer);
+        await saving;
         const res = await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         await closeGeneric({ force: true });
         engineToast(res, 'הפוסט נמחק.');
@@ -1314,6 +1412,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload) {
       }));
       $$('#genBody [data-unlink]').forEach((b) =>
         b.addEventListener('click', run(async () => {
+          await saveNow();
           const res = await api(`/content/${b.dataset.unlink}/unlink`,
             { method: 'POST', body: { week: state.week } });
           await closeGeneric({ force: true });
@@ -1471,6 +1570,11 @@ function campaignMenu(c) {
   // ייבוא מטבלה — רק בזוויות. העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
   const angles = c.structure !== 'general';
   const items = [
+    // "קמפיין מוכן" ראשון: רק כשיש מה להשאיר ועל מה לפרוס
+    can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
+      '<button type="button" data-act="complete" class="ok">קמפיין מוכן</button>',
+    can('settings') && c.content_complete_at &&
+      '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     can('settings') && '<button type="button" data-act="edit">ערוך קמפיין</button>',
     can('settings') && `<button type="button" data-act="share">${c.share_pct != null
       ? `נתח קבוע: ${c.share_pct}%` : 'נתח קבוע…'}</button>`,
@@ -1478,11 +1582,6 @@ function campaignMenu(c) {
     can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     canLinkIn(c) && '<button type="button" data-act="link">קשר תוכן</button>',
     angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
-    // "קמפיין מוכן": רק כשיש מה להשאיר ועל מה לפרוס
-    can('settings') && !c.content_complete_at && c.content.length && c.starts_on && c.ends_on &&
-      '<button type="button" data-act="complete" class="ok">קמפיין מוכן</button>',
-    can('settings') && c.content_complete_at &&
-      '<button type="button" data-act="reopen">פתח מחדש להשלמת תוכן</button>',
     // קמפיין חדש תמיד כללי; קמפיין ישן לפי זוויות עובר בהמרה (כל ניסוח = פוסט)
     angles && can('settings') && '<button type="button" data-act="to-general">המר לקמפיין כללי</button>',
     // תבנית ל"שבץ מחדש" בלוח האסטרטגיה
