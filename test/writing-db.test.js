@@ -181,12 +181,17 @@ test('סעיף 19 — ייבוא לקמפיין כללי: שורה N ← פוס�
     ['פתיחה', 'מכירתי', 'fb אחת', 'ig אחת', 'x אחת'].join('\t'),
     // תא עם כמה שורות מגיע מאקסל במרכאות
     ['', '', '"fb שתיים\nהמשך"', '', 'x שתיים'].join('\t'),
+    // שורה ריקה באמצע = אין פוסט 3; השורה אחריה היא פוסט 4 (ובסוף — רעש)
+    ['', '', '', '', ''].join('\t'),
+    ['', '', '', '', 'x ארבע'].join('\t'),
+    '', '',
   ].join('\n');
 
   const pv = await call('POST', `/campaigns/${g.campaign}/import/preview`, { text });
   assert.equal(pv.status, 200, JSON.stringify(pv.json));
   assert.equal(pv.json.structure, 'general');
-  assert.equal(pv.json.totals.to_create, 5);
+  assert.equal(pv.json.totals.to_create, 6);
+  assert.equal(pv.json.totals.skipped, 0, JSON.stringify(pv.json.skipped));
   assert.equal(pv.json.totals.errors, 0);
   // התצוגה המקדימה לא כותבת
   assert.equal((await slotMap(g.campaign)).size, 0);
@@ -194,12 +199,13 @@ test('סעיף 19 — ייבוא לקמפיין כללי: שורה N ← פוס�
   const imp = await call('POST', `/campaigns/${g.campaign}/import`,
     { text, mark_ready: true, week: inDays(1) });
   assert.equal(imp.status, 201, JSON.stringify(imp.json));
-  assert.equal(imp.json.created, 5);
+  assert.equal(imp.json.created, 6);
   assert.ok(imp.json.engine, 'מילוי אחד אחרי הייבוא');
   assert.ok(imp.json.engine.placed > 0, JSON.stringify(imp.json.engine.summary));
 
   const m = await slotMap(g.campaign);
-  assert.equal(m.size, 5);
+  assert.equal(m.size, 6);
+  assert.ok(m.has(`${x.id}:4`) && ![fb, ig, x].some((ch) => m.has(`${ch.id}:3`)), [...m.keys()].join());
   for (const ch of [fb, ig, x]) assert.equal(m.get(`${ch.id}:1`)?.title, 'פתיחה');
   assert.equal(m.get(`${fb.id}:1`).kind, 'promo');
   assert.equal(m.get(`${fb.id}:1`).body, 'fb אחת');

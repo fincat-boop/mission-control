@@ -65,8 +65,10 @@ const TRUE_WORDS = new Set(['כן', 'true', '1', 'v', 'x', 'yes', 'y']);
 /**
  * מפרק CSV או TSV, כולל תאים מצוטטים שמכילים פסיקים ושורות חדשות.
  * הדבקה ישירה מ-Excel מגיעה כ-TSV, ולכן המפריד מזוהה ולא נשאל.
+ * keepEmpty — שורות ריקות באמצע נשארות (קמפיין כללי: שורה N = פוסט N, ושורה
+ * ריקה היא "אין פוסט N"); ריקות בהתחלה ובסוף — תמיד רעש מהעתקה.
  */
-export function parseTable(text) {
+export function parseTable(text, { keepEmpty = false } = {}) {
   const src = String(text ?? '').replace(/^﻿/, '').replace(/\r\n?/g, '\n');
   if (!src.trim()) return [];
 
@@ -104,7 +106,13 @@ export function parseTable(text) {
   table.push(row);
 
   // שורות ריקות לגמרי — רעש מהעתקה, לא נתונים
-  return table.filter((r) => r.some((c) => String(c).trim() !== ''));
+  const filled = (r) => r.some((c) => String(c).trim() !== '');
+  if (!keepEmpty) return table.filter(filled);
+  const first = table.findIndex(filled);
+  if (first === -1) return [];
+  let last = table.length - 1;
+  while (!filled(table[last])) last -= 1;
+  return table.slice(first, last + 1);
 }
 
 /** ממפה את שורת הכותרות לעמודות שהמערכת מבינה */
@@ -145,7 +153,7 @@ export async function analyzeImport(campaignId, text, { markReady = false, exist
   const campaign = await one('select * from campaigns where id = $1', [campaignId]);
   if (!campaign) throw new Error('לא נמצא קמפיין כזה');
 
-  const table = parseTable(text);
+  const table = parseTable(text, { keepEmpty: campaign.structure === 'general' });
   if (table.length < 2) {
     throw new Error('הטבלה צריכה שורת כותרות ולפחות שורת תוכן אחת');
   }
@@ -417,7 +425,10 @@ async function analyzeGeneral(campaign, table, { cols, channelCols, unknown, myC
       : [];
     const cells = [...own, ...general];
     if (!cells.length) {
-      skipped.push(`שורה ${line}: אין טקסט לאף ערוץ — לא נוצר פוסט ${index}`);
+      // שורה ריקה לגמרי = אין פוסט N בשום ערוץ (בכוונה); כותרת בלי טקסט — אומרים
+      if (raw.some((c) => String(c).trim() !== '')) {
+        skipped.push(`שורה ${line}: אין טקסט לאף ערוץ — לא נוצר פוסט ${index}`);
+      }
       return;
     }
 

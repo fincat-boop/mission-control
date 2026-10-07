@@ -307,7 +307,7 @@ function generalPreview(plan, list, readyNote) {
       .filter(Boolean).join(' · ') + ` (${readyNote})`;
   const tag = { create: '', update: ' (עדכון)', skip: ' (דילוג)' };
   const sample = plan.items.slice(0, 4).map((i) =>
-    `<tr><td>${i.index}</td><td>${esc(i.title || i.variants[0]?.title || '')}</td>
+    `<tr><td>${i.index}</td><td>${esc(i.title || 'נגזרת מהטקסט של כל פוסט')}</td>
          <td>${esc(KIND_HE[i.kind])}</td>
          <td>${esc(i.variants.map((v) => `${v.channel_name}${v.from_general ? ' (כללי)' : ''}${
            tag[v.action]}`).join(', '))}</td></tr>`).join('');
