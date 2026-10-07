@@ -80,9 +80,11 @@ section[hidden] { display: none; }
    ומתחתיו המצב שלה השבוע. בלי שבבים ומסגרות; מי שלא באוויר — המצב בכתום */
 .oxy { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--border); }
 .oxy h3 { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 12px; }
-.oxy ul { list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 14px 28px; }
-.oxyitem { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 9px; row-gap: 2px; }
+/* כל הנקודות בשורה אחת, תמיד: עמודות שוות; שם ארוך נחתך, במסך צר גוללים לצד */
+.oxy ul { list-style: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(140px, 1fr);
+  gap: 0 24px; overflow-x: auto; padding-bottom: 4px; }
+.oxyitem { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 9px; row-gap: 2px; }
+.oxyitem .nm, .oxyitem .st { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .oxyitem .sw { width: 9px; height: 9px; border-radius: 50%; }
 .oxyitem .nm { font-size: 13px; color: var(--ink-1); font-weight: 500; }
 .oxyitem .st { grid-column: 2; font-size: 11.5px; color: var(--muted); }
@@ -104,53 +106,37 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 1000px; }
 .chan .cap { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .chan .cap.full { color: var(--st-warn); }
 .grid td.day { min-width: 110px; height: 68px; }
-/* הרקע הוא צבע נקודת הקצה ומוזרק מהקוד. סוג התוכן הוא התג שבתוך .meta. */
-.post { position: relative; border-radius: 7px; padding: 6px 9px; margin-bottom: 5px; font-size: 12px; line-height: 1.4; cursor: pointer; }
+/* כרטיס פוסט: ניטרלי, עם פס בצבע נקודת הקצה (--ep, מהקוד) ושם הנקודה בראשו.
+   בתחתית שורת מצב אחת — נקודה בגוון ומילים, בלי תגיות צפות */
+.post { position: relative; border-radius: 7px; padding: 6px 9px 7px; margin-bottom: 6px; font-size: 12px;
+  line-height: 1.4; cursor: pointer; background: var(--panel-2); color: var(--ink-1);
+  border: 1px solid var(--border); border-inline-start: 4px solid var(--ep, var(--muted)); }
+.post:hover { border-color: color-mix(in srgb, var(--ink-2) 45%, var(--border)); border-inline-start-color: var(--ep); }
+.post .pep { display: flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600;
+  color: var(--ep, var(--muted)); margin-bottom: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .post .ep { font-weight: 600; display: block; }
-.post .meta { opacity: .85; font-size: 10.5px; margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+.post .meta { color: var(--ink-2); font-size: 10.5px; margin-top: 3px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .post .kind {
-  font-style: normal; font-size: 9.5px; font-weight: 700; letter-spacing: .02em;
-  padding: 1px 5px; border-radius: 4px;
-  background: rgba(0,0,0,.22); border: 1px solid rgba(255,255,255,.28);
+  font-style: normal; font-size: 9.5px; font-weight: 600;
+  padding: 0 5px; border-radius: 4px; border: 1px solid var(--border); color: var(--ink-2);
 }
-.post .kind.promo { background: rgba(0,0,0,.38); }
-/* פוסט שפורסם: הכרטיס (צבע, כותרת, פרטים) נשאר, רק דהוי — והחותמת
-   יושבת מעליו באלכסון, כמו חותמת גומי, ולא נכנסת ל-opacity של השאר */
-.post.published { overflow: hidden; }
-.post.published .published-inner { opacity: .5; }
-/* inset:0 + margin:auto ממרכז בדיוק גיאומטרי, בלי תלות בכיוון RTL —
-   הגרסה הקודמת עם left:50%+translate יצאה לא ממורכזת בפועל */
-.post.published .pub-stamp {
-  position: absolute; inset: 0; margin: auto;
-  width: fit-content; height: fit-content;
-  transform: rotate(-10deg);
-  font-size: 14px; font-weight: 800; letter-spacing: .04em; white-space: nowrap;
-  color: #fff; border: 2px solid #fff; border-radius: 6px;
-  padding: 2px 9px; background: var(--st-good);
-  box-shadow: 0 0 12px 3px rgba(52,199,89,.85), 0 2px 4px rgba(0,0,0,.4);
-}
+.post .kind.promo { color: var(--st-warn); border-color: color-mix(in srgb, var(--st-warn) 45%, transparent); }
+/* שורת המצב */
+.pst { display: flex; align-items: baseline; gap: 5px; margin-top: 5px; font-size: 11px; font-weight: 600; flex-wrap: wrap; }
+.pst > i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; align-self: center; }
+.pst .h { font-weight: 400; color: var(--muted); }
+.pst.red { color: var(--st-crit); }
+.pst.yellow { color: var(--st-warn); }
+.pst.blue { color: var(--accent); }
+.pst.auto { color: var(--st-good); }
+/* בלי תוכן — מסגרת מקווקוות: משבצת שמחכה */
+.post.missing { border-style: dashed; border-inline-start-style: solid; }
+.post.missing .ep { color: var(--ink-2); font-weight: 500; }
+/* פורסם — הכרטיס נשאר, דהוי; המצב אומר "פורסם" */
+.post.published .pep, .post.published .ep, .post.published .meta { opacity: .55; }
+.post.failed { border-color: var(--st-crit); border-inline-start-color: var(--ep); }
 
-/* תגית פינתית משותפת: אדום = אין תוכן, צהוב = יש טיוטה, כחול = יש תוכן מוכן */
-.corner-tag {
-  position: absolute; inset-block-start: -7px; inset-inline-end: -6px;
-  color: #fff; font-size: 9.5px; font-weight: 700;
-  letter-spacing: .02em; padding: 2px 7px; border-radius: 999px;
-  box-shadow: 0 1px 3px rgba(0,0,0,.35);
-}
-.corner-tag.red    { background: var(--st-crit); }
-.corner-tag.yellow { background: var(--st-warn); }
-.corner-tag.blue   { background: var(--accent); }
-.corner-tag.auto   { background: var(--st-good); }
-.post.failed { outline: 2px solid var(--st-crit); outline-offset: -1px; }
-
-.hole {
-  position: relative; border: 1.5px dashed var(--st-crit); border-radius: 7px;
-  padding: 6px 9px; font-size: 11.5px; color: var(--st-crit); font-weight: 600; cursor: pointer;
-}
 /* יש תוכן בטיוטה שעוד לא אושר לאף ערוץ — פחות דחוף מ"אין תוכן בכלל" */
-.hole.draft { border-color: var(--st-warn); color: var(--st-warn); }
-.hole small, .pending small { color: var(--muted); font-weight: 400; }
-.pending { border: 1.5px dashed var(--st-warn); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; color: var(--st-warn); font-weight: 600; cursor: pointer; }
 /* כפתור ההוספה לא משתתף בזרימה: הוא מרחף בפינת המשבצת ורק משנה שקיפות.
    קודם הוא הופיע ב-display והזיז את כל הלוח בכל תזוזת עכבר. */
 .grid td.day { position: relative; }
@@ -1014,11 +1000,6 @@ button.btn.bell .badge {
 #toast .toast-act:hover, #toast .toast-act:focus-visible { border-color: var(--accent); }
 
 /* פוסט חסר תוכן: הכרטיס הרגיל בצבע הנקודה, במסגרת מקווקוות */
-.post.missing { outline: 2px dashed var(--st-crit); outline-offset: -2px; }
-.post .hint {
-  font-style: normal; font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px;
-  background: var(--st-warn); color: #1a1a1a;
-}
 
 /* חלון "מלא את השבוע" — כל פריט עם תיבת סימון */
 .eng-intro { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
@@ -1257,12 +1238,6 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .ptabs button[aria-selected="true"] { color: var(--ink-1); border-bottom-color: var(--accent); font-weight: 600; }
 .ptabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 #pEdit .frow2 { margin-bottom: 10px; }
-/* פוסט שהמועד שלו עבר ולא יצא — מסגרת ותג "עבר המועד" */
-.post.missed { outline: 2px dashed var(--st-warn); outline-offset: -2px; }
-.post .missed-tag {
-  display: inline-block; margin-top: 4px; font-style: normal; font-size: 9.5px; font-weight: 700;
-  padding: 1px 6px; border-radius: 4px; background: var(--st-warn); color: #1a1a1a;
-}
 /* היסטוריית ניסיונות הפרסום — מקופלת */
 .pvlog { margin-top: 14px; font-size: 12px; }
 .pvlog summary { cursor: pointer; color: var(--ink-2); }
@@ -1273,14 +1248,6 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .pvlog li.bad .st { color: var(--st-crit); white-space: nowrap; }
 .pvlog .msg { color: var(--ink-2); }
 .pverr { color: var(--st-crit); font-size: 13px; line-height: 1.6; padding: 6px 0 4px; }
-/* פוסט שפורסם ועוד לא נמדד — תג פינתי (במקום של תגית התוכן), לא בתוך ה-opacity */
-.post.published:has(.unmeasured) { overflow: visible; }
-.post .unmeasured {
-  position: absolute; inset-block-start: -7px; inset-inline-end: -6px; z-index: 1;
-  font-style: normal; font-size: 9.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
-  background: #0c0c0e; color: var(--st-warn); border: 1px solid var(--st-warn);
-  box-shadow: 0 1px 3px rgba(0,0,0,.35);
-}
 /* היום בלוח — כותרת העמודה מודגשת, והמשבצות בעמודה ברקע עדין */
 .grid thead th.today { color: var(--accent); font-weight: 650; box-shadow: inset 0 -2px 0 var(--accent); }
 .grid td.day.today { background-color: rgba(77,163,255,.04); }
@@ -1312,11 +1279,12 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .mpost .mbody { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .mpost .mbody b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mpost .mbody .d { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mtag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; color: #fff; white-space: nowrap; }
-.mtag.red { background: var(--st-crit); }
-.mtag.yellow { background: var(--st-warn); color: #1a1a1a; }
-.mtag.blue { background: var(--accent); color: #0d1117; }
-.mtag.auto { background: var(--st-good); color: #0d1117; }
+.mtag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.mtag > i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.mtag.red { color: var(--st-crit); }
+.mtag.yellow { color: var(--st-warn); }
+.mtag.blue { color: var(--accent); }
+.mtag.auto { color: var(--st-good); }
 @media (max-width: 600px) {
   .toolbar .legend { display: none; }
   .toolbar { gap: 8px; }
