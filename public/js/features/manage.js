@@ -338,7 +338,7 @@ function systemGroup(users, settings, backupsRes, ro) {
       <details class="item" data-open-id="engine">
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
-          ${eng('ברירת מחדל: ימים לפחות בין שני פוסטים של אותה נקודת קצה באותו ערוץ — כל קמפיין יכול לשנות', 'min_gap_days', s.min_gap_days)}
+          ${eng('ברירת מחדל: ימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ — לכל היותר; בערוץ שיש בו מקום לכמה פוסטים בשבוע המרווח קטן יותר לבד. כל קמפיין יכול לקבוע משלו', 'min_gap_days', s.min_gap_days)}
           ${eng('פוסטים מכירתיים ביום — לכל היותר, בכל הערוצים יחד', 'max_promo_per_day', s.max_promo_per_day)}
           <div class="prow">
             <label class="cbline">
