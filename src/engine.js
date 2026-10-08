@@ -1687,10 +1687,12 @@ export function gapViolation(own, dates, dateKey, gapsAt = null, settings = null
 
 /**
  * הסדר בין התוכן המתאים של נקודה למשבצת (סעיף 11):
+ *   0. מוכן לפני טיוטה — בכל הקבוצות (החלטת מנהל D3): שוטף מוכן לפני טיוטה
+ *      של קמפיין
  *   1. תוכן של קמפיין שרץ בתאריך (עבר את notDueOn) — לפני תוכן שוטף/ותיק;
  *      בין קמפיינים — המפגר ביותר מהנתח שלו בערוץ קודם (debts.campaignLag),
  *      ולא תמיד הוותיק
- *   2. בתוך כל קבוצה — מוכן לפני טיוטה, ואז לפי סוג: כשקמפיין רץ לנקודה
+ *   2. אחר כך לפי סוג: כשקמפיין רץ לנקודה
  *      משולב → מכירתי → ערך (משולבים קודם בחדר המכירתי של היחס — החלטת
  *      משתמש; כמו kindLimited בקיבולת), אחרת ערך קודם
  *   3. פיגור שווה — הקמפיין עם המזהה הקטן; בתוך קמפיין — לפי התור
@@ -1710,9 +1712,9 @@ export function contentOrder({ channelId, inCampaign, debts = null }) {
   return (a, b) => {
     const ca = a.campaign_id != null;
     const cb = b.campaign_id != null;
+    if (isReady(a) !== isReady(b)) return isReady(b) - isReady(a);
     if (ca !== cb) return cb - ca;
-    return (ca ? lagOf(b) - lagOf(a) : 0) ||
-      (isReady(b) - isReady(a)) || (rank[a.kind] - rank[b.kind]) ||
+    return (ca ? lagOf(b) - lagOf(a) : 0) || (rank[a.kind] - rank[b.kind]) ||
       (ca ? (a.campaign_id - b.campaign_id) || ((a.sort_order ?? 0) - (b.sort_order ?? 0)) : 0);
   };
 }

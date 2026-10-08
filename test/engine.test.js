@@ -936,7 +936,7 @@ test('pacedDate / notDueOn — קמפיין לפי קצב מפוזר על התק
 
 import { contentOrder, gapViolation } from '../src/engine.js';
 
-test('contentOrder — קמפיין רץ לפני שוטף ותיק; המפגר מהנתח קודם; מוכן לפני טיוטה בכל קבוצה', () => {
+test('contentOrder — מוכן לפני טיוטה בכל הקבוצות; קמפיין רץ לפני שוטף ותיק; המפגר מהנתח קודם', () => {
   const r = (x) => ({ ready_channel_ids: [1], eligible_channel_ids: [1], kind: 'value', ...x });
   const evergreen = r({ id: 1, campaign_id: null, evergreen: true, kind: 'promo' });
   const oldCamp = r({ id: 2, campaign_id: 5, sort_order: 1 });
@@ -945,7 +945,8 @@ test('contentOrder — קמפיין רץ לפני שוטף ותיק; המפגר 
   const lag = { campaignLag: (id) => (id === 9 ? 0.3 : -0.1) };
   const order = (list, debts) =>
     [...list].sort(contentOrder({ channelId: 1, inCampaign: true, debts })).map((c) => c.id);
-  assert.deepEqual(order([evergreen, oldCamp, newCamp, draft], lag), [3, 4, 2, 1]);
+  // D3: טיוטה של הקמפיין המפגר אחרי כל המוכנים — גם אחרי השוטף המוכן
+  assert.deepEqual(order([evergreen, oldCamp, newCamp, draft], lag), [3, 2, 1, 4]);
   // בלי פיגור ידוע — הקמפיין עם המזהה הקטן, ועדיין לפני השוטף
   assert.deepEqual(order([evergreen, newCamp, oldCamp]), [2, 3, 1]);
 });
