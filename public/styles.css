@@ -1547,3 +1547,5 @@ details.item details.adv[open] > summary { margin-bottom: 10px; }
 .aksecretbox code { font-size: 13px; color: var(--ink-1); user-select: all; }
 .akinfo .tablewrap { max-height: 50vh; overflow: auto; margin-bottom: 16px; }
 .akreq code { font-size: 11.5px; }
+.sumline.idlech { margin-top: 8px; }
+.sumline.idlech .linkbtn { margin-inline-start: 6px; color: var(--ink-2); text-decoration: underline; }

@@ -25,6 +25,12 @@ PHONE.addEventListener('change', () => {
 
 let boardReq = 0; // רק התשובה לבקשה האחרונה מצוירת — לחיצות מהירות על ‹ › לא מתערבבות
 
+// ערוץ בלי אף פוסט בשבוע המוצג לא תופס שורה בלוח. שורה מתחת לטבלה מונה
+// אותם, ו"הצג" מחזיר את השורות (להוספה ידנית או גרירה אליהם). לא נשמר —
+// כל כניסה ללוח מתחילה מוסתר
+let showEmptyChannels = false;
+const hasPosts = (ch) => ch.days.some((d) => d.posts.length);
+
 export async function renderBoard() {
   const req = ++boardReq;
   // רשימת ההקמה — רכה: אם היא נכשלת, הלוח עצמו עדיין מוצג. אחרי שהושלמה
@@ -64,7 +70,12 @@ export async function renderBoard() {
     ? `<th class="today" aria-current="date">${esc(d.label)} · היום</th>`
     : `<th>${esc(d.label)}</th>`)).join('');
 
-  const body = b.channels.map((ch) => {
+  // שבוע ריק לגמרי — מציגים את כל השורות: בלעדיהן אין איפה להוסיף פוסט
+  const idle = b.channels.filter((ch) => !hasPosts(ch));
+  const hideIdle = !showEmptyChannels && idle.length < b.channels.length;
+  const rows = hideIdle ? b.channels.filter(hasPosts) : b.channels;
+
+  const body = rows.map((ch) => {
     const full = ch.used >= ch.max_per_week;
     const days = ch.days.map((day) => {
       const cards = day.posts.map((p) => postCard(p)).join('');
@@ -138,7 +149,12 @@ export async function renderBoard() {
         <thead><tr><th></th>${head}</tr></thead>
         <tbody>${body || emptyRow}</tbody>
       </table>
-    </div>`}
+    </div>
+    ${idle.length && idle.length < b.channels.length ? `<div class="sumline idlech">
+      ${showEmptyChannels ? 'מוצגים גם ערוצים בלי פוסטים השבוע'
+        : `בלי פוסטים השבוע: ${idle.map((ch) => `<b>${esc(ch.name)}</b>`).join(' · ')}`}
+      <button type="button" class="linkbtn" id="toggleIdle">${showEmptyChannels ? 'הסתר' : 'הצג'}</button>
+    </div>` : ''}`}
     <div class="sumline">השבוע: <b>${s.total} פרסומים</b> · מהם <b>${s.promo} מכירתיים</b> · ${ratio}</div>
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
@@ -171,6 +187,10 @@ export async function renderBoard() {
     await refreshBoard();
   }));
   $('#runEngine')?.addEventListener('click', run(openEngine));
+  $('#toggleIdle')?.addEventListener('click', run(async () => {
+    showEmptyChannels = !showEmptyChannels;
+    await refreshBoard();
+  }));
 
   // אישור מרוכז — כל המוכנים לפרסום אוטומטי של השבוע שמועדם עוד לא עבר
   // עוברים ל-approved, וכל אחד מתפרסם במועד שנקבע לו. לא שולח מיד.
