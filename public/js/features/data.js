@@ -11,7 +11,7 @@ import { openPostPreview } from '../ui/postDialog.js';
 
 /* ========================= נתונים וסטטיסטיקה ========================= */
 
-const VIA_HE = { ui: 'ידני', assistant: 'העוזר', system: 'מערכת' };
+const VIA_HE = { ui: 'ידני', assistant: 'העוזר', system: 'מערכת', api: 'סוכן' };
 
 /** התקופה הנוכחית כפרמטרים ל-API. החודשים — לפי שעון ישראל (dataPeriod.js). */
 function dataRange() {
@@ -633,7 +633,7 @@ function activityPanel(a) {
   </tr>`).join('');
 
   // "מערכת" = מה שקרה בלי שאדם לחץ: תחזוקה ופרסום אוטומטי (via='system', בלי משתמש)
-  const filters = [['', 'הכול'], ['ui', 'ידני'], ['assistant', 'העוזר'], ['system', 'מערכת']].map(([v, l]) =>
+  const filters = [['', 'הכול'], ['ui', 'ידני'], ['assistant', 'העוזר'], ['api', 'סוכן'], ['system', 'מערכת']].map(([v, l]) =>
     `<button data-via="${v}"${state.dataVia === v ? ' class="on"' : ''}>${esc(l)}</button>`
   ).join('');
 

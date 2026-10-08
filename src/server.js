@@ -14,6 +14,8 @@ import {
 import { publishTickForOrg, refreshNewsletterMetrics } from './publish/runner.js';
 import { armTickHeartbeat, tickFinished, tickStarted } from './publish/heartbeat.js';
 import api from './routes/api.js';
+import agentApi from './agent-api/router.js';
+import { pruneApiRequests } from './agent-api/store.js';
 import { MAX_FILE_MB } from './routes/_shared.js';
 import { mediaReady } from './media.js';
 import { r2Host } from './r2.js';
@@ -70,6 +72,10 @@ app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
+
+// API לסוכנים: מפתח API ולא קוקי, ורק נתיבים מרשימה לבנה (src/agent-api).
+// לפני /api — שם הבקשה הייתה נבדקת לפי קוקי. הראוטר תמיד עונה (404 בסופו).
+app.use('/api/v1', agentApi);
 
 // כל בקשה מאומתת רצה בתוך הקשר הטננט של המשתמש (tenantScope ב-db.js).
 app.use('/api', csrfGuard, loadUser, tenantScope, audit, api);
@@ -149,6 +155,10 @@ const timers = [
   // מדיה ב-R2: סל מחזור, העברת קבצים ישנים מהמסד, יתומים (src/maintenance.js)
   setTimeout(() => { mediaMaintenance().catch((e) => console.error('תחזוקת מדיה נכשלה:', e)); }, 4 * 60000),
   setInterval(() => { mediaMaintenance().catch((e) => console.error('תחזוקת מדיה נכשלה:', e)); }, HOUR),
+  // יומן הבקשות של ה-API לסוכנים נשמר 90 יום
+  setInterval(() => {
+    pruneApiRequests().catch((e) => console.error('ניקוי יומן בקשות ה-API נכשל:', e));
+  }, 24 * HOUR),
   // פרסום אוטומטי: כל דקה, לכל ארגון. הטיק עצמו בודק את מתג-העל של הארגון
   // ויוצא מיד כשהוא כבוי — הריצה הריקה זולה.
   // בלי withOrg סביב הטיק: הוא פותח טרנזקציה קצרה משלו לכל שלב (runner.js),

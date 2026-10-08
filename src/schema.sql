@@ -812,3 +812,85 @@ do $$ begin
       for each row execute function stamp_disabled_at();
   end if;
 end $$;
+
+-- ========================= API לסוכנים: מפתחות =========================
+-- מפתח לכל סוכן חיצוני, עם הרשאות (src/agent-api, הועתק מ-Backbone).
+--   - נשמר רק sha256 של המפתח. המפתח מוצג פעם אחת בהנפקה ואינו ניתן לשחזור.
+--   - key_prefix (12 התווים הראשונים) ציבורי: מפתח החיפוש, ומזהה בלוגים.
+--     ייחודי בכל המסד ולא לפי ארגון — באימות עוד לא יודעים מה הארגון.
+--   - scopes = טקסט חופשי בצורה בלבד; הרשימה עצמה בקוד (scopes.js), כך
+--     שהוספת הרשאה לא דורשת מיגרציה.
+--   - ביטול = revoked_at, לא מחיקה. מחיקה רק של מפתח שכבר בוטל.
+--   - לא בגיבוי (tables.js): שחזור היה מחזיר לחיים מפתחות שבוטלו מאז.
+create table if not exists api_keys (
+  id           serial primary key,
+  org_id       int not null references orgs(id),
+  name         text not null,
+  key_prefix   text not null,
+  key_hash     text not null,
+  env          text not null default 'live',
+  scopes       text[] not null default '{}',
+  created_by   int references users(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  last_used_at timestamptz,
+  expires_at   timestamptz,
+  revoked_at   timestamptz,
+  constraint api_keys_name_chk check (char_length(btrim(name)) between 2 and 80),
+  constraint api_keys_env_chk check (env in ('live','test')),
+  constraint api_keys_prefix_chk check (key_prefix ~ '^mc_(live|test)_[a-z0-9]{4}$'),
+  constraint api_keys_hash_chk check (key_hash ~ '^[0-9a-f]{64}$'),
+  constraint api_keys_scopes_chk check (
+    array_to_string(scopes, ',') ~ '^$|^[a-z_]+\.[a-z_.]+(,[a-z_]+\.[a-z_.]+)*$')
+);
+create unique index if not exists api_keys_prefix_idx on api_keys (key_prefix);
+create index if not exists api_keys_org_idx on api_keys (org_id, created_at desc);
+
+-- יומן בקשות לכל מפתח (90 יום — pruneApiRequests ב-server.js). path בלי
+-- query string. status null = הבקשה לא הסתיימה.
+create table if not exists api_requests (
+  id          bigserial primary key,
+  org_id      int not null references orgs(id),
+  api_key_id  int not null references api_keys(id) on delete cascade,
+  method      text not null,
+  path        text not null,
+  status      smallint,
+  ip          inet,
+  duration_ms int,
+  created_at  timestamptz not null default now()
+);
+create index if not exists api_requests_key_idx on api_requests (api_key_id, created_at desc);
+create index if not exists api_requests_time_idx on api_requests (created_at);
+
+-- ה-grant הכללי למעלה רץ לפני שהטבלאות האלה נוצרו (בעלייה הראשונה)
+grant select, insert, update, delete on api_keys, api_requests to app_user;
+grant usage, select on all sequences in schema public to app_user;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['api_keys','api_requests'] loop
+    execute format(
+      'alter table %I alter column org_id set default nullif(current_setting(''app.current_org'', true), '''')::int', t);
+    execute format('alter table %I enable row level security', t);
+    execute format('alter table %I force row level security', t);
+    begin
+      execute format(
+        'create policy org_isolation on %I '
+        || 'using (org_id = nullif(current_setting(''app.current_org'', true), '''')::int) '
+        || 'with check (org_id = nullif(current_setting(''app.current_org'', true), '''')::int)', t);
+    exception when duplicate_object then null;
+    end;
+  end loop;
+end $$;
+
+-- יומן הפעולות: פעולה של סוכן נרשמת via='api'. רק כשעוד לא הוחלף — בלי
+-- סריקה של כל היומן בכל עלייה.
+do $$ begin
+  if not exists (select 1 from pg_constraint
+                  where conname = 'activity_log_via_check'
+                    and pg_get_constraintdef(oid) like '%''api''%') then
+    alter table activity_log drop constraint if exists activity_log_via_check;
+    alter table activity_log add constraint activity_log_via_check
+      check (via in ('ui','assistant','system','api'));
+  end if;
+end $$;

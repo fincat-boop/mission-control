@@ -13,6 +13,7 @@ import taskRoutes from './tasks.js';
 import settingsRoutes from './settings.js';
 import statsRoutes from './stats.js';
 import publishRoutes from './publish.js';
+import apiKeyRoutes from './api-keys.js';
 
 /**
  * הרכבת ה-API. הקובץ הזה לא מגדיר אף נתיב בעצמו — כל אחד מהראוטרים
@@ -27,17 +28,27 @@ const r = Router();
 
 r.use(publicRoutes);
 r.use(requireAuth);
+// ניהול מפתחות ה-API — רק מהממשק (קוקי), ולכן לא בתוך protectedApi
+r.use(apiKeyRoutes);
 
-r.use(boardRoutes);
-r.use(engineRoutes);
-r.use(endpointRoutes);
-r.use(campaignRoutes);
-r.use(contentRoutes);
-r.use(channelRoutes);
-r.use(strategyRoutes);
-r.use(taskRoutes);
-r.use(settingsRoutes);
-r.use(statsRoutes);
-r.use(publishRoutes);
+/**
+ * הנתיבים המוגנים, בלי שער ההתחברות. מורכבים פעמיים: כאן מאחורי
+ * requireAuth (הממשק), וב-/api/v1 מאחורי שער מפתחות ה-API
+ * (src/agent-api/router.js) — שם רק מה שברשימה הלבנה עובר.
+ */
+export const protectedApi = Router();
+protectedApi.use(boardRoutes);
+protectedApi.use(engineRoutes);
+protectedApi.use(endpointRoutes);
+protectedApi.use(campaignRoutes);
+protectedApi.use(contentRoutes);
+protectedApi.use(channelRoutes);
+protectedApi.use(strategyRoutes);
+protectedApi.use(taskRoutes);
+protectedApi.use(settingsRoutes);
+protectedApi.use(statsRoutes);
+protectedApi.use(publishRoutes);
+
+r.use(protectedApi);
 
 export default r;
