@@ -570,6 +570,12 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
   if (kind && kind.capacity < capacity) {
     capacity = kind.capacity;
     limitedBy = kind.binding;
+  } else if (kind && limitedBy === 'gap' && rateCap > capacity) {
+    // המרווח מקצץ, אבל גם בלעדיו המגבלה לפי סוג לא הייתה נותנת יותר — היא
+    // המגביל האמיתי (דחיסה לא תעזור, ולכן גם לא שואלים עליה)
+    const atRate = kindLimited({ S: rateCap, mix, channel, settings, weeksTouched, span,
+                                 availableDays: available.length, promoDayCap });
+    if (atRate?.binding && atRate.capacity <= capacity) limitedBy = atRate.binding;
   }
 
   return { wanted, capacity, rateCap, gapCap, siblings: k, availableDays: available.length,

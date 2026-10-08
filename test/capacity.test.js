@@ -545,3 +545,16 @@ test('סעיף 6 — kindMix: לפי הגרסאות בכל ערוץ, ובלי ת
   assert.deepEqual(m.get(4), { promo: 2, value: 1, hybrid: 0 });
   assert.equal(kindMix([], [{ id: 1 }]), null);
 });
+
+test('סעיף 6 — כשגם בלי המרווח המכירתיים לא נותנים יותר, הם המגביל (לא "לדחוס")', () => {
+  // בלאק פריידי 20.11–5.12 (3 שבועות בלוח), עד מכירתי אחד בשבוע: במרווח 7 נכנסים
+  // 3, ודחיסה לא תוסיף — הקצב מבקש 4 אבל התקרה 3
+  const r = channelCapacity({ from: '2026-11-20', to: '2026-12-05',
+    channel: { max_per_week: 5, urgent_reserve_pct: 20, max_promo_per_week: 1 }, share: 0.4,
+    gapDays: 7, mix: { promo: 1 }, settings: RULES });
+  assert.equal(r.capacity, 3);
+  assert.equal(r.limitedBy, 'promo_week');
+  assert.equal(gapToFit({ from: '2026-11-20', to: '2026-12-05',
+    channel: { max_per_week: 5, urgent_reserve_pct: 20, max_promo_per_week: 1 }, share: 0.4,
+    mix: { promo: 1 }, settings: RULES }, 4), null);
+});
