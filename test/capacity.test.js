@@ -559,22 +559,44 @@ test('סעיף 6 — כשגם בלי המרווח המכירתיים לא נות
     mix: { promo: 1 }, settings: RULES }, 4), null);
 });
 
-test('R2 — משולב לא נחתך ביחס (כמו במנוע), רק בתקרה השבועית שלו', () => {
+test('משולב עובר באותו שער היחס כמו המכירתי, במשקל שלו (שלב 3 — קודם R2: לא נחתך)', () => {
   const base = { from: '2026-11-01', to: '2026-11-28', share: 1, gapDays: 1, settings: RULES };
-  // ערוץ של 3, 4 שבועות, הכול משולב: 12 נכנסים — קודם נחתך ל-6 (12 / 4 ÷ 0.5)
+  // ערוץ של 3, 4 שבועות: חדר של 3 במשקל מכירתי. הכול משולב (0.5) — 6 נכנסים,
+  // כמו שהמנוע משבץ (קודם 12, והמנוע שיבץ מעל התקרה)
   const hybrid = channelCapacity({ ...base, channel: { max_per_week: 3, urgent_reserve_pct: 0 },
                                    mix: { hybrid: 4 } });
-  assert.equal(hybrid.capacity, 12);
-  // עם תקרה שבועית למשולבים — היא כן חלה
+  assert.equal(hybrid.capacity, 6);
+  assert.equal(hybrid.limitedBy, 'ratio');
+  // עם תקרה שבועית למשולבים — היא חלה קודם
   const capped = channelCapacity({ ...base, mix: { hybrid: 4 },
     channel: { max_per_week: 3, urgent_reserve_pct: 0, max_hybrid_per_week: 1 } });
   assert.equal(capped.capacity, 4);
   assert.equal(capped.limitedBy, 'hybrid_week');
-  // משולב תופס חלק ממקום המכירתי: חצי משולב חצי מכירתי — המכירתי נחתך, המשולב לא
+  // חצי משולב חצי מכירתי: מכירתיים קודם (כמו סדר הבחירה במנוע), המשולבים
+  // במה שנשאר מהחדר — המשקל המכירתי לא עובר את 3
   const mixed = channelCapacity({ ...base, channel: { max_per_week: 3, urgent_reserve_pct: 0 },
                                   mix: { hybrid: 1, promo: 1 } });
-  assert.equal(mixed.kinds.hybrid, 6);
-  assert.equal(mixed.kinds.promo, 0);   // 3 (תקרה) − 6 × 0.5
+  assert.equal(mixed.kinds.promo, 3);
+  assert.equal(mixed.kinds.hybrid, 0);
+  const few = channelCapacity({ ...base, channel: { max_per_week: 3, urgent_reserve_pct: 0 },
+                                mix: { hybrid: 5, promo: 1 } });
+  assert.equal(few.kinds.promo + 0.5 * few.kinds.hybrid <= 3, true);
+  assert.deepEqual([few.kinds.promo, few.kinds.hybrid], [2, 2]);
+});
+
+test('promoRoomAllows — שער אחד: חדר קבוע, או לפי הערך בחלון; ערך תמיד נכנס', async () => {
+  const { promoRoomAllows } = await import('../src/capacity.js');
+  const gate = { room: 3, hybridWeight: 0.5 };
+  assert.equal(promoRoomAllows('hybrid', { promo: 2.5 }, gate), true);
+  assert.equal(promoRoomAllows('hybrid', { promo: 3 }, gate), false);
+  assert.equal(promoRoomAllows('promo', { promo: 2.5 }, gate), false);
+  assert.equal(promoRoomAllows('value', { promo: 99 }, gate), true);
+  // לפי הערך: ערוץ של 3 (יחס 3): משולב אחרי 4 ערך — 4.5 ≥ 3 × 0.5
+  const byValue = { minRatio: 3, budget: 3, hybridWeight: 0.5 };
+  assert.equal(promoRoomAllows('hybrid', { value: 1, promo: 0 }, byValue), true);
+  assert.equal(promoRoomAllows('hybrid', { value: 0, promo: 0 }, byValue), false);
+  assert.equal(promoRoomAllows('promo', { value: 3, promo: 0 }, byValue), true);
+  assert.equal(promoRoomAllows('promo', { value: 5, promo: 1 }, byValue), false);
 });
 
 test('R3 — קמפיין מכירתי קצר: רבע מהתקרה של 28 יום בכל שבוע, כמו המילוי המרוסן', async () => {

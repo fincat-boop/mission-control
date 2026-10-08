@@ -76,13 +76,16 @@ export function notPlacedNotes(limits) {
   return (limits ?? []).map((x) => {
     const head = `${postsOf(x.count, x.kinds)} ${x.count === 1 ? 'לא נכנס' : 'לא נכנסו'} ל${x.channel_name}`;
     const days = (n) => (n === 1 ? 'יום אחד' : `${n} ימים`);
+    // משולב עובר באותו שער היחס, במשקל החלקי שלו (promoRoomAllows)
+    const hybrid = x.kinds?.hybrid
+      ? ` משולב נספר כ-${x.hybrid_weight ?? 0.5} מכירתי.` : '';
     switch (x.reason) {
       case 'ratio':
         return `${head}: נדרשים ${x.ratio} פוסטי ערך לכל מכירתי, וכשהמנוע בדק היו בערוץ ` +
-          `ב-28 הימים ${x.value} ערך מול ${x.promo} מכירתיים. עוד תוכן ערך לערוץ הזה יפנה להם מקום.`;
+          `ב-28 הימים ${x.value} ערך מול ${x.promo} מכירתיים. עוד תוכן ערך לערוץ הזה יפנה להם מקום.${hybrid}`;
       case 'ratio_cap':
         return `${head}: ביחס של ${x.ratio} ערך לכל מכירתי, ערוץ של ${x.max_per_week ?? x.budget} פוסטים בשבוע ` +
-          `מכניס עד ${x.ratio_cap} מכירתיים ב-28 ימים, ולא יותר מרבע מהם בשבוע אחד.`;
+          `מכניס עד ${x.ratio_cap} מכירתיים ב-28 ימים, ולא יותר מרבע מהם בשבוע אחד.${hybrid}`;
       case 'promo_week':
       case 'hybrid_week':
       case 'value_week': {

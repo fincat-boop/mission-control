@@ -478,3 +478,48 @@ test('סעיף 14 — תוכן שוטף שנמחק חסום רק לשבוע של
   assert.ok(next.placements.some((x) => x.content_id === it), 'בשבוע שאחרי — חוזר');
   await wipe();
 });
+
+/* ========================= משולב + מכירתי: המנוע והקיבולת מסכימים ========================= */
+
+// לסירוגין: המכירתיים ממלאים את החדר. מכירתי אחד ואחריו משולבים: המשולבים
+// מקבלים את מה שנשאר מהחדר — במשקל שלהם
+const HYBRID_CASES = [
+  { perWeek: 3, kinds: (n) => Array.from({ length: n }, (_, i) => (i % 2 ? 'hybrid' : 'promo')) },
+  { perWeek: 7, kinds: (n) => Array.from({ length: n }, (_, i) => (i % 2 ? 'hybrid' : 'promo')) },
+  { perWeek: 3, kinds: (n) => Array.from({ length: n }, (_, i) => (i ? 'hybrid' : 'promo')) },
+];
+for (const { perWeek, kinds } of HYBRID_CASES) {
+  test(`משולב+מכירתי — המנוע והקיבולת מסכימים, ערוץ של ${perWeek} בשבוע, 4 שבועות (${kinds(4).join(',')}…)`, { skip }, async () => {
+    await wipe();
+    const { autoFillCampaign } = await import('../src/routes/_shared.js');
+    const { channelCapacity, ratioPromoLimit, channelBudget, kindWeights } =
+      await import('../src/capacity.js');
+    const ch = await channel(`ערוץ ${perWeek}`, perWeek);
+    const ep = await endpoint('נקודה');
+    // 4 שבועות שמתחילים בעוד 3 שבועות — כולם שבועות מרוסנים לקמפיין
+    const s = weekMeta(inDays(21)).start;
+    const e = weekMeta(inDays(42)).end;
+    const c = await campaign(ep.id, ch.id, { starts: s, ends: e, gap: 1 });
+    // הרבה תוכן, מכירתי ומשולב לסירוגין
+    const list = kinds(4 * perWeek);
+    const ids = await items(ep.id, ch.id, list.length, { campaignId: c.id, kind: list });
+    const fill = await inOrg(() => autoFillCampaign(c.id, null));
+    const posts = await q('select kind from posts where content_id = any($1::int[])', [ids]);
+    const got = { promo: 0, hybrid: 0, value: 0 };
+    for (const p of posts) got[p.kind] += 1;
+
+    const settings = await q1('select * from engine_settings limit 1');
+    const cap = channelCapacity({ from: s, to: e, channel: ch, share: 1, gapDays: 1, settings,
+                                  mix: { promo: list.filter((k) => k === 'promo').length,
+                                         hybrid: list.filter((k) => k === 'hybrid').length } });
+    const room = ratioPromoLimit(channelBudget(ch), 28, 4, settings.min_value_per_promo);
+    const weight = kindWeights(got, settings.hybrid_weight).promo;
+    // המשקל המכירתי של המנוע לא עובר את החדר שהקיבולת חוזה (קודם: משולבים
+    // ששובצו אחרי המכירתיים העבירו אותו)
+    assert.ok(weight <= room, `${weight} > ${room}: ${JSON.stringify(got)} ${JSON.stringify(fill.summary)}`);
+    assert.deepEqual({ promo: got.promo, hybrid: got.hybrid },
+      { promo: cap.kinds.promo, hybrid: cap.kinds.hybrid }, JSON.stringify(cap));
+    assert.equal(cap.limitedBy, 'ratio');
+    await wipe();
+  });
+}

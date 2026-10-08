@@ -465,13 +465,32 @@ export function windowRatio(minRatio, budget) {
 }
 
 /**
- * שער היחס של המנוע (סעיף 6): האם מכירתי נוסף נכנס לערוץ, מול המשקלים
- * (kindWeights) של כל הפוסטים שלו ב-28 הימים — מה שכבר על הלוח או פורסם,
- * ומה שהמנוע מתכנן באותה ריצה. ערך ≥ יחס × (מכירתי + 1).
+ * שער היחס — פונקציה אחת למנוע ולקיבולת (סעיף 6 + משולב/מכירתי משלב 2):
+ * האם פוסט מסוג kind נכנס, מול המשקלים (kindWeights) של הפוסטים בחלון.
+ * "משולב" נספר hybrid_weight כמכירתי (ו-1−hybrid_weight כערך) — ולכן גם הוא
+ * עובר בשער, על אותו "חדר מכירתי": קודם רק מכירתי נבדק, והקיבולת ניכתה
+ * משולבים מהחדר בזמן שהמנוע הכניס אותם בלי בדיקה, כך שמשולבים ששובצו אחרי
+ * המכירתיים העבירו את המשקל המכירתי מעל התקרה. ערך — תמיד נכנס.
+ *   room != null — חדר קבוע במשקל מכירתי (ratioPromoLimit בקיבולת, התקרה
+ *     הצפויה / השבועית בשבוע מרוסן במנוע): המשקל המכירתי אחרי הפוסט ≤ room
+ *   room == null — לפי הערך שבחלון (השער הרגיל במנוע): ערך ≥ יחס × מכירתי,
+ *     שניהם אחרי הפוסט (windowRatio)
+ * @param weights {promo, value} — kindWeights של מה שכבר בחלון
  */
-export function ratioAllowsPromo(weights, minRatio, budget) {
+export function promoRoomAllows(kind, weights, { room = null, minRatio = 0, budget = 0,
+                                                 hybridWeight = 0.5 } = {}) {
+  const add = kindWeights({ [kind]: 1 }, hybridWeight);
+  if (add.promo <= 0) return true;
+  const promo = (weights.promo ?? 0) + add.promo;
+  // שבר עשרוני (משולב 0.3) — סובלנות לעיגול
+  if (room != null) return room === Infinity || promo <= room + 1e-9;
   const r = windowRatio(minRatio, budget);
-  return r <= 0 || weights.value >= r * (weights.promo + 1);
+  return r <= 0 || (weights.value ?? 0) + add.value + 1e-9 >= r * promo;
+}
+
+/** שער היחס למכירתי נוסף (promoRoomAllows, לפי הערך בחלון): ערך ≥ יחס × (מכירתי + 1) */
+export function ratioAllowsPromo(weights, minRatio, budget) {
+  return promoRoomAllows('promo', weights, { minRatio, budget });
 }
 
 /**
@@ -623,8 +642,10 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
  *     שהטווח נוגע בהם (שבוע ראשון–שבת, כמו buildUsage)
  *   promo_day — מכירתי ליום (max_promo_per_day, בכל הערוצים) × הימים הפנויים,
  *     או promoDayCap — החלק של הערוץ כשלקמפיין כמה ערוצים (channelCapacities)
- *   ratio — שער היחס: ratioPromoLimit (משקל מכירתי, משולב נספר חלקית; רק
- *     המכירתי נחתך — משולב לא עובר בשער, כמו במנוע)
+ *   ratio — שער היחס: ratioPromoLimit (משקל מכירתי, משולב נספר חלקית). שני
+ *     הסוגים עוברים באותו שער (promoRoomAllows — אותה פונקציה כמו המנוע):
+ *     קודם המכירתיים, ומה שנשאר מהחדר — למשולבים, כמו סדר הבחירה במנוע
+ *     (contentOrder: מכירתי לפני משולב כשקמפיין רץ)
  * קירוב: התקרות לערוץ שלמות לקמפיין הזה — קמפיין מכירתי נוסף באותו ערוץ
  * חולק אותן בפועל; המנוע אוכף, וכאן רק מעריכים כמה נכנס.
  * @returns {{capacity:number, kinds:object, wanted:object, limits:object,
@@ -649,16 +670,17 @@ function kindLimited({ S, mix, channel, settings, weeksTouched, span, availableD
     ratio: ratioPromoLimit(channelBudget(channel), span, weeksTouched,
       settings?.min_value_per_promo ?? 3),
   };
-  let p = Math.min(P, limits.promo_week, limits.promo_day);
-  // משולב לא עובר בשער היחס (כמו במנוע) — רק התקרה השבועית שלו; הוא כן
-  // תופס חלק ממקום המכירתי בחלון (hybrid_weight), ולכן מקטין את p
-  const h = Math.min(H, limits.hybrid_week);
+  const pMax = Math.min(P, limits.promo_week, limits.promo_day);
+  const hMax = Math.min(H, limits.hybrid_week);
   const v = Math.min(V, limits.value_week);
-  let ratioCut = false;
-  if (p + hw * h > limits.ratio) {
-    ratioCut = true;
-    p = Math.max(0, Math.floor(limits.ratio - hw * h));
-  }
+  // החדר המכירתי של היחס — מכירתיים קודם, משולבים במה שנשאר (promoRoomAllows)
+  const gate = { room: limits.ratio, hybridWeight: hw };
+  const used = { promo: 0, value: 0 };
+  let p = 0;
+  while (p < pMax && promoRoomAllows('promo', used, gate)) { p += 1; used.promo += 1; }
+  let h = 0;
+  while (h < hMax && promoRoomAllows('hybrid', used, gate)) { h += 1; used.promo += hw; }
+  const ratioCut = p < pMax || h < hMax;
   let binding = null;
   if (ratioCut) binding = 'ratio';
   else if (P > limits.promo_week && limits.promo_week <= limits.promo_day) binding = 'promo_week';

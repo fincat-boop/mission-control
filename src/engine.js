@@ -4,8 +4,8 @@ import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
 import {
-  averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, RATIO_WINDOW_DAYS,
-  ratioAllowsPromo, ratioPromoCap, ratioWindowStart, weeklyPromoCap, windowRatio,
+  averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, promoRoomAllows,
+  RATIO_WINDOW_DAYS, ratioPromoCap, ratioWindowStart, weeklyPromoCap, windowRatio,
 } from './capacity.js';
 import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
@@ -709,27 +709,29 @@ export function selectPlanItems(plan, selected) {
 }
 
 /**
- * בדיקה חוזרת של שער היחס על מה שנבחר בפועל. התכנון אישר כל מכירתי מול
- * כל ההצעה; אם המשתמש הוריד פריטי ערך, מכירתי שנשען עליהם כבר לא מאוזן.
- * קודם נכנס כל מה שאינו מכירתי (ערך, משולב, פוסטים חסרי תוכן, שיוכים),
- * ורק אז כל מכירתי נבדק מחדש מול usage.allows — אותו שער כמו בתכנון.
+ * בדיקה חוזרת של שער היחס על מה שנבחר בפועל. התכנון אישר כל מכירתי ומשולב
+ * מול כל ההצעה; אם המשתמש הוריד פריטי ערך, מה שנשען עליהם כבר לא מאוזן.
+ * קודם נכנס כל מה שאינו עובר בשער (ערך, פוסטים חסרי תוכן, שיוכים), ורק אז
+ * כל מכירתי ומשולב, לפי הסדר, נבדק מחדש מול usage.allows — אותו שער כמו בתכנון.
  * @returns {{placements:object[], dropped:object[]}}
  */
 export function recheckSelection(plan, { channels, existing, settings, prior = new Map() }) {
   const usage = buildUsage(channels, existing, settings, { prior });
+  const gated = (x) => x.kind === 'promo' || x.kind === 'hybrid';
   for (const a of plan.attachments ?? []) usage.retag(a.channel_id, a.date, a.prev_kind, a.kind);
   for (const h of plan.holes ?? []) usage.take(h.channel_id, h.date, h.kind, -1);
-  for (const p of plan.placements.filter((x) => x.kind !== 'promo')) {
+  for (const p of plan.placements.filter((x) => !gated(x))) {
     usage.take(p.channel_id, p.date, p.kind, -1);
   }
   const dropped = [];
-  for (const p of plan.placements.filter((x) => x.kind === 'promo')) {
-    if (usage.allows(p.channel_id, p.date, 'promo')) {
-      usage.take(p.channel_id, p.date, 'promo', -1);
+  for (const p of plan.placements.filter(gated)) {
+    if (usage.allows(p.channel_id, p.date, p.kind)) {
+      usage.take(p.channel_id, p.date, p.kind, -1);
     } else {
       dropped.push({
         key: p.key, title: p.title,
-        reason: 'בלי פריטי הערך שהורדו מהסימון אין מספיק ערך לאזן את הפוסט המכירתי',
+        reason: `בלי פריטי הערך שהורדו מהסימון אין מספיק ערך לאזן את הפוסט ${
+          p.kind === 'hybrid' ? 'המשולב' : 'המכירתי'}`,
       });
     }
   }
@@ -1270,16 +1272,22 @@ export function buildUsage(channels, existing, settings,
 
   /** התקרה הצפויה של מכירתיים ב-28 יום בערוץ (שבוע מרוסן) */
   const promoCapOf = (u) => ratioPromoCap(u.budget, RATIO_WINDOW_DAYS, minRatio);
-  /** שער היחס בערוץ, מול החלון win ומונה השבוע week: 'ratio' / 'ratio_cap' / null */
-  const ratioReason = (u, win, week) => {
+  /**
+   * שער היחס בערוץ לפוסט מסוג kind (מכירתי או משולב — promoRoomAllows, אותה
+   * פונקציה כמו הקיבולת), מול החלון win ומונה השבוע week: 'ratio' /
+   * 'ratio_cap' / null. משולב נבדק על אותו חדר במשקל שלו (hybrid_weight) —
+   * קודם רק מכירתי נבדק, ומשולבים ששובצו אחריו העבירו את התקרה
+   */
+  const ratioReason = (u, win, week, kind = 'promo') => {
     if (projectedPromoCap) {
       const cap = promoCapOf(u);
       if (cap === Infinity) return null;
-      return kindWeights(win, hybridWeight).promo + 1 > cap ||
-        kindWeights(week, hybridWeight).promo + 1 > weeklyPromoCap(u.budget, minRatio)
-        ? 'ratio_cap' : null;
+      const fits = (w, room) => promoRoomAllows(kind, kindWeights(w, hybridWeight),
+        { room, hybridWeight });
+      return fits(win, cap) && fits(week, weeklyPromoCap(u.budget, minRatio)) ? null : 'ratio_cap';
     }
-    return ratioAllowsPromo(kindWeights(win, hybridWeight), minRatio, u.budget) ? null : 'ratio';
+    return promoRoomAllows(kind, kindWeights(win, hybridWeight),
+      { minRatio, budget: u.budget, hybridWeight }) ? null : 'ratio';
   };
   const block = (channelId, contentId) => {
     promoBlocked += 1;
@@ -1301,11 +1309,11 @@ export function buildUsage(channels, existing, settings,
 
     if (capReached(u, kind)) return `${kind}_week`;
 
-    if (kind === 'promo') {
-      if ((promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return 'promo_day';
-      // שער היחס: מכירתי נוסף מותר רק אם יש מספיק ערך בחלון שיאזן אותו
-      // (או, בשבוע מרוסן, רק עד התקרה הצפויה)
-      const why = ratioReason(u, u.win, u.byKind);
+    if (kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return 'promo_day';
+    if (kind === 'promo' || kind === 'hybrid') {
+      // שער היחס: מכירתי / משולב נוסף מותר רק אם יש מספיק ערך בחלון שיאזן
+      // אותו (או, בשבוע מרוסן, רק עד התקרה הצפויה)
+      const why = ratioReason(u, u.win, u.byKind, kind);
       if (why) { block(channelId, contentId); return why; }
     }
     return null;
@@ -1320,11 +1328,11 @@ export function buildUsage(channels, existing, settings,
     const u = byChannel.get(channelId);
     if (!u) return 'full';
     if (capReached(u, toKind)) return `${toKind}_week`;
-    if (toKind === 'promo') {
-      if ((promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return 'promo_day';
+    if (toKind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return 'promo_day';
+    if (toKind === 'promo' || toKind === 'hybrid') {
       // שער היחס, כשהפוסט כבר לא נספר בסוג הקודם שלו
       const less = (o) => ({ ...o, [fromKind]: Math.max(0, (o[fromKind] ?? 0) - 1) });
-      const why = ratioReason(u, less(u.win), less(u.byKind));
+      const why = ratioReason(u, less(u.win), less(u.byKind), toKind);
       if (why) { block(channelId, contentId); return why; }
     }
     return null;
@@ -1401,6 +1409,7 @@ export function buildUsage(channels, existing, settings,
         value: Number(w.value.toFixed(1)),
         promo: Number(w.promo.toFixed(1)),
         ratio_cap: promoCapOf(u) === Infinity ? null : promoCapOf(u),
+        hybrid_weight: hybridWeight,
         budget: u.budget,
         // המספר שהמשתמש קבע לערוץ ("פוסטים בשבוע"), לא התקציב אחרי השמורה
         max_per_week: Number(u.ch.max_per_week),
