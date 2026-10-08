@@ -50,7 +50,10 @@ r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
 /**
  * "בטל" על מילוי של המנוע. רק מה שלא השתנה מאז:
  *  - created [{post_id, content_id}] — נמחק רק פוסט שעדיין מתוכנן, לא פורסם,
- *    נוצר בחצי השעה האחרונה, עם אותו תוכן, ובלי תוצאות שנמדדו.
+ *    נוצר בחצי השעה האחרונה, עם אותו תוכן, ובלי תוצאות שנמדדו — ורק אם הוא
+ *    עדיין בדיוק כמו שהמילוי יצר אותו (updated_at = created_at, טריגר
+ *    posts_touch). פוסט שגררו, שהזיזו לו שעה או ששינו לו כותרת אחרי המילוי
+ *    נשאר, ונספר ב-kept — הבדיקה בשרת, לא לפי מה שהלקוח זוכר.
  *  - attached [{post_id, content_id, title, prev_title, prev_kind, closed_task_ids}]
  *    — חוזר לפוסט חסר תוכן רק אם עדיין מתוכנן, עם אותו תוכן ואותה כותרת
  *    שהשיוך כתב; המשימות שהשיוך סגר (לכתוב/החלפה) נפתחות שוב.
@@ -75,10 +78,23 @@ r.post('/engine/undo', requirePerm('content'), wrap(async (req, res) => {
           where p.id = x.id and p.content_id is not distinct from x.content_id
             and p.status = 'scheduled' and p.published_at is null
             and p.created_at > now() - interval '30 minutes'
+            and p.updated_at = p.created_at
             and not exists (select 1 from post_results r where r.post_id = p.id)
         returning p.id, p.content_id, p.channel_id, p.scheduled_at`,
         [created.map((x) => x.id), created.map((x) => x.content)])
     : [];
+  // מה שנוצר במילוי ועדיין על הלוח, אבל נערך מאז — נשאר, והלקוח אומר כמה
+  const gone = new Set(removed.map((p) => p.id));
+  const rest = created.filter((x) => !gone.has(x.id));
+  const kept = rest.length
+    ? (await one(
+        `select count(*)::int as n from posts p
+           join unnest($1::int[], $2::int[]) as x(id, content_id)
+             on p.id = x.id and p.content_id is not distinct from x.content_id
+          where p.published_at is null and p.updated_at > p.created_at
+            and p.status not in ('published','publishing')`,
+        [rest.map((x) => x.id), rest.map((x) => x.content)])).n
+    : 0;
 
   const detached = [];
   for (const a of attached) {
@@ -114,7 +130,7 @@ r.post('/engine/undo', requirePerm('content'), wrap(async (req, res) => {
     .map((w) => { try { return weekMeta(`${w}T12:00:00`).start; } catch { return null; } })
     .filter(Boolean);
   await recordDismissals([...removed, ...detached], { weeks });
-  res.json({ removed: removed.length, detached: detached.length,
+  res.json({ removed: removed.length, detached: detached.length, kept,
              ignored: created.length + attached.length - removed.length - detached.length });
 }));
 
@@ -125,37 +141,53 @@ r.post('/urgent/preview', requirePerm('content'), wrap(async (req, res) => {
   res.json(await planUrgent(req.body ?? {}));
 }));
 
-/** אישור: משבץ בפועל לפי אותה תוכנית */
+/**
+ * אישור: משבץ בפועל לפי אותה תוכנית. התכנון והכתיבה תחת נעילת המנוע של
+ * הארגון (lockEngine, כמו /engine/apply) — מילוי אוטומטי או מבצע דחוף נוסף
+ * שרצים במקביל ראו את אותה משבצת פנויה ושובצו שניהם. התצוגה המקדימה לא
+ * כותבת, ולכן בלי נעילה.
+ */
 r.post('/urgent/commit', requirePerm('content'), wrap(async (req, res) => {
   const b = req.body ?? {};
-  const plan = await planUrgent(b);
-  if (plan.errors?.length) return bad(res, plan.errors.join(' · '));
-  if (plan.placements.length === 0) return bad(res, 'לא נמצא שטח פנוי למבצע הדחוף');
-
-  const needsApproval = !(req.user.is_owner || req.user.perm_approve);
-  // מפתח אחד לכל הפוסטים של המבצע — "אשר את כל המבצע" בחלון הפוסט
-  const group = crypto.randomUUID();
-  const created = [];
-  for (const p of plan.placements) {
-    const post = await one(
-      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at,
-                          status, assignee_id, urgent, note, urgent_group)
-       values ($1,$2,$3,'promo',$4,$5,$6,true,$7,$8) returning *`,
-      [p.channel_id, b.endpoint_id ?? null, b.title, p.scheduled_at,
-       needsApproval ? 'pending_approval' : 'scheduled',
-       b.assignee_id ?? req.user.id, p.note ?? null, group]
-    );
-    created.push(post);
-    if (needsApproval) {
-      await query(
-        `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent)
-         values ($1,$2,'approve',$3,$4,true)`,
-        [`לאשר: ${b.title}`, `${p.channel_name} · ${p.day_label} · דורש הרשאת אישור`,
-         post.id, b.endpoint_id ?? null]
-      );
-    }
+  try {
+    await lockEngine();
+  } catch (e) {
+    if (e?.code !== '55P03') throw e;
+    return bad(res, 'המנוע ממלא כרגע את הלוח בבקשה אחרת — נסו לאשר שוב בעוד רגע', 503);
   }
-  res.status(201).json({ posts: created, pending: needsApproval });
+  // התכנון והכתיבה ביחד בשרשרת של התהליך (withEngineLock), כמו applyWeek
+  const out = await withEngineLock(async () => {
+    const plan = await planUrgent(b);
+    if (plan.errors?.length) return { error: plan.errors.join(' · ') };
+    if (plan.placements.length === 0) return { error: 'לא נמצא שטח פנוי למבצע הדחוף' };
+
+    const needsApproval = !(req.user.is_owner || req.user.perm_approve);
+    // מפתח אחד לכל הפוסטים של המבצע — "אשר את כל המבצע" בחלון הפוסט
+    const group = crypto.randomUUID();
+    const created = [];
+    for (const p of plan.placements) {
+      const post = await one(
+        `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at,
+                            status, assignee_id, urgent, note, urgent_group)
+         values ($1,$2,$3,'promo',$4,$5,$6,true,$7,$8) returning *`,
+        [p.channel_id, b.endpoint_id ?? null, b.title, p.scheduled_at,
+         needsApproval ? 'pending_approval' : 'scheduled',
+         b.assignee_id ?? req.user.id, p.note ?? null, group]
+      );
+      created.push(post);
+      if (needsApproval) {
+        await query(
+          `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent)
+           values ($1,$2,'approve',$3,$4,true)`,
+          [`לאשר: ${b.title}`, `${p.channel_name} · ${p.day_label} · דורש הרשאת אישור`,
+           post.id, b.endpoint_id ?? null]
+        );
+      }
+    }
+    return { posts: created, pending: needsApproval };
+  });
+  if (out.error) return bad(res, out.error);
+  res.status(201).json(out);
 }));
 
 export default r;

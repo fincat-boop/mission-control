@@ -8,6 +8,7 @@ import { backupAlerts, readBackupLayers } from './backup-status.js';
 import { mediaReady } from './media.js';
 import { UNCONFIRMED_SQL, unconfirmedAlert, unconfirmedPosts } from './unconfirmed.js';
 import { postIsLiveSql } from './live.js';
+import { tickHeartbeat, tickStallAlert } from './publish/heartbeat.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -120,18 +121,23 @@ export async function buildAlerts(user = null) {
   }
 
   // התנגשות שיכולה להיווצר משיבוץ ידני או מנתונים ישנים:
-  // אותה נקודת קצה, אותה מדיה, אותו יום
+  // אותה נקודת קצה, אותה מדיה, אותו יום — בשעון ישראל (::date לבד לפי אזור
+  // הזמן של הסשן, UTC בפרוד: פוסט של 01:00 נספר ליום הקודם). פוסט של קמפיין
+  // מושהה או לא פעיל לא על הלוח ולא אצל המנוע — גם לא כאן (פורסם — כן)
   const clashes = await rows(
     `select e.name as endpoint_name, c.name as channel_name,
-            p.scheduled_at::date as on_date,
+            (p.scheduled_at at time zone 'Asia/Jerusalem')::date as on_date,
             count(*)::int as n,
             string_agg(distinct p.kind, ',') as kinds
        from posts p
        join endpoints e on e.id = p.endpoint_id
        join channels c  on c.id = p.channel_id
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
       where p.status in ('scheduled','approved','publishing','failed','pending_approval')
         and p.scheduled_at >= now() - interval '1 day'
-      group by e.name, c.name, p.scheduled_at::date
+        and (ca.id is null or (ca.active and ca.paused_at is null) or p.status = 'published')
+      group by e.name, c.name, (p.scheduled_at at time zone 'Asia/Jerusalem')::date
      having count(*) > 1`
   );
 
@@ -188,6 +194,11 @@ export async function buildAlerts(user = null) {
   if (storage) alerts.push(storage);
 
   if (platformSignals) alerts.push(...backupAlerts(backupLayers));
+
+  // טיק הפרסום לא הסתיים 10 דקות (publish/heartbeat.js) — הטיק אחד לכל
+  // הארגונים, וכל ארגון מושפע; כמו "פרסום נכשל" — לכל משתמש, בלי הרשאה
+  const stalled = tickStallAlert(tickHeartbeat());
+  if (stalled) alerts.push(stalled);
 
   const order = { crit: 0, warn: 1, info: 2 };
   // סימן אחד לכל פוסט: משימה פתוחה היא ה-to-do, ההתראה המקבילה מתייתרת

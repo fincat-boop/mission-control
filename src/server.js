@@ -12,6 +12,7 @@ import {
   backupNow, cleanupStaleUrgent, forEachOrg, mediaMaintenance, suggestContentSwaps, sweepTasks,
 } from './maintenance.js';
 import { publishTickForOrg, refreshNewsletterMetrics } from './publish/runner.js';
+import { armTickHeartbeat, tickFinished, tickStarted } from './publish/heartbeat.js';
 import api from './routes/api.js';
 import { MAX_FILE_MB } from './routes/_shared.js';
 import { mediaReady } from './media.js';
@@ -133,6 +134,8 @@ async function publishTickAllOrgs() {
       console.error(`טיק הפרסום נכשל לארגון ${id}:`, e.message));
   }
 }
+// הדופק של הטיק (publish/heartbeat.js) — התראה כשהטיק לא הסתיים 10 דקות
+armTickHeartbeat();
 const timers = [
   setTimeout(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 2 * 60000),
   setInterval(() => { backupNow().catch((e) => console.error('גיבוי אוטומטי נכשל:', e)); }, 24 * HOUR),
@@ -156,9 +159,10 @@ const timers = [
   setInterval(() => {
     if (tickRunning) return;
     tickRunning = true;
+    tickStarted();
     publishTickAllOrgs()
       .catch((e) => console.error('טיק הפרסום האוטומטי נכשל:', e))
-      .finally(() => { tickRunning = false; });
+      .finally(() => { tickRunning = false; tickFinished(); });
   }, 60000),
   // מדדי ניוזלטר (פתיחות/קליקים) ממשיכים להצטבר אחרי השליחה — רענון שעתי
   setInterval(() => {

@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
-import { autoFill, autoFillCampaign, bad, parseIdList, titleFromFilename, updateById, upload, wrap } from './_shared.js';
+import {
+  autoFill, autoFillCampaign, bad, lockEngineOr503, parseIdList, titleFromFilename, updateById,
+  upload, wrap,
+} from './_shared.js';
+import { revalidateCampaignPosts, SHIFT_STATUSES } from '../campaign-shift.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
@@ -637,13 +641,28 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
       statusChanged: ['ready', 'draft'].includes(b.status) && b.status !== statusBefore,
     }));
   }
+  // הסוג של פוסט = הסוג של התוכן שלו (attachToPost). שינוי סוג (ערך /
+  // מכירתי) עובר לפוסטים העתידיים שעוד לא יצאו — של הפריט ושל כל הקבוצה
+  // המקושרת (syncFrom העביר אליה את הסוג). בלי זה המנוע, אזהרת המכסות
+  // והיחס בלוח המשיכו לספור את הסוג הישן. פורסם / בפרסום — היסטוריה, לא נוגעים
+  let kindPosts = 0;
+  if (b.kind !== undefined) {
+    kindPosts = (await query(
+      `update posts p set kind = ci.kind
+         from content_items ci, content_items me
+        where me.id = $1 and ci.id = p.content_id
+          and coalesce(ci.linked_to_id, ci.id) = coalesce(me.linked_to_id, me.id)
+          and p.kind <> ci.kind
+          and p.status = any($2) and p.scheduled_at > now()`,
+      [c.id, SHIFT_STATUSES])).rowCount;
+  }
   // משבצת: הגרסה היחידה שלה — לנעילה האופטימית של השמירה הבאה מאותו טופס
   const variant = c.slot_channel_id
     ? await one('select * from content_variants where content_id = $1 and channel_id = $2',
       [c.id, c.slot_channel_id])
     : null;
   const engine = await fillFor(c, b.week);
-  res.json({ content: c, variant, warn, downgraded, engine });
+  res.json({ content: c, variant, warn, downgraded, kind_posts: kindPosts, engine });
 }));
 
 /**
@@ -653,10 +672,23 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
  * יעד עם תוכן דורש replace: true (אחרת 409 עם needs_confirm).
  */
 r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
+  // קישור למשבצת שכבר משובצת: הפוסטים שלה נשארים במועדים שלהם ומעכשיו יוצאים
+  // עם התוכן של המקור — ואם אחד מהם באותו יום כמו פוסט של הקבוצה, "לא באותו
+  // יום" (links_apart) נשבר בלי התראה. לכן בקמפיין שהכלל דולק בו — נעילת
+  // המנוע לפני כל כתיבה, ואחרי הקישור הפוסטים של העוקבת נבדקים מחדש מול
+  // הכלל הזה בלבד (משבצת חדשה / ריקה — אין מה לבדוק; המילוי משבץ לפי הכלל)
+  const scope = await one(
+    `select ca.id, ca.links_apart from content_items ci join campaigns ca on ca.id = ci.campaign_id
+      where ci.id = $1`, [Number(req.params.id) || 0]);
+  const apart = !!scope && scope.links_apart !== false;
+  if (apart && !(await lockEngineOr503(res))) return;
   let out;
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
+  const shift = apart
+    ? await revalidateCampaignPosts(scope.id, { rules: { linksApart: true }, contentIds: [out.follower.id] })
+    : null;
   const engine = await fillFor(out.source, req.body?.week);
-  res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, engine });
+  res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, shift, engine });
 }));
 
 /**
@@ -667,7 +699,8 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
  * ומנתקת את הפוסטים שמקושרים בין שתי העמודות (dry_run מחזיר גם unlinks).
  */
 r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res) => {
-  const c = await one('select id, structure, link_rules from campaigns where id = $1 for update',
+  const c = await one(
+    'select id, structure, link_rules, links_apart from campaigns where id = $1 for update',
     [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
   if (c.structure !== 'general') return bad(res, 'קישור עמודות זמין רק בקמפיין כללי');
@@ -691,6 +724,10 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
   if (req.body?.dry_run) return res.json({ copies: plan.length, unlinks: followers.length });
 
   const apart = typeof req.body?.links_apart === 'boolean' ? req.body.links_apart : null;
+  // "לא באותו יום" נדלק: פוסטים מקושרים שכבר משובצים באותו יום נבדקים מחדש
+  // (revalidateCampaignPosts) — נעילת המנוע לפני כל כתיבה, כמו בעריכת קמפיין
+  const tighten = apart === true && c.links_apart === false;
+  if (tighten && !(await lockEngineOr503(res))) return;
   await query(
     `update campaigns set link_rules = $2::jsonb, links_apart = coalesce($3, links_apart)
       where id = $1`, [c.id, JSON.stringify(clean), apart]);
@@ -699,8 +736,12 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
     try { await unlink(id); unlinked += 1; } catch (e) { if (!(e instanceof LinkError)) throw e; }
   }
   const out = await applyLinkPlan(plan);
-  const engine = await autoFill(req.body?.week);
-  res.json({ rules: clean, ...out, unlinked, engine });
+  // מה שירד מהלוח משובץ מחדש על כל התקופה של הקמפיין, לא רק בשבוע שמוצג
+  const shift = tighten ? await revalidateCampaignPosts(c.id, { rules: { linksApart: true } }) : null;
+  const engine = shift?.rescheduled
+    ? await autoFillCampaign(c.id, req.body?.week)
+    : await autoFill(req.body?.week);
+  res.json({ rules: clean, ...out, unlinked, shift, engine });
 }));
 
 /**

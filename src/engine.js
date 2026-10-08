@@ -4,6 +4,8 @@ import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
 import { averageShares, channelBudget, effectiveGap } from './capacity.js';
+import { isEmptyContent } from './publish/readiness.js';
+import { itemAssetsSql } from './links.js';
 
 /**
  * מנוע השיבוץ.
@@ -61,7 +63,10 @@ export async function planWeek(anchorDate, {
   // לבחור אותה נקודה — אחרת המפתחות שהמשתמש סימן לא יימצאו בהצעה הטרייה
   const endpoints = await rows('select * from endpoints where active = true order by id');
   // הזווית נושאת את השיוך; הגרסה קובעת אם היא מוכנה למדיה מסוימת.
-  // תוכן של קמפיין מושהה לא נכנס לתכנון.
+  // תוכן של קמפיין מושהה או לא פעיל (active = false) לא נכנס לתכנון — כמו
+  // הקיבולת (capacity.js) ומילוי התקופה (campaignFillWeeks), שכבר מדלגים
+  // על קמפיין לא פעיל. פוסטים שכבר על הלוח לקמפיין כזה נשארים (existing
+  // למטה סופר אותם) — המנוע רק לא מוסיף.
   //
   // ready_channel_ids — רק גרסה שסומנה "מוכן". eligible_channel_ids — גם
   // טיוטה: השיבוץ הולך לפי האסטרטגיה, לא לפי אם כבר נכתב טקסט סופי.
@@ -87,7 +92,7 @@ export async function planWeek(anchorDate, {
           from content_items ci
           left join content_variants v on v.content_id = ci.id
           left join campaigns ca on ca.id = ci.campaign_id
-         where (ca.id is null or ca.paused_at is null)
+         where (ca.id is null or (ca.active and ca.paused_at is null))
            -- משבצת של קמפיין כללי שהמדיה שלה הוסרה מהקמפיין: נשמרת, לא משובצת
            and (ci.slot_channel_id is null or exists (
                  select 1 from campaign_channels cc
@@ -98,7 +103,7 @@ export async function planWeek(anchorDate, {
   // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
   // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
   // שכבר קרתה, בדיוק כמו ב-board.js.
-  const existing = await rows(
+  const onBoard = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status,
             p.title, p.published_at, p.auto_hole
        from posts p
@@ -109,6 +114,10 @@ export async function planWeek(anchorDate, {
         and (ca.paused_at is null or p.status = 'published')`,
     [from, to]
   );
+  // מה שתופס מקום — קיבולת, אותו יום, חורים, מילוי מרוסן. פוסט שנכשל ושהמועד
+  // שלו עבר לא עלה לאוויר ולא תופס (takesRoom); התוכן שלו נשאר חסום לשבוע
+  // (usedContent למטה, מכל onBoard)
+  const existing = onBoard.filter((p) => takesRoom(p, now));
   const campaigns = await rows('select * from campaigns where active = true and paused_at is null');
   // תוכן שהמשתמש הוריד מהשבוע הזה (מחיקת פוסט / ביטול מילוי) — לא חוזר
   const dismissals = await rows('select content_id, channel_id from engine_dismissals where week_start = $1', [week.start]);
@@ -134,7 +143,7 @@ export async function planWeek(anchorDate, {
     { projectedPromoCap: onlyCampaignId != null });
 
   // תוכן שכבר משובץ השבוע — או שהמשתמש הוריד מהשבוע — לא יוצע שוב לאותו ערוץ
-  const usedContent = blockedContent(existing, dismissals);
+  const usedContent = blockedContent(onBoard, dismissals);
 
   // ההיסטוריה המלאה של כל פריט תוכן בכל ערוץ — בלעדיה תוכן חד-פעמי היה
   // חוזר לאוויר בכל שבוע שבו הוא לא במקרה משובץ
@@ -143,7 +152,7 @@ export async function planWeek(anchorDate, {
   // כל הפוסטים החיים של כל נקודה בכל ערוץ סביב השבוע — לבדיקת המרווח מול
   // השכן הקרוב לשני הכיוונים (ראו contentGap / nearestDays), גם בשיוך תוכן
   // לפוסטים חסרי תוכן וגם בשיבוץ חדש
-  const pairDates = await postDatesPerEndpointChannel(from, to, settings);
+  const pairDates = await postDatesPerEndpointChannel(from, to, settings, now);
 
   // הימים שבהם כבר יוצא פוסט של כל קבוצת קישור (מקור + עוקבות), בכל ערוץ —
   // פוסט מקושר לא יוצא באותו יום כשהקמפיין מבקש (links_apart)
@@ -426,6 +435,12 @@ export async function applyWeek(anchorDate, {
  * נפתר. פוסט שאושר לפרסום אוטומטי חוזר ל"מתוכנן": האישור ניתן לפוסט בלי
  * התוכן הזה. מחזיר null אם בינתיים כבר יש לפוסט תוכן, הוא יצא לאוויר,
  * או שהמועד שלו עבר. משמש גם את המנוע וגם את "שייך תוכן" בחלון הפוסט.
+ *
+ * תוכן בלי טקסט ובלי מדיה לערוץ (כותרת בלבד — isEmptyContent) עדיין "חסר
+ * תוכן" (סעיף 20): "לכתוב" נשארת פתוחה — נסגרת כשהתוכן מוכן
+ * (taskCloseReason). הצעת החלפה נסגרת בכל מקרה: נבחר תוכן משלו. קודם רק
+ * השיוך הידני פתח אותה מחדש, והמנוע סגר אותה על פוסט ריק. closed_task_ids
+ * — רק מה שנשאר סגור, ש"בטל" יפתח מחדש.
  * @returns {Promise<{post:object, closed_task_ids:number[], approval_reset:boolean}|null>}
  */
 export async function attachToPost(postId, c) {
@@ -442,11 +457,18 @@ export async function attachToPost(postId, c) {
     [postId, c.content_id, c.title, c.kind, c.endpoint_id]
   );
   if (!post) return null;
+  const variant = await one(
+    'select status, body, meta from content_variants where content_id = $1 and channel_id = $2',
+    [c.content_id, post.channel_id]);
+  const files = await rows(itemAssetsSql('a.id, a.mime, a.variant_id'), [c.content_id, post.channel_id]);
+  const platform = (await one('select platform from channels where id = $1', [post.channel_id]))?.platform;
+  const empty = isEmptyContent({ platform, variant, assets: files });
   const closed = await rows(
     `update tasks set done = true, done_at = now()
-      where post_id = $1 and kind in ('write','swap') and done = false
+      where post_id = $1 and done = false
+        and (kind = 'swap' or (kind = 'write' and not $2::boolean))
       returning id`,
-    [postId]
+    [postId, empty]
   );
   const { old_status: oldStatus, ...row } = post;
   return {
@@ -485,7 +507,7 @@ export async function recordDismissals(list, { weeks = [] } = {}) {
 
 /**
  * תוכן שאפשר לשייך לפוסט בערוץ channelId: יש לו ניסוח לערוץ (מוכן או
- * טיוטה), הקמפיין שלו לא מושהה, והתאריך (אם נתון) בתוך חלון הקמפיין.
+ * טיוטה), הקמפיין שלו פעיל ולא מושהה, והתאריך (אם נתון) בתוך חלון הקמפיין.
  * endpointId null = מכל נקודות הקצה (פוסט שעוד אין לו נקודה).
  * מוכן קודם; בתוך כל קבוצה — מה שעוד לא שובץ בערוץ הזה, ואז הוותיק.
  */
@@ -688,6 +710,22 @@ function addDaysKey(dateKey, n) {
 
 /** הסטטוסים של פוסט שתופס שטח — אותם שהמנוע סופר כקיימים על הלוח */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
+
+/**
+ * האם פוסט חי תופס מקום: תקציב שבועי, מרווח, אותו יום, מכירתי ליום ותקרה
+ * לסוג. פוסט שנכשל ושהמועד שלו עבר לא עלה לאוויר — הוא לא תופס מקום, ומשבצת
+ * אחרת יכולה להיכנס במקומו באותו שבוע (קודם הוא אכל אחד מ-max_per_week וחסם
+ * את המרווח, ושום דבר לא החליף אותו). התוכן שלו עדיין "יש לו פוסט" (HAS_POST
+ * ב-campaigns.js, contentHistory כאן) — המנוע לא משבץ אותו שוב לבד; המשתמש
+ * מטפל דרך משימת הכישלון (ניסיון חוזר או הזזה). נכשל שהמועד שלו עוד לפניו
+ * (נדיר) — תופס מקום כמו קודם.
+ */
+export const takesRoom = (p, now = new Date()) =>
+  p.status !== 'failed' || new Date(p.scheduled_at) > now;
+
+/** אותו כלל כביטוי SQL. p — כינוי טבלת posts; now — ביטוי זמן (פרמטר או now()) */
+export const takesRoomSql = (p = 'p', now = 'now()') =>
+  `(${p}.status <> 'failed' or ${p}.scheduled_at > ${now})`;
 /** פוסט שעוד עתיד לצאת — נספר בוותק כשהמועד שלו לפני השבוע המתוכנן */
 const UPCOMING_STATUSES = ['scheduled', 'approved', 'publishing', 'pending_approval'];
 
@@ -1573,17 +1611,19 @@ async function contentHistory() {
  * קמפיין — או הכללי אם גדול יותר); פוסט רחוק מזה לא משנה שום החלטה.
  * אותם מצבים כמו בלוח (LIVE ב-gap.js).
  */
-async function postDatesPerEndpointChannel(from, to, settings) {
+async function postDatesPerEndpointChannel(from, to, settings, now = new Date()) {
   const horizon = Math.max(30, effectiveGap(null, settings));
+  // נכשל שהמועד שלו עבר לא חוסם מרווח (takesRoom)
   const r = await rows(
     `select endpoint_id, channel_id, scheduled_at
-       from posts
+       from posts p
       where endpoint_id is not null
         and status in ('scheduled','approved','publishing','failed','published','pending_approval')
+        and ${takesRoomSql('p', '$4::timestamptz')}
         and scheduled_at >= $1::timestamptz - make_interval(days => $3)
         and scheduled_at <= $2::timestamptz + make_interval(days => $3)
       order by scheduled_at`,
-    [from, to, horizon]
+    [from, to, horizon, now]
   );
   const map = new Map();
   for (const x of r) {

@@ -6,7 +6,8 @@ import { pool, rows, one, query } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import {
   addGroupDay, buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES,
-  linkDayTaken, nearestDays, nextSlot, outsideCampaignWindow, withEngineLock,
+  linkDayTaken, nearestDays, nextSlot, outsideCampaignWindow, takesRoom, takesRoomSql,
+  withEngineLock,
 } from './engine.js';
 import { effectiveGap } from './capacity.js';
 
@@ -118,8 +119,10 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
 
   const maxPromoPerDay = settings?.max_promo_per_day ?? 1;
 
-  // מצב הלוח שנשאר קבוע — ממנו נמדד המרווח, ואליו נבדקות ההתנגשויות
-  const usage = buildUsage(channels, anchored, settings);
+  // מצב הלוח שנשאר קבוע — ממנו נמדד המרווח, ואליו נבדקות ההתנגשויות. נכשל
+  // שהמועד שלו עבר לא עלה לאוויר ולא תופס מקום (takesRoom, כמו במנוע)
+  const room = anchored.filter((p) => takesRoom(p, now));
+  const usage = buildUsage(channels, room, settings);
   // הימים של כל קבוצת קישור — מהקבועים, ומכל פוסט שזז (בתוך השבוע בלבד:
   // הכלל הוא אותו יום, ויום מחוץ לשבוע הוא לא יום בתוכו)
   const groupDays = new Map();
@@ -128,18 +131,18 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
     addGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
   }
   const sameDay = new Set(
-    anchored.filter((p) => p.endpoint_id)
+    room.filter((p) => p.endpoint_id)
       .map((p) => `${p.endpoint_id}:${p.channel_id}:${ymd(new Date(p.scheduled_at))}`)
   );
   const promoPerDay = new Map();
-  for (const p of anchored.filter((x) => x.kind === 'promo')) {
+  for (const p of room.filter((x) => x.kind === 'promo')) {
     const d = ymd(new Date(p.scheduled_at));
     promoPerDay.set(d, (promoPerDay.get(d) ?? 0) + 1);
   }
 
   // המרווח נמדד מול השכנים מחוץ לשבוע וגם מול הקבועים שבתוכו
   const near = new Map([...neighbours].map(([k, v]) => [k, [...v]]));
-  for (const p of anchored.filter((x) => x.endpoint_id)) {
+  for (const p of room.filter((x) => x.endpoint_id)) {
     const key = `${p.endpoint_id}:${p.channel_id}`;
     near.set(key, [...(near.get(key) ?? []), dayOf(p)]);
   }
@@ -241,8 +244,10 @@ export async function applyRespace(moves) {
   for (const m of moves) {
     const was = new Date(m.post.scheduled_at);
     if (m.from === m.dateKey && was.getHours() === m.hour) continue;
-    await query('update posts set scheduled_at = $1 where id = $2 and status = any($3)', [m.to, m.post.id, MOVABLE]);
-    changed += 1;
+    // רק מה שבאמת נכתב: פוסט שבינתיים יצא לפרסום / פורסם לא עובר את סינון
+    // הסטטוס, ולא נספר כ"הוזז"
+    const r = await query('update posts set scheduled_at = $1 where id = $2 and status = any($3)', [m.to, m.post.id, MOVABLE]);
+    changed += r.rowCount;
   }
   return changed;
 }
@@ -307,11 +312,13 @@ async function neighbourDays(from, to, horizon) {
   const before = new Date(from); before.setDate(before.getDate() - horizon);
   const after = new Date(to);    after.setDate(after.getDate() + horizon);
 
+  // נכשל שהמועד שלו עבר לא חוסם מרווח (takesRoom)
   const r = await rows(
     `select endpoint_id, channel_id, scheduled_at
-       from posts
+       from posts p
       where endpoint_id is not null
         and status = any($1)
+        and ${takesRoomSql()}
         and scheduled_at >= $2 and scheduled_at <= $3
         and (scheduled_at < $4 or scheduled_at > $5)`,
     [ON_BOARD, before, after, from, to]

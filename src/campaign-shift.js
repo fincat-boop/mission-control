@@ -2,7 +2,7 @@ import { query, rows, one } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import {
   addGroupDay, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES, linkDayTaken,
-  nearestDays, outsideCampaignWindow,
+  nearestDays, outsideCampaignWindow, takesRoomSql,
 } from './engine.js';
 import { effectiveGap } from './capacity.js';
 
@@ -42,13 +42,21 @@ const LAST_HOUR = 22;
  *   campaign_links_apart.
  * fixed — כל שאר הפוסטים החיים סביב התאריכים החדשים (גם של הקמפיין עצמו
  *   שלא זזים — היסטוריה, פורסם). מולם נבדק כל פוסט, ומול מה שכבר התקבל
- *   לפניו: הזזה אחידה שומרת על המרווחים בתוך הקמפיין, ולכן אין צורך לבדוק
- *   את הפוסטים שלו זה מול זה מעבר לזה.
+ *   לפניו — כך שגם הפוסטים של הקמפיין נבדקים זה מול זה: בהזזה אחידה זה
+ *   כמעט תמיד עובר, ובבדיקה בלי הזזה (days = 0, revalidateCampaignPosts) זה
+ *   מה שתופס מרווח שגדל או זוג מקושר באותו יום.
  * channels — כל הערוצים (גם לא פעילים: פוסט על ערוץ כבוי לא יורד בגלל זה).
+ * rules — null (הזזה): כל הכללים הקשיחים, והשעה עוברת לפנויה הבאה. בבדיקה
+ *   בלי הזזה — רק הכללים שהתהדקו, והשעה לא משתנה: {window} — חלון הקמפיין,
+ *   {gap} — אותו יום ומרווח מהשכן, {linksApart} — "לא באותו יום". פוסט
+ *   שהוצב ידנית אחרי אזהרה (מרווח, מכסות) לא יורד בגלל שינוי שלא נגע בכלל
+ *   שהוא עובר עליו.
  *
  * @returns {{moves:{post:object, at:Date}[], drops:object[]}}
  */
-export function planCampaignShift({ moving, fixed, channels, settings, days, now = new Date() }) {
+export function planCampaignShift({
+  moving, fixed, channels, settings, days, now = new Date(), rules = null,
+}) {
   const today = ymd(now);
   const dayOf = (p) => ymd(new Date(p.scheduled_at));
   // רק הכללים הקשיחים של התקרה: תקציב הערוץ, ימים חסומים, תקרות לסוג
@@ -87,6 +95,9 @@ export function planCampaignShift({ moving, fixed, channels, settings, days, now
   const drops = [];
   const order = [...moving].sort((a, b) =>
     new Date(a.scheduled_at) - new Date(b.scheduled_at) || a.id - b.id);
+  const all = !rules;
+  const check = { window: all || !!rules.window, gap: all || !!rules.gap,
+                  linksApart: all || !!rules.linksApart };
   for (const p of order) {
     const at = new Date(p.scheduled_at);
     // setDate ולא +N×24 שעות — השעה המקומית נשמרת גם במעבר שעון
@@ -102,23 +113,23 @@ export function planCampaignShift({ moving, fixed, channels, settings, days, now
     const usage = usageFor(key);
     const list = p.endpoint_id ? pairs.get(`${p.endpoint_id}:${p.channel_id}`) ?? [] : [];
     const fits =
-      !outsideCampaignWindow(p, key) &&
-      // יום חסום, תקציב שבועי של הערוץ, תקרה לסוג, מכירתי ליום
-      usage.allows(p.channel_id, key, p.kind) &&
+      !(check.linksApart && p.content_id && p.campaign_links_apart !== false &&
+        linkDayTaken(groupDays, root(p), p.content_id, key)) &&
+      !(check.window && outsideCampaignWindow(p, key)) &&
+      // יום חסום, תקציב שבועי של הערוץ, תקרה לסוג, מכירתי ליום — רק בהזזה
+      (!all || usage.allows(p.channel_id, key, p.kind)) &&
       // אותה נקודה, אותו ערוץ, אותו יום — ומרווח מהשכן הקרוב לשני הכיוונים
-      !list.includes(key) &&
-      nearestDays(list, key) >= contentGap(p, settings) &&
-      !(p.content_id && p.campaign_links_apart !== false &&
-        linkDayTaken(groupDays, root(p), p.content_id, key));
+      !(check.gap && (list.includes(key) || nearestDays(list, key) < contentGap(p, settings)));
     if (!fits) { drops.push(p); continue; }
 
-    // שעה תפוסה באותו ערוץ באותו יום — השעה הפנויה הבאה, כמו במנוע
-    let hour = at.getHours();
-    while (usage.hourTaken(p.channel_id, key, hour) && hour < LAST_HOUR) hour += 1;
-    if (usage.hourTaken(p.channel_id, key, hour)) { drops.push(p); continue; }
-    if (hour !== at.getHours()) at.setHours(hour, 0, 0, 0);
-
-    usage.take(p.channel_id, key, p.kind, hour);
+    if (all) {
+      // שעה תפוסה באותו ערוץ באותו יום — השעה הפנויה הבאה, כמו במנוע
+      let hour = at.getHours();
+      while (usage.hourTaken(p.channel_id, key, hour) && hour < LAST_HOUR) hour += 1;
+      if (usage.hourTaken(p.channel_id, key, hour)) { drops.push(p); continue; }
+      if (hour !== at.getHours()) at.setHours(hour, 0, 0, 0);
+      usage.take(p.channel_id, key, p.kind, hour);
+    }
     addPair(p, key);
     if (p.content_id && LINK_LIVE_STATUSES.includes(p.status)) {
       addGroupDay(groupDays, root(p), p.content_id, key);
@@ -136,8 +147,40 @@ export function planCampaignShift({ moving, fixed, channels, settings, days, now
  *   approved — כמה מאלה שירדו היו מאושרים (יצטרכו אישור מחדש)
  */
 export async function shiftCampaignPosts(campaignId, days, now = new Date()) {
+  if (!days) return { moved: 0, rescheduled: 0, approved: 0 };
+  return reschedule(campaignId, days, now);
+}
+
+/**
+ * בדיקה מחדש של הפוסטים העתידיים של הקמפיין מול הכללים של המנוע שהתהדקו,
+ * בלי להזיז אותם בזמן (אותה בדיקה כמו בהזזה, עם 0 ימים). אחרי שינוי שמהדק
+ * את הכללים — סיום מוקדם יותר, התחלה מאוחרת יותר בלי הזזה, מרווח גדול יותר,
+ * "לא באותו יום" שנדלק, קישור למשבצת שכבר משובצת — פוסט שכבר על הלוח היה
+ * נשאר שובר את הכלל, בלי התראה ובלי שמשהו יזיז אותו. מה שלא עובר יורד מהלוח
+ * (פורסם / בפרסום — לעולם לא), והמילוי של הקמפיין שאחרי משבץ אותו מחדש.
+ * הקורא אחראי לנעילת המנוע (lockEngine) לפני כל כתיבה בבקשה.
+ *
+ * הסדר: לפי המועד — הפוסט המוקדם נשאר, וזה שאחריו נבדק מולו (המרווח, אותו
+ * יום של פוסט מקושר).
+ * @param opts.rules אילו כללים נבדקים: {window, gap, linksApart} (ראו
+ *   planCampaignShift) — רק מה שהתהדק
+ * @param opts.contentIds רק הפוסטים של התוכן הזה נבדקים (למשל העוקבת שקושרה
+ *   עכשיו); שאר הפוסטים של הקמפיין קבועים ונבדקים מולם
+ * @returns {Promise<{kept:number, rescheduled:number, approved:number}>}
+ *   kept — מה שנשאר במקומו (או זז שעה באותו יום, כששעה תפוסה); approved — כמה
+ *   מאלה שירדו היו מאושרים (יצטרכו אישור מחדש)
+ */
+export async function revalidateCampaignPosts(campaignId,
+  { rules, contentIds = null, now = new Date() } = {}) {
+  if (!rules) throw new Error('revalidateCampaignPosts: צריך לבחור אילו כללים לבדוק');
+  const { moved, rescheduled, approved } =
+    await reschedule(campaignId, 0, now, { rules, contentIds });
+  return { kept: moved, rescheduled, approved };
+}
+
+/** ההזזה / הבדיקה עצמה — days = 0: בדיקה בלבד, בלי הזזה בזמן */
+async function reschedule(campaignId, days, now, { rules = null, contentIds = null } = {}) {
   const none = { moved: 0, rescheduled: 0, approved: 0 };
-  if (!days) return none;
   // רק מה שעוד לא יצא ועוד לא עבר. היסטוריה לא מזיזים.
   const moving = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.status, p.scheduled_at,
@@ -151,8 +194,9 @@ export async function shiftCampaignPosts(campaignId, days, now = new Date()) {
       where ci.campaign_id = $1
         and p.status = any($2)
         and p.scheduled_at >= $3
+        and ($4::int[] is null or p.content_id = any($4::int[]))
       order by p.scheduled_at, p.id`,
-    [campaignId, SHIFT_STATUSES, now]);
+    [campaignId, SHIFT_STATUSES, now, contentIds]);
   if (!moving.length) return none;
 
   const settings = await one('select * from engine_settings limit 1');
@@ -167,7 +211,8 @@ export async function shiftCampaignPosts(campaignId, days, now = new Date()) {
   });
   const from = new Date(Math.min(...shifted));
   const to = new Date(Math.max(...shifted));
-  // שיבוץ של קמפיין מושהה לא תופס מקום (אלא אם פורסם) — כמו existing במנוע
+  // שיבוץ של קמפיין מושהה לא תופס מקום (אלא אם פורסם) — כמו existing במנוע;
+  // וגם לא פוסט שנכשל ושהמועד שלו עבר (takesRoom)
   const fixed = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.status, p.scheduled_at,
             ci.linked_to_id
@@ -177,12 +222,16 @@ export async function shiftCampaignPosts(campaignId, days, now = new Date()) {
       where p.status = any($1)
         and not (p.id = any($2::int[]))
         and (ca.paused_at is null or p.status = 'published')
+        and ${takesRoomSql('p', '$6::timestamptz')}
         and p.scheduled_at >= $3::timestamptz - make_interval(days => $5)
         and p.scheduled_at <= $4::timestamptz + make_interval(days => $5)`,
-    [ON_BOARD, moving.map((p) => p.id), from, to, horizon]);
+    [ON_BOARD, moving.map((p) => p.id), from, to, horizon, now]);
 
-  const { moves, drops } = planCampaignShift({ moving, fixed, channels, settings, days, now });
+  const { moves, drops } =
+    planCampaignShift({ moving, fixed, channels, settings, days, now, rules });
   for (const m of moves) {
+    // בבדיקה בלי הזזה רוב הפוסטים נשארים בדיוק במקום — אין מה לכתוב
+    if (+m.at === +new Date(m.post.scheduled_at)) continue;
     await query('update posts set scheduled_at = $1 where id = $2', [m.at, m.post.id]);
   }
   if (drops.length) {

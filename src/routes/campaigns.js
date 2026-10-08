@@ -1,5 +1,7 @@
 import { Router } from 'express';
-import { EMPTY_FILL, autoFill, autoFillCampaign, bad, updateById, wrap } from './_shared.js';
+import {
+  EMPTY_FILL, autoFill, autoFillCampaign, bad, lockEngineOr503, updateById, wrap,
+} from './_shared.js';
 import {
   campaignsWithHealth, completionSummary, currentAllocation, gapDaysError, loadCapacityPreview,
   resolvePeriod, structureChangeError,
@@ -7,13 +9,13 @@ import {
 
 // האימות של המרווח יושב ב-campaigns.js (גם העוזר בודק דרכו); מיוצא גם מכאן
 export { gapDaysError };
-import { currentOrg, one, rows, tx } from '../db.js';
+import { currentOrg, one, query, rows, tx } from '../db.js';
 import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
 import { isDate, rerunPeriod, runName } from '../../public/js/core/period.js';
 import { ymd } from '../board.js';
-import { lockEngine } from '../engine.js';
-import { shiftCampaignPosts } from '../campaign-shift.js';
+import { revalidateCampaignPosts, SHIFT_STATUSES, shiftCampaignPosts } from '../campaign-shift.js';
+import { effectiveGap } from '../capacity.js';
 import { STALE_CAMPAIGN, staleCampaign } from '../variant-lock.js';
 
 const r = Router();
@@ -207,7 +209,7 @@ r.post('/campaigns/capacity-preview', requirePerm('settings'), wrap(async (req, 
   const draft = { ...(before ?? {}) };
   for (const k of PREVIEW_FIELDS) if (b[k] !== undefined) draft[k] = b[k];
   if (b.assume_complete === true) {
-    if (!before) return bad(res, 'אפשר לבדוק סימון "מוכן" רק לקמפיין שכבר נשמר');
+    if (!before) return bad(res, 'אפשר לבדוק סימון "סיימתי לכתוב" רק לקמפיין שכבר נשמר');
     draft.content_complete_at = before.content_complete_at ?? new Date().toISOString();
   }
   const endpoint = await one('select id from endpoints where id = $1', [draft.endpoint_id]);
@@ -321,6 +323,41 @@ async function copyCampaign(src, b, { complete = false, templateId = null } = {}
   return { campaign: c, copied: counts };
 }
 
+/** "1.11" — יום.חודש של תאריך YYYY-MM-DD, להודעות */
+const dayMonth = (d) => {
+  const [, m, day] = String(d).slice(0, 10).split('-').map(Number);
+  return `${day}.${m}`;
+};
+
+/**
+ * הרצה חדשה של קמפיין מחזורי (או שכפול של תבנית / הרצה) לא חופפת להרצה
+ * אחרת של אותה סדרה באותה נקודת קצה: זה אותו תוכן, וחפיפה הייתה מוציאה את
+ * אותו טקסט פעמיים. הסדרה = התבנית (template_id ?? id) וכל ההרצות שנוצרו
+ * ממנה. הרצה בלי תאריך סיום (תבנית "פתוחה") לא נבדקת — אין לה חלון.
+ * b — הקמפיין החדש אחרי newCampaignError (starts_on ו-ends_on כבר מחושבים).
+ * @returns {Promise<string|null>} הודעה בעברית עם שם ההרצה החופפת והתאריכים
+ */
+async function runOverlapError(src, b) {
+  if (!src.recurring && src.template_id == null) return null;
+  if (!b.starts_on || !b.ends_on) return null;
+  const root = src.template_id ?? src.id;
+  // נעילת התבנית: שתי הרצות חדשות במקביל לא עוברות שתיהן את הבדיקה
+  await one('select id from campaigns where id = $1 for update', [root]);
+  const clash = await one(
+    `select name, starts_on, ends_on from campaigns
+      where (id = $1 or template_id = $1) and endpoint_id = $2
+        and starts_on is not null and ends_on is not null
+        and starts_on <= $4::date and ends_on >= $3::date
+      order by ends_on desc, id desc limit 1`,
+    [root, b.endpoint_id, b.starts_on, b.ends_on]);
+  if (!clash) return null;
+  const range = `${dayMonth(clash.starts_on)}–${dayMonth(clash.ends_on)}`;
+  const fix = clash.starts_on <= b.starts_on
+    ? `בוחרים תאריך התחלה אחרי ${dayMonth(clash.ends_on)}.`
+    : `בוחרים תקופה שמסתיימת לפני ${dayMonth(clash.starts_on)}.`;
+  return `הסבב החדש חופף לסבב '${clash.name}' (${range}). ${fix}`;
+}
+
 /**
  * שכפול: הטופס נפתח עם ההגדרות של המקור, ומשנים בו מה שרוצים. העותק
  * מתחיל לא "מוכן" ולא מחזורי (ראו copyCampaign).
@@ -339,6 +376,8 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
               ...body, structure: src.structure };
   const err = newCampaignError(b);
   if (err) return bad(res, err);
+  const overlap = await runOverlapError(src, b);
+  if (overlap) return bad(res, overlap, 409);
 
   const out = await copyCampaign(src, b);
   if (out.error) return bad(res, out.error, out.status);
@@ -354,7 +393,8 @@ r.post('/campaigns/:id/duplicate', requirePerm('settings'), wrap(async (req, res
  * החלון החדש. התבנית וההרצות הקודמות לא משתנות.
  *
  * גוף: { starts_on, name?, period?, ends_on?, week? } — period/ends_on כמו
- * בטופס הקמפיין; בלעדיהם אורך התבנית (rerunPeriod).
+ * בטופס הקמפיין; בלעדיהם אורך התבנית (rerunPeriod). הרצה שחופפת לתבנית או
+ * להרצה אחרת שלה — 409 (runOverlapError).
  */
 r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) => {
   const src = await one('select * from campaigns where id = $1', [req.params.id]);
@@ -389,6 +429,8 @@ r.post('/campaigns/:id/replace', requirePerm('settings'), wrap(async (req, res) 
   };
   const err = newCampaignError(b);
   if (err) return bad(res, err);
+  const overlap = await runOverlapError(src, b);
+  if (overlap) return bad(res, overlap, 409);
 
   const out = await copyCampaign(src, b,
     { complete: !!src.content_complete_at, templateId: src.id });
@@ -679,33 +721,77 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   // והפוסטים נשארים מאחור, מנותקים מהחלון שהם אמורים לשרת.
   const shiftDays = b.starts_on && before.starts_on && b.starts_on !== before.starts_on
     ? daysBetweenDates(before.starts_on, b.starts_on) : 0;
-  if (shiftDays) {
-    // ההזזה והמילוי שאחריה תחת אותה נעילת מנוע של הארגון, עד ה-commit —
-    // נלקחת לפני כל כתיבה, כדי שנעילה תפוסה לא תשאיר שמירה חצויה
-    try {
-      await lockEngine();
-    } catch (e) {
-      if (e?.code !== '55P03') throw e;
-      return bad(res, 'מילוי אחר של הלוח רץ ממש עכשיו — מנסים לשמור שוב בעוד רגע', 503);
-    }
-  }
+  // בלי הזזה: שינוי שמהדק כלל (סיום מוקדם יותר, מרווח גדול יותר) — הפוסטים
+  // שכבר בלוח נבדקים מחדש מול הכלל הזה בלבד. הזזה בודקת את כולם בעצמה
+  let revalidate = !shiftDays &&
+    tightensCampaignRules(before, b, await one('select * from engine_settings limit 1'));
+  // נקודת קצה אחרת: התוכן והפוסטים שעוד לא יצאו עוברים איתה (למטה), ושם
+  // יכולים לפגוש פוסטים של הנקודה החדשה באותו יום / בתוך המרווח — אותו
+  // יום ומרווח הם כלל gap של הבדיקה. בהזזה — כל הכללים נבדקים ממילא
+  const endpointChanged = b.endpoint_id != null && b.endpoint_id !== '' &&
+    Number(b.endpoint_id) !== before.endpoint_id;
+  if (endpointChanged && !shiftDays) revalidate = { ...(revalidate || {}), gap: true };
+  // ההזזה / הבדיקה והמילוי שאחריה תחת אותה נעילת מנוע של הארגון, עד ה-commit —
+  // נלקחת לפני כל כתיבה, כדי שנעילה תפוסה לא תשאיר שמירה חצויה
+  if ((shiftDays || revalidate) && !(await lockEngineOr503(res))) return;
 
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
   }
 
+  // המנוע משבץ לפי נקודת הקצה של פריט התוכן, והנתח/הקיבולת לפי של הקמפיין —
+  // בלי זה התוכן והפוסטים נשארו על הנקודה הישנה. פורסם / בפרסום — היסטוריה
+  let endpointPosts = 0;
+  if (endpointChanged) {
+    await query(
+      'update content_items set endpoint_id = $2 where campaign_id = $1 and endpoint_id is distinct from $2',
+      [c.id, c.endpoint_id]);
+    endpointPosts = (await query(
+      `update posts p set endpoint_id = ci.endpoint_id
+         from content_items ci
+        where ci.id = p.content_id and ci.campaign_id = $1
+          and p.endpoint_id is distinct from ci.endpoint_id
+          and p.status = any($2) and p.scheduled_at > now()`,
+      [c.id, SHIFT_STATUSES])).rowCount;
+  }
+
   // אחרי השמירה: הפוסטים נבדקים מול החלון, המרווח והקישורים החדשים.
   // מה שלא עובר את הכללים יורד מהלוח, והמילוי שמיד אחרי משבץ אותו מחדש
-  const shift = await shiftCampaignPosts(c.id, shiftDays);
+  const shift = revalidate
+    ? await revalidateCampaignPosts(c.id, { rules: revalidate })
+    : await shiftCampaignPosts(c.id, shiftDays);
 
   // שינוי במה שהקמפיין צריך או מתי — כל התקופה שלו; שאר השדות (שם, מטרה)
   // לא משנים שיבוץ, ומספיק השבוע שמוצג כמו קודם
   const engine = FILL_FIELDS.some((k) => b[k] !== undefined)
     ? await autoFillCampaign(c.id, b.week)
     : await autoFill(b.week);
-  res.json({ campaign: c, moved_posts: shift.moved, shift, engine });
+  res.json({ campaign: c, moved_posts: shift.moved ?? 0, shift, endpoint_posts: endpointPosts, engine });
 }));
+
+/** YYYY-MM-DD מעמודת date או מהגוף; null כשאין */
+const dateKey = (v) => (v == null || v === '' ? null : String(v).slice(0, 10));
+
+/**
+ * אילו כללים העריכה b (אחרי applyPeriod ו-gapDaysError) מהדקת, כך שפוסטים
+ * שכבר בלוח עלולים לשבור אותם: window — הסיום הוקדם (גם דרך תקופה קצרה
+ * יותר) או שנקבע תאריך התחלה לקמפיין שלא היה לו (בלי הזזה — אין ממה
+ * להזיז); gap — המרווח בפועל גדל (effectiveGap — גם ריק ← הכללי). רק אלה
+ * נבדקים: פוסט שהוצב ידנית אחרי אזהרה על כלל אחר נשאר. שם, מטרה, נתח — כלום.
+ * @param settings engine_settings — המרווח הכללי, כשלקמפיין אין משלו
+ * @returns {{window?:true, gap?:true}|null} null — שום כלל לא התהדק
+ */
+export function tightensCampaignRules(before, b, settings) {
+  const rules = {};
+  const oldEnd = dateKey(before.ends_on);
+  const newEnd = b.ends_on !== undefined ? dateKey(b.ends_on) : oldEnd;
+  if (newEnd && (!oldEnd || newEnd < oldEnd)) rules.window = true;
+  if (dateKey(b.starts_on) && !dateKey(before.starts_on)) rules.window = true;
+  if (b.min_gap_days !== undefined &&
+      effectiveGap(b, settings) > effectiveGap(before, settings)) rules.gap = true;
+  return Object.keys(rules).length ? rules : null;
+}
 
 /** מספר ימים בין שני תאריכים, בלי להיתקל במעבר שעון */
 function daysBetweenDates(a, b) {

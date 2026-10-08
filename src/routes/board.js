@@ -12,7 +12,9 @@ import { emitPostEvent } from '../publish/runner.js';
 import { hubStale, hubUnverified } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
 import { contentState } from '../publish/readiness.js';
-import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '../engine.js';
+import {
+  attachToPost, contentCandidates, plannedDate, recordDismissals, takesRoomSql,
+} from '../engine.js';
 import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
 import { unconfirmedPosts } from '../unconfirmed.js';
@@ -91,8 +93,9 @@ export function blockedDayError(target, when) {
  * פוסט אחר של אותה נקודת קצה באותו ערוץ באותו יום (postId — לא הוא עצמו), או
  * null. היום — בלוח של ישראל בשני הצדדים (פוסט ב-01:00 שייך ליום שלו, לא ליום
  * הקודם ב-UTC). נספרים רק פוסטים חיים שעל הלוח (LIVE_STATUSES), בלי פוסט
- * מוחזק שירד מהלוח (קמפיין מושהה, ערוץ / נקודה מושבתים — postIsLiveSql),
- * אלא אם כבר פורסם. גם העוזר בודק דרכה (checkMove).
+ * מוחזק שירד מהלוח (קמפיין מושהה, ערוץ / נקודה מושבתים — postIsLiveSql)
+ * אלא אם כבר פורסם, ובלי נכשל שהמועד שלו עבר (לא עלה לאוויר, takesRoom) —
+ * כמו במנוע. גם העוזר בודק דרכה (checkMove).
  */
 export function sameDayClash({ postId = null, endpointId, channelId, when }) {
   if (!endpointId) return null;
@@ -101,7 +104,7 @@ export function sameDayClash({ postId = null, endpointId, channelId, when }) {
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
       where ($1::int is null or p.id <> $1) and p.endpoint_id = $2 and p.channel_id = $3
-        and p.status = any($5)
+        and p.status = any($5) and ${takesRoomSql('p')}
         and (p.status = 'published' or ${postIsLiveSql('p')})
         and (p.scheduled_at at time zone 'Asia/Jerusalem')::date
           = ($4::timestamptz at time zone 'Asia/Jerusalem')::date`,
@@ -167,11 +170,17 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   if (publishing) return bad(res, publishing, 409);
 
   // הזזה על הלוח עוברת את אותו כלל שהמנוע והמבצע הדחוף מכבדים:
-  // נקודת קצה אחת, מדיה אחת, יום אחד.
-  if (b.scheduled_at || b.channel_id) {
+  // נקודת קצה אחת, מדיה אחת, יום אחד. גם שינוי של נקודת הקצה, הסוג או
+  // התוכן בלי הזזה (עריכת פוסט, החלפת תוכן ממשימת תחזוקה) — אותן בדיקות:
+  // נקודה אחרת יכולה להתנגש באותו יום / במרווח, וסוג אחר — במכסה לסוג
+  // (ניתוק תוכן — content_id ריק — לא מוסיף כלל, ולכן לא מעורר בדיקות)
+  const changed = (key) => key in b && idOrNull(b[key]) !== (current[key] ?? null);
+  const contentChanged = b.content_id != null && changed('content_id');
+  const kindChanged = b.kind != null && b.kind !== current.kind;
+  if (b.scheduled_at || b.channel_id || changed('endpoint_id') || contentChanged || kindChanged) {
     const when = b.scheduled_at ?? current.scheduled_at;
     const channel = b.channel_id ?? current.channel_id;
-    const endpoint = b.endpoint_id ?? current.endpoint_id;
+    const endpoint = 'endpoint_id' in b ? idOrNull(b.endpoint_id) : current.endpoint_id;
 
     const moving = isMove(current, b);
     const blocked = moving && moveBlocker(current, when);
@@ -210,9 +219,9 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       // המרווח של הקמפיין של התוכן שיישאר על הפוסט אחרי העדכון
       await gapWarning({ endpointId: endpoint, channelId: channel, when, excludePostId: current.id,
                          contentId: contentAfter }),
-      // רק כשהתאריך באמת זז — שינוי ערוץ באותו יום לא מעורר אותה שוב
-      b.scheduled_at
-        ? await campaignWindowWarning({ contentId: b.content_id ?? current.content_id, when })
+      // רק כשהתאריך או התוכן באמת משתנים — שינוי ערוץ באותו יום לא מעורר אותה שוב
+      b.scheduled_at || contentChanged
+        ? await campaignWindowWarning({ contentId: contentAfter, when })
         : null,
       relinked
         ? await linkDayWarning({ contentId: contentAfter, when, excludePostId: current.id })
@@ -220,24 +229,6 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       // מכסות — רק כשהפוסט נכנס לשבוע / ערוץ / סוג / יום שלא נספר בו קודם
       await capWarning({ channelId: channel, when, kind: b.kind ?? current.kind,
                          excludePostId: current.id }),
-    );
-    if (warning && !warningsConfirmed(b)) {
-      return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
-    }
-  } else if (b.content_id != null && Number(b.content_id) !== current.content_id) {
-    // רק התוכן מתחלף, בלי הזזה: המרווח תלוי בקמפיין של התוכן, ולכן תוכן של
-    // קמפיין עם מרווח ארוך יותר יכול להפוך שיבוץ תקין לצמוד מדי — אותה
-    // אזהרה ואותו אישור כמו בהזזה
-    const warning = softWarning(
-      await gapWarning({ endpointId: b.endpoint_id ?? current.endpoint_id,
-                         channelId: current.channel_id, when: current.scheduled_at,
-                         excludePostId: current.id, contentId: b.content_id }),
-      await campaignWindowWarning({ contentId: b.content_id, when: current.scheduled_at }),
-      await linkDayWarning({ contentId: b.content_id, when: current.scheduled_at,
-                             excludePostId: current.id }),
-      // תוכן מסוג אחר יכול לחרוג מהתקרה לסוג (התקציב השבועי כבר נספר)
-      await capWarning({ channelId: current.channel_id, when: current.scheduled_at,
-                         kind: b.kind ?? current.kind, excludePostId: current.id }),
     );
     if (warning && !warningsConfirmed(b)) {
       return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
@@ -444,7 +435,7 @@ r.get('/posts/candidates', wrap(async (req, res) => {
 /**
  * שיוך תוכן לפוסט שאין לו תוכן ("חסר תוכן"). אותם כללים כמו המנוע: ניסוח
  * לערוץ הזה, אותה נקודת קצה (תוכן תמיד שייך לנקודה — ראו content_items),
- * קמפיין לא מושהה ותאריך בתוך החלון שלו. משימות "לכתוב"/"החלפה" נסגרות.
+ * קמפיין פעיל ולא מושהה ותאריך בתוך החלון שלו. משימות "לכתוב"/"החלפה" נסגרות.
  */
 r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res) => {
   const contentId = Number(req.body?.content_id);
@@ -469,7 +460,8 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
 
   const c = await one(
     `select ci.id, ci.title, ci.kind, ci.endpoint_id, ${candidateColumnsSql()},
-            ca.name as campaign_name, ca.paused_at, ca.starts_on, ca.ends_on,
+            ca.name as campaign_name, ca.paused_at, ca.active as campaign_active,
+            ca.starts_on, ca.ends_on,
             v.status as variant_status,
             (select active from endpoints where id = ci.endpoint_id) as endpoint_active,
             ci.slot_channel_id is null or exists (
@@ -499,6 +491,8 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
   }
   if (c.campaign_id) {
     if (c.paused_at) return bad(res, `הקמפיין "${c.campaign_name}" מושהה`, 409);
+    // קמפיין לא פעיל — כמו מושהה לשיבוץ (candidateFilterSql): הרשימה לא מציעה אותו
+    if (!c.campaign_active) return bad(res, `הקמפיין "${c.campaign_name}" לא פעיל`, 409);
     const day = post.local_date;
     if ((c.starts_on && c.starts_on > day) || (c.ends_on && c.ends_on < day)) {
       return bad(res, `הפוסט מחוץ לתאריכי הקמפיין "${c.campaign_name}"` +
@@ -547,19 +541,8 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     content_id: c.id, title: c.title, kind: c.kind, endpoint_id: c.endpoint_id,
   });
   if (!done) return bad(res, 'הפוסט השתנה בינתיים — רעננו ונסו שוב', 409);
-  // תוכן בלי טקסט ובלי מדיה (כותרת בלבד) עדיין "חסר תוכן" (סעיף 20): משימת
-  // "לכתוב" שהשיוך סגר (attachToPost) נפתחת שוב — נסגרת כשהתוכן מוכן
-  // (taskCloseReason). הצעת החלפה נשארת סגורה: נבחר תוכן משלו.
-  const variant = await one(
-    'select status, body, meta from content_variants where content_id = $1 and channel_id = $2',
-    [c.id, post.channel_id]);
-  const files = await rows(itemAssetsSql('a.id, a.mime, a.variant_id'), [c.id, post.channel_id]);
-  const platform = (await one('select platform from channels where id = $1', [post.channel_id]))?.platform;
-  if (done.closed_task_ids.length && contentState({ platform, variant, assets: files }).empty) {
-    await query(
-      `update tasks set done = false, done_at = null
-        where id = any($1::int[]) and kind = 'write'`, [done.closed_task_ids]);
-  }
+  // תוכן בלי טקסט ובלי מדיה (כותרת בלבד): "לכתוב" נשארת פתוחה — attachToPost,
+  // אותו כלל כמו במילוי של המנוע
   res.json({ post: done.post, draft: c.variant_status !== 'ready',
              approval_reset: done.approval_reset });
 }));

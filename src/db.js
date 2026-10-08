@@ -143,6 +143,13 @@ export function tenantScope(req, res, next) {
       clearTimeout(timer);
       resolve();
     };
+    // הדפדפן ויתר עוד לפני שהבקשה קיבלה חיבור מה-pool (רענון באמצע טעינה,
+    // כשכל החיבורים תפוסים): 'close' כבר קרה ולא יגיע שוב, ו-'finish' לא
+    // מגיע על חיבור סגור — הטרנזקציה הייתה נשארת פתוחה לנצח ותופסת חיבור,
+    // עד שה-pool כולו נתקע. אין למי לענות — לא מריצים את הנתיב בכלל.
+    // לפי ה-socket ולא req.destroyed: בקשה שגופה נקרא (express.json) מסומנת
+    // destroyed גם כשהדפדפן עוד מחכה לתשובה.
+    if (req.socket?.destroyed) return done();
     res.on('finish', done);
     res.on('close', () => {
       // התשובה כבר הסתיימה (res.end נקרא) — הנתיב סיים, אפשר לסגור

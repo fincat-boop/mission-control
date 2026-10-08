@@ -160,7 +160,7 @@ export async function suggestContentSwaps() {
          join content_variants v on v.content_id = ci.id and v.channel_id = $1 and v.status = 'ready'
          join endpoints e on e.id = ci.endpoint_id and e.active = true
          left join campaigns ca on ca.id = ci.campaign_id
-        where (ca.id is null or ca.paused_at is null)
+        where (ca.id is null or (ca.active and ca.paused_at is null))
           and (ci.slot_channel_id is null or exists (
                 select 1 from campaign_channels cc
                  where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))

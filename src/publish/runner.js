@@ -37,6 +37,16 @@ import { endpointLiveSql } from '../live.js';
 
 const MAX_LATE_HOURS = 12;   // approved שפוספס ביותר מזה — נכשל, לא מתפרסם באיחור
 
+// השלמה אחרי השבתה (שרת שנפל, טיק ארוך): פוסט שהמועד שלו עבר ביותר מ-
+// OVERDUE_MINUTES לא יוצא אם פוסט אחר באותו ערוץ פורסם או נתפס בתוך
+// CATCHUP_SPACING_MINUTES — מחכה לטיק מאוחר יותר, ולכל היותר מאחר אחד לערוץ
+// בכל טיק. בלי זה כל מה שהצטבר יצא באותה דקה (3 פוסטים של 10/13/16 ב-18:00).
+// פוסט בזמן — לא מושפע. כלל ה-12 שעות נמדד מהמועד, כמו קודם: ערוץ משלים
+// עד ~24 פוסטים (12 שעות / 30 דקות) פחות משך ההשבתה — מה שלא הספיק נכשל
+// עם TOO_LATE_ERROR.
+export const OVERDUE_MINUTES = 5;
+export const CATCHUP_SPACING_MINUTES = 30;
+
 export const STUCK_SOCIAL_MINUTES = 30;   // פייסבוק/אינסטגרם ב-publishing יותר מזה — נקטע
 export const STUCK_NEWSLETTER_HOURS = 24; // ניוזלטר שה-HUB לא ענה עליו / לא קיבל תוך יממה
 export const STUCK_NEWSLETTER_CAP_HOURS = 72; // ניוזלטר שה-HUB עוד "שולח" אחרי 3 ימים
@@ -538,6 +548,22 @@ async function tickStep(orgId, label, fn) {
   }
 }
 
+/**
+ * האם פוסט מאחר (OVERDUE_MINUTES), ואם כן — האם פוסט אחר באותו ערוץ פורסם
+ * (published_at) או נתפס (publishing_started_at — כולל ניסיון שנכשל, שאולי
+ * עלה) בתוך CATCHUP_SPACING_MINUTES. לפי now() של המסד, ממש לפני התפיסה —
+ * פוסט שיצא קודם באותו טיק כבר נספר.
+ */
+const CATCHUP_SQL =
+  `select p.channel_id,
+          p.scheduled_at < now() - ($2 || ' minutes')::interval as overdue,
+          exists (select 1 from posts o
+                   where o.channel_id = p.channel_id and o.id <> p.id
+                     and (o.published_at > now() - ($3 || ' minutes')::interval
+                          or o.publishing_started_at > now() - ($3 || ' minutes')::interval)
+                 ) as recent
+     from posts p where p.id = $1`;
+
 /** פוסט שאושר ופוספס ביותר מ-MAX_LATE_HOURS — נכשל, בטרנזקציה משלו */
 async function failTooLate(orgId, id) {
   // אותו מסלול כשל כמו כל השאר: משימה, publish_log, יומן ואירוע ל-HUB
@@ -600,10 +626,19 @@ export async function publishTickForOrg(orgId = currentOrg()) {
     );
   })) ?? [];
 
+  // השלמה אחרי השבתה — מאחר אחד לערוץ בטיק, ורק אחרי מרווח (CATCHUP_SQL)
+  const caughtUp = new Set();
   for (const { id, too_late } of due) {
     if (too_late) {
       await failTooLate(orgId, id);
       continue;
+    }
+    const pace = await tickStep(orgId, `בדיקת מרווח לפוסט #${id} נכשלה:`,
+      () => one(CATCHUP_SQL, [id, OVERDUE_MINUTES, CATCHUP_SPACING_MINUTES]));
+    if (!pace) continue; // נעלם, או שהבדיקה נכשלה — הטיק הבא
+    if (pace.overdue) {
+      if (pace.recent || caughtUp.has(pace.channel_id)) continue;
+      caughtUp.add(pace.channel_id);
     }
     await publishOne(id, { orgId, dueOnly: true })
       .catch((e) => console.error(`פרסום פוסט #${id} נכשל:`, e.message));

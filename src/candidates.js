@@ -5,7 +5,7 @@
  * אם הכרטיס מבטיח תוכן שהרשימה לא מציגה — המשתמש נתקע.
  *
  * הכלל: נקודת הקצה של התוכן פעילה; משבצת-מדיה של קמפיין כללי רק בערוץ
- * שלה וכל עוד הערוץ בקמפיין; קמפיין לא מושהה; התאריך בתוך חלון הקמפיין.
+ * שלה וכל עוד הערוץ בקמפיין; קמפיין פעיל ולא מושהה; התאריך בתוך חלון הקמפיין.
  * (ניסוח לערוץ — מוכן או טיוטה — נבדק בנפרד, ב-join על content_variants.)
  *
  * קמפיין מוכן (שלב 3): פריט לא יוצא לפני התאריך המתוכנן שלו. התאריך נגזר
@@ -32,7 +32,7 @@ export function candidateFilterSql({ ci = 'ci', ca = 'ca', channel, date }) {
     and (${ci}.slot_channel_id is null or (${ci}.slot_channel_id = ${channel} and exists (
           select 1 from campaign_channels fcc
            where fcc.campaign_id = ${ci}.campaign_id and fcc.channel_id = ${ci}.slot_channel_id)))
-    and (${ca}.id is null or (${ca}.paused_at is null and (
+    and (${ca}.id is null or (${ca}.active and ${ca}.paused_at is null and (
           ${date} is null or ((${ca}.starts_on is null or ${ca}.starts_on <= ${date})
                           and (${ca}.ends_on is null or ${ca}.ends_on >= ${date})))))`;
 }

@@ -1029,6 +1029,7 @@ function openLinkRules(campaign, reload) {
         : 'הקישור בין העמודות הוסר.') +
         (res.unlinked ? ` ${res.unlinked} פוסטים נותקו.` : '') +
         (res.skipped?.length ? ` ${res.skipped.length} לא הועתקו: ${res.skipped[0]}` : '') +
+        (res.shift ? ` ${shiftNote(res.shift)}`.trimEnd() : '') +
         downgradeNote(res.downgraded));
       await reload();
       return false;
