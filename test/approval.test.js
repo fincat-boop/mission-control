@@ -38,3 +38,28 @@ test('taskCloseReason — "לאשר מחדש": נסגרת באישור / פרס�
   // משימת אישור רגילה (ממתין לאישור) — כמו קודם
   assert.equal(taskCloseReason({ ...t('scheduled', null), meta: null }, now), 'resolved');
 });
+
+test('taskCloseReason — "להעביר ל-HUB": הועבר / פורסם / הוזז / המועד הגיע', () => {
+  const now = new Date('2026-10-08T12:00:00Z');
+  const at = '2026-10-09T08:00:00Z';
+  const t = (post_status, scheduled = at) => ({ id: 2, kind: 'approve', post_id: 7, done: false,
+    meta: { hub_transfer: true, for_at: '2026-10-09T08:00:00+00:00' }, post_status, post_scheduled_at: scheduled });
+  assert.equal(taskCloseReason(t('scheduled'), now), null);
+  assert.equal(taskCloseReason(t('approved'), now), null);
+  assert.equal(taskCloseReason(t('publishing'), now), 'resolved');
+  assert.equal(taskCloseReason(t('failed'), now), 'resolved');
+  assert.equal(taskCloseReason(t('published'), now), 'published');
+  assert.equal(taskCloseReason(t('scheduled', '2026-10-09T10:00:00Z'), now), 'moved');
+  assert.equal(taskCloseReason(t('scheduled'), new Date('2026-10-09T08:01:00Z')), 'expired');
+});
+
+test('isMissed / retryPending — מאושר שמחכה לניסיון חוזר לא "עבר המועד" עד אחרי הניסיון', async () => {
+  const { isMissed, retryPending } = await import('../public/js/core/postActions.js');
+  const now = new Date('2026-10-08T12:00:00Z');
+  const p = { status: 'approved', scheduled_at: '2026-10-08T11:30:00Z', publish_retry_at: '2026-10-08T12:05:00Z' };
+  assert.equal(retryPending(p, now), true);
+  assert.equal(isMissed(p, now), false);
+  assert.equal(isMissed({ ...p, publish_retry_at: null }, now), true);
+  assert.equal(isMissed(p, new Date('2026-10-08T12:30:00Z')), true);
+  assert.equal(retryPending(p, new Date('2026-10-08T12:30:00Z')), false);
+});

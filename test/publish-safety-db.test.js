@@ -228,8 +228,10 @@ test('תפיסה בטיק (dueOnly): קמפיין מושהה, ערוץ בלי פ
 test('Graph נכשל: failed עם משימה, נשמר — ולא חוזר לפרסום בטיק הבא', { skip }, async () => {
   const id = await duePost('Graph דוחה');
   await onlyThese(id);
+  // דחייה של הפוסט עצמו (מדיניות). טוקן שפג (190) הוא כשל תצורה — משימה אחת
+  // לכל הארגון ולא לפוסט (סעיף 32, autopublish-gate-db)
   const calls = await withGraph(() => new Response(
-    JSON.stringify({ error: { message: 'Invalid OAuth access token', code: 190 } }), { status: 400 }),
+    JSON.stringify({ error: { message: 'Blocked by policy', code: 368 } }), { status: 400 }),
   () => runner.publishTickForOrg(org));
   assert.equal(calls.length, 1);
   const p = await q1('select status, publish_error from posts where id = $1', [id]);

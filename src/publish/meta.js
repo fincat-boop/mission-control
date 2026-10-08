@@ -72,8 +72,9 @@ async function graph(path, {
   }
   if (!res.ok || data.error) {
     const e = data.error ?? {};
+    // live — הקריאה שמעלה את הפוסט; ניסיון חוזר על "תקלה זמנית" רק כשלא (errors.js retryableRejection)
     throw Object.assign(new Error(e.error_user_msg ?? e.message ?? `Graph API ${res.status}`), {
-      code: e.code, subcode: e.error_subcode, type: e.type, status: res.status,
+      code: e.code, subcode: e.error_subcode, type: e.type, status: res.status, live,
     });
   }
   return data;

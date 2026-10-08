@@ -142,3 +142,38 @@ test('MAYBE_OUT_PATTERNS — תופסות בדיוק את ההודעות של "�
   assert.ok(!maybe(friendlyPublishError(graphErr('Error validating access token', 190), { platform: 'facebook' }).message),
     'טוקן פג — בוודאות לא עלה');
 });
+
+/* ---------- סעיף 32: מה חוזר לבד ומה מתרכז ---------- */
+
+test('retryableRejection — רק דחייה מפורשת וזמנית; לעולם לא "אולי עלה"', async () => {
+  const { retryableRejection } = await import('../src/publish/errors.js');
+  const g = (code, extra = {}) => Object.assign(new Error('x'), { code, status: 400, ...extra });
+  for (const code of [4, 17, 32, 341, 613]) assert.equal(retryableRejection(g(code, { live: true })), true, String(code));
+  assert.equal(retryableRejection(g(2)), true);
+  assert.equal(retryableRejection(g(1, { live: true })), false, 'תקלה לא צפויה בקריאה שמעלה — אולי עלה');
+  assert.equal(retryableRejection(g(190)), false);
+  assert.equal(retryableRejection(g(368)), false);
+  assert.equal(retryableRejection(Object.assign(new Error('t'), { kind: 'graph_timeout', maybeLive: false })), false);
+  assert.equal(retryableRejection(Object.assign(new Error('t'), { kind: 'processing_timeout' })), false);
+  assert.equal(retryableRejection(new TypeError('fetch failed')), false);
+  assert.equal(retryableRejection(Object.assign(new Error('x'), { code: 4 })), false, 'בלי status — לא תשובה של מטא');
+  assert.equal(retryableRejection('rate limit'), false);
+  const hub = (status, answered) => Object.assign(new Error('h'), { name: 'HubMailError', status, answered });
+  assert.equal(retryableRejection(hub(503, true)), true);
+  assert.equal(retryableRejection(hub(502, false)), false);
+  assert.equal(retryableRejection(hub(400, true)), false);
+});
+
+test('configErrorKind — לפי ההודעה הידידותית; פייסבוק ואינסטגרם נפרדים', async () => {
+  const { configErrorKind } = await import('../src/publish/errors.js');
+  const msg = (err, platform) => friendlyPublishError(err, { platform }).message;
+  assert.equal(configErrorKind(msg('R2_PUBLIC_BASE_URL לא מוגדר', 'instagram'), 'instagram'), 'env:אחסון המדיה');
+  assert.equal(configErrorKind(msg(Object.assign(new Error('x'), { code: 190 }), 'facebook'), 'facebook'), 'token:facebook');
+  assert.equal(configErrorKind(msg(Object.assign(new Error('x'), { code: 190 }), 'instagram'), 'instagram'), 'token:instagram');
+  assert.equal(configErrorKind(msg(Object.assign(new Error('x'), { code: 10 }), 'facebook'), 'facebook'), 'permission:facebook');
+  assert.equal(configErrorKind(msg('אין חיבור פעיל לערוץ — מגדירים בניהול → ערוצי פרסום', 'facebook'), 'facebook'),
+    'connection:facebook');
+  assert.equal(configErrorKind(msg(Object.assign(new Error('x'), { name: 'HubMailError', status: 401 }))), 'hub_auth');
+  assert.equal(configErrorKind(msg(Object.assign(new Error('x'), { code: 4 }), 'facebook'), 'facebook'), null);
+  assert.equal(configErrorKind(msg('fetch failed', 'facebook'), 'facebook'), null);
+});

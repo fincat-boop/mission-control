@@ -1,13 +1,13 @@
 import { api, postWithGapCheck } from '../core/api.js';
 import { can, epColor, persistView, state } from '../core/state.js';
 import { $, $$, esc, run, toast } from '../core/dom.js';
-import { HE_DAYS, KIND_HE, inkOn, ymd } from '../core/format.js';
+import { HE_DAYS, KIND_HE, hhmm, inkOn, ymd } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
 import { openEngine } from '../ui/engineDialog.js';
 import { openPostPreview } from '../ui/postDialog.js';
 import { openAddPost } from '../ui/addPost.js';
 import { confirmDialog } from '../core/confirm.js';
-import { isMissed } from '../core/postActions.js';
+import { isMissed, retryPending } from '../core/postActions.js';
 import { newsletterHubTag } from '../core/hubFill.js';
 import { fetchSetupStatus, renderSetupCard, setupGoButton, wireSetupGo } from '../ui/setup.js';
 
@@ -253,6 +253,10 @@ function statusTag(p) {
   // מאושר בערוץ שהפרסום האוטומטי כבוי בו — לא יוצא לבד (סעיף 30)
   if (p.status === 'approved' && p.channel_auto === false) {
     return { cls: 'orange', label: 'לא יתפרסם לבד', hint: 'הפרסום האוטומטי כבוי לערוץ' };
+  }
+  // נדחה זמנית ומחכה לניסיון חוזר אחד (סעיף 32)
+  if (retryPending(p)) {
+    return { cls: 'auto', label: `ניסיון חוזר ב-${hhmm(p.publish_retry_at)}` };
   }
   if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
   // "מוכן" שלא יעבור את בדיקת הפרסום — אותה בדיקה כמו התא בטבלה (סעיף 21)

@@ -22,9 +22,17 @@ const time = (p) => new Date(p.scheduled_at).getTime();
  */
 export function isMissed(post, now = new Date()) {
   if (post.status === 'scheduled') return time(post) < now.getTime();
-  if (post.status === 'approved') return time(post) < now.getTime() - APPROVED_GRACE_MS;
+  // ניסיון חוזר שמחכה (סעיף 32) — החסד נמדד מהניסיון החוזר, לא מהמועד
+  if (post.status === 'approved') {
+    const from = post.publish_retry_at ? new Date(post.publish_retry_at).getTime() : time(post);
+    return from < now.getTime() - APPROVED_GRACE_MS;
+  }
   return false;
 }
+
+/** מאושר שמחכה לניסיון חוזר אחד (סעיף 32) — publish_retry_at עוד לא הגיע */
+export const retryPending = (post, now = new Date()) => post.status === 'approved' &&
+  !!post.publish_retry_at && new Date(post.publish_retry_at).getTime() > now.getTime();
 
 /**
  * האם הפוסט יכול לצאת בפרסום אוטומטי: פלטפורמה עם אינטגרציה, חיבור קיים

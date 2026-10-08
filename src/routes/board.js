@@ -292,6 +292,12 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   // האישור לפרסום אוטומטי ניתן על מה שיוצא בפועל: הערוץ (החיבור, הניסוח),
   // התוכן ונקודת הקצה — שינוי של אחד מהם מחזיר למתוכנן. מועד בלבד משאיר.
   const approvalReset = current.status === 'approved' && approvalResetOnChange(current, b);
+  // ניסיון חוזר שמחכה (סעיף 32) — שייך למועד הקודם; במועד החדש מתחילים מאפס
+  if (current.status === 'approved' && current.publish_retry_at && isMove(current, b)) {
+    post = await one(
+      `update posts set publish_retry_at = null, publish_error = null
+        where id = $1 and status = 'approved' returning *`, [current.id]) ?? post;
+  }
   if (approvalReset) {
     post = await one(
       `update posts set status = 'scheduled', approved_by = null, approved_at = null

@@ -155,3 +155,52 @@ export function friendlyPublishError(err, { platform } = {}) {
       (raw ? ` (${raw.slice(0, RAW_MAX)})` : '') + '.',
   };
 }
+
+/* ========================= סעיף 32 — מה חוזר לבד ומה מתרכז ========================= */
+
+/**
+ * קודים של מטא שאומרים "לא עכשיו" בתשובה מפורשת: הגבלת קצב (הבקשה נדחתה
+ * לפני שבוצעה) ותקלה זמנית אצלם.
+ */
+const META_RETRY_RATE = META_RATE;
+const META_RETRY_TEMPORARY = META_TEMPORARY;
+
+/**
+ * האם מותר לנסות שוב לבד, פעם אחת (runner.js scheduleRetry). רק דחייה
+ * מפורשת וזמנית שבוודאות לא העלתה כלום:
+ *   - מטא ענתה בשגיאה (יש code ו-status מהתשובה עצמה) עם קוד הגבלת קצב —
+ *     בכל קריאה, גם זו שמעלה את הפוסט: הבקשה נדחתה לפני שבוצעה;
+ *   - מטא ענתה "תקלה זמנית / לא צפויה" (1, 2) — רק כשזו לא הייתה הקריאה
+ *     שמעלה את הפוסט (live, meta.js): שם "לא צפויה" יכולה להיות גם אחרי
+ *     שהפוסט עלה;
+ *   - ה-HUB ענה בעצמו (answered) ב-5xx.
+ * לעולם לא: חוסר מענה (graph_timeout), תקלת רשת, עיבוד שלא הסתיים, שגיאה
+ * בלי קוד — אולי עלה, ופרסום חוזר היה כפול.
+ */
+export function retryableRejection(err) {
+  if (!err || typeof err !== 'object' || err.kind) return false;
+  if (err.name === 'HubMailError') return err.answered === true && Number(err.status) >= 500;
+  const code = Number(err.code);
+  if (!Number.isFinite(code) || !Number.isFinite(Number(err.status))) return false;
+  if (META_RETRY_RATE.includes(code)) return true;
+  return META_RETRY_TEMPORARY.includes(code) && err.live !== true;
+}
+
+/**
+ * כשל תצורה — מה שעוצר את כל הפוסטים מאותה סיבה (הגדרה חסרה בשרת, מפתח
+ * HUB שנדחה, חיבור לערוץ שפג / חסרה בו הרשאה / חסר): המפתח של הקבוצה, או
+ * null. לפי ההודעה הידידותית (מה שנשמר ב-publish_error), כדי שהטיק
+ * (failPost — משימה ואירוע אחד לשעה) וההתראה (alerts.js — התראה אחת)
+ * יקבצו לפי אותו כלל. platform — לחיבור: פייסבוק ואינסטגרם הם שתי בעיות.
+ */
+export function configErrorKind(message, platform = null) {
+  const m = String(message ?? '');
+  const env = m.match(/^חסרה הגדרה בשרת \(([^)]+)\)/);
+  if (env) return `env:${env[1]}`;
+  if (/^ה-HUB דחה את מפתח החיבור/.test(m)) return 'hub_auth';
+  const p = platform ?? 'any';
+  if (/^החיבור ל.+ פג או בוטל/.test(m)) return `token:${p}`;
+  if (/^לחשבון המחובר ל.+ חסרה הרשאה/.test(m)) return `permission:${p}`;
+  if (/^(אין חיבור פעיל לערוץ|פענוח הטוקן נכשל|חסר מזהה (עמוד|חשבון))/.test(m)) return `connection:${p}`;
+  return null;
+}

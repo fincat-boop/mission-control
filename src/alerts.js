@@ -9,6 +9,7 @@ import { mediaReady } from './media.js';
 import { UNCONFIRMED_SQL, unconfirmedAlert, unconfirmedPosts } from './unconfirmed.js';
 import { postIsLiveSql } from './live.js';
 import { tickHeartbeat, tickStallAlert } from './publish/heartbeat.js';
+import { configErrorKind } from './publish/errors.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -70,7 +71,8 @@ export async function buildAlerts(user = null) {
          where p.status = 'pending_approval' and ${postIsLiveSql('p')}
          order by p.scheduled_at`);
   // פרסום שנכשל — עד שבועיים אחורה. אחר כך זה כבר היסטוריה, לא מצב.
-  const failed = await rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name
+  const failed = await rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name,
+                 c.platform
           from posts p left join channels c on c.id = p.channel_id
          where p.status = 'failed' and p.scheduled_at >= now() - interval '14 days'
            and ${postIsLiveSql('p')}
@@ -395,16 +397,40 @@ export function campaignContentAlert(c, daysToStart) {
 const shortWhen = (d) =>
   new Date(d).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
 
-/** התראה חוסמת לכל פוסט שהפרסום שלו נכשל. id יציב לפי הפוסט. */
+/**
+ * התראה חוסמת לכל פוסט שהפרסום שלו נכשל. id יציב לפי הפוסט.
+ * כשל תצורה (סעיף 32 — configErrorKind: הגדרה חסרה בשרת, חיבור שפג) עוצר
+ * את כל הפוסטים מאותה סיבה: התראה אחת לכל סוג, עם כמה ואילו — לא אחת לכל פוסט.
+ */
 export function failedPostAlerts(list) {
-  return list.map((p) => ({
-    id: `post-failed-${p.id}`,
-    level: 'crit',
-    title: `פרסום נכשל: ${p.title}`,
-    detail: [p.channel_name, shortWhen(p.scheduled_at), p.publish_error].filter(Boolean).join(' · '),
-    tab: 'board',
-    post_id: p.id,
-  }));
+  const groups = new Map();
+  const single = [];
+  for (const p of list) {
+    const kind = configErrorKind(p.publish_error, p.platform);
+    if (!kind) { single.push(p); continue; }
+    if (!groups.has(kind)) groups.set(kind, []);
+    groups.get(kind).push(p);
+  }
+  // פוסט אחד מאותה סיבה — התראה רגילה של פוסט
+  for (const [kind, ps] of groups) if (ps.length === 1) { single.push(ps[0]); groups.delete(kind); }
+  return [
+    ...[...groups].map(([kind, ps]) => ({
+      id: `publish-config-${kind}`,
+      level: 'crit',
+      title: `${ps.length} פוסטים לא פורסמו מאותה סיבה`,
+      detail: [ps[0].publish_error,
+        ps.slice(0, 3).map((p) => p.title).join(', ') + (ps.length > 3 ? '…' : '')].join(' · '),
+      tab: 'board',
+    })),
+    ...single.map((p) => ({
+      id: `post-failed-${p.id}`,
+      level: 'crit',
+      title: `פרסום נכשל: ${p.title}`,
+      detail: [p.channel_name, shortWhen(p.scheduled_at), p.publish_error].filter(Boolean).join(' · '),
+      tab: 'board',
+      post_id: p.id,
+    })),
+  ];
 }
 
 /**

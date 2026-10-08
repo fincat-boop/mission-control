@@ -45,6 +45,9 @@ const AUTO_ASSIGN_KINDS = ['write', 'swap', 'publish'];
  *   approve        — הפוסט כבר לא ממתין לאישור
  *   approve (לאשר מחדש, meta.reapprove — סעיף 31) — הפוסט אושר שוב או
  *                    פורסם, או יממה אחרי המועד (ואז הוא ברשימת "לא סומנו")
+ *   approve (להעביר ל-HUB, meta.hub_transfer — סעיף 32) — הניוזלטר הועבר /
+ *                    פורסם / נכשל (כבר לא מתוכנן או מאושר), הוזז ממועד המשימה
+ *                    (meta.for_at), או שהמועד הגיע
  */
 export function taskCloseReason(t, now = new Date()) {
   if (t.done || t.post_id == null) return null;
@@ -80,6 +83,12 @@ export function taskCloseReason(t, now = new Date()) {
         if (published) return 'published';
         if (t.post_status === 'approved') return 'reapproved';
         return expired ? 'expired' : null;
+      }
+      if (t.meta?.hub_transfer) {
+        if (published) return 'published';
+        if (!['scheduled', 'approved'].includes(t.post_status)) return 'resolved';
+        if (t.meta.for_at && at != null && new Date(t.meta.for_at).getTime() !== at) return 'moved';
+        return future ? null : 'expired';
       }
       return t.post_status !== 'pending_approval' ? 'resolved' : null;
     default:

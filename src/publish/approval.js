@@ -83,7 +83,7 @@ export async function resetChangedApprovals(contentIds) {
   if (!stale.length) return 0;
   const back = await rows(
     `update posts set status = 'scheduled', approved_by = null, approved_at = null,
-                      approved_digest = null, publish_error = null
+                      approved_digest = null, publish_error = null, publish_retry_at = null
       where id = any($1::int[]) and status = 'approved' returning id`,
     [stale]);
   return back.length;

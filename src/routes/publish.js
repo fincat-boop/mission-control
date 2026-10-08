@@ -265,7 +265,7 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), requireAutopublish,
   // הטביעה של מה שאושר (סעיף 31): שינוי תוכן אחרי זה מחזיר לאישור
   const post = await one(
     `update posts set status = 'approved', approved_by = $2, approved_at = now(),
-            publish_error = null, approved_digest = $3
+            publish_error = null, approved_digest = $3, publish_retry_at = null
       where id = $1 returning *`,
     [payload.post.id, req.user.id, approvalDigest(payload)]
   );
@@ -339,7 +339,7 @@ r.post('/publish/approve-week', requirePerm('approve'), requireAutopublish, wrap
   if (eligible.length) {
     await query(
       `update posts p set status = 'approved', approved_by = $3, approved_at = now(),
-              publish_error = null, approved_digest = x.digest
+              publish_error = null, approved_digest = x.digest, publish_retry_at = null
          from unnest($1::int[], $2::text[]) as x(id, digest)
         where p.id = x.id`,
       [eligible, digests, req.user.id]
@@ -401,7 +401,8 @@ r.get('/publish/newsletter-posts', wrap(async (req, res) => {
 /** ביטול אישור — חוזר למתוכנן, שום דבר לא נשלח */
 r.post('/posts/:id/unapprove-publish', requirePerm('approve'), wrap(async (req, res) => {
   const post = await one(
-    `update posts set status = 'scheduled', approved_by = null, approved_at = null
+    `update posts set status = 'scheduled', approved_by = null, approved_at = null,
+                      publish_retry_at = null, publish_error = null
       where id = $1 and status = 'approved' returning *`,
     [req.params.id]
   );

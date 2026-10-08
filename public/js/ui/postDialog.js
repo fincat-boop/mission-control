@@ -6,7 +6,7 @@ import { goToTab, openPostEditor, refreshAfterPostChange } from '../ui/refresh.j
 import { KIND_HE, hhmm, isImage, isVideo, ymd } from '../core/format.js';
 import { candidateButtons, loadCandidates } from '../ui/contentPicker.js';
 import { AUTO_PLATFORMS, choosePrimary, editPatch, isMissed, nextFreeSlot, postFacts,
-         publishingStuck, rescheduleApproves } from '../core/postActions.js';
+         publishingStuck, rescheduleApproves, retryPending } from '../core/postActions.js';
 import { newsletterHubTag } from '../core/hubFill.js';
 import { pickExtras } from '../core/socialRules.js';
 import { mountHubPreview, newsletterPostNotes, openInHub, previewInput,
@@ -790,10 +790,14 @@ export async function openPostPreview(postId) {
       ? `<div class="pvwarn"><b>ממתין לאישור.</b> ${post.urgent ? 'מבצע דחוף' : 'פוסט'} שנוצר בלי הרשאת אישור${
           post.assignee_name ? ` (${esc(post.assignee_name)})` : ''} — לא יתפרסם עד שמישהו עם הרשאת אישור יאשר.${
           post.group_pending > 1 ? ` במבצע הזה ממתינים ${post.group_pending} ערוצים.` : ''}</div>` : ''}
-    ${post.status === 'approved' && previewFacts.autoReady
+    ${post.status === 'approved' && previewFacts.autoReady && !retryPending(post)
       ? `<div class="pvauto">⚡ מאושר לפרסום אוטומטי${
           post.approved_by_name ? ` — אישר: ${esc(post.approved_by_name)}` : ''}.
           יתפרסם ב-${esc(when)}.</div>` : ''}
+    ${post.status === 'approved' && previewFacts.autoReady && retryPending(post)
+      ? `<div class="pvauto">⚡ הניסיון הראשון נדחה זמנית${
+          post.publish_error ? ` (${esc(post.publish_error)})` : ''}.
+          ניסיון חוזר אחד ב-${esc(hhmm(post.publish_retry_at))} — אם גם הוא ייכשל, הפוסט יסומן "נכשל".</div>` : ''}
     ${post.status === 'approved' && !previewFacts.autoReady
       ? `<div class="pvwarn"><b>מאושר, אבל לא יתפרסם לבד</b> — הפרסום האוטומטי כבוי לערוץ הזה.
           מפרסמים ידנית ומסמנים "פורסם", או מדליקים פרסום אוטומטי לערוץ בניהול ← ערוצי פרסום.</div>` : ''}

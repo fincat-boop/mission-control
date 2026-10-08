@@ -32,6 +32,9 @@ export const UNCONFIRMED_SQL = `(
   p.status in ('scheduled', 'approved') and p.published_at is null
   and p.scheduled_at < now() - interval '${UNCONFIRMED_GRACE_MINUTES} minutes'
   and (p.content_id is not null or p.urgent or not p.auto_hole)
+  -- ניסיון חוזר שמחכה (סעיף 32, publish_retry_at) — עוד בדרך, לא "לא ידוע"
+  and not (p.status = 'approved' and p.publish_retry_at is not null
+           and p.publish_retry_at > now() - interval '${UNCONFIRMED_GRACE_MINUTES} minutes')
   and exists (select 1 from channels uc
                where uc.id = p.channel_id
                  and (uc.platform <> 'newsletter'

@@ -6,7 +6,7 @@ import { deletePublicAssets, publicAssetsReady, uploadPublicAsset } from './publ
 import { mediaUrl } from '../media.js';
 import { HubMailError, createNewsletter, hubCampaignUrl, hubMailReady, newsletterStatus } from '../hub-mail.js';
 import { emitHubEventSafe, postEventInput } from '../hub-events.js';
-import { friendlyPublishError } from './errors.js';
+import { configErrorKind, friendlyPublishError, retryableRejection } from './errors.js';
 import { itemAssetsSql } from '../links.js';
 import {
   DIGEST_UNVERIFIED, HUB_MISSING_ERROR, NOT_APPROVED_ERROR, NOT_TRANSFERRED_ERROR, alreadyTransferred,
@@ -97,7 +97,7 @@ export async function resetToManual() {
                  where status = 'approved' or (status = 'failed' and not ${maybeOutSql('p')})
                  for update)
      update posts p set status = 'scheduled', approved_by = null, approved_at = null,
-                        publish_error = null
+                        publish_error = null, publish_retry_at = null
        from t where p.id = t.id
      returning p.id, t.status as was`);
   if (moved.length) {
@@ -198,6 +198,38 @@ async function recordFailedTask(post, title, error, who = 'owner') {
   ));
 }
 
+/** כמה זמן אירוע תצורה אחד ל-HUB מכסה את כל הכשלים מאותה סיבה */
+export const CONFIG_NOTICE_HOURS = 1;
+
+/**
+ * כשל תצורה (סעיף 32): משימה אחת פתוחה לכל סוג תקלה בארגון (configErrorKind
+ * — tasks_config_failed_uidx), שסופרת כמה פוסטים נכשלו בגללה. emit — האם
+ * לשלוח עכשיו אירוע ל-HUB: משימה חדשה, או שהאירוע הקודם יצא לפני יותר
+ * מ-CONFIG_NOTICE_HOURS. נסגרת ביד (אחרי שהמפתח / בעל החשבון מתקן).
+ * @returns {Promise<{emit:boolean, count:number}|undefined>}
+ */
+async function recordConfigNotice(kind, title, message, who) {
+  const row = await bestEffort('משימת כשל תצורה נכשלה:', () => one(
+    `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta)
+     values ($1, $2, 'failed', null, null, true, (now() at time zone 'Asia/Jerusalem')::date,
+             jsonb_build_object('config_kind', $3::text, 'who', $4::text, 'count', 1, 'notified_at', now()))
+     on conflict (org_id, (meta->>'config_kind'))
+       where kind = 'failed' and done = false and post_id is null and (meta->>'config_kind') is not null
+     do update set subtitle = excluded.subtitle, urgent = true, due_on = excluded.due_on,
+       meta = tasks.meta || jsonb_build_object(
+         'count', coalesce((tasks.meta->>'count')::int, 0) + 1,
+         'notified_at', case when (tasks.meta->>'notified_at')::timestamptz
+                                  > now() - make_interval(hours => $5::int)
+                             then tasks.meta->'notified_at' else to_jsonb(now()) end)
+     returning id, (meta->>'count')::int as count, (meta->>'notified_at')::timestamptz = now() as emit`,
+    [title, message, kind, who, CONFIG_NOTICE_HOURS]));
+  if (!row) return undefined;
+  await bestEffort('עדכון כותרת משימת כשל התצורה נכשל:', () => query(
+    'update tasks set title = $2 where id = $1',
+    [row.id, row.count === 1 ? title : `${title} — ${row.count} פוסטים נכשלו מאותה סיבה`]));
+  return { emit: row.emit, count: row.count };
+}
+
 async function logActivity(action, post, summary) {
   await bestEffort('כתיבה ליומן הפעולות (פרסום) נכשלה:', () => query(
     `insert into activity_log (user_id, user_name, via, action, entity, entity_id, summary)
@@ -250,23 +282,30 @@ export async function failPost(post, err, {
     ? { message: raw, who: 'owner' }
     : friendlyPublishError(err, { platform: post.platform });
   const moved = await one(
-    `update posts set status = 'failed', publish_error = $2
+    `update posts set status = 'failed', publish_error = $2, publish_retry_at = null
       where id = $1 and ($3::text[] is null or status = any($3::text[])) returning id`,
     [post.id, message, from]);
   if (!moved) return null;
 
   const attempt = await logPublish(post, false, { error: raw });
   await logActivity('publish_failed', post, `${title}: "${post.title}" — ${message}`);
+  // כשל תצורה (סעיף 32): אותה סיבה עוצרת את כל הפוסטים — משימה אחת לסוג
+  // התקלה ואירוע אחד לשעה, לא אחד לכל פוסט. הפוסט עצמו נכשל כרגיל
+  const configKind = internal ? null : configErrorKind(message, post.platform);
+  const notice = configKind ? await recordConfigNotice(configKind, title, message, who) : null;
   // deferNotify — האירוע חוזר לקורא (notify) והוא שולח אותו אחרי ה-commit:
   // שלא יצא אירוע על כשל שהתגלגל אחורה, ושה-HUB לא יחזיק טרנזקציה פתוחה
   let event = null;
-  if (notify) {
-    const args = ['post_publish_failed', post, { error: message, who },
+  if (notify && (!configKind || notice?.emit)) {
+    const extra = configKind
+      ? { error: message, who, grouped: true, config_kind: configKind, count: notice.count }
+      : { error: message, who };
+    const args = ['post_publish_failed', post, extra,
       { attempt: attempt ?? Date.now(), email: await ownerEmail() }];
     if (deferNotify) event = () => emitPostEvent(...args);
     else await emitPostEvent(...args);
   }
-  await recordFailedTask(post, title, message, who);
+  if (!configKind) await recordFailedTask(post, title, message, who);
   return { ok: false, error: message, ...(event ? { notify: event } : {}) };
 }
 
@@ -418,6 +457,8 @@ const CLAIM_SQL =
     where p.id = $1 and p.status = any($2)
       and (not $3::boolean or (
             p.scheduled_at <= now()
+        -- ניסיון חוזר (סעיף 32) — רק מהרגע שנקבע לו
+        and (p.publish_retry_at is null or p.publish_retry_at <= now())
         and exists (select 1 from engine_settings s where s.autopublish_enabled)
         and exists (select 1 from channels c
                       join channel_connections cc on cc.channel_id = c.id
@@ -525,7 +566,7 @@ async function refuseChanged(orgId, post) {
     await recordOutcome(orgId, async () => {
       const back = await one(
         `update posts set status = 'scheduled', approved_by = null, approved_at = null,
-                          approved_digest = null, publishing_started_at = null
+                          approved_digest = null, publishing_started_at = null, publish_retry_at = null
           where id = $1 and status = 'publishing' returning id`, [post.id]);
       if (!back) return;
       await bestEffort('יצירת משימת "לאשר מחדש" נכשלה:', () => recordReapproveTask(post));
@@ -537,6 +578,44 @@ async function refuseChanged(orgId, post) {
   }
   console.log(`פוסט #${post.id} ("${post.title}") לא פורסם — התוכן השתנה אחרי האישור`);
   return { ok: false, error: CHANGED_AFTER_APPROVAL };
+}
+
+/** אחרי כמה דקות מנסים שוב פוסט שנדחה זמנית (סעיף 32) */
+export const RETRY_AFTER_MINUTES = 15;
+
+/**
+ * ניסיון חוזר אחד (סעיף 32): מטא דחתה את הפוסט במפורש ובאופן זמני
+ * (retryableRejection — שום דבר לא עלה). publishing → approved עם
+ * publish_retry_at, ההודעה הידידותית ב-publish_error (החלון מסביר),
+ * שורה ב-publish_log וביומן — בלי משימה ובלי אירוע. הטיק תופס אותו שוב
+ * מ-publish_retry_at (CLAIM_SQL), אם המתג עדיין דלוק ולא עברו 12 שעות
+ * מהמועד; כשל שני עובר ב-failPost. שמירה שנכשלה — נשאר publishing ויסומן
+ * כתקוע (לא מתפרסם שוב לבד).
+ */
+async function scheduleRetry(orgId, post, err) {
+  const raw = err?.message ?? String(err);
+  const { message } = friendlyPublishError(err, { platform: post.platform });
+  let at = null;
+  try {
+    at = await recordOutcome(orgId, async () => {
+      const row = await one(
+        `update posts set status = 'approved', publish_error = $2,
+                          publish_retry_at = now() + make_interval(mins => $3::int)
+          where id = $1 and status = 'publishing' returning publish_retry_at`,
+        [post.id, message, RETRY_AFTER_MINUTES]);
+      if (!row) return null;
+      await logPublish(post, false, { error: raw });
+      const hhmm = new Intl.DateTimeFormat('he-IL', { timeZone: LOCAL_TZ, hour: '2-digit', minute: '2-digit' })
+        .format(new Date(row.publish_retry_at));
+      await logActivity('publish_retry', post,
+        `ניסיון חוזר ב-${hhmm} — "${post.title}" ב${post.channel_name}: ${message}`);
+      return row.publish_retry_at;
+    });
+  } catch (e) {
+    console.error(`תזמון ניסיון חוזר לפוסט #${post.id} נכשל — נשאר publishing עד שיזוהה כתקוע:`, e.message);
+  }
+  if (at) console.log(`פוסט #${post.id} ("${post.title}") נדחה זמנית — ניסיון חוזר ב-${new Date(at).toISOString()}`);
+  return { ok: false, error: message, retry_at: at };
 }
 
 /** הקריאה לפלטפורמה — בלי טרנזקציה פתוחה (יכולה לקחת דקות בוידאו לאינסטגרם) */
@@ -555,7 +634,7 @@ function sendToPlatform({ post, token, text, media, options, cover }) {
 async function markPublished(post, result) {
   const updated = await one(
     `update posts set status = 'published', published_at = now(),
-            external_id = $2, external_url = $3, publish_error = null
+            external_id = $2, external_url = $3, publish_error = null, publish_retry_at = null
       where id = $1 returning *`,
     [post.id, result.id, result.url]
   );
@@ -613,6 +692,11 @@ export async function publishOne(postId,
   try {
     result = await sendToPlatform(prep);
   } catch (e) {
+    // דחייה מפורשת וזמנית (סעיף 32) — ניסיון חוזר אחד, רק מהטיק. כבר ניסינו
+    // שוב (publish_retry_at על הפוסט) — כשל רגיל
+    if (dueOnly && !post.publish_retry_at && retryableRejection(e)) {
+      return scheduleRetry(orgId, post, e);
+    }
     // השגיאה עצמה (עם code/status) — friendlyPublishError מתרגם לפיה
     return failClaimed(orgId, postId, post, e);
   }
@@ -715,6 +799,9 @@ export async function publishTickForOrg(orgId = currentOrg()) {
     if (await autopublishOn()) await newsletterNotTransferred();
   });
 
+  // יממה לפני ניוזלטר שלא הועבר — משימת "להעביר ל-HUB" (סעיף 32)
+  await newsletterTransferPrep(orgId);
+
   // פוסטים שאושרו והגיע זמנם. איחור גדול מדי לא מתפרסם — נכשל עם הסבר.
   // קמפיין מושהה / נקודה מושבתת — לא יוצא, גם פוסט שאושר לפני (הלוח מסתיר אותו).
   // ניוזלטר לא כאן: הוא לא נשלח מהטיק (newsletterNotTransferred / transferNewsletter).
@@ -728,6 +815,7 @@ export async function publishTickForOrg(orgId = currentOrg()) {
          join channels c on c.id = p.channel_id and c.active
          left join channel_connections cc on cc.channel_id = c.id
         where p.status = 'approved' and p.scheduled_at <= now()
+          and (p.publish_retry_at is null or p.publish_retry_at <= now())
           and cc.auto_enabled = true and c.platform <> 'newsletter'
           and not exists (select 1 from content_items ci
                             join campaigns ca on ca.id = ci.campaign_id
@@ -1020,6 +1108,62 @@ async function writePublishTask(p, action) {
 
 /* ========================= ניוזלטר: העברה ל-HUB ========================= */
 
+/** כמה שעות לפני ניוזלטר שלא הועבר נפתחת משימת "להעביר ל-HUB" (סעיף 32) */
+export const HUB_TRANSFER_AHEAD_HOURS = 24;
+
+export const HUB_TRANSFER_SUB_READY =
+  'לוחצים "העבר ל-HUB" בחלון הפוסט, ומאשרים את השליחה ב-HUB — בלי זה הניוזלטר לא יוצא';
+export const HUB_TRANSFER_SUB_NOT_READY =
+  'הניוזלטר עוד לא מוכן — משלימים אותו בתוכן, ואז לוחצים "העבר ל-HUB" ומאשרים ב-HUB';
+
+/**
+ * "להעביר ל-HUB" (סעיף 32): כשהמתג דלוק, ניוזלטר נשלח רק אחרי שמישהו לוחץ
+ * "העבר ל-HUB" ומאשר שם — ומי ששכח מגלה את זה רק במועד (newsletterNotTransferred).
+ * HUB_TRANSFER_AHEAD_HOURS לפני המועד נפתחת משימה (kind 'approve' +
+ * meta.hub_transfer, למי שמורשה לאשר), אחת לכל פוסט לכל מועד
+ * (tasks_hub_transfer_uidx — גם אחרי שנסגרה ביד). נסגרת לבד כשהניוזלטר
+ * הועבר / פורסם / נכשל / נמחק / הוזז, או כשהמועד עבר (task-lifecycle.js),
+ * ומיד בהעברה (transferNewsletter). כמו manualPublishPrep: מתג כבוי —
+ * הניוזלטר מקבל "לפרסם היום", ומשימות "להעביר ל-HUB" פתוחות נסגרות.
+ */
+export async function newsletterTransferPrep(orgId) {
+  const on = await tickStep(orgId, 'בדיקת המתג (להעביר ל-HUB) נכשלה:', () => autopublishOn());
+  if (on === undefined) return;
+  if (!on) {
+    await tickStep(orgId, 'סגירת משימות "להעביר ל-HUB" נכשלה:', () => query(
+      `update tasks set done = true, done_at = now(),
+              meta = coalesce(meta, '{}'::jsonb) || '{"auto_closed": "expired"}'::jsonb
+        where kind = 'approve' and done = false and (meta->>'hub_transfer') = 'true'`));
+    return;
+  }
+  const due = (await tickStep(orgId, 'הכנת משימות "להעביר ל-HUB" נכשלה:', () => rows(
+    `select p.id, p.title, p.endpoint_id, p.assignee_id, p.scheduled_at,
+            coalesce(v.status = 'ready', false) as ready
+       from posts p
+       join channels c on c.id = p.channel_id and c.active and c.platform = 'newsletter'
+       left join content_variants v on v.content_id = p.content_id and v.channel_id = p.channel_id
+      where p.status in ('scheduled', 'approved') and p.hub_transferred_at is null
+        and p.content_id is not null
+        and p.scheduled_at > now()
+        and p.scheduled_at <= now() + make_interval(hours => $1::int)
+        and not exists (select 1 from content_items ci
+                          join campaigns ca on ca.id = ci.campaign_id
+                         where ci.id = p.content_id and ca.paused_at is not null)
+        and ${endpointLiveSql('p')}`,
+    [HUB_TRANSFER_AHEAD_HOURS]))) ?? [];
+  for (const p of due) {
+    await tickStep(orgId, `משימת "להעביר ל-HUB" לפוסט #${p.id} נכשלה:`, () => query(
+      `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
+       values ($1, $2, 'approve', $3, $4, false,
+               ($5::timestamptz at time zone 'Asia/Jerusalem')::date,
+               jsonb_build_object('hub_transfer', true, 'for_at', $5::timestamptz), $6)
+       on conflict (post_id, (meta->>'for_at')) where kind = 'approve' and (meta->>'hub_transfer') = 'true'
+       do nothing`,
+      [`להעביר ל-HUB: ${p.title}`, p.ready ? HUB_TRANSFER_SUB_READY : HUB_TRANSFER_SUB_NOT_READY,
+       p.id, p.endpoint_id, p.scheduled_at, p.assignee_id ?? null]));
+  }
+}
+
 /** כמה אחורה מחפשים ניוזלטר שהמועד שלו הגיע ולא הועבר — לא מציפים פוסטים ישנים */
 export const NOT_TRANSFERRED_WINDOW_HOURS = 24;
 
@@ -1140,9 +1284,11 @@ export async function transferNewsletter(postId, user, { now = new Date(), fetch
      reuse ? null : r.idempotent ? DIGEST_UNVERIFIED : newsletterDigest(payload), user?.id ?? null]
   );
   // משימת "לא הועבר" / כשל קודם — נסגרת: הניוזלטר בידי ה-HUB עכשיו
+  // וגם "להעביר ל-HUB" שנפתחה יממה לפני (סעיף 32)
   await query(
     `update tasks set done = true, done_at = now()
-      where post_id = $1 and kind = 'failed' and done = false`, [post.id]);
+      where post_id = $1 and done = false
+        and (kind = 'failed' or (kind = 'approve' and (meta->>'hub_transfer') = 'true'))`, [post.id]);
   await logPublish(post, true, { externalId: r.campaign_id });
   await logActivity('publish', post,
     `ניוזלטר "${post.title}" ${reuse ? 'חובר מחדש לקמפיין הקיים' : 'הועבר'} ב-HUB` +

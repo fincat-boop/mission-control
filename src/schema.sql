@@ -611,6 +611,23 @@ alter table posts add column if not exists approved_digest text;
 create unique index if not exists tasks_reapprove_uidx
   on tasks (post_id) where kind = 'approve' and done = false and (meta->>'reapprove') = 'true';
 
+-- publish_retry_at (סעיף 32): מטא דחתה את הפוסט במפורש ובאופן זמני (הגבלת
+-- קצב, תקלה זמנית — errors.js retryableRejection): הפוסט חוזר ל"מאושר"
+-- והטיק מנסה שוב פעם אחת מהרגע הזה. ערך קיים על פוסט שנתפס = זה כבר
+-- הניסיון החוזר, וכשל נוסף עובר במסלול הכשל הרגיל. מתאפס באישור ובפרסום.
+alter table posts add column if not exists publish_retry_at timestamptz;
+
+-- כשל תצורה (סעיף 32 — חסרה הגדרה בשרת, חיבור לערוץ שפג): משימה אחת פתוחה
+-- לכל סוג תקלה בארגון, במקום משימה לכל פוסט (runner.js recordConfigNotice).
+create unique index if not exists tasks_config_failed_uidx
+  on tasks (org_id, (meta->>'config_kind'))
+  where kind = 'failed' and done = false and post_id is null and (meta->>'config_kind') is not null;
+
+-- "להעביר ל-HUB" (סעיף 32): יממה לפני ניוזלטר שלא הועבר. אחת לכל פוסט לכל
+-- מועד (meta.for_at), גם אחרי שנסגרה — שלא תיפתח שוב בכל טיק.
+create unique index if not exists tasks_hub_transfer_uidx
+  on tasks (post_id, (meta->>'for_at')) where kind = 'approve' and (meta->>'hub_transfer') = 'true';
+
 -- ========================= ויתורים של המנוע =========================
 -- תוכן שהמשתמש הוריד מערוץ בשבוע מסוים (מחיקת פוסט, "בטל" על מילוי
 -- אוטומטי). המילוי האוטומטי רץ אחרי כל שינוי, ובלי הרשומה הזו הוא היה
