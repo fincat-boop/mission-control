@@ -1039,7 +1039,9 @@ export async function campaignsWithHealth() {
       status: statusOf({ c, today, grid, myChannels, ahead, noRoom, unplaced: room.unplaced }),
       // למה אין לקמפיין משבצות (null = יש) — המסך מסביר את זה במקום "אין תאריכים"
       no_room_reason: noRoom,
-      pace: paceOf(c, today, paceDone(myPosts, channelById, { today }), grid),
+      // הקצב בחודש האחרון בלבד — היעד ו"יצאו" באותו חלון (paceWindow, R1)
+      pace: paceOf(c, today, paceDone(myPosts, channelById,
+        { today, from: paceWindow(c, today)?.from ?? null }), grid),
       content: shaped,
       grid: grid.angles,
       // זוויות שאין להן מקום ברשת (מעבר לתכנון / כפולות) — מוצגות מתחת לה
@@ -1135,10 +1137,14 @@ function baseStatus({ c, today, grid, myChannels, ahead, noRoom }) {
  *     מיום שעבר, בערוץ פעיל שאינו ניוזלטר. לא ידוע ≠ לא יצא — כמעט הכול
  *     מתפרסם ביד ולא מסומן (החלטה ה1: לא מסמנים אוטומטית, רק לא מפילים את הקצב).
  * channelById — הערוצים לפי מזהה (active, platform). today — 'YYYY-MM-DD' מקומי.
+ * from — רק מה שיום הפרסום שלו (published_at, ובלעדיו המועד) מ-from והלאה:
+ *   החלון של הקצב (paceWindow).
  */
-export function paceDone(myPosts, channelById, { now = new Date(), today = ymd(now) } = {}) {
+export function paceDone(myPosts, channelById,
+                         { now = new Date(), today = ymd(now), from = null } = {}) {
   const cutoff = now.getTime() - 30 * 60000;
   return myPosts.filter((p) => {
+    if (from && ymd(new Date(p.published_at ?? p.scheduled_at)) < from) return false;
     if (['published', 'publishing'].includes(p.status)) return true;
     if (!['scheduled', 'approved'].includes(p.status) || p.published_at) return false;
     const ch = channelById.get(p.channel_id);
@@ -1152,23 +1158,44 @@ export function paceDone(myPosts, channelById, { now = new Date(), today = ymd(n
 /** מתחת לזה הפיגור הוא רעש (פוסט אחד שזז יום), לא בעיה — סעיף 29 */
 export const PACE_MIN_BEHIND = 2;
 export const PACE_MIN_SHARE = 0.2;
+/** הקצב נמדד על החודש האחרון בלבד (R1) */
+export const PACE_WINDOW_DAYS = 28;
 
 /**
- * האם הקמפיין עומד בקצב, ביחס לזמן שכבר עבר ממנו. היעד = הנדרש ברשת
- * (grid.total_cells), כלומר הקיבולת שהמנוע באמת יכול לשבץ (channelCapacity),
- * או מה שנכתב בקמפיין מוכן — לא תדירות שמוגדרת על הקמפיין.
- * done — paceDone (פורסם + מתוכנן עד היום + לא אושר שיצא).
+ * החלון שבו נמדד הקצב: 28 הימים האחרונים עד היום, בתוך הקמפיין. הרשת
+ * משתנה באמצע קמפיין (נתחים לכל ערוץ, שמורה לדחופים, מרווח) — מדידה מתחילת
+ * הקמפיין הייתה מקפיצה את "היו אמורים לצאת" לטווח שכבר אי אפשר להשלים.
+ * null — הקמפיין עוד לא התחיל או בלי תאריכים.
+ * @returns {{from:string, to:string, since_start:boolean}|null}
+ */
+export function paceWindow(c, today) {
+  if (!c.starts_on || !c.ends_on || c.starts_on > today) return null;
+  const back = addDaysYmd(today, -(PACE_WINDOW_DAYS - 1));
+  const from = c.starts_on > back ? c.starts_on : back;
+  const to = c.ends_on < today ? c.ends_on : today;
+  if (from > to) return null;
+  return { from, to, since_start: from === String(c.starts_on).slice(0, 10) };
+}
+
+/**
+ * האם הקמפיין עומד בקצב בחלון האחרון (paceWindow). היעד = הנדרש ברשת
+ * (grid.total_cells) × החלק של החלון מהקמפיין — הקיבולת שהמנוע באמת יכול
+ * לשבץ (channelCapacity), או מה שנכתב בקמפיין מוכן; לא תדירות שמוגדרת על
+ * הקמפיין. done — paceDone באותו חלון (from = window.from).
  * lagging — מתריעים רק מפיגור של PACE_MIN_BEHIND פוסטים ולפחות 20% מהצפוי.
  */
 export function paceOf(c, today, done, grid) {
-  if (!c.starts_on || !c.ends_on || c.starts_on > today || grid.total_cells === 0) return null;
-  const end = c.ends_on < today ? c.ends_on : today;
-  const elapsed = daysBetween(c.starts_on, end);
+  if (grid.total_cells === 0) return null;
+  const w = paceWindow(c, today);
+  if (!w) return null;
+  const days = daysBetween(w.from, w.to);
   const span = daysBetween(c.starts_on, c.ends_on);
-  const expected = Math.floor(grid.total_cells * (elapsed / span));
+  const expected = Math.floor(grid.total_cells * (days / span));
   const behind = Math.max(0, expected - done);
   return {
-    elapsed_days: elapsed,
+    elapsed_days: days,
+    window_from: w.from,
+    since_start: w.since_start,
     expected_by_now: expected,
     done,
     published: done, // שם ישן — אותו מספר
