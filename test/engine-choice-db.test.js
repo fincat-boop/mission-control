@@ -273,3 +273,70 @@ test('סעיף 10 — יותר תוכן ממשבצות: הקמפיין עדיי�
   assert.deepEqual(posts.map((p) => p.content_id).sort((x, y) => x - y), ids.slice(0, 5));
   await wipe();
 });
+
+/* ========================= 11. בחירת תוכן בתוך נקודה ========================= */
+
+test('סעיף 11 — תוכן של קמפיין רץ קודם לתוכן שוטף ותיק (evergreen)', { skip }, async () => {
+  await wipe();
+  const week = weekMeta(inDays(7));
+  const ch = await channel('פייסבוק', 1);
+  const ep = await endpoint('נקודה');
+  // השוטף נוצר קודם (ותיק יותר) — קודם הוא ניצח בשוויון
+  const [old] = await items(ep.id, ch.id, 1, { prefix: 'ותיק', evergreen: true });
+  const c = await campaign(ep.id, ch.id, { starts: inDays(-7), ends: inDays(30) });
+  const [mine] = await items(ep.id, ch.id, 1, { campaignId: c.id, prefix: 'קמפיין' });
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const p = plan.placements.filter((x) => x.channel_id === ch.id);
+  assert.equal(p.length, 1);
+  assert.equal(p[0].content_id, mine, `נבחר ${p[0].title} (הוותיק: ${old})`);
+  await wipe();
+});
+
+test('סעיף 11 — בין שני קמפיינים של הנקודה: המפגר מהנתח שלו קודם, לא הוותיק', { skip }, async () => {
+  await wipe();
+  const week = weekMeta(inDays(7));
+  const start = new Date(`${week.days[0].date}T10:00:00`);
+  const ch = await channel('פייסבוק', 1);
+  const ep = await endpoint('נקודה');
+  const old = await campaign(ep.id, ch.id, { name: 'ותיק', starts: inDays(-30), ends: inDays(30) });
+  const late = await campaign(ep.id, ch.id, { name: 'חדש', starts: inDays(-30), ends: inDays(30) });
+  // לוותיק 3 פוסטים בחלון, לחדש אף אחד. הפריט הפנוי ראשון בתור (מגיע עכשיו)
+  const oi = await items(ep.id, ch.id, 4, { campaignId: old.id, prefix: 'ותיק' });
+  const [li] = await items(ep.id, ch.id, 1, { campaignId: late.id, prefix: 'חדש' });
+  for (let i = 1; i <= 3; i += 1) {
+    await post(ch.id, ep.id, daysAgo(4 * i, start), { contentId: oi[i] });
+  }
+  const parts = await inOrg(async () => {
+    const eps = await db.rows('select * from endpoints');
+    const settings = await db.one('select * from engine_settings limit 1');
+    const debts = await engine.computeDebts(eps, settings, null, week);
+    return { old: debts.campaignLag(old.id, ch.id), late: debts.campaignLag(late.id, ch.id) };
+  });
+  assert.ok(parts.late > 0 && parts.old < 0, JSON.stringify(parts));
+
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const p = plan.placements.filter((x) => x.channel_id === ch.id);
+  assert.equal(p.length, 1);
+  assert.equal(p[0].content_id, li, `נבחר ${p[0].title}`);
+  await wipe();
+});
+
+test('סעיף 11 — מרווח: פוסט מכבד גם את המרווח הגדול של השכן', { skip }, async () => {
+  await wipe();
+  const week = weekMeta(inDays(7));
+  const ch = await channel('פייסבוק', 7);
+  const ep = await endpoint('נקודה');
+  const wide = await campaign(ep.id, ch.id, { name: 'מרווח 7', starts: inDays(-7), ends: inDays(30), gap: 7 });
+  const tight = await campaign(ep.id, ch.id, { name: 'מרווח 1', starts: inDays(-7), ends: inDays(30), gap: 1 });
+  const [w] = await items(ep.id, ch.id, 1, { campaignId: wide.id, prefix: 'רחב' });
+  await items(ep.id, ch.id, 6, { campaignId: tight.id, prefix: 'צפוף' });
+  // הפוסט של "מרווח 7" ביום רביעי של השבוע המתוכנן — כל השבוע בתוך 7 ימים ממנו
+  const wed = new Date(`${week.days[3].date}T10:00:00`);
+  await post(ch.id, ep.id, wed, { status: 'scheduled', contentId: w });
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const p = plan.placements.filter((x) => x.channel_id === ch.id);
+  assert.deepEqual(p.map((x) => `${x.title} ${x.date}`), []);
+  // ו"לא נכנס" בגלל מרווח הוא המצב הרגיל — לא הודעה
+  assert.equal(plan.notes.filter((n) => /מרווח/.test(n)).length, 0);
+  await wipe();
+});

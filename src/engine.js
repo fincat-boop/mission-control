@@ -166,7 +166,10 @@ export async function planWeek(anchorDate, {
   // כל הפוסטים החיים של כל נקודה בכל ערוץ סביב השבוע — לבדיקת המרווח מול
   // השכן הקרוב לשני הכיוונים (ראו contentGap / nearestDays), גם בשיוך תוכן
   // לפוסטים חסרי תוכן וגם בשיבוץ חדש
-  const pairDates = await postDatesPerEndpointChannel(from, to, settings, now);
+  // pairGaps — המרווח של הקמפיין של כל אחד מהם (סעיף 11: פוסט מכבד גם את
+  // המרווח של השכן, לא רק את שלו — gapViolation)
+  const { dates: pairDates, gaps: pairGaps } =
+    await postDatesPerEndpointChannel(from, to, settings, now);
 
   // הימים שבהם כבר יוצא פוסט של כל קבוצת קישור (מקור + עוקבות), בכל ערוץ —
   // פוסט מקושר לא יוצא באותו יום כשהקמפיין מבקש (links_apart)
@@ -187,7 +190,8 @@ export async function planWeek(anchorDate, {
     // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
     // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
     holes: openHoles(existing, channels, endpoints, now, { autoOnly: !withHoles }),
-    content: candidates, usedContent, history, settings, usage, pairDates, groupDays, gapCtx,
+    content: candidates, usedContent, history, settings, usage, pairDates, pairGaps, groupDays,
+    gapCtx,
   }).map((a) => ({
     ...a,
     channel_name: channels.find((ch) => ch.id === a.channel_id)?.name ?? '',
@@ -237,7 +241,8 @@ export async function planWeek(anchorDate, {
 
     const pick = chooseForSlot({
       slot, endpoints, content: candidates, campaigns, debts, usage,
-      usedContent, pairDates, settings, placements, history, sameDay, groupDays, gapCtx, misses,
+      usedContent, pairDates, pairGaps, settings, placements, history, sameDay, groupDays, gapCtx,
+      misses,
     });
     if (!pick) continue;
 
@@ -273,14 +278,16 @@ export async function planWeek(anchorDate, {
     usedContent.add(`${slot.channel_id}:${pick.content.id}`);
     sameDay.add(`${pick.endpoint.id}:${slot.channel_id}:${slot.dateKey}`);
     addPairDate(pairDates, `${pick.endpoint.id}:${slot.channel_id}`, slot.dateKey);
+    addPairGap(pairGaps, `${pick.endpoint.id}:${slot.channel_id}`, slot.dateKey, ownGapDays(pick.content));
     addGroupDay(groupDays, linkRoot(pick.content), pick.content.id, slot.dateKey);
-    debts.markScheduled(pick.endpoint.id);
+    debts.markScheduled(pick.endpoint.id,
+      { channelId: slot.channel_id, campaignId: pick.content.campaign_id });
     campaignUsed.set(slot.channel_id, (campaignUsed.get(slot.channel_id) ?? 0) + 1);
   }
 
   const holes = withHoles
     ? findHoles({ endpoints, content, debts, channels, usage, week, existing, now,
-                  pairDates, sameDay, settings, gapCtx })
+                  pairDates, pairGaps, sameDay, settings, gapCtx })
         .map((h) => ({ ...h, key: planItemKey('hole', h) }))
     : [];
 
@@ -733,7 +740,7 @@ export function openHoles(existing, channels, endpoints, now = new Date(), { aut
  */
 export function chooseHoleFills({
   holes, content, usedContent, history = new Map(), settings = null, usage = null,
-  pairDates = new Map(), groupDays = new Map(), gapCtx = null,
+  pairDates = new Map(), pairGaps = new Map(), groupDays = new Map(), gapCtx = null,
 }) {
   const out = [];
   for (const h of holes) {
@@ -741,17 +748,18 @@ export function chooseHoleFills({
     const at = new Date(h.scheduled_at);
     const dateKey = ymd(at);
     const slot = { channel_id: h.channel_id, dateKey };
-    const neighbours = [...(pairDates.get(`${h.endpoint_id}:${h.channel_id}`) ?? [])];
+    const pair = `${h.endpoint_id}:${h.channel_id}`;
+    const neighbours = [...(pairDates.get(pair) ?? [])];
     const self = neighbours.indexOf(dateKey);
     if (self >= 0) neighbours.splice(self, 1);
-    const nearest = nearestDays(neighbours, dateKey);
     const fits = content.filter((c) =>
       c.endpoint_id === h.endpoint_id &&
       (c.eligible_channel_ids ?? []).includes(h.channel_id) &&
       fitsSlotChannel(c, h.channel_id) &&
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
       !notDueOn(c, dateKey) &&
-      nearest >= contentGap(c, settings, on) &&
+      gapViolation(contentGap(c, settings, on), neighbours, dateKey, pairGaps.get(pair),
+        settings, on) == null &&
       !linkedSameDay(c, groupDays, dateKey) &&
       reusable(c, slot, history, settings)
     );
@@ -765,6 +773,8 @@ export function chooseHoleFills({
     if (!c) continue;
     usedContent.add(`${h.channel_id}:${c.id}`);
     usage?.retag(h.channel_id, dateKey, h.kind, c.kind);
+    // היום של הפוסט נושא עכשיו את המרווח של הקמפיין של התוכן
+    setPairGap(pairGaps, pair, dateKey, ownGapDays(c));
     addGroupDay(groupDays, linkRoot(c), c.id, dateKey);
 
     out.push({
@@ -959,8 +969,10 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   // "בפועל" נספר מכל מה שתופס שטח — גם מה שמתוכנן לשבוע הזה ולפניו, לא רק
   // מה שפורסם — כדי שתכנון שבוע עתידי יראה מה כבר שובץ לפניו. שיבוץ של
   // קמפיין מושהה לא נספר (כמו existing ב-planWeek), אלא אם כבר פורסם.
-  const counts = targetPct.size === 0 ? [] : await rows(
-    `select p.endpoint_id, p.channel_id, count(*)::int as n
+  // לכל נקודה × ערוץ × קמפיין (campaign_id null — תוכן שוטף / בלי תוכן): הנקודה
+  // סוכמת על הקמפיינים, והקמפיין לבד — לבחירה בתוך הנקודה (סעיף 11)
+  const byCampaign = targetPct.size === 0 ? [] : await rows(
+    `select p.endpoint_id, p.channel_id, ci.campaign_id, count(*)::int as n
        from posts p
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
@@ -972,15 +984,45 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
         and ((p.published_at >= $1::date and p.published_at < ($2::date + 1))
           or (p.published_at is null
               and p.scheduled_at >= $1::date and p.scheduled_at < ($2::date + 1)))
-      group by p.endpoint_id, p.channel_id`,
+      group by p.endpoint_id, p.channel_id, ci.campaign_id`,
     [from, to, LIVE_STATUSES]
   );
+  const countMap = new Map();
+  for (const r of byCampaign) {
+    const k = `${r.endpoint_id}:${r.channel_id}`;
+    countMap.set(k, (countMap.get(k) ?? 0) + r.n);
+  }
+  const counts = [...countMap].map(([k, n]) => {
+    const [endpoint_id, channel_id] = k.split(':').map(Number);
+    return { endpoint_id, channel_id, n };
+  });
   // ערוץ → (נקודה → פיגור): בכל ערוץ מול הנקודות שיש להן יעד בו
   const deficits = new Map([...targetPct].map(([ch, t]) =>
     [ch, strategyDeficits(t, counts.filter((c) => c.channel_id === ch))]));
   const deficitOf = (endpointId, channelId) => (channelId == null
     ? Math.max(0, ...[...deficits.values()].map((d) => d.get(endpointId) ?? 0))
     : deficits.get(channelId)?.get(endpointId) ?? 0);
+
+  // הפיגור של כל קמפיין מהנתח שלו בערוץ (סעיף 11): היעד — הנתח הממוצע שלו
+  // בשבוע (shares), מנורמל מול הקמפיינים שבערוץ; בפועל — החלק שלו מהפוסטים של
+  // אותם קמפיינים בחלון, כולל מה שהוצע בריצה הזו (markScheduled). חיובי =
+  // מפגר; שלילי = מקדים. בבחירה בין התוכן של נקודה — המפגר ביותר קודם
+  const campaignCounts = new Map(); // ערוץ → (קמפיין → פוסטים בחלון)
+  for (const r of byCampaign) {
+    if (r.campaign_id == null) continue;
+    if (!campaignCounts.has(r.channel_id)) campaignCounts.set(r.channel_id, new Map());
+    const m = campaignCounts.get(r.channel_id);
+    m.set(r.campaign_id, (m.get(r.campaign_id) ?? 0) + r.n);
+  }
+  const campaignLag = (campaignId, channelId) => {
+    const target = shares.get(Number(channelId));
+    if (!target?.has(Number(campaignId))) return 0;
+    const want = target.get(Number(campaignId)) /
+      [...target.values()].reduce((sum, v) => sum + v, 0);
+    const m = campaignCounts.get(Number(channelId)) ?? new Map();
+    const total = [...target.keys()].reduce((sum, id) => sum + (m.get(id) ?? 0), 0);
+    return want - (total ? (m.get(Number(campaignId)) ?? 0) / total : 0);
+  };
 
   const scheduledBoost = new Map(); // כמה כבר הצענו לה בריצה הזו
 
@@ -1063,8 +1105,19 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
     /** הנתח הממוצע של קמפיין בשבוע המתוכנן בערוץ (0 כשאינו רץ בו) */
     campaignShare: (campaignId, channelId) =>
       shares.get(Number(channelId))?.get(Number(campaignId)) ?? 0,
-    markScheduled(id) {
+    /**
+     * הפיגור של קמפיין מהנתח שלו בערוץ (חיובי = מפגר; 0 כשאינו רץ בערוץ) —
+     * לבחירה בין התוכן של נקודה (chooseForSlot, סעיף 11)
+     */
+    campaignLag,
+    /** שיבוץ בריצה: הנקודה (פיזור), והקמפיין בערוץ (campaignLag) כשנתון */
+    markScheduled(id, { channelId = null, campaignId = null } = {}) {
       scheduledBoost.set(id, (scheduledBoost.get(id) ?? 0) + 1);
+      if (channelId != null && campaignId != null) {
+        if (!campaignCounts.has(Number(channelId))) campaignCounts.set(Number(channelId), new Map());
+        const m = campaignCounts.get(Number(channelId));
+        m.set(Number(campaignId), (m.get(Number(campaignId)) ?? 0) + 1);
+      }
     },
     scheduledCount: (id) => scheduledBoost.get(id) ?? 0,
   };
@@ -1541,6 +1594,79 @@ export function addPairDate(map, key, dateKey) {
   map.set(key, list);
 }
 
+/**
+ * המרווח של הקמפיין של תוכן (min_gap_days), או null — ברירת המחדל (תוכן
+ * שוטף, קמפיין בלי מרווח משלו, פוסט בלי תוכן). מה שנרשם ב-pairGaps.
+ */
+export const ownGapDays = (c) => (c?.campaign_id ? c.campaign_min_gap_days ?? null : null);
+
+/**
+ * רושם את המרווח של פוסט ביום של נקודה×ערוץ (pairGaps: key → (יום → מרווחים)).
+ * gap — min_gap_days של הקמפיין שלו, או null (ברירת המחדל).
+ */
+export function addPairGap(map, key, dateKey, gap) {
+  if (!map) return;
+  if (!map.has(key)) map.set(key, new Map());
+  const days = map.get(key);
+  days.set(dateKey, [...(days.get(dateKey) ?? []), gap]);
+}
+
+/** כמו addPairGap, אבל מחליף את מה שנרשם ליום (פוסט חסר תוכן שקיבל תוכן) */
+function setPairGap(map, key, dateKey, gap) {
+  if (!map) return;
+  if (!map.has(key)) map.set(key, new Map());
+  map.get(key).set(dateKey, [gap]);
+}
+
+/**
+ * האם פוסט ביום dateKey מפר מרווח מול השכנים של אותה נקודה באותו ערוץ
+ * (dates — התאריכים שלהם). לכל שכן נדרש הגדול מבין המרווח של הפוסט עצמו
+ * (own — contentGap) לבין המרווח של השכן (gapsAt: יום → min_gap_days של
+ * הקמפיינים שלו; null = ברירת המחדל), שניהם דרך effectiveGap (סעיף 11) —
+ * קודם רק המרווח של הפוסט עצמו, וקמפיין עם מרווח קצר נצמד לשכן שביקש מרווח
+ * ארוך. שכן בלי רישום — רק own (כמו קודם). מחזירה את המרווח שהופר, או null.
+ */
+export function gapViolation(own, dates, dateKey, gapsAt = null, settings = null, on = {}) {
+  for (const d of dates ?? []) {
+    const theirs = (gapsAt?.get(d) ?? []).reduce((m, g) =>
+      Math.max(m, effectiveGap(g == null ? null : { min_gap_days: g }, settings, on)), 0);
+    const need = Math.max(own, theirs);
+    if (nearestDays([d], dateKey) < need) return need;
+  }
+  return null;
+}
+
+/**
+ * הסדר בין התוכן המתאים של נקודה למשבצת (סעיף 11):
+ *   1. תוכן של קמפיין שרץ בתאריך (עבר את notDueOn) — לפני תוכן שוטף/ותיק;
+ *      בין קמפיינים — המפגר ביותר מהנתח שלו בערוץ קודם (debts.campaignLag),
+ *      ולא תמיד הוותיק
+ *   2. בתוך כל קבוצה — מוכן לפני טיוטה, ואז לפי סוג: כשקמפיין רץ לנקודה
+ *      מכירתי → משולב → ערך, אחרת ערך קודם
+ *   3. פיגור שווה — הקמפיין עם המזהה הקטן; בתוך קמפיין — לפי התור
+ *      (sort_order); תוכן שוטף — הסדר שבו נטען (הוותיק)
+ * מפתח מילוני אחד, כדי שהמיון יהיה עקבי.
+ */
+export function contentOrder({ channelId, inCampaign, debts = null }) {
+  const rank = inCampaign
+    ? { promo: 0, hybrid: 1, value: 2 }
+    : { value: 0, hybrid: 1, promo: 2 };
+  const isReady = (c) => (c.ready_channel_ids ?? []).includes(channelId);
+  const lag = new Map();
+  const lagOf = (c) => {
+    if (!lag.has(c.campaign_id)) lag.set(c.campaign_id, debts?.campaignLag?.(c.campaign_id, channelId) ?? 0);
+    return lag.get(c.campaign_id);
+  };
+  return (a, b) => {
+    const ca = a.campaign_id != null;
+    const cb = b.campaign_id != null;
+    if (ca !== cb) return cb - ca;
+    return (ca ? lagOf(b) - lagOf(a) : 0) ||
+      (isReady(b) - isReady(a)) || (rank[a.kind] - rank[b.kind]) ||
+      (ca ? (a.campaign_id - b.campaign_id) || ((a.sort_order ?? 0) - (b.sort_order ?? 0)) : 0);
+  };
+}
+
 /* ========================= פוסטים מקושרים ========================= */
 
 /**
@@ -1615,18 +1741,17 @@ export async function linkGroupDays(from, to) {
 
 export function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
-          usedContent, pairDates = new Map(), settings, history, sameDay,
+          usedContent, pairDates = new Map(), pairGaps = new Map(), settings, history, sameDay,
           groupDays = new Map(), gapCtx = null, misses = null } = ctx;
   const on = gapOn(gapCtx, slot.channel_id);
   // למה תוכן שמתאים למשבצת לא נכנס אליה — המרווח או מגבלה של הקיבולת (סעיף 6;
   // notPlacedNotes אחרי הריצה, רק לתוכן שבסוף לא נכנס לערוץ בכלל)
-  const miss = (c, why) => {
+  const miss = (c, why, gap = null) => {
     if (!misses) return;
     const k = `${slot.channel_id}:${c.id}`;
     if (!misses.has(k)) misses.set(k, new Map());
     if (!misses.get(k).has(why)) {
-      misses.get(k).set(why, { ...usage.detail?.(slot.channel_id, why),
-                               gap: why === 'gap' ? contentGap(c, settings, on) : null });
+      misses.get(k).set(why, { ...usage.detail?.(slot.channel_id, why), gap });
     }
   };
 
@@ -1635,9 +1760,10 @@ export function chooseForSlot(ctx) {
   for (const e of endpoints) {
     // אותה נקודה, אותה מדיה, אותו יום — לא משנה מאיזה סוג
     if (sameDay.has(`${e.id}:${slot.channel_id}:${slot.dateKey}`)) continue;
-    // המרחק מהפוסט הקרוב של הנקודה בערוץ הזה. המרווח עצמו תלוי בתוכן — כל
-    // קמפיין קובע את שלו — ולכן נבדק לכל מועמד בנפרד, למטה.
-    const nearest = nearestDays(pairDates.get(`${e.id}:${slot.channel_id}`), slot.dateKey);
+    // הפוסטים של הנקודה בערוץ הזה. המרווח עצמו תלוי בתוכן — כל קמפיין קובע
+    // את שלו — ובשכן (סעיף 11: הגדול מבין השניים), ולכן נבדק לכל מועמד בנפרד
+    const pair = `${e.id}:${slot.channel_id}`;
+    const neighbours = pairDates.get(pair);
 
     // טיוטה נחשבת מועמדת כמו תוכן מוכן — השיבוץ הולך לפי האסטרטגיה,
     // לא לפי אם כבר נכתב טקסט סופי. bool כדי שאפשר יהיה להעדיף מוכן
@@ -1650,7 +1776,9 @@ export function chooseForSlot(ctx) {
           linkedSameDay(c, groupDays, slot.dateKey) ||
           usedContent.has(`${slot.channel_id}:${c.id}`) ||
           !reusable(c, slot, history, settings)) return false;
-      if (nearest < contentGap(c, settings, on)) { miss(c, 'gap'); return false; }
+      const gapNeed = gapViolation(contentGap(c, settings, on), neighbours, slot.dateKey,
+        pairGaps.get(pair), settings, on);
+      if (gapNeed != null) { miss(c, 'gap', gapNeed); return false; }
       const why = usage.reason
         ? usage.reason(slot.channel_id, slot.dateKey, c.kind, c.id)
         : (usage.allows(slot.channel_id, slot.dateKey, c.kind, c.id) ? null : 'full');
@@ -1665,19 +1793,14 @@ export function chooseForSlot(ctx) {
       (!c.starts_on || c.starts_on <= slot.dateKey) &&
       (!c.ends_on || c.ends_on >= slot.dateKey)
     );
-    const rank = inCampaign
-      ? { promo: 0, hybrid: 1, value: 2 }
-      : { value: 0, hybrid: 1, promo: 2 };
-    const isReady = (c) => (c.ready_channel_ids ?? []).includes(slot.channel_id);
-    // מוכן קודם, טיוטה רק אם אין ברירה — בתוך כל קבוצה, לפי סוג התוכן
-    ready.sort((a, b) => (isReady(b) - isReady(a)) || (rank[a.kind] - rank[b.kind]));
+    ready.sort(contentOrder({ channelId: slot.channel_id, inCampaign, debts }));
 
     candidates.push({
       endpoint: e,
       content: ready[0],
       score: debts.score(e.id, slot.channel_id),
       inCampaign,
-      draft: !isReady(ready[0]),
+      draft: !(ready[0].ready_channel_ids ?? []).includes(slot.channel_id),
     });
   }
 
@@ -1724,8 +1847,8 @@ const HOLE_HOUR = 12;
  * אחרי היצירה הפוסט נכנס ל-sameDay ול-pairDates, כמו שיבוץ.
  */
 export function findHoles({ endpoints, content, debts, channels, usage, week, existing,
-                            now = new Date(), pairDates = new Map(), sameDay = new Set(),
-                            settings = null, gapCtx = null }) {
+                            now = new Date(), pairDates = new Map(), pairGaps = new Map(),
+                            sameDay = new Set(), settings = null, gapCtx = null }) {
   const holes = [];
   // המרווח הכללי של הערוץ — אין תוכן, ולכן אין קמפיין (effectiveGap, סעיף 5)
   const gapIn = (ch) => effectiveGap(null, settings, gapOn(gapCtx, ch.id));
@@ -1745,7 +1868,8 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
       at(dateKey, HOLE_HOUR) > now &&
       usage.allows(ch.id, dateKey, 'value') &&
       !sameDay.has(`${e.id}:${ch.id}:${dateKey}`) &&
-      nearestDays(pairDates.get(`${e.id}:${ch.id}`), dateKey) >= gapIn(ch);
+      gapViolation(gapIn(ch), pairDates.get(`${e.id}:${ch.id}`), dateKey,
+        pairGaps.get(`${e.id}:${ch.id}`), settings, gapOn(gapCtx, ch.id)) == null;
     let target = null;
     let day = null;
     for (const ch of channels.filter((x) => usage.remaining(x.id) > 0)
@@ -1764,6 +1888,7 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
     usage.take(target.id, day.date, 'value', hour);
     sameDay.add(`${e.id}:${target.id}:${day.date}`);
     addPairDate(pairDates, `${e.id}:${target.id}`, day.date);
+    addPairGap(pairGaps, `${e.id}:${target.id}`, day.date, null);
 
     holes.push({
       channel_id: target.id,
@@ -1903,27 +2028,34 @@ async function priorKinds(weekStart) {
  * השכן הקרוב לשני הכיוונים (nearestDays), ולכן צריך את כולם ולא רק את
  * האחרון. הטווח: השבוע ± המרווח הגדול ביותר שאפשר (30 — התקרה של מרווח
  * קמפיין — או הכללי אם גדול יותר); פוסט רחוק מזה לא משנה שום החלטה.
- * אותם מצבים כמו בלוח (LIVE ב-gap.js).
+ * אותם מצבים כמו בלוח (LIVE ב-gap.js). gaps — המרווח של הקמפיין של כל
+ * פוסט (addPairGap), לבדיקה מול השכן (gapViolation, סעיף 11).
+ * @returns {Promise<{dates: Map<string, string[]>, gaps: Map<string, Map<string, (number|null)[]>>}>}
  */
 async function postDatesPerEndpointChannel(from, to, settings, now = new Date()) {
   const horizon = Math.max(30, effectiveGap(null, settings));
   // נכשל שהמועד שלו עבר לא חוסם מרווח (takesRoom)
   const r = await rows(
-    `select endpoint_id, channel_id, scheduled_at
+    `select p.endpoint_id, p.channel_id, p.scheduled_at, ca.min_gap_days as campaign_min_gap_days
        from posts p
-      where endpoint_id is not null
-        and status in ('scheduled','approved','publishing','failed','published','pending_approval')
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.endpoint_id is not null
+        and p.status in ('scheduled','approved','publishing','failed','published','pending_approval')
         and ${takesRoomSql('p', '$4::timestamptz')}
-        and scheduled_at >= $1::timestamptz - make_interval(days => $3)
-        and scheduled_at <= $2::timestamptz + make_interval(days => $3)
-      order by scheduled_at`,
+        and p.scheduled_at >= $1::timestamptz - make_interval(days => $3)
+        and p.scheduled_at <= $2::timestamptz + make_interval(days => $3)
+      order by p.scheduled_at`,
     [from, to, horizon, now]
   );
-  const map = new Map();
+  const dates = new Map();
+  const gaps = new Map();
   for (const x of r) {
     const key = `${x.endpoint_id}:${x.channel_id}`;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(ymd(new Date(x.scheduled_at)));
+    const day = ymd(new Date(x.scheduled_at));
+    if (!dates.has(key)) dates.set(key, []);
+    dates.get(key).push(day);
+    addPairGap(gaps, key, day, x.campaign_min_gap_days ?? null);
   }
-  return map;
+  return { dates, gaps };
 }

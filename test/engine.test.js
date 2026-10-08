@@ -687,8 +687,9 @@ test('מרווח לפי מועמד: שני קמפיינים של אותה נקו
   assert.equal(pickOn('2026-11-08', [loose], dates), null);
   // יום אחרי הפוסט — גם מרווח 2 לא מספיק
   assert.equal(pickOn('2026-11-06', [tight], dates), null);
-  // שבוע אחרי — שניהם מותרים, והראשון בסדר זוכה (שניהם מוכנים, אותו סוג)
-  assert.equal(pickOn('2026-11-12', [loose, tight], dates), 22);
+  // שבוע אחרי — שניהם מותרים. שניהם מוכנים, אותו סוג ובלי מידע על פיגור
+  // מהנתח: הקמפיין עם המזהה הקטן (סעיף 11 — קודם: הראשון ברשימה)
+  assert.equal(pickOn('2026-11-12', [loose, tight], dates), 21);
 });
 
 test('מרווח 1 בקמפיין: כל יום מותר, אבל לא אותו יום', () => {
@@ -926,4 +927,36 @@ test('pacedDate / notDueOn — קמפיין לפי קצב מפוזר על התק
   // בלי סוף, או תוכן שוטף — אין פיזור
   assert.equal(pacedDate({ ...it(2), campaign_ends_on: null }), null);
   assert.equal(notDueOn({ campaign_id: null }, '2020-01-01'), false);
+});
+
+/* ---------- סעיף 11: סדר התוכן בתוך נקודה, ומרווח מול השכן ---------- */
+
+import { contentOrder, gapViolation } from '../src/engine.js';
+
+test('contentOrder — קמפיין רץ לפני שוטף ותיק; המפגר מהנתח קודם; מוכן לפני טיוטה בכל קבוצה', () => {
+  const r = (x) => ({ ready_channel_ids: [1], eligible_channel_ids: [1], kind: 'value', ...x });
+  const evergreen = r({ id: 1, campaign_id: null, evergreen: true, kind: 'promo' });
+  const oldCamp = r({ id: 2, campaign_id: 5, sort_order: 1 });
+  const newCamp = r({ id: 3, campaign_id: 9, sort_order: 1 });
+  const draft = r({ id: 4, campaign_id: 9, sort_order: 0, ready_channel_ids: [] });
+  const lag = { campaignLag: (id) => (id === 9 ? 0.3 : -0.1) };
+  const order = (list, debts) =>
+    [...list].sort(contentOrder({ channelId: 1, inCampaign: true, debts })).map((c) => c.id);
+  assert.deepEqual(order([evergreen, oldCamp, newCamp, draft], lag), [3, 4, 2, 1]);
+  // בלי פיגור ידוע — הקמפיין עם המזהה הקטן, ועדיין לפני השוטף
+  assert.deepEqual(order([evergreen, newCamp, oldCamp]), [2, 3, 1]);
+});
+
+test('gapViolation — הגדול מבין המרווח של הפוסט לבין המרווח של השכן', () => {
+  const gaps = new Map([['2026-11-05', [7]], ['2026-11-20', [null]]]);
+  const dates = ['2026-11-05', '2026-11-20'];
+  const s = { min_gap_days: 3 };
+  // מרווח 1 משלו, אבל השכן ב-5.11 ביקש 7
+  assert.equal(gapViolation(1, dates, '2026-11-08', gaps, s), 7);
+  assert.equal(gapViolation(1, dates, '2026-11-12', gaps, s), null);
+  // השכן ב-20.11 שוטף — ברירת המחדל (3)
+  assert.equal(gapViolation(1, dates, '2026-11-18', gaps, s), 3);
+  // בלי רישום של השכן — רק המרווח של הפוסט, כמו קודם
+  assert.equal(gapViolation(2, ['2026-11-05'], '2026-11-07', null, s), null);
+  assert.equal(gapViolation(2, ['2026-11-05'], '2026-11-06', null, s), 2);
 });
