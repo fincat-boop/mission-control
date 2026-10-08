@@ -18,7 +18,23 @@ const skip = RUN ? false : 'מסד בדיקה מקומי לא הוגדר (LINKS_
 let db, server, base, org, otherOrg, owner, member, ids;
 let currentUser = null;
 
-const settle = () => new Promise((r) => setTimeout(r, 150));
+/**
+ * ה-commit של tenantScope, יומן הפעולות ויומן הבקשות רצים אחרי שהתשובה
+ * כבר נשלחה. המתנה קבועה (150ms) לא הספיקה תחת עומס — הבדיקה הבאה ראתה
+ * מצב ישן (למשל מפתח שעוד לא בוטל). מחכים עד שאין במסד הזה אף חיבור אחר
+ * באמצע עבודה או טרנזקציה פתוחה.
+ */
+async function settle() {
+  for (let i = 0; i < 100; i++) {
+    const { rows: [r] } = await db.pool.query(
+      `select count(*)::int as n from pg_stat_activity
+        where datname = current_database() and pid <> pg_backend_pid()
+          and (state = 'active' or state like 'idle in transaction%')`);
+    if (r.n === 0) return;
+    await new Promise((res) => setTimeout(res, 30));
+  }
+  throw new Error('המסד לא נרגע תוך 3 שניות');
+}
 
 async function http(method, path, { body, key, headers = {} } = {}) {
   const res = await fetch(`${base}${path}`, {
@@ -31,7 +47,8 @@ async function http(method, path, { body, key, headers = {} } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await res.json().catch(() => null);
-  await settle();   // ה-commit של tenantScope והרישום ביומנים רצים אחרי התשובה
+  await new Promise((r) => setTimeout(r, 20));   // שה-'finish' יתחיל את ה-commit וההרשמה ליומנים
+  await settle();
   return { status: res.status, json };
 }
 
