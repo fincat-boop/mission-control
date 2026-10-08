@@ -5,10 +5,11 @@ import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 import {
-  averageShares, channelCapacity, effectiveGap, endToFit, gapToFit, normalizeShares, shareOf,
-  siblingsOf,
+  averageSharesByChannel, blendByChannel, channelCapacity, channelSharesOf, effectiveGap, endToFit,
+  gapToFit, normalizeSharesByChannel, shareOf, siblingsOf,
 } from './capacity.js';
 import { loadGapDays } from './gap.js';
+import { CAMPAIGNS_WEIGHTED_SQL, CHANNEL_IDS_SQL } from './capacity-db.js';
 
 // הטעינה של ברירת המחדל יושבת ב-gap.js (מקום אחד); כאן רק מייצאים הלאה
 // לקוראים הקיימים (routes/content.js)
@@ -41,23 +42,9 @@ const daysBetween = (a, b) => {
     (Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / DAY)) + 1;
 };
 
-/**
- * הערוצים של כל קמפיין כעמודה בשורה — siblingsOf (capacity.js) סופר לפיה
- * קמפיינים של אותה נקודה שחולקים ערוץ.
- */
-const CHANNEL_IDS_SQL = `(select coalesce(array_agg(cc.channel_id order by cc.channel_id), '{}')
-     from campaign_channels cc where cc.campaign_id = c.id) as channel_ids`;
-
-/**
- * הקמפיינים עם החשיבות של נקודת הקצה שלהם והערוצים שלהם — הרשימה ש-shareOf
- * מחלק ביניהם ו-siblingsOf סופר בה. כל מי שמחשב נתח או צורך
- * (channelNeeds) טוען דרכה. endpoint_active — קמפיין של נקודה מושבתת לא
- * מתחרה על שטח, כמו קמפיין מושהה (normalizeShares, סעיף 16).
- */
-export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance,
-       e.active as endpoint_active,
-       ${CHANNEL_IDS_SQL}
-  from campaigns c join endpoints e on e.id = c.endpoint_id`;
+// השאילתות עברו ל-capacity-db.js (המנוע טוען אותן בלי לייבא את הקובץ הזה);
+// כאן מייצאים הלאה לקוראים הקיימים
+export { CAMPAIGNS_WEIGHTED_SQL };
 
 /**
  * המרווח בין פוסטים של הקמפיין: מספר שלם 1–30, או null/ריק = ברירת המחדל
@@ -80,7 +67,7 @@ export function gapDaysError(b) {
 /**
  * הקיבולת של הקמפיין בכל אחת מהמדיות שלו, עם הפירוט: כמה הקצב רוצה
  * (wanted), כמה נכנס (capacity), ומה מגביל (limitedBy). הנתח נמדד על חלון
- * הקמפיין מול הקמפיינים החופפים (shareOf).
+ * הקמפיין בכל ערוץ מול הקמפיינים החופפים שיושבים באותו ערוץ (channelSharesOf, סעיף 4).
  *
  * המרווח: של הקמפיין (min_gap_days), ובלעדיו הכללי — effectiveGap, אותו
  * מרווח שהמנוע אוכף על התוכן שלו. המרווח הוא לנקודה × ערוץ, ולכן קמפיינים
@@ -93,9 +80,11 @@ export function gapDaysError(b) {
 export function channelCapacities(campaign, channels, concurrent = [], { gapDays = 7 } = {}) {
   const out = new Map();
   if (!campaign.starts_on || !campaign.ends_on) return out;
-  const share = shareOf(campaign, concurrent);
+  // הנתח בכל ערוץ — רק מול הקמפיינים שיושבים באותו ערוץ (סעיף 4)
+  const shares = channelSharesOf(campaign, concurrent, channels.map((ch) => ch.id));
   const gap = effectiveGap(campaign, { min_gap_days: gapDays });
   for (const ch of channels) {
+    const share = shares.get(Number(ch.id)) ?? 0;
     const sib = siblingsOf(campaign, concurrent, ch.id);
     out.set(ch.id, {
       ...channelCapacity({ from: campaign.starts_on, to: campaign.ends_on, channel: ch,
@@ -162,8 +151,9 @@ export function capacityPreview(draft, channels, concurrent = [],
         const capacityAt = (to) => {
           const d = { ...draft, ends_on: to };
           const sib = siblingsOf(d, concurrent, ch.id);
+          const share = channelSharesOf(d, concurrent, channels.map((x) => x.id)).get(Number(ch.id));
           return channelCapacity({ from: draft.starts_on, to, channel: ch,
-                                   share: shareOf(d, concurrent), gapDays: gap,
+                                   share: share ?? 0, gapDays: gap,
                                    siblings: sib.count, siblingRank: sib.rank }).capacity;
         };
         return {
@@ -830,7 +820,8 @@ export async function campaignsWithHealth() {
 
     // מה שהמערכת גוזרת בעצמה. נשלח תמיד — גם כשיש ערך ידני — כדי
     // שהממשק יוכל להראות "אוטומטי = כך וכך" ולא לבקש מספר בלי הקשר.
-    const autoShare = Math.round(shareOf({ ...c, share_pct: null }, list) * 100);
+    // הנתח בכל ערוץ שלו, משוקלל בתקציבי הערוצים (shareOf + blendShares, סעיף 4)
+    const autoShare = Math.round(shareOf({ ...c, share_pct: null }, list, myChannels) * 100);
     // קמפיין שאין לו מקום באף ערוץ — מצב משלו, לא "מלא — 0/0"
     const noRoom = grid.complete
       ? null : noRoomReason(c, channelCapacities(c, myChannels, list, { gapDays }));
@@ -1031,14 +1022,19 @@ const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי
  *
  * זו התמונה האסטרטגית: לא מה קורה בקמפיין מסוים, אלא כמה מקום כל נקודת קצה
  * מקבלת לאורך הזמן. הנתח של נקודה בחודש = סכום הנתחים של הקמפיינים שלה,
- * כל אחד ממוצע הנתח היומי שלו בחודש (averageShares — אותו חשבון כמו הרשת
- * והמנוע). קמפיין שרץ חצי חודש נספר בחצי. הסכום לא עובר 100%; כשכל הקמפיינים קבועים ומתחת ל-100%, היתרה
- * היא של התוכן השוטף ולא מוצגת כאן.
+ * כל אחד ממוצע הנתח היומי שלו בחודש — בכל ערוץ מול מי שיושב בו
+ * (averageSharesByChannel, אותו חשבון כמו הרשת והמנוע), ומשוקלל בתקציבי
+ * הערוצים שיש בהם קמפיינים (blendByChannel). קמפיין שרץ חצי חודש נספר
+ * בחצי. הסכום לא עובר 100%; כשכל הקמפיינים קבועים ומתחת ל-100%, או בערוץ
+ * בלי קמפיינים, היתרה היא של התוכן השוטף ולא מוצגת כאן.
  */
 export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
   const campaigns = await rows(
     `${CAMPAIGNS_WEIGHTED_SQL} where c.active = true and c.paused_at is null`);
   const endpoints = await rows('select id, name, importance from endpoints where active = true order by importance desc, id');
+  const channels = await rows('select * from channels where active = true');
+  const channelById = new Map(channels.map((ch) => [ch.id, ch]));
+  const channelIds = channels.map((ch) => ch.id);
 
   const now = new Date();
   const base = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
@@ -1050,8 +1046,10 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
     const from = ymd(start);
     const to = ymd(end);
 
-    // הקמפיינים שנוגעים בחודש הזה, והנתח הממוצע של כל אחד מהם בחודש
-    const shares = averageShares(campaigns, { from, to });
+    // הקמפיינים שנוגעים בחודש הזה, והנתח הממוצע של כל אחד מהם בחודש — לכל
+    // ערוץ בנפרד (סעיף 4), משוקלל בתקציב הערוצים שיש בהם קמפיינים
+    const shares = blendByChannel(averageSharesByChannel(campaigns, { from, to, channelIds }),
+      channelById);
     const live = campaigns.filter((c) => shares.has(c.id));
 
     const weights = new Map();
@@ -1085,9 +1083,10 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
 /**
  * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין.
  *
- * הנתח (target_pct): הנתח המנורמל של הקמפיין היום (normalizeShares — אותו
- * חשבון כמו הרשת והמנוע): share_pct שנקבע ידנית (מוקטן אם הסכום עובר 100%),
- * ובלעדיו חלק מהיתרה לפי חשיבות נקודת הקצה. נמדד על היום ולא על החלון של
+ * הנתח (target_pct): הנתח המנורמל של הקמפיין היום, בכל ערוץ מול מי שיושב בו
+ * (normalizeSharesByChannel — אותו חשבון כמו הרשת והמנוע) ומשוקלל בתקציבי
+ * הערוצים שיש בהם קמפיינים (blendByChannel): share_pct שנקבע ידנית (מוקטן אם
+ * הסכום בערוץ עובר 100%), ובלעדיו חלק מהיתרה לפי חשיבות נקודת הקצה. נמדד על היום ולא על החלון של
  * כל קמפיין, כדי שהשורות יהיו מאותו בסיס והסכום שלהן לא יעבור 100%.
  * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
  * הקמפיין מתוך הפרסומים של כל הקמפיינים בטבלה — אותו בסיס כמו הנתח, שמתחלק
@@ -1095,7 +1094,11 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
  */
 export async function currentAllocation() {
   const today = ymd(new Date());
-  const shares = normalizeShares(await rows(CAMPAIGNS_WEIGHTED_SQL), { from: today, to: today });
+  const channels = await rows('select * from channels where active = true');
+  const shares = blendByChannel(
+    normalizeSharesByChannel(await rows(CAMPAIGNS_WEIGHTED_SQL),
+      { from: today, to: today, channelIds: channels.map((ch) => ch.id) }),
+    new Map(channels.map((ch) => [ch.id, ch])));
   const running = await rows(
     `select c.*, e.name as endpoint_name
        from campaigns c join endpoints e on e.id = c.endpoint_id and e.active

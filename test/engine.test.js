@@ -543,14 +543,16 @@ import { strategyDeficits, strategyTargets } from '../src/engine.js';
 // "היום" = אוקטובר: שוטף של נקודה 1 רץ עכשיו; בלאק פריידי (נקודה 2, 40%)
 // מתחיל רק ב-20.11. עד עכשיו המנוע הסתכל על הקמפיינים של היום, ולכן כשתכנן
 // את שבוע בלאק פריידי היעד של נקודה 2 היה 0 — והיא קיבלה 0 משבצות.
-const routine = { id: 1, endpoint_id: 1, endpoint_importance: 5, share_pct: null,
+// סעיף 4: היעד לכל ערוץ — שניהם בערוץ 1, ולכן targetPct.get(1)
+const routine = { id: 1, endpoint_id: 1, endpoint_importance: 5, share_pct: null, channel_ids: [1],
                   active: true, paused_at: null, starts_on: '2026-10-01', ends_on: '2026-12-31' };
-const blackFriday = { id: 7, endpoint_id: 2, endpoint_importance: 9, share_pct: 40,
+const blackFriday = { id: 7, endpoint_id: 2, endpoint_importance: 9, share_pct: 40, channel_ids: [1],
                       active: true, paused_at: null, starts_on: '2026-11-20', ends_on: '2026-12-05' };
 
 test('strategyTargets — קמפיין עתידי מושך את הנקודה שלו כשמתכננים את השבוע שבו הוא רץ', () => {
   const bfWeek = weekMeta('2026-11-24');
-  const { targetPct, from, to } = strategyTargets([routine, blackFriday], bfWeek);
+  const { targetPct: byCh, from, to } = strategyTargets([routine, blackFriday], bfWeek);
+  const targetPct = byCh.get(1);
   assert.equal(targetPct.get(2), 40);
   assert.equal(Math.round(targetPct.get(1)), 60);          // היתרה לאוטומטי
   assert.equal(from, '2026-10-01');                       // starts_on המוקדם בשבוע
@@ -564,7 +566,7 @@ test('strategyTargets — קמפיין עתידי מושך את הנקודה ש�
 
 test('strategyTargets — בשבוע של היום בלאק פריידי עוד לא רץ: אין לו יעד', () => {
   const now = weekMeta('2026-10-14');
-  const { targetPct } = strategyTargets([routine, blackFriday], now);
+  const targetPct = strategyTargets([routine, blackFriday], now).targetPct.get(1);
   assert.equal(targetPct.has(2), false);
   assert.equal(targetPct.get(1), 100);
   assert.equal(strategyDeficits(targetPct, [{ endpoint_id: 1, n: 3 }]).get(2), undefined);
@@ -580,11 +582,23 @@ test('strategyTargets — בלי קמפיינים בשבוע: החלון 90 יו
 test('strategyTargets — מושהה לא מושך; מפורשים מעל 100% מוקטנים', () => {
   const w = weekMeta('2026-11-24');
   const paused = { ...blackFriday, paused_at: '2026-11-01T00:00:00Z' };
-  assert.equal(strategyTargets([routine, paused], w).targetPct.has(2), false);
+  assert.equal(strategyTargets([routine, paused], w).targetPct.get(1).has(2), false);
   const big = { ...routine, share_pct: 90 };
-  const { targetPct } = strategyTargets([big, blackFriday], w);
+  const targetPct = strategyTargets([big, blackFriday], w).targetPct.get(1);
   assert.equal(Math.round(targetPct.get(1)), 69);           // 90 / 130
   assert.equal(Math.round(targetPct.get(2)), 31);           // 40 / 130
+});
+
+test('strategyTargets — סעיף 4: היעד לכל ערוץ רק מול מי שיושב בו', () => {
+  const w = weekMeta('2026-11-24');
+  const fb = { ...routine, channel_ids: [1] };
+  const wa = { ...blackFriday, share_pct: null, endpoint_importance: 5, channel_ids: [2] };
+  const { targetPct, shares } = strategyTargets([fb, wa], w);
+  // כל אחד לבד בערוץ שלו — 100%, ולא 50/50 על כל הערוצים
+  assert.equal(targetPct.get(1).get(1), 100);
+  assert.equal(targetPct.get(2).get(2), 100);
+  assert.equal(targetPct.get(1).has(2), false);
+  assert.equal(shares.get(2).get(7), 1);
 });
 
 test('strategyDeficits — נקודה שוטפת בלי יעד לא נכנסת לבסיס ולא יוצרת פיגור קבוע', () => {

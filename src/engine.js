@@ -3,7 +3,8 @@ import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
-import { averageShares, channelBudget, effectiveGap } from './capacity.js';
+import { averageSharesByChannel, channelBudget, effectiveGap } from './capacity.js';
+import { CAMPAIGNS_WEIGHTED_SQL } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
 import { itemAssetsSql } from './links.js';
 import { endpointLiveSql, postIsLiveSql } from './live.js';
@@ -191,13 +192,14 @@ export async function planWeek(anchorDate, {
 
   // שבוע מרוסן: הקמפיין לא תופס יותר מהנתח שלו בכל ערוץ — אחרת שמירה שלו
   // ממלאת את כל המשבצות של שבועות רחוקים לפני שלאחרים יש שם תוכן. התקרה =
-  // ceil(תקציב הערוץ × הנתח הממוצע של הקמפיין בשבוע), כולל מה שכבר שלו על
-  // הלוח באותו שבוע.
+  // ceil(תקציב הערוץ × הנתח הממוצע של הקמפיין בשבוע באותו ערוץ — מול מי
+  // שיושב בו, סעיף 4), כולל מה שכבר שלו על הלוח באותו שבוע.
   const shareCap = new Map();
   const campaignUsed = new Map();
   if (onlyCampaignId != null) {
-    const share = debts.campaignShare(onlyCampaignId);
-    for (const ch of channels) shareCap.set(ch.id, Math.ceil(channelBudget(ch) * share));
+    for (const ch of channels) {
+      shareCap.set(ch.id, Math.ceil(channelBudget(ch) * debts.campaignShare(onlyCampaignId, ch.id)));
+    }
     const mine = new Set(candidates.map((c) => c.id));
     // פוסטים שלו על הלוח, וגם פוסטים חסרי תוכן שהשיוך שלמעלה ממלא בתוכן שלו
     for (const p of [...existing.filter((x) => mine.has(x.content_id)), ...attachments]) {
@@ -733,33 +735,40 @@ export const takesRoomSql = (p = 'p', now = 'now()') =>
 const UPCOMING_STATUSES = ['scheduled', 'approved', 'publishing', 'pending_approval'];
 
 /**
- * היעד האסטרטגי של כל נקודת קצה בשבוע המתוכנן — לא היום. קמפיין שמתחיל
- * בעוד חודש מושך את הנקודה שלו כשמתכננים את השבוע שבו הוא רץ (קודם בלאק
- * פריידי קיבל 0 משבצות, כי המנוע הסתכל רק על הקמפיינים של היום).
+ * היעד האסטרטגי של כל נקודת קצה בשבוע המתוכנן — לא היום, ולכל ערוץ בנפרד.
+ * קמפיין שמתחיל בעוד חודש מושך את הנקודה שלו כשמתכננים את השבוע שבו הוא רץ
+ * (קודם בלאק פריידי קיבל 0 משבצות, כי המנוע הסתכל רק על הקמפיינים של היום).
  *
- * היעד של נקודה = סכום הנתחים של הקמפיינים שלה שחופפים לשבוע, כל אחד ממוצע
- * הנתח היומי שלו בשבוע (averageShares — אותו חשבון כמו הרשת וציר
- * האסטרטגיה, כולל נתחים אוטומטיים). החלון שבו נמדד "בפועל" מתחיל ב-starts_on המוקדם של אותם קמפיינים,
- * ובלי תאריך כזה — 90 יום לפני השבוע; ונגמר בסוף השבוע המתוכנן.
+ * היעד של נקודה בערוץ = סכום הנתחים של הקמפיינים שלה שחופפים לשבוע ויושבים
+ * בערוץ, כל אחד ממוצע הנתח היומי שלו בשבוע באותו ערוץ (averageSharesByChannel
+ * — אותו חשבון כמו הרשת, סעיף 4). החלון שבו נמדד "בפועל" מתחיל ב-starts_on
+ * המוקדם של אותם קמפיינים, ובלי תאריך כזה — 90 יום לפני השבוע; ונגמר בסוף
+ * השבוע המתוכנן.
  *
- * @param campaigns שורות campaigns עם endpoint_importance
+ * @param campaigns שורות CAMPAIGNS_WEIGHTED_SQL (עם endpoint_importance ו-channel_ids)
  * @param week {days:[{date}]} — weekMeta
- * @returns {{targetPct: Map<number, number>, from: string, to: string, shares: Map}}
- *   shares — הנתח הממוצע של כל קמפיין בשבוע (averageShares)
+ * @param opts.channelIds הערוצים לחשב (ברירת מחדל — כל מי שמופיע ב-channel_ids)
+ * @returns {{targetPct: Map<number, Map<number, number>>, from: string, to: string,
+ *            shares: Map<number, Map>}} targetPct — ערוץ → (נקודה → אחוז);
+ *   shares — ערוץ → הנתח הממוצע של כל קמפיין בשבוע (averageSharesByChannel)
  */
-export function strategyTargets(campaigns, week) {
+export function strategyTargets(campaigns, week, { channelIds = null } = {}) {
   const weekFrom = week.days[0].date;
   const weekTo = week.days[week.days.length - 1].date;
-  const shares = averageShares(campaigns, { from: weekFrom, to: weekTo });
+  const shares = averageSharesByChannel(campaigns, { from: weekFrom, to: weekTo, channelIds });
 
   const targetPct = new Map();
-  const starts = [];
-  for (const c of campaigns) {
-    if (!shares.has(c.id)) continue;
-    targetPct.set(c.endpoint_id, (targetPct.get(c.endpoint_id) ?? 0) + shares.get(c.id) * 100);
-    if (c.starts_on) starts.push(String(c.starts_on).slice(0, 10));
+  const starts = new Set();
+  for (const [ch, byCampaign] of shares) {
+    const t = new Map();
+    for (const c of campaigns) {
+      if (!byCampaign.has(c.id)) continue;
+      t.set(c.endpoint_id, (t.get(c.endpoint_id) ?? 0) + byCampaign.get(c.id) * 100);
+      if (c.starts_on) starts.add(String(c.starts_on).slice(0, 10));
+    }
+    if (t.size) targetPct.set(ch, t);
   }
-  const from = starts.sort()[0] ?? addDaysKey(weekFrom, -90);
+  const from = [...starts].sort()[0] ?? addDaysKey(weekFrom, -90);
   return { targetPct, from, to: weekTo, shares };
 }
 
@@ -855,18 +864,19 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   );
   const lastMap = new Map(lastLive.map((r) => [r.endpoint_id, r.last_at]));
 
-  // פער מהנתח של הקמפיינים שרצים בשבוע המתוכנן. קמפיין מושהה לא מתחרה על
-  // שטח (normalizeShares מסנן אותו), בדיוק כמו שהוא לא מוצג בלוח.
-  // endpoint_active — קמפיין של נקודה מושבתת לא מתחרה (normalizeShares, סעיף 16)
-  const campaigns = await rows(
-    `select c.*, e.importance as endpoint_importance, e.active as endpoint_active
-       from campaigns c join endpoints e on e.id = c.endpoint_id`);
-  const { targetPct, from, to, shares } = strategyTargets(campaigns, week);
+  // פער מהנתח של הקמפיינים שרצים בשבוע המתוכנן, לכל ערוץ בנפרד (סעיף 4).
+  // קמפיין מושהה לא מתחרה על שטח (normalizeShares מסנן אותו), בדיוק כמו
+  // שהוא לא מוצג בלוח. endpoint_active — קמפיין של נקודה מושבתת לא מתחרה
+  // (normalizeShares, סעיף 16)
+  const campaigns = await rows(CAMPAIGNS_WEIGHTED_SQL);
+  const activeChannels = await rows('select id from channels where active = true');
+  const { targetPct, from, to, shares } = strategyTargets(campaigns, week,
+    { channelIds: activeChannels.map((ch) => ch.id) });
   // "בפועל" נספר מכל מה שתופס שטח — גם מה שמתוכנן לשבוע הזה ולפניו, לא רק
   // מה שפורסם — כדי שתכנון שבוע עתידי יראה מה כבר שובץ לפניו. שיבוץ של
   // קמפיין מושהה לא נספר (כמו existing ב-planWeek), אלא אם כבר פורסם.
   const counts = targetPct.size === 0 ? [] : await rows(
-    `select p.endpoint_id, count(*)::int as n
+    `select p.endpoint_id, p.channel_id, count(*)::int as n
        from posts p
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
@@ -878,10 +888,15 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
         and ((p.published_at >= $1::date and p.published_at < ($2::date + 1))
           or (p.published_at is null
               and p.scheduled_at >= $1::date and p.scheduled_at < ($2::date + 1)))
-      group by p.endpoint_id`,
+      group by p.endpoint_id, p.channel_id`,
     [from, to, LIVE_STATUSES]
   );
-  const deficits = strategyDeficits(targetPct, counts);
+  // ערוץ → (נקודה → פיגור): בכל ערוץ מול הנקודות שיש להן יעד בו
+  const deficits = new Map([...targetPct].map(([ch, t]) =>
+    [ch, strategyDeficits(t, counts.filter((c) => c.channel_id === ch))]));
+  const deficitOf = (endpointId, channelId) => (channelId == null
+    ? Math.max(0, ...[...deficits.values()].map((d) => d.get(endpointId) ?? 0))
+    : deficits.get(channelId)?.get(endpointId) ?? 0);
 
   const scheduledBoost = new Map(); // כמה כבר הצענו לה בריצה הזו
 
@@ -895,33 +910,37 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   for (const e of endpoints) {
     const { daysSince, staleness } = stalenessOf(lastMap.get(e.id) ?? null, reference, e, neverCap);
 
-    const deficit = deficits.get(e.id) ?? 0;
-
     // המכפיל מרוכז סביב 1.0 (ניטרלי). מחסרים 1 כדי שנקודה בלי נתונים
     // תתרום בדיוק 0 לציון, נקודה מוצלחת תוסיף, וחלשה תוריד מעט.
     const perfMult = perf?.endpoint.get(e.id) ?? 1;
 
     parts.set(e.id, {
-      staleness, deficit, importance: e.importance / 10, daysSince,
+      staleness, importance: e.importance / 10, daysSince,
       performance: perf ? perfMult : null,
     });
   }
 
   return {
-    score(endpointId) {
+    /** הציון של נקודה למשבצת בערוץ channelId — הפיגור מהנתח נמדד באותו ערוץ */
+    score(endpointId, channelId = null) {
       const p = parts.get(endpointId);
       if (!p) return 0;
       // כל שיבוץ שכבר הוצע בריצה הזו מקטין את החוב, כדי שהמנוע יתפזר
       const already = scheduledBoost.get(endpointId) ?? 0;
       return W_STALENESS * p.staleness
-           + W_STRATEGY * p.deficit
+           + W_STRATEGY * deficitOf(endpointId, channelId)
            + W_IMPORTANCE * p.importance
            + (p.performance == null ? 0 : W_PERFORMANCE * (p.performance - 1))
            - already * 0.6;
     },
-    parts: (id) => parts.get(id),
-    /** הנתח הממוצע של קמפיין בשבוע המתוכנן (0 כשאינו רץ בו) */
-    campaignShare: (campaignId) => shares.get(Number(campaignId)) ?? 0,
+    /** המרכיבים של נקודה; deficit — בערוץ channelId (בלי ערוץ — הגדול מבין הערוצים) */
+    parts: (id, channelId = null) => {
+      const p = parts.get(id);
+      return p && { ...p, deficit: deficitOf(id, channelId) };
+    },
+    /** הנתח הממוצע של קמפיין בשבוע המתוכנן בערוץ (0 כשאינו רץ בו) */
+    campaignShare: (campaignId, channelId) =>
+      shares.get(Number(channelId))?.get(Number(campaignId)) ?? 0,
     markScheduled(id) {
       scheduledBoost.set(id, (scheduledBoost.get(id) ?? 0) + 1);
     },
@@ -1419,7 +1438,7 @@ export function chooseForSlot(ctx) {
     candidates.push({
       endpoint: e,
       content: ready[0],
-      score: debts.score(e.id),
+      score: debts.score(e.id, slot.channel_id),
       inCampaign,
       draft: !isReady(ready[0]),
     });
@@ -1429,7 +1448,7 @@ export function chooseForSlot(ctx) {
   candidates.sort((a, b) => b.score - a.score);
 
   const best = candidates[0];
-  const p = debts.parts(best.endpoint.id);
+  const p = debts.parts(best.endpoint.id, slot.channel_id);
   const bits = [];
   if (p.daysSince === null) bits.push('עוד לא פורסמה מעולם');
   else if (p.staleness >= 1) bits.push(`${Math.floor(p.daysSince)} ימים בלי פרסום`);

@@ -296,3 +296,82 @@ test('siblingsOf — מספר האחים והמקום לפי מזהה; טיוט�
   assert.deepEqual(siblingsOf({ ...a, id: undefined }, list, 6), { count: 4, rank: 3 });
   assert.deepEqual(siblingsOf(a, list, 7), { count: 1, rank: 0 });
 });
+
+/* ========================= סעיף 4 — נתחים לכל ערוץ ========================= */
+
+import {
+  averageSharesByChannel, blendByChannel, blendShares, channelSharesOf, normalizeSharesByChannel,
+} from '../src/capacity.js';
+import { channelCapacities } from '../src/campaigns.js';
+
+// נקודה A בפייסבוק (1) בלבד, נקודה B בוואטסאפ (2) בלבד, אותה חשיבות
+const onFb = { ...span, id: 1, endpoint_id: 1, endpoint_importance: 5, channel_ids: [1] };
+const onWa = { ...span, id: 2, endpoint_id: 2, endpoint_importance: 5, channel_ids: [2] };
+
+test('סעיף 4 — כל קמפיין לבד בערוץ שלו מקבל את כל הערוץ, לא 50%', () => {
+  const s = normalizeSharesByChannel([onFb, onWa], { from: '2026-08-01', to: '2026-08-31' });
+  assert.deepEqual([...s.keys()].sort(), [1, 2]);
+  assert.equal(s.get(1).get(1), 1);
+  assert.equal(s.get(2).get(2), 1);
+  assert.equal(s.get(1).has(2), false);
+  // הנרמול הישן (בלי ערוצים) נתן לכל אחד 50% בכל ערוץ
+  near(normalizeShares([onFb, onWa], { from: '2026-08-01', to: '2026-08-31' }).get(2), 0.5);
+});
+
+test('סעיף 4 — share_pct 100 בוואטסאפ לא מאפס את האוטומטי בפייסבוק', () => {
+  const waFull = { ...onWa, share_pct: 100 };
+  const fbAuto2 = { ...onFb, id: 3, endpoint_id: 3, channel_ids: [1, 2] };
+  const s = normalizeSharesByChannel([onFb, waFull, fbAuto2],
+    { from: '2026-08-01', to: '2026-08-31' });
+  // פייסבוק: שני אוטומטיים, 50/50 — הקבוע של וואטסאפ לא שם
+  near(s.get(1).get(1), 0.5);
+  near(s.get(1).get(3), 0.5);
+  // וואטסאפ: הקבוע לוקח 100%, האוטומטי שיושב גם שם — 0 רק שם
+  assert.equal(s.get(2).get(2), 1);
+  assert.equal(s.get(2).get(3), 0);
+});
+
+test('סעיף 4 — חשיבות מחלקת רק בין הנקודות שיש להן קמפיין בערוץ', () => {
+  const a = { ...span, id: 1, endpoint_id: 1, endpoint_importance: 6, channel_ids: [1, 2] };
+  const b = { ...span, id: 2, endpoint_id: 2, endpoint_importance: 2, channel_ids: [1] };
+  const s = normalizeSharesByChannel([a, b], { from: '2026-08-01', to: '2026-08-31' });
+  near(s.get(1).get(1), 0.75);
+  near(s.get(1).get(2), 0.25);
+  assert.equal(s.get(2).get(1), 1);
+});
+
+test('סעיף 4 — ממוצע בזמן לכל ערוץ: קבוע בוואטסאפ חצי מהזמן', () => {
+  const fixed = { ...onWa, id: 9, endpoint_id: 9, share_pct: 100,
+                  starts_on: '2026-08-01', ends_on: '2026-08-15' };
+  const auto = { ...onWa, id: 2 };
+  const s = averageSharesByChannel([auto, fixed, onFb], { from: '2026-08-01', to: '2026-08-31' });
+  near(s.get(2).get(2), 16 / 31);
+  near(s.get(1).get(1), 1);
+  near(channelSharesOf(auto, [fixed, onFb]).get(2), 16 / 31);
+});
+
+test('סעיף 4 — נתח אחד לתצוגה: משוקלל בתקציב הערוצים', () => {
+  const fb = { id: 1, max_per_week: 10, urgent_reserve_pct: 0 };
+  const wa = { id: 2, max_per_week: 5, urgent_reserve_pct: 0 };
+  near(blendShares(new Map([[1, 0.5], [2, 1]]), [fb, wa]), (5 + 5) / 15);
+  assert.equal(blendShares(new Map(), []), 0);
+  const both = { ...span, id: 3, endpoint_id: 3, endpoint_importance: 5, channel_ids: [1, 2] };
+  // פייסבוק: A ו-C (50/50); וואטסאפ: C לבד
+  near(shareOf(both, [onFb], [fb, wa]), (10 * 0.5 + 5 * 1) / 15);
+  const all = blendByChannel(normalizeSharesByChannel([onFb, both],
+    { from: '2026-08-10', to: '2026-08-10', channelIds: [1, 2] }), new Map([[1, fb], [2, wa]]));
+  near(all.get(1), (10 * 0.5) / 15);
+  near(all.get(3), (10 * 0.5 + 5) / 15);
+});
+
+test('סעיף 4 — channelCapacities: קמפיין לבד בוואטסאפ מקבל את כל התקציב שם', () => {
+  const fb = { id: 1, name: 'פייסבוק', max_per_week: 8, urgent_reserve_pct: 0 };
+  const wa = { id: 2, name: 'וואטסאפ', max_per_week: 4, urgent_reserve_pct: 0 };
+  const week = { starts_on: '2026-08-02', ends_on: '2026-08-08' };
+  const b = { ...onWa, ...week };
+  const caps = channelCapacities(b, [wa], [{ ...onFb, ...week }], { gapDays: 1 });
+  assert.equal(caps.get(2).share, 1);
+  assert.equal(caps.get(2).capacity, 4);
+  // הנרמול הישן היה נותן 50% → 2
+  void fb;
+});
