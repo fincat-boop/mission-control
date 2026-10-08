@@ -5,7 +5,7 @@ import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel
 import { spreadDate } from '../public/js/core/period.js';
 import {
   averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, RATIO_WINDOW_DAYS,
-  ratioAllowsPromo, ratioPromoCap, windowRatio,
+  ratioAllowsPromo, ratioPromoCap, weeklyPromoCap, windowRatio,
 } from './capacity.js';
 import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
@@ -1175,7 +1175,8 @@ export function buildUsage(channels, existing, settings,
       const cap = promoCapOf(u);
       if (cap === Infinity) return null;
       return kindWeights(win, hybridWeight).promo + 1 > cap ||
-        kindWeights(week, hybridWeight).promo + 1 > Math.ceil(cap / 4) ? 'ratio_cap' : null;
+        kindWeights(week, hybridWeight).promo + 1 > weeklyPromoCap(u.budget, minRatio)
+        ? 'ratio_cap' : null;
     }
     return ratioAllowsPromo(kindWeights(win, hybridWeight), minRatio, u.budget) ? null : 'ratio';
   };

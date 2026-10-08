@@ -558,3 +558,35 @@ test('סעיף 6 — כשגם בלי המרווח המכירתיים לא נות
     channel: { max_per_week: 5, urgent_reserve_pct: 20, max_promo_per_week: 1 }, share: 0.4,
     mix: { promo: 1 }, settings: RULES }, 4), null);
 });
+
+test('R2 — משולב לא נחתך ביחס (כמו במנוע), רק בתקרה השבועית שלו', () => {
+  const base = { from: '2026-11-01', to: '2026-11-28', share: 1, gapDays: 1, settings: RULES };
+  // ערוץ של 3, 4 שבועות, הכול משולב: 12 נכנסים — קודם נחתך ל-6 (12 / 4 ÷ 0.5)
+  const hybrid = channelCapacity({ ...base, channel: { max_per_week: 3, urgent_reserve_pct: 0 },
+                                   mix: { hybrid: 4 } });
+  assert.equal(hybrid.capacity, 12);
+  // עם תקרה שבועית למשולבים — היא כן חלה
+  const capped = channelCapacity({ ...base, mix: { hybrid: 4 },
+    channel: { max_per_week: 3, urgent_reserve_pct: 0, max_hybrid_per_week: 1 } });
+  assert.equal(capped.capacity, 4);
+  assert.equal(capped.limitedBy, 'hybrid_week');
+  // משולב תופס חלק ממקום המכירתי: חצי משולב חצי מכירתי — המכירתי נחתך, המשולב לא
+  const mixed = channelCapacity({ ...base, channel: { max_per_week: 3, urgent_reserve_pct: 0 },
+                                  mix: { hybrid: 1, promo: 1 } });
+  assert.equal(mixed.kinds.hybrid, 6);
+  assert.equal(mixed.kinds.promo, 0);   // 3 (תקרה) − 6 × 0.5
+});
+
+test('R3 — קמפיין מכירתי קצר: רבע מהתקרה של 28 יום בכל שבוע, כמו המילוי המרוסן', async () => {
+  const { ratioPromoLimit, weeklyPromoCap } = await import('../src/capacity.js');
+  // ערוץ של 7 (בלי שמורה), יחס 3: 7 ב-28 יום, עד 2 בשבוע
+  assert.equal(weeklyPromoCap(7, 3), 2);
+  assert.equal(ratioPromoLimit(7, 7, 1, 3), 2);
+  assert.equal(ratioPromoLimit(7, 28, 4, 3), 7);
+  assert.equal(ratioPromoLimit(7, 7, 1, 0), Infinity);
+  const week = channelCapacity({ from: '2026-11-01', to: '2026-11-07', share: 1, gapDays: 1,
+    channel: { max_per_week: 7, urgent_reserve_pct: 0 }, mix: { promo: 5 },
+    settings: { ...RULES, max_promo_per_day: 5 } });
+  assert.equal(week.capacity, 2);   // קודם 7 — כל התקרה של 28 יום בשבוע אחד
+  assert.equal(week.limitedBy, 'ratio');
+});

@@ -464,6 +464,27 @@ export function ratioAllowsPromo(weights, minRatio, budget) {
 }
 
 /**
+ * כמה מכירתיים בשבוע אחד לכל היותר כשהיחס נאכף בלי לדעת כמה ערך יהיה (שבוע
+ * מרוסן במנוע, קיבולת של קמפיין): רבע מהתקרה של 28 יום, למעלה — כדי שלא
+ * ייערמו כולם בשבוע הראשון. Infinity — השער כבוי.
+ */
+export function weeklyPromoCap(budget, minRatio) {
+  const cap = ratioPromoCap(budget, RATIO_WINDOW_DAYS, minRatio);
+  return cap === Infinity ? Infinity : Math.ceil(cap / 4);
+}
+
+/**
+ * כמה מכירתיים (במשקל) נכנסים לקמפיין בערוץ בטווח של days ימים שנוגע
+ * ב-weeksTouched שבועות בלוח: הקטן מבין התקרה של היחס על הטווח
+ * (ratioPromoCap) לבין weeklyPromoCap × השבועות — אותו כלל כמו המילוי המרוסן
+ * במנוע (buildUsage), ולכן קמפיין קצר לא מקבל את כל התקרה של 28 יום בשבוע אחד.
+ */
+export function ratioPromoLimit(budget, days, weeksTouched, minRatio) {
+  return Math.min(ratioPromoCap(budget, days, minRatio),
+    weeklyPromoCap(budget, minRatio) * Math.max(1, weeksTouched));
+}
+
+/**
  * כמה מכירתיים (במשקל — משולב נספר חלקית) נכנסים לערוץ בטווח של days ימים
  * אם שאר הפוסטים בו ערך — אותו אי-שוויון כמו ratioAllowsPromo, בערוץ מלא:
  * floor(תקציב × שבועות / (1 + יחס)). טווח קצר מ-28 יום נמדד כחלון שלם —
@@ -591,7 +612,8 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
  *     שהטווח נוגע בהם (שבוע ראשון–שבת, כמו buildUsage)
  *   promo_day — מכירתי ליום (max_promo_per_day, בכל הערוצים) × הימים הפנויים,
  *     או promoDayCap — החלק של הערוץ כשלקמפיין כמה ערוצים (channelCapacities)
- *   ratio — שער היחס: ratioPromoCap (משקל מכירתי, משולב נספר חלקית)
+ *   ratio — שער היחס: ratioPromoLimit (משקל מכירתי, משולב נספר חלקית; רק
+ *     המכירתי נחתך — משולב לא עובר בשער, כמו במנוע)
  * קירוב: התקרות לערוץ שלמות לקמפיין הזה — קמפיין מכירתי נוסף באותו ערוץ
  * חולק אותן בפועל; המנוע אוכף, וכאן רק מעריכים כמה נכנס.
  * @returns {{capacity:number, kinds:object, wanted:object, limits:object,
@@ -613,16 +635,18 @@ function kindLimited({ S, mix, channel, settings, weeksTouched, span, availableD
     hybrid_week: capOf('max_hybrid_per_week'),
     value_week: capOf('max_value_per_week'),
     promo_day: promoDayCap ?? perDay * availableDays,
-    ratio: ratioPromoCap(channelBudget(channel), span, settings?.min_value_per_promo ?? 3),
+    ratio: ratioPromoLimit(channelBudget(channel), span, weeksTouched,
+      settings?.min_value_per_promo ?? 3),
   };
   let p = Math.min(P, limits.promo_week, limits.promo_day);
-  let h = Math.min(H, limits.hybrid_week);
+  // משולב לא עובר בשער היחס (כמו במנוע) — רק התקרה השבועית שלו; הוא כן
+  // תופס חלק ממקום המכירתי בחלון (hybrid_weight), ולכן מקטין את p
+  const h = Math.min(H, limits.hybrid_week);
   const v = Math.min(V, limits.value_week);
   let ratioCut = false;
   if (p + hw * h > limits.ratio) {
     ratioCut = true;
     p = Math.max(0, Math.floor(limits.ratio - hw * h));
-    if (p + hw * h > limits.ratio && hw > 0) h = Math.floor(limits.ratio / hw);
   }
   let binding = null;
   if (ratioCut) binding = 'ratio';
