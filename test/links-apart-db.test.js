@@ -309,8 +309,11 @@ test('PATCH /posts — הזזה לשבוע מלא: אזהרת מכסה; הזזה
   try {
     await insertPost({ channel: s.ch, ep: s.ep, at: at(18) });
     await insertPost({ channel: s.ch, ep: s.ep2, at: at(19) });
-    const mover = await insertPost({ channel: s.ch, at: at(25) });
-    const inWeek = await insertPost({ channel: s.ch, at: at(26) });
+    // אין פוסט בלי נקודת קצה (8.10.26) — ונקודה שלישית, שהמרווח מול 18/19 לא יוסיף אזהרה
+    s.ep3 = await inOrg(async () => (await db.one(
+      "insert into endpoints (name, importance) values ('הזזה 3', 5) returning id")).id);
+    const mover = await insertPost({ channel: s.ch, ep: s.ep3, at: at(25) });
+    const inWeek = await insertPost({ channel: s.ch, ep: s.ep2, at: at(26) });
 
     const warn = await call('PATCH', `/posts/${mover}`, { scheduled_at: at(20) });
     assert.equal(warn.status, 409, JSON.stringify(warn.json));
@@ -324,6 +327,7 @@ test('PATCH /posts — הזזה לשבוע מלא: אזהרת מכסה; הזזה
     assert.equal((await call('PATCH', `/posts/${inWeek}`, { scheduled_at: at(27) })).status, 200);
   } finally {
     await capCleanup(s);
+    if (s.ep3) await inOrg(() => db.query('delete from endpoints where id = $1', [s.ep3]));
   }
 });
 
