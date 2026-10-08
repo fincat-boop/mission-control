@@ -370,7 +370,9 @@ test('תקרה: קמפיין של שנה ממולא רק 26 שבועות קדי�
   const weeks = campaignFillWeeks(c);
   assert.equal(weeks.length, 26);
   const posts = await q('select scheduled_at from posts where id = any($1::int[])', [fill.created_ids]);
-  assert.ok(posts.length >= 20, `${posts.length} פוסטים`);
+  // סעיף 10: 40 פריטים על 400 יום = פריט כל ~10 ימים, ובתוך 26 שבועות מגיע
+  // התור של ~18 מהם (קודם — 20+, כל שבוע לפי הסדר מתחילת הקמפיין)
+  assert.ok(posts.length >= 17 && posts.length <= 20, `${posts.length} פוסטים`);
   for (const p of posts) assert.ok(weekOf(p.scheduled_at) <= weeks[25], String(p.scheduled_at));
   await cleanup(x);
 });

@@ -904,3 +904,26 @@ test('R4 — mergeLimits: תוכן שנכנס בשבוע אחר יורד; אות
   const both = mergeLimits([[g('share', [20])], [g('ratio', [20])]]);
   assert.deepEqual(both.map((x) => x.reason), ['ratio']);
 });
+
+/* ---------- סעיף 10: פיזור כל קמפיין במנוע ---------- */
+
+import { notDueOn, pacedDate } from '../src/engine.js';
+
+test('pacedDate / notDueOn — קמפיין לפי קצב מפוזר על התקופה; בשבוע של התאריך מותר מכל יום', () => {
+  // 4 פריטים, 1.11–9.1 (70 יום): 1.11, 18.11, 6.12, 23.12
+  const base = { campaign_id: 3, campaign_starts_on: '2026-11-01', campaign_ends_on: '2027-01-09',
+                 campaign_slot_count: 4, campaign_complete_at: null };
+  const it = (rank) => ({ ...base, campaign_slot_rank: rank });
+  assert.deepEqual([1, 2, 3, 4].map((r) => pacedDate(it(r))),
+    ['2026-11-01', '2026-11-18', '2026-12-06', '2026-12-23']);
+  // קמפיין לא מוכן — plannedDate (הכלל הידני) לא חל, רק המנוע מפזר
+  assert.equal(plannedDate(it(2)), null);
+  assert.equal(outsideCampaignWindow(it(2), '2026-11-02'), false);
+  assert.equal(notDueOn(it(2), '2026-11-14'), true);    // שבוע לפני
+  assert.equal(notDueOn(it(2), '2026-11-15'), false);   // ראשון של השבוע של 18.11
+  assert.equal(notDueOn(it(2), '2026-12-30'), false);   // התפספס — מותר אחר כך
+  assert.equal(notDueOn(it(2), '2027-01-10'), true);    // אחרי סוף הקמפיין
+  // בלי סוף, או תוכן שוטף — אין פיזור
+  assert.equal(pacedDate({ ...it(2), campaign_ends_on: null }), null);
+  assert.equal(notDueOn({ campaign_id: null }, '2020-01-01'), false);
+});

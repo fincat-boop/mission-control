@@ -292,7 +292,7 @@ export async function planWeek(anchorDate, {
   // בשבוע מרוסן: הקמפיין הגיע לתקרה שלו בערוץ
   const limits = notPlacedLimits({
     content: candidates, channels, misses, landed, skip: usedBefore,
-    open: (c, ch) => week.days.some((d) => d.date >= today && !outsideCampaignWindow(c, d.date)) &&
+    open: (c, ch) => week.days.some((d) => d.date >= today && !notDueOn(c, d.date)) &&
       reusable(c, { channel_id: ch.id, dateKey: week.days[week.days.length - 1].date }, history,
                settings),
     share: (chId) => (onlyCampaignId != null && overShare(chId)
@@ -750,7 +750,7 @@ export function chooseHoleFills({
       (c.eligible_channel_ids ?? []).includes(h.channel_id) &&
       fitsSlotChannel(c, h.channel_id) &&
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
-      !outsideCampaignWindow(c, dateKey) &&
+      !notDueOn(c, dateKey) &&
       nearest >= contentGap(c, settings, on) &&
       !linkedSameDay(c, groupDays, dateKey) &&
       reusable(c, slot, history, settings)
@@ -1412,20 +1412,21 @@ function compareKeys(a, b) {
 /* ========================= בחירה למשבצת ========================= */
 
 /**
- * העמודות ש-outsideCampaignWindow צריך כדי לכבד "קמפיין מוכן", לשאילתת
- * תוכן עם הכינויים ci (content_items) ו-ca (campaigns). המקום של הפריט
- * בתור של הקמפיין (בכללי — של המדיה שלו) וכמה פריטים בתור, כמו ברשת
- * (src/campaigns.js). שאילתות משנה ולא פונקציית חלון — כדי שהמספרים לא
- * ישתנו לפי מה שהשאילתה החיצונית מסננת. רק כשהקמפיין סומן מוכן.
+ * העמודות ש-outsideCampaignWindow צריך כדי לכבד "קמפיין מוכן", ו-pacedDate
+ * לפיזור של כל קמפיין במנוע (סעיף 10), לשאילתת תוכן עם הכינויים ci
+ * (content_items) ו-ca (campaigns). המקום של הפריט בתור של הקמפיין (בכללי —
+ * של המדיה שלו) וכמה פריטים בתור, כמו ברשת (src/campaigns.js). שאילתות משנה
+ * ולא פונקציית חלון — כדי שהמספרים לא ישתנו לפי מה שהשאילתה החיצונית מסננת.
+ * לכל תוכן של קמפיין; plannedDate עצמה חלה רק על קמפיין שסומן מוכן.
  */
 export const COMPLETE_SPREAD_COLUMNS = `
   ca.content_complete_at as campaign_complete_at,
-  case when ca.content_complete_at is not null then (
+  case when ca.id is not null then (
     select count(*)::int from content_items x
      where x.campaign_id = ci.campaign_id
        and x.slot_channel_id is not distinct from ci.slot_channel_id
        and (x.sort_order, x.id) <= (ci.sort_order, ci.id)) end as campaign_slot_rank,
-  case when ca.content_complete_at is not null then (
+  case when ca.id is not null then (
     select count(*)::int from content_items x
      where x.campaign_id = ci.campaign_id
        and x.slot_channel_id is not distinct from ci.slot_channel_id) end as campaign_slot_count`;
@@ -1442,10 +1443,48 @@ export function plannedDate(c) {
     c.campaign_slot_rank - 1, c.campaign_slot_count);
 }
 
-/** בתוך החלון של הקמפיין, אבל לפני התאריך המתוכנן של הפריט (קמפיין מוכן) */
+/**
+ * התאריך שלפניו המנוע לא משבץ פריט של קמפיין (סעיף 10): פרוס אחיד על
+ * תקופת הקמפיין לפי המקום שלו בתור — אותה spreadDate של "קמפיין מוכן", לכל
+ * קמפיין עם תאריכי התחלה וסוף. קודם קמפיין לפי קצב התמלא שבוע אחרי שבוע
+ * לפי הסדר, ו-4 פוסטים של קמפיין בן 10 שבועות נחתו בשבועות 1–4. אחרי
+ * התאריך — מותר (משבצת שהתפספסה, או יותר תוכן ממשבצות: התור מתקדם).
+ * רק במילוי של המנוע: שיבוץ ידני ("שייך תוכן", פוסט ידני) נשאר חופשי, חוץ
+ * מקמפיין מוכן (plannedDate). null — אין תאריך כזה.
+ */
+export function pacedDate(c) {
+  if (!c?.campaign_id || !c.campaign_starts_on || !c.campaign_ends_on) return null;
+  if (!c.campaign_slot_rank || !c.campaign_slot_count) return null;
+  return spreadDate(c.campaign_starts_on, c.campaign_ends_on,
+    c.campaign_slot_rank - 1, c.campaign_slot_count);
+}
+
+/** יום ראשון של השבוע של YYYY-MM-DD (השבוע בלוח מתחיל בראשון, כמו weekMeta) */
+function sundayOf(dateKey) {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const t = Date.UTC(y, m - 1, d);
+  return new Date(t - new Date(t).getUTCDay() * 86400000).toISOString().slice(0, 10);
+}
+
+/**
+ * מחוץ למה שהמנוע משבץ ביום הזה: מחוץ לחלון הקמפיין (outsideCampaignWindow),
+ * או בשבוע שלפני השבוע של התאריך המפוזר של הפריט (pacedDate, סעיף 10).
+ * בשבוע עצמו — מותר מכל יום: המנוע ממלא שבוע ממרכזו לקצוות (nextSlot), ותור
+ * שנפתח רק ביום המדויק היה משאיר את תחילת השבוע ריקה גם כשיש יותר תוכן
+ * ממשבצות. שיבוץ, שיוך לפוסט חסר תוכן, "לא נכנס" וסיבת החור — כולם דרכה.
+ */
+export function notDueOn(c, dateKey) {
+  if (outsideCampaignWindow(c, dateKey)) return true;
+  const paced = pacedDate(c);
+  return !!paced && sundayOf(dateKey) < sundayOf(paced);
+}
+
+/** בתוך החלון של הקמפיין, אבל לפני התאריך המתוכנן / המפוזר של הפריט (notDueOn) */
 function waitingForPlannedDate(c, dateKey) {
   const planned = plannedDate(c);
-  return !!planned && dateKey < planned &&
+  const paced = pacedDate(c);
+  const waiting = (planned && dateKey < planned) || (paced && sundayOf(dateKey) < sundayOf(paced));
+  return !!waiting &&
     !(c.campaign_starts_on && dateKey < c.campaign_starts_on) &&
     !(c.campaign_ends_on && dateKey > c.campaign_ends_on);
 }
@@ -1607,7 +1646,7 @@ export function chooseForSlot(ctx) {
       if (c.endpoint_id !== e.id ||
           !(c.eligible_channel_ids ?? []).includes(slot.channel_id) ||
           !fitsSlotChannel(c, slot.channel_id) ||
-          outsideCampaignWindow(c, slot.dateKey) ||
+          notDueOn(c, slot.dateKey) ||
           linkedSameDay(c, groupDays, slot.dateKey) ||
           usedContent.has(`${slot.channel_id}:${c.id}`) ||
           !reusable(c, slot, history, settings)) return false;
@@ -1751,7 +1790,7 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
 export function holeReason(endpointContent, dateKey) {
   if (!endpointContent.length) return 'אין שום תוכן (גם לא טיוטה) לנקודה הזו';
   // קמפיין מוכן: התוכן בחלון, אבל כל פריט מחכה לתאריך המתוכנן שלו
-  if (endpointContent.every((c) => outsideCampaignWindow(c, dateKey)) &&
+  if (endpointContent.every((c) => notDueOn(c, dateKey)) &&
       endpointContent.some((c) => waitingForPlannedDate(c, dateKey))) {
     return 'התוכן של הקמפיין מתוכנן לתאריכים מאוחרים יותר';
   }

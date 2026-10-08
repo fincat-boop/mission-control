@@ -194,8 +194,12 @@ test('סעיף 9 — קמפיין שהתחיל מאוחר לא זוכה כמעט
   // האחרון — 7 מול 8. קודם החלון התחיל ב-starts_on של א, ו-ב "פיגר" 8 מול 32
   const ca = await campaign(a.id, ch.id, { name: 'ותיק', starts: ymd(daysAgo(70, start)), ends });
   const cb = await campaign(b.id, ch.id, { name: 'חדש', starts: ymd(daysAgo(21, start)), ends });
-  const ia = await items(a.id, ch.id, 34, { campaignId: ca.id, prefix: 'א' });
-  const ib = await items(b.id, ch.id, 18, { campaignId: cb.id, prefix: 'ב' });
+  const ia = await items(a.id, ch.id, 24, { campaignId: ca.id, prefix: 'א' });
+  const ib = await items(b.id, ch.id, 8, { campaignId: cb.id, prefix: 'ב' });
+  // תוכן שוטף לשיבוץ — הפיגור נמדד לנקודה, לא לפריט (התוכן של הקמפיינים
+  // מפוזר על התקופה שלהם, סעיף 10)
+  await items(a.id, ch.id, 10, { prefix: 'א שוטף' });
+  await items(b.id, ch.id, 10, { prefix: 'ב שוטף' });
   for (let i = 0; i < 24; i += 1) {
     await post(ch.id, a.id, daysAgo(70 - i * 3 - 1, start), { contentId: ia[i] });
   }
@@ -217,5 +221,55 @@ test('סעיף 9 — קמפיין שהתחיל מאוחר לא זוכה כמעט
   assert.ok(plan.placements.length >= 6, String(plan.placements.length));
   assert.ok(Math.abs(by(a.id) - by(b.id)) <= 1,
     `א ${by(a.id)} / ב ${by(b.id)}: ${plan.placements.map((p) => p.endpoint_name).join(', ')}`);
+  await wipe();
+});
+
+/* ========================= 10. פיזור קמפיין לפי קצב ========================= */
+
+test('סעיף 10 — 4 פוסטים של קמפיין בן 10 שבועות נפרסים על כל התקופה, לא בשבועות 1–4', { skip }, async () => {
+  await wipe();
+  const { autoFillCampaign } = await import('../src/routes/_shared.js');
+  const ch = await channel('פייסבוק', 7);
+  const ep = await endpoint('נקודה');
+  // מתחיל בעוד 3 שבועות (ראשון), 10 שבועות — כל השבועות מרוסנים לקמפיין
+  const s = weekMeta(inDays(21)).start;
+  const e = ymd(new Date(new Date(`${s}T12:00:00`).getTime() + (70 - 1) * 86400000));
+  const c = await campaign(ep.id, ch.id, { starts: s, ends: e });
+  const ids = await items(ep.id, ch.id, 4, { campaignId: c.id, prefix: 'קצב' });
+
+  const fill = await inOrg(() => autoFillCampaign(c.id, null));
+  const posts = await q(
+    `select content_id, scheduled_at from posts where content_id = any($1::int[]) order by scheduled_at`, [ids]);
+  assert.equal(posts.length, 4, JSON.stringify(fill.summary));
+  const weekIdx = (at) => Math.floor((new Date(at) - new Date(`${s}T00:00:00`)) / (7 * 86400000));
+  const weeks = posts.map((p) => weekIdx(p.scheduled_at));
+  // פריט k מתוך 4 — לא לפני start + floor(k × 70 / 4) ימים: שבועות 0, 2, 5, 7
+  assert.deepEqual(weeks, [0, 2, 5, 7], JSON.stringify(posts));
+  // כל פריט לא לפני התאריך המפוזר שלו, ולפי הסדר בתור
+  assert.deepEqual(posts.map((p) => p.content_id), ids);
+  await wipe();
+});
+
+test('סעיף 10 — יותר תוכן ממשבצות: הקמפיין עדיין ממלא כמה שאפשר בתקופה', { skip }, async () => {
+  await wipe();
+  const { autoFillCampaign } = await import('../src/routes/_shared.js');
+  const ch = await channel('פייסבוק', 7);
+  const ep = await endpoint('נקודה');
+  // שבועיים, מרווח 3 ימים בין פוסטים → 5 משבצות לכל היותר; 12 פריטים
+  const s = weekMeta(inDays(21)).start;
+  const e = ymd(new Date(new Date(`${s}T12:00:00`).getTime() + 13 * 86400000));
+  const c = await campaign(ep.id, ch.id, { starts: s, ends: e, gap: 3 });
+  const ids = await items(ep.id, ch.id, 12, { campaignId: c.id, prefix: 'הרבה' });
+  await inOrg(() => autoFillCampaign(c.id, null));
+  const posts = await q(
+    'select content_id, scheduled_at from posts where content_id = any($1::int[]) order by scheduled_at', [ids]);
+  // כמה שהמרווח מאפשר בתקופה (channelCapacity — אותו חשבון כמו הרשת)
+  const { channelCapacity } = await import('../src/capacity.js');
+  const cap = channelCapacity({ from: s, to: e, channel: ch, share: 1, gapDays: 3 }).gapCap;
+  assert.equal(cap, 5);
+  assert.equal(posts.length, cap, JSON.stringify(posts));
+  // התור מתקדם לפי הסדר — הפריטים הראשונים, לא דילוג לסוף (בתוך שבוע המנוע
+  // ממלא ממרכז השבוע לקצוות, ולכן לא בהכרח לפי סדר הימים)
+  assert.deepEqual(posts.map((p) => p.content_id).sort((x, y) => x - y), ids.slice(0, 5));
   await wipe();
 });
