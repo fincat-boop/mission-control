@@ -1146,7 +1146,7 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
   // מהקמפיינים החופפים והמרווח של המנוע — כדי שהקבצים ימלאו את המשבצות
   // שהמשתמש רואה
   const concurrent = await rows(CAMPAIGNS_WEIGHTED_SQL);
-  const opts = await loadCapacityOptions();
+  const opts = await loadCapacityOptions({ campaignId: campaign.id, channels: myChannels });
   // קמפיין שסומן מוכן: אין משבצות ריקות — הקבצים נכנסים בסוף ומגדילים אותו
   const need = campaign.content_complete_at
     ? null : channelNeeds(campaign, myChannels, concurrent, opts).get(channelId) ?? null;

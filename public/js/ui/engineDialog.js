@@ -53,9 +53,12 @@ function fillSummary(fill) {
  */
 export function engineToast(res, base = '') {
   const fill = res?.engine;
-  // מכירתיים שלא נכנסו — נאמר גם כשלא שובץ כלום, כדי שזה לא יקרה בשקט
-  const blocked = fill?.promo_blocked > 0
-    ? ` ${fill.promo_blocked} פוסטים מכירתיים לא שובצו — חסר תוכן ערך באותם שבועות.` : '';
+  // מה לא נכנס בגלל מגבלה (יחס, תקרה לסוג, מכירתי ליום) — המשפט של השרת עם
+  // המגבלה שעצרה (notPlacedNotes); נאמר גם כשלא שובץ כלום, כדי שזה לא יקרה בשקט
+  const notes = fill?.limit_notes ?? [];
+  const blocked = notes.length
+    ? ` ${notes[0]}${notes.length > 1 ? ` ועוד ${notes.length - 1} כאלה.` : ''}`
+    : '';
   if (!fill || !(fill.placed || fill.attached)) return toast((base || 'נשמר.') + blocked);
   toastAction(`${base} ${fillSummary(fill)}${blocked}`.trim(), 'בטל', () => undoFill(fill));
 }

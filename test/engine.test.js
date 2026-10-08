@@ -774,33 +774,111 @@ test('stalenessOf: לא פורסמה — מאז שנוצרה באותו קצב, 
 
 /* ========================= שער היחס בשבוע מרוסן ========================= */
 
-test('buildUsage projectedPromoCap — מכירתי עד floor(תקציבים / (1+יחס)), גם בלי ערך על הלוח', () => {
-  // שני ערוצים × 7 = 14; יחס 3 → 3 מכירתיים בשבוע
+test('buildUsage projectedPromoCap — סעיף 6: לכל ערוץ, ratioPromoCap ב-28 יום ועד רבע ממנה בשבוע', () => {
+  // ערוץ של 7 בשבוע (בלי שמורה), יחס 3 → 7 מכירתיים ב-28 יום, עד 2 בשבוע.
+  // קודם: תקרה אחת לכל הערוצים יחד בשבוע — floor(14 / 4) = 3
   const chans = [channel({ id: 1, max_per_week: 7 }), channel({ id: 2, max_per_week: 7 })];
   const settings = { ...SETTINGS, max_promo_per_day: 5 };
   const usage = buildUsage(chans, [], settings, { projectedPromoCap: true });
-  for (let i = 0; i < 3; i += 1) {
+  for (let i = 0; i < 2; i += 1) {
     assert.equal(usage.allows(1, '2026-10-08', 'promo', 100 + i), true, `מכירתי ${i + 1}`);
     usage.take(1, '2026-10-08', 'promo', 10 + i);
   }
-  assert.equal(usage.allows(2, '2026-10-08', 'promo', 200), false, 'הרביעי חורג מהתקרה');
-  assert.deepEqual(usage.ratioReport().blockedPairs, ['2:200']);
+  assert.equal(usage.reason(1, '2026-10-08', 'promo', 102), 'ratio_cap', 'השלישי בשבוע חורג');
+  // ערוץ אחר — חלון משלו
+  assert.equal(usage.allows(2, '2026-10-08', 'promo', 200), true);
+  assert.deepEqual(usage.ratioReport().blockedPairs, ['1:102']);
 
-  // מכירתי שכבר על הלוח באותו שבוע נספר בתקרה
-  const busy = buildUsage(chans, [
-    { channel_id: 1, kind: 'promo', scheduled_at: new Date('2026-10-05T10:00:00') },
-    { channel_id: 2, kind: 'promo', scheduled_at: new Date('2026-10-06T10:00:00') },
-  ], settings, { projectedPromoCap: true });
+  // מכירתיים בשלושת השבועות שלפני נספרים בחלון: 6 + 1 = 7 עוד נכנס, השני כבר לא
+  const busy = buildUsage(chans, [], settings,
+    { projectedPromoCap: true, prior: new Map([[1, { promo: 6 }]]) });
   assert.equal(busy.allows(1, '2026-10-08', 'promo'), true);
   busy.take(1, '2026-10-08', 'promo', 10);
   assert.equal(busy.allows(1, '2026-10-09', 'promo'), false);
 
-  // השער הרגיל (שבוע מלא) — בלי ערך על הלוח אין מכירתי בכלל, כמו קודם
-  assert.equal(buildUsage(chans, [], settings).allows(1, '2026-10-08', 'promo'), false);
+  // השער הרגיל (שבוע מלא) — בלי ערך בחלון אין מכירתי; 3 ערך בשבועות שלפני — יש
+  assert.equal(buildUsage(chans, [], settings).reason(1, '2026-10-08', 'promo'), 'ratio');
+  assert.equal(buildUsage(chans, [], settings, { prior: new Map([[1, { value: 3 }]]) })
+    .allows(1, '2026-10-08', 'promo'), true);
   // יחס 0 = שער כבוי
   const off = buildUsage(chans, [], { ...settings, min_value_per_promo: 0 }, { projectedPromoCap: true });
   for (let i = 0; i < 5; i += 1) {
     assert.equal(off.allows(1, `2026-10-0${4 + i}`, 'promo'), true);
     off.take(1, `2026-10-0${4 + i}`, 'promo', 10);
   }
+});
+
+test('buildUsage — סעיף 6: שער היחס לכל ערוץ, ערוץ קטן מקבל מכירתי ~1 מכל 4', () => {
+  // ערוץ של 3 בשבוע (תקציב 2 אחרי השמורה), יחס 3: מסמלצים 8 שבועות של מילוי,
+  // כל שבוע עם החלון של שלושת הקודמים. יש תמיד גם ערך וגם מכירתי מוכנים —
+  // המנוע מעדיף מכירתי (קמפיין רץ), אז כל מקום שהשער מאפשר — מכירתי
+  const ch = channel({ id: 1, max_per_week: 3, urgent_reserve_pct: 20 });
+  const weeks = [];
+  for (let w = 0; w < 8; w += 1) {
+    const prior = { promo: 0, value: 0, hybrid: 0 };
+    for (const k of weeks.slice(-3)) for (const x of k) prior[x] += 1;
+    const u = buildUsage([ch], [], SETTINGS, { prior: new Map([[1, prior]]) });
+    const placed = [];
+    for (const d of ['2026-10-05', '2026-10-07']) {
+      const kind = u.allows(1, d, 'promo') ? 'promo' : 'value';
+      if (!u.allows(1, d, kind)) continue;
+      u.take(1, d, kind, 10);
+      placed.push(kind);
+    }
+    weeks.push(placed);
+  }
+  const all = weeks.flat();
+  const promos = all.filter((k) => k === 'promo').length;
+  assert.equal(all.length, 16);   // 2 בשבוע — התקציב
+  // בכל 4 שבועות רצופים: לא יותר מאחד מכל 4
+  assert.ok(promos >= 3 && promos <= 4, `${promos} מכירתיים: ${JSON.stringify(weeks)}`);
+  for (let w = 3; w < 8; w += 1) {
+    const win = weeks.slice(w - 3, w + 1).flat();
+    const p = win.filter((k) => k === 'promo').length;
+    assert.ok(win.length - p >= 3 * p, `חלון ${w}: ${JSON.stringify(win)}`);
+  }
+});
+
+/* ========================= סעיף 6 — מה לא נכנס ולמה ========================= */
+
+import { notPlacedLimits, notPlacedNotes } from '../src/engine.js';
+
+test('סעיף 6 — notPlacedLimits: סיבה אחת לכל תוכן×ערוץ, לפי הסדר; ערך רק בתקרת ערך', () => {
+  const chs = [{ id: 1, name: 'פייסבוק' }, { id: 2, name: 'וואטסאפ' }];
+  const c = (id, kind) => ({ id, kind, eligible_channel_ids: [1, 2] });
+  const misses = new Map([
+    ['1:10', new Map([['gap', { gap: 3 }], ['ratio', { ratio: 3, value: 2, promo: 1 }]])],
+    ['1:11', new Map([['gap', { gap: 3 }]])],
+    ['1:12', new Map([['gap', { gap: 3 }]])],         // ערך במרווח — מצב רגיל, לא מדווח
+    ['2:13', new Map([['value_week', { cap: 2 }]])],
+  ]);
+  const limits = notPlacedLimits({
+    content: [c(10, 'promo'), c(11, 'promo'), c(12, 'value'), c(13, 'value'), c(14, 'promo')],
+    channels: chs, misses, landed: new Set(['2:10', '2:11']), skip: new Set(['2:14']),
+    share: (ch) => (ch === 1 ? null : null),
+  });
+  const by = Object.fromEntries(limits.map((x) => [`${x.reason}:${x.channel_id}`, x]));
+  assert.deepEqual(Object.keys(by).sort(), ['gap:1', 'ratio:1', 'value_week:2']);
+  assert.equal(by['ratio:1'].count, 1);
+  assert.equal(by['gap:1'].count, 1);
+  assert.equal(by['value_week:2'].kinds.value, 1);
+});
+
+test('סעיף 6 — notPlacedNotes: כל הודעה אומרת את המגבלה עם המספרים', () => {
+  const base = { channel_name: 'וואטסאפ', count: 2, kinds: { promo: 2, hybrid: 0, value: 0 } };
+  const [ratio, cap, week, day, share, gap] = notPlacedNotes([
+    { ...base, reason: 'ratio', ratio: 3, value: 4, promo: 1 },
+    { ...base, reason: 'ratio_cap', ratio: 3, budget: 2, ratio_cap: 2 },
+    { ...base, reason: 'promo_week', cap: 1 },
+    { ...base, count: 1, kinds: { promo: 1 }, reason: 'promo_day', per_day: 1 },
+    { ...base, reason: 'share', share_pct: 50, cap: 2 },
+    { ...base, reason: 'gap', gap: 3 },
+  ]);
+  assert.match(ratio, /^2 פוסטים מכירתיים לא נכנסו לוואטסאפ: נדרשים 3 פוסטי ערך לכל מכירתי.*4 ערך מול 1 מכירתיים\. עוד תוכן ערך/);
+  assert.match(cap, /ערוץ של 2 פוסטים בשבוע מכניס עד 2 מכירתיים ב-28 ימים/);
+  assert.doesNotMatch(cap, /עוד תוכן ערך/);
+  assert.match(week, /הערוץ מקבל עד 1 מכירתיים בשבוע \(בהגדרות הערוץ, תחת "מתקדם"\)/);
+  assert.match(day, /^פוסט מכירתי אחד לא נכנס לוואטסאפ: מותר עד מכירתי אחד ביום בכל הערוצים/);
+  assert.match(share, /הנתח של הקמפיין בערוץ הוא 50% — עד 2 פוסטים בשבוע/);
+  assert.match(gap, /המרווח בין פוסטים של אותה נקודת קצה בערוץ הוא 3 ימים/);
 });

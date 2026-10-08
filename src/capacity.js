@@ -427,6 +427,54 @@ export function siblingsOf(campaign, concurrent, channelId) {
 }
 
 /**
+ * המשקל של כל צד: "משולב" נספר hybrid_weight כמכירתי והשאר כערך.
+ * אותה נוסחה בשער היחס של המנוע, בקיבולת של קמפיין ובכרטיס "ערך לכל מכירתי".
+ */
+export function kindWeights({ promo = 0, value = 0, hybrid = 0 }, hybridWeight) {
+  const hw = Number(hybridWeight);
+  return { promo: promo + hybrid * hw, value: value + hybrid * (1 - hw) };
+}
+
+/** החלון של שער היחס בין ערך למכירתי, בימים — לכל ערוץ בנפרד (סעיף 6) */
+export const RATIO_WINDOW_DAYS = 28;
+
+/**
+ * כמה פוסטי ערך נדרשים לכל מכירתי בערוץ בפועל: min_value_per_promo (0 = השער
+ * כבוי), אבל לא יותר ממה שהערוץ מכיל ב-28 יום פחות המכירתי עצמו. ערוץ של
+ * פוסט אחד בשבוע (4 בחלון) ביחס 5 היה חוסם מכירתי לתמיד — כאן הוא מקבל
+ * מכירתי אחד על כל 4 (היחס לא חל מעבר לגודל הערוץ).
+ * @param budget channelBudget של הערוץ
+ */
+export function windowRatio(minRatio, budget) {
+  const r = Number(minRatio) || 0;
+  if (r <= 0) return 0;
+  return Math.min(r, Math.max(0, (budget * RATIO_WINDOW_DAYS) / 7 - 1));
+}
+
+/**
+ * שער היחס של המנוע (סעיף 6): האם מכירתי נוסף נכנס לערוץ, מול המשקלים
+ * (kindWeights) של כל הפוסטים שלו ב-28 הימים — מה שכבר על הלוח או פורסם,
+ * ומה שהמנוע מתכנן באותה ריצה. ערך ≥ יחס × (מכירתי + 1).
+ */
+export function ratioAllowsPromo(weights, minRatio, budget) {
+  const r = windowRatio(minRatio, budget);
+  return r <= 0 || weights.value >= r * (weights.promo + 1);
+}
+
+/**
+ * כמה מכירתיים (במשקל — משולב נספר חלקית) נכנסים לערוץ בטווח של days ימים
+ * אם שאר הפוסטים בו ערך — אותו אי-שוויון כמו ratioAllowsPromo, בערוץ מלא:
+ * floor(תקציב × שבועות / (1 + יחס)). טווח קצר מ-28 יום נמדד כחלון שלם —
+ * שער היחס של המנוע מסתכל על 28 הימים שמסביב. Infinity — השער כבוי.
+ * לקיבולת של קמפיין ולמילוי המרוסן במנוע (שבועות שעוד אין בהם ערך לספור).
+ */
+export function ratioPromoCap(budget, days, minRatio) {
+  const r = windowRatio(minRatio, budget);
+  if (r <= 0) return Infinity;
+  return Math.floor((budget * Math.max(days, RATIO_WINDOW_DAYS)) / 7 / (1 + r));
+}
+
+/**
  * כמה פוסטים בשבוע המנוע רשאי לשבץ בערוץ: התקרה פחות השמורה לדחופים.
  * אותו מספר ש-buildUsage במנוע אוכף — מקור אחד.
  */
@@ -456,7 +504,11 @@ export function channelBudget(channel) {
  *               לדחופים), או כשהאחים תפסו את כל הימים — המנוע לא ישבץ שם,
  *               ולכן גם לא דורשים בשבילו תוכן
  *   limitedBy = 'blocked' (כל הימים חסומים) / 'budget' (תקציב 0) /
- *               'gap' (המרווח הוא המגביל, כולל חלק 0 בין אחים) / 'rate'
+ *               'gap' (המרווח הוא המגביל, כולל חלק 0 בין אחים) / 'rate' /
+ *               מגבלה לפי סוג (סעיף 6, רק עם mix): 'ratio' / 'promo_week' /
+ *               'promo_day' / 'hybrid_week' / 'value_week' (kindLimited)
+ *   kinds     = כמה מכל סוג נכנס (עם mix), kindWanted — כמה ביקשו לפני
+ *               המגבלות, kindLimits — המספרים של כל מגבלה (להודעות)
  *
  * ימים חסומים: blocked_days הם מספרי ימים בשבוע (0 = ראשון), כמו
  * Date.getDay() במנוע (buildSlots / allows).
@@ -466,7 +518,8 @@ export function channelBudget(channel) {
  *          availableDays = מספר הימים הפנויים בטווח
  */
 export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GAP_DAYS,
-                                  siblings = 1, siblingRank = 0 }) {
+                                  siblings = 1, siblingRank = 0, mix = null, settings = null,
+                                  promoDayCap = null }) {
   const start = utc(from);
   const end = utc(to);
   const span = Math.max(0, Math.round((end - start) / DAY)) + 1;
@@ -505,8 +558,72 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
   else if (budget <= 0) limitedBy = 'budget';
   else if (gapCap === 0 || gapCap < rateCap) limitedBy = 'gap';
 
+  // סעיף 6: מגבלות לפי סוג — רק כשידוע מה התוכן של הקמפיין בערוץ (mix)
+  const dow0 = new Date(start).getUTCDay();
+  const weeksTouched = new Set(available.map((d) => Math.floor((d + dow0) / 7))).size;
+  const kind = mix && capacity > 0
+    ? kindLimited({ S: capacity, mix, channel, settings, weeksTouched, span,
+                    availableDays: available.length, promoDayCap })
+    : null;
+  if (kind && kind.capacity < capacity) {
+    capacity = kind.capacity;
+    limitedBy = kind.binding;
+  }
+
   return { wanted, capacity, rateCap, gapCap, siblings: k, availableDays: available.length,
-           limitedBy };
+           limitedBy, kinds: kind?.kinds ?? null, kindWanted: kind?.wanted ?? null,
+           kindLimits: kind?.limits ?? null };
+}
+
+/**
+ * החלק של קיבולת הקמפיין שנשאר אחרי המגבלות לפי סוג (סעיף 6), מתוך S = מה
+ * שהנתח, הקצב והמרווח מאפשרים. התוכן של הקמפיין בערוץ (mix — כמה מכל סוג)
+ * מחלק את S לפי אותו יחס, וכל סוג נחתך במגבלות שהמנוע אוכף:
+ *   promo_week / hybrid_week / value_week — התקרה לסוג בערוץ × השבועות בלוח
+ *     שהטווח נוגע בהם (שבוע ראשון–שבת, כמו buildUsage)
+ *   promo_day — מכירתי ליום (max_promo_per_day, בכל הערוצים) × הימים הפנויים,
+ *     או promoDayCap — החלק של הערוץ כשלקמפיין כמה ערוצים (channelCapacities)
+ *   ratio — שער היחס: ratioPromoCap (משקל מכירתי, משולב נספר חלקית)
+ * קירוב: התקרות לערוץ שלמות לקמפיין הזה — קמפיין מכירתי נוסף באותו ערוץ
+ * חולק אותן בפועל; המנוע אוכף, וכאן רק מעריכים כמה נכנס.
+ * @returns {{capacity:number, kinds:object, wanted:object, limits:object,
+ *            binding:'ratio'|'promo_week'|'promo_day'|'hybrid_week'|'value_week'|null}|null}
+ */
+function kindLimited({ S, mix, channel, settings, weeksTouched, span, availableDays, promoDayCap }) {
+  const n = { promo: Number(mix.promo ?? 0), value: Number(mix.value ?? 0),
+              hybrid: Number(mix.hybrid ?? 0) };
+  const total = n.promo + n.value + n.hybrid;
+  if (!total) return null;
+  const P = Math.round((S * n.promo) / total);
+  const H = Math.min(S - P, Math.round((S * n.hybrid) / total));
+  const V = S - P - H;
+  const capOf = (field) => (channel[field] != null ? Number(channel[field]) * weeksTouched : Infinity);
+  const perDay = Number(settings?.max_promo_per_day ?? 1);
+  const hw = Number(settings?.hybrid_weight ?? 0.5);
+  const limits = {
+    promo_week: capOf('max_promo_per_week'),
+    hybrid_week: capOf('max_hybrid_per_week'),
+    value_week: capOf('max_value_per_week'),
+    promo_day: promoDayCap ?? perDay * availableDays,
+    ratio: ratioPromoCap(channelBudget(channel), span, settings?.min_value_per_promo ?? 3),
+  };
+  let p = Math.min(P, limits.promo_week, limits.promo_day);
+  let h = Math.min(H, limits.hybrid_week);
+  const v = Math.min(V, limits.value_week);
+  let ratioCut = false;
+  if (p + hw * h > limits.ratio) {
+    ratioCut = true;
+    p = Math.max(0, Math.floor(limits.ratio - hw * h));
+    if (p + hw * h > limits.ratio && hw > 0) h = Math.floor(limits.ratio / hw);
+  }
+  let binding = null;
+  if (ratioCut) binding = 'ratio';
+  else if (P > limits.promo_week && limits.promo_week <= limits.promo_day) binding = 'promo_week';
+  else if (P > limits.promo_day) binding = 'promo_day';
+  else if (H > limits.hybrid_week) binding = 'hybrid_week';
+  else if (V > limits.value_week) binding = 'value_week';
+  return { capacity: p + h + v, kinds: { promo: p, hybrid: h, value: v },
+           wanted: { promo: P, hybrid: H, value: V }, limits, binding };
 }
 
 /**

@@ -447,3 +447,88 @@ test('סעיף 5 — weekGapLimit: מרווח של קמפיין שמגביל א�
                               settings: { min_gap_days: 7 } }), 7);
   assert.equal(weekGapLimit({ ...week, channel: ch, endpoints: new Map(), settings: null }), null);
 });
+
+/* ========================= סעיף 6 — מכירתי בתוך הקיבולת ========================= */
+
+import { kindMix } from '../src/campaigns.js';
+import { ratioAllowsPromo, ratioPromoCap, windowRatio } from '../src/capacity.js';
+
+const RULES = { min_value_per_promo: 3, max_promo_per_day: 1, hybrid_weight: 0.5 };
+
+test('סעיף 6 — יחס על 28 יום: ערוץ של 3 בשבוע ביחס 3 → מכירתי אחד לכל 4 פוסטים', () => {
+  // תקציב 3 → 12 פוסטים ב-28 יום → 3 מכירתיים (קודם: floor(3 / 4) = 0 בכל שבוע)
+  assert.equal(ratioPromoCap(3, 28, 3), 3);
+  assert.equal(ratioPromoCap(3, 7, 3), 3);        // טווח קצר נמדד כחלון שלם
+  assert.equal(ratioPromoCap(3, 56, 3), 6);
+  assert.equal(ratioPromoCap(3, 28, 0), Infinity); // השער כבוי
+  // ערוץ קטן מהיחס: פוסט אחד בשבוע ביחס 5 → היחס בפועל 3 (4 בחלון) ולא חסימה לתמיד
+  assert.equal(windowRatio(5, 1), 3);
+  assert.equal(ratioPromoCap(1, 28, 5), 1);
+  assert.equal(windowRatio(3, 4), 3);
+  // השער: ערך ≥ יחס × (מכירתי + 1)
+  assert.equal(ratioAllowsPromo({ value: 3, promo: 0 }, 3, 3), true);
+  assert.equal(ratioAllowsPromo({ value: 5, promo: 1 }, 3, 3), false);
+  assert.equal(ratioAllowsPromo({ value: 0, promo: 0 }, 0, 3), true);
+});
+
+test('סעיף 6 — קיבולת לפי סוג: קמפיין מכירתי בערוץ של 3 מקבל רק את מה שהיחס מאפשר', () => {
+  const ch = { max_per_week: 3, urgent_reserve_pct: 0 };
+  const base = { from: '2026-11-01', to: '2026-12-26', channel: ch, share: 1, gapDays: 1,
+                 settings: RULES };
+  // בלי לדעת מה התוכן — כמו קודם
+  assert.equal(channelCapacity(base).capacity, 24);
+  const promo = channelCapacity({ ...base, mix: { promo: 5 } });
+  assert.equal(promo.capacity, 6);                 // 24 / 4
+  assert.equal(promo.limitedBy, 'ratio');
+  assert.deepEqual(promo.kinds, { promo: 6, hybrid: 0, value: 0 });
+  // חצי ערך: 12 ערך + 6 מכירתי (התקרה) = 18
+  const half = channelCapacity({ ...base, mix: { promo: 2, value: 2 } });
+  assert.equal(half.capacity, 18);
+  // ערך בלבד — בלי מגבלה
+  assert.equal(channelCapacity({ ...base, mix: { value: 3 } }).capacity, 24);
+  // יחס כבוי — הכול נכנס
+  assert.equal(channelCapacity({ ...base, mix: { promo: 1 },
+    settings: { ...RULES, min_value_per_promo: 0 } }).capacity, 24);
+});
+
+test('סעיף 6 — תקרת מכירתיים לשבוע בערוץ', () => {
+  const ch = { max_per_week: 7, urgent_reserve_pct: 0, max_promo_per_week: 1 };
+  // 1.11 (ראשון) עד 28.11 — 4 שבועות בלוח
+  const r = channelCapacity({ from: '2026-11-01', to: '2026-11-28', channel: ch, share: 1,
+    gapDays: 1, mix: { promo: 1 }, settings: { ...RULES, min_value_per_promo: 0 } });
+  assert.equal(r.capacity, 4);
+  assert.equal(r.limitedBy, 'promo_week');
+  assert.equal(r.kindLimits.promo_week, 4);
+  // מכירתי ליום בערוץ אחד לא מגביל מעבר למרווח (פוסט אחד ליום לנקודה ממילא) —
+  // הוא חוצה ערוצים (הבדיקה הבאה)
+  assert.equal(r.kindLimits.promo_day, 28);
+});
+
+test('סעיף 6 — channelCapacities: מכירתי ליום מתחלק בין הערוצים של הקמפיין', () => {
+  const a = { id: 1, name: 'א', max_per_week: 7, urgent_reserve_pct: 0 };
+  const b = { id: 2, name: 'ב', max_per_week: 7, urgent_reserve_pct: 0 };
+  const camp = { id: 5, endpoint_id: 1, active: true, endpoint_importance: 5, min_gap_days: 1,
+                 starts_on: '2026-11-01', ends_on: '2026-11-07' };
+  const mix = new Map([[1, { promo: 3 }], [2, { promo: 3 }]]);
+  const caps = channelCapacities(camp, [a, b], [],
+    { gapDays: 1, settings: { ...RULES, min_value_per_promo: 0 }, mix });
+  // 7 ימים × מכירתי אחד ליום — 7 בשני הערוצים יחד, לא 7 בכל אחד
+  assert.ok(caps.get(1).capacity + caps.get(2).capacity <= 7,
+    `${caps.get(1).capacity} + ${caps.get(2).capacity}`);
+  assert.equal(caps.get(1).limitedBy, 'promo_day');
+});
+
+test('סעיף 6 — kindMix: לפי הגרסאות בכל ערוץ, ובלי תוכן — null', () => {
+  const items = [
+    { kind: 'promo', variants: [{ channel_id: 1, status: 'ready' }, { channel_id: 2, status: 'not_relevant' }] },
+    { kind: 'value', variants: [{ channel_id: 2, status: 'draft' }] },
+    { kind: 'promo', slot_channel_id: 3, variants: [] },
+  ];
+  const m = kindMix(items, [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }]);
+  assert.deepEqual(m.get(1), { promo: 1, value: 0, hybrid: 0 });
+  assert.deepEqual(m.get(2), { promo: 0, value: 1, hybrid: 0 });
+  assert.deepEqual(m.get(3), { promo: 1, value: 0, hybrid: 0 });
+  // ערוץ בלי אף פריט — כל התוכן של הקמפיין
+  assert.deepEqual(m.get(4), { promo: 2, value: 1, hybrid: 0 });
+  assert.equal(kindMix([], [{ id: 1 }]), null);
+});

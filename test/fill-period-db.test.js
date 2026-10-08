@@ -439,7 +439,8 @@ test('קמפיין שכולו מכירתי: בשבועות מרוסנים מקב
   const ch2 = await q1(
     `insert into channels (name, platform, max_per_week, urgent_reserve_pct)
      values ('ערוץ מכירתי ב', 'manual', 7, 0) returning id`);
-  // שני ערוצים × 7 = 14; יחס 3 ערך לכל מכירתי → 3 מכירתיים בשבוע
+  // סעיף 6: שער היחס לכל ערוץ על 28 יום — ערוץ של 7, יחס 3 → 7 מכירתיים ב-28
+  // יום, עד רבע מהם (2) בשבוע: 2 + 2 = 4 בשבוע (קודם: 14 / 4 = 3 לשני הערוצים יחד)
   const first = weekMeta(inDays(21));
   const c = await q1(
     `insert into campaigns (endpoint_id, name, starts_on, ends_on, min_gap_days)
@@ -452,9 +453,12 @@ test('קמפיין שכולו מכירתי: בשבועות מרוסנים מקב
   const perWeek = new Map();
   for (const p of posts) perWeek.set(weekOf(p.scheduled_at), (perWeek.get(weekOf(p.scheduled_at)) ?? 0) + 1);
   assert.deepEqual([...perWeek.entries()].sort(),
-    [[first.start, 3], [weekMeta(inDays(28)).start, 3]], JSON.stringify(fill.summary));
+    [[first.start, 4], [weekMeta(inDays(28)).start, 4]], JSON.stringify(fill.summary));
   assert.ok(posts.every((p) => p.kind === 'promo'));
   assert.ok(fill.promo_blocked > 0, 'החסומים נספרים — לא בשקט');
+  // וההודעה אומרת איזו מגבלה עצרה, עם המספרים — לא "חסר תוכן ערך"
+  assert.ok(fill.limit_notes.some((n) => /עד 7 מכירתיים ב-28 ימים/.test(n)), fill.limit_notes.join(' | '));
+  assert.ok(!fill.limit_notes.some((n) => /עוד תוכן ערך/.test(n)));
 
   await q('delete from posts where channel_id = $1', [ch2.id]);
   await cleanup(x);
