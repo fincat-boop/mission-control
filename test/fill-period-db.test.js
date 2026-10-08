@@ -550,7 +550,7 @@ test('ותק: פוסט שנכשל לא נספר — הנקודה עדיין מח
   const mine = plan.placements.filter((p) => p.channel_id === a.ch);
   assert.equal(mine.length, 1);
   assert.equal(mine[0].endpoint_id, a.ep, `זכתה ${mine[0].endpoint_name} (${mine[0].reason})`);
-  assert.match(mine[0].reason, /עוד לא פורסמה מעולם/);
+  assert.match(mine[0].reason, /עוד לא פורסמה ב/);  // סעיף 8: בערוץ של המשבצת
 
   // מתוכנן שהמועד שלו עבר אתמול ולא סומן — "לא אושר שיצא": לא ידוע ≠ לא יצא
   // (סעיף 2 בשיפורי ההתנהגות; קודם הוא לא נספר, והנקודה נראתה רעבה)

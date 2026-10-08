@@ -928,7 +928,7 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   // ערוץ / נקודה מושבתים) לא נספר: הוא לא על הלוח. אותו כלל כמו UNCONFIRMED_SQL.
   const reference = stalenessReference(week, now);
   const lastLive = await rows(
-    `select p.endpoint_id, max(coalesce(p.published_at, p.scheduled_at)) as last_at
+    `select p.endpoint_id, p.channel_id, max(coalesce(p.published_at, p.scheduled_at)) as last_at
        from posts p
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
@@ -943,10 +943,18 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
               and (p.content_id is not null or p.urgent or not p.auto_hole)
               and exists (select 1 from channels uc where uc.id = p.channel_id
                              and uc.platform <> 'newsletter')))
-      group by p.endpoint_id`,
+      group by p.endpoint_id, p.channel_id`,
     [reference, now, UPCOMING_STATUSES]
   );
-  const lastMap = new Map(lastLive.map((r) => [r.endpoint_id, r.last_at]));
+  // הוותק נמדד לכל נקודה × ערוץ (סעיף 8): נקודה שמתפרסמת כל שבוע בוואטסאפ
+  // ונעדרת חודשיים מפייסבוק היא "טרייה" רק בוואטסאפ. lastPair — `${נקודה}:${ערוץ}`;
+  // lastMap — הנקודה בכלל (האחרון מבין הערוצים), לחורים ולבדיקות
+  const lastPair = new Map(lastLive.map((r) => [`${r.endpoint_id}:${r.channel_id}`, r.last_at]));
+  const lastMap = new Map();
+  for (const r of lastLive) {
+    const cur = lastMap.get(r.endpoint_id);
+    if (!cur || new Date(r.last_at) > new Date(cur)) lastMap.set(r.endpoint_id, r.last_at);
+  }
 
   // פער מהנתח של הקמפיינים שרצים בשבוע המתוכנן, לכל ערוץ בנפרד (סעיף 4).
   // קמפיין מושהה לא מתחרה על שטח (normalizeShares מסנן אותו), בדיוק כמו
@@ -985,10 +993,33 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   const scheduledBoost = new Map(); // כמה כבר הצענו לה בריצה הזו
 
   // התקרה של נקודה שלא פורסמה: הוותיקה ביותר מבין אלה שיש להן פוסט לפני
-  // הייחוס (3 כשאין אף אחת) — ראו stalenessOf
-  const published = endpoints.filter((e) => lastMap.has(e.id))
-    .map((e) => stalenessOf(lastMap.get(e.id), reference, e).staleness);
-  const neverCap = published.length ? Math.max(...published) : 3;
+  // הייחוס (3 כשאין אף אחת) — ראו stalenessOf. לנקודה בכלל — מול כל הנקודות;
+  // לנקודה × ערוץ — מול הנקודות שיש להן פוסט באותו ערוץ (סעיף 8)
+  const capOf = (has, last) => {
+    const list = endpoints.filter(has).map((e) => stalenessOf(last(e), reference, e).staleness);
+    return list.length ? Math.max(...list) : 3;
+  };
+  const neverCap = capOf((e) => lastMap.has(e.id), (e) => lastMap.get(e.id));
+  const channelCaps = new Map();
+  const channelNeverCap = (channelId) => {
+    if (!channelCaps.has(channelId)) {
+      const k = (e) => `${e.id}:${channelId}`;
+      channelCaps.set(channelId, capOf((e) => lastPair.has(k(e)), (e) => lastPair.get(k(e))));
+    }
+    return channelCaps.get(channelId);
+  };
+  // הוותק של נקודה בערוץ — אותו כלל כמו לנקודה (stalenessOf), רק על הפוסטים
+  // שלה בערוץ הזה; "עוד לא פורסמה בערוץ" — מאז שנוצרה, לפחות 2, עד הוותיקה בערוץ
+  const pairStale = new Map();
+  const stalenessIn = (e, channelId) => {
+    const k = `${e.id}:${channelId}`;
+    if (!pairStale.has(k)) {
+      pairStale.set(k, stalenessOf(lastPair.get(k) ?? null, reference, e,
+        channelNeverCap(channelId)));
+    }
+    return pairStale.get(k);
+  };
+  const byId = new Map(endpoints.map((e) => [e.id, e]));
 
   const parts = new Map();
   for (const e of endpoints) {
@@ -1004,10 +1035,21 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
     });
   }
 
+  /** המרכיבים של נקודה — בערוץ channelId הוותק נמדד באותו ערוץ (סעיף 8) */
+  const partsIn = (endpointId, channelId) => {
+    const p = parts.get(endpointId);
+    if (!p || channelId == null) return p;
+    const { daysSince, staleness } = stalenessIn(byId.get(endpointId), Number(channelId));
+    return { ...p, daysSince, staleness };
+  };
+
   return {
-    /** הציון של נקודה למשבצת בערוץ channelId — הפיגור מהנתח נמדד באותו ערוץ */
+    /**
+     * הציון של נקודה למשבצת בערוץ channelId — הוותק והפיגור מהנתח נמדדים
+     * באותו ערוץ. בלי ערוץ — הוותק של הנקודה בכלל
+     */
     score(endpointId, channelId = null) {
-      const p = parts.get(endpointId);
+      const p = partsIn(endpointId, channelId);
       if (!p) return 0;
       // כל שיבוץ שכבר הוצע בריצה הזו מקטין את החוב, כדי שהמנוע יתפזר
       const already = scheduledBoost.get(endpointId) ?? 0;
@@ -1017,9 +1059,13 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
            + (p.performance == null ? 0 : W_PERFORMANCE * (p.performance - 1))
            - already * 0.6;
     },
-    /** המרכיבים של נקודה; deficit — בערוץ channelId (בלי ערוץ — הגדול מבין הערוצים) */
+    /**
+     * המרכיבים של נקודה. עם ערוץ — הוותק (staleness, daysSince) והפיגור
+     * (deficit) באותו ערוץ; בלי ערוץ — הוותק של הנקודה בכלל (הפוסט האחרון
+     * בכל ערוץ — לחורים) והפיגור הגדול מבין הערוצים
+     */
     parts: (id, channelId = null) => {
-      const p = parts.get(id);
+      const p = partsIn(id, channelId);
       return p && { ...p, deficit: deficitOf(id, channelId) };
     },
     /** הנתח הממוצע של קמפיין בשבוע המתוכנן בערוץ (0 כשאינו רץ בו) */
@@ -1610,8 +1656,11 @@ export function chooseForSlot(ctx) {
   const best = candidates[0];
   const p = debts.parts(best.endpoint.id, slot.channel_id);
   const bits = [];
-  if (p.daysSince === null) bits.push('עוד לא פורסמה מעולם');
-  else if (p.staleness >= 1) bits.push(`${Math.floor(p.daysSince)} ימים בלי פרסום`);
+  // הוותק בערוץ של המשבצת (סעיף 8)
+  if (p.daysSince === null) bits.push(`עוד לא פורסמה ב${slot.channel_name ?? 'ערוץ הזה'}`);
+  else if (p.staleness >= 1) {
+    bits.push(`${Math.floor(p.daysSince)} ימים בלי פרסום ב${slot.channel_name ?? 'ערוץ הזה'}`);
+  }
   if (p.deficit > 0.05) bits.push(`מפגרת ${Math.round(p.deficit * 100)} נק' אחרי הנתח שלה`);
   if (best.inCampaign) bits.push('קמפיין רץ');
   if (best.draft) bits.push('התוכן עוד בטיוטה — צריך לכתוב את הניסוח הסופי');

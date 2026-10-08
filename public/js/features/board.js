@@ -45,12 +45,16 @@ export async function renderBoard() {
       : o.days_since === 0 ? 'פורסם היום'
       : o.days_since === 1 ? 'פורסם אתמול'
       : `${o.days_since} ימים בלי פרסום`;
+    // הערוץ שבו הנקודה הכי ותיקה, כשהוא שונה מהפרסום האחרון בכלל (סעיף 8)
+    const sc = o.stalest_channel;
+    const where = sc
+      ? ` · ב${sc.name} ${sc.days_since === null ? 'עוד לא' : `${sc.days_since} ימים`}` : '';
     const plan = o.scheduled_this_week === 1 ? 'פעם אחת השבוע' : `${o.scheduled_this_week} פעמים השבוע`;
     const bg = epColor(o.endpoint_id);
-    return `<li class="oxyitem" title="${esc(`${o.name} · ${plan} · ${when}`)}"
+    return `<li class="oxyitem" title="${esc(`${o.name} · ${plan} · ${when}${where}`)}"
       style="background:${bg};color:${inkOn(bg)}">
       <span class="nm">${esc(o.name)}</span>
-      <span class="st">${esc(plan)} · ${esc(when)}</span>
+      <span class="st">${esc(plan)} · ${esc(when)}${esc(where)}</span>
     </li>`;
   }).join('');
 
