@@ -22,7 +22,13 @@ import { buildBoard, ymd } from './board.js';
 import { planWeek } from './engine.js';
 import { VIA_HEADER } from './audit.js';
 import { buildStats, readActivity } from './stats.js';
-import { capWarning, gapWarning, linkDayWarning } from './gap.js';
+import { campaignWindowWarning, capWarning, gapWarning, linkDayWarning } from './gap.js';
+import {
+  approvalResetOnChange, blockedDayError, channelChangeBlocker, isMove, moveBlocker,
+  publishingBlocker, sameDayClash,
+} from './routes/board.js';
+import { dueOf, taskList } from './routes/tasks.js';
+import { openPostSql } from './live.js';
 import { friendlyAiError } from './ai-errors.js';
 
 const MODEL = 'claude-opus-5';
@@ -225,14 +231,27 @@ const READ_TOOLS = {
   },
 
   get_tasks: {
-    description: 'המשימות הפתוחות והמשימות שנסגרו השבוע.',
+    description: 'המשימות כמו בטאב "משימות": להיום, דורש טיפול (באיחור / בלי יעד), ' +
+      'בקרוב, ומה שהושלם השבוע. משימות שנדחו ("דחה עד מחר") לא ברשימות — רק כמה הן.',
     input_schema: { type: 'object', properties: {} },
-    run: async () => ({
-      open: await rows(
-        `select t.id, t.title, t.subtitle, t.kind, t.urgent, t.due_on, u.name as assignee
-           from tasks t left join users u on u.id = t.assignee_id
-          where t.done = false order by t.urgent desc, t.due_on nulls last, t.id`),
-    }),
+    // אותה רשימה כמו GET /tasks (taskList): סוגרת קודם את מה שנפתר, מסננת
+    // את מה שנדחה ומקבצת באותו כלל — לא שאילתה משלה שתסטה מהטאב
+    run: async () => {
+      const g = await taskList();
+      const brief = (t) => ({
+        id: t.id, title: t.title, subtitle: t.subtitle, kind: t.kind, urgent: t.urgent,
+        due_on: dueOf(t), assignee: t.assignee_name ?? null,
+        post_id: t.post_id ?? null, post_title: t.post_title ?? null, channel: t.channel_name ?? null,
+      });
+      return {
+        today: g.today.map(brief),
+        attention: g.attention.map(brief),
+        upcoming: g.upcoming.map(brief),
+        open_count: g.open_count,
+        snoozed_count: g.snoozed.length,
+        done_this_week: g.done_this_week.map((t) => ({ id: t.id, title: t.title, kind: t.kind })),
+      };
+    },
   },
 
   get_stats: {
@@ -531,10 +550,13 @@ const WRITE_TOOLS = {
       },
       required: ['post_id'],
     },
-    // האזהרות הרכות (מרווח, פוסט מקושר, מכסות) מוצגות בהצעה עצמה (checkMove),
-    // ולכן אישור ההצעה הוא גם האישור שלהן — אחרת הנתיב היה מחזיר 409
-    request: ({ post_id, ...rest }) => ({
-      method: 'PATCH', path: `/posts/${post_id}`, body: { ...rest, confirm_warnings: true },
+    // האזהרות הרכות (מרווח, חלון הקמפיין, פוסט מקושר, מכסות) מוצגות בהצעה
+    // עצמה (checkMove — אותן בדיקות כמו PATCH /posts), ולכן אישור ההצעה הוא
+    // גם האישור שלהן. רק כשהוצגו: אחרת אזהרה שנולדה בינתיים חוזרת כ-409
+    // ולא מאושרת בלי שאיש ראה אותה (ב2)
+    request: ({ post_id, ...rest }, checked) => ({
+      method: 'PATCH', path: `/posts/${post_id}`,
+      body: { ...rest, ...(checked?.confirm ? { confirm_warnings: true } : {}) },
     }),
     check: (a) => checkMove(a),
   },
@@ -586,9 +608,10 @@ const WRITE_TOOLS = {
       method: 'PATCH', path: `/endpoints/${endpoint_id}`, body: rest,
     }),
     check: async (a) => ({
-      warnings: a.importance != null
-        ? ['שינוי חשיבות משנה את הנתח של כל שאר נקודות הקצה']
-        : [],
+      warnings: [
+        ...(a.importance != null ? ['שינוי חשיבות משנה את הנתח של כל שאר נקודות הקצה'] : []),
+        ...(a.active === false ? await heldWarning('endpoint_id', a.endpoint_id) : []),
+      ],
     }),
   },
 
@@ -723,6 +746,17 @@ async function checkCampaignUpdate(a) {
   return { warnings };
 }
 
+/**
+ * השבתה דרך העוזר — כמה פוסטים עתידיים יוחזקו (סעיף 16, אותו מספר כמו חלון
+ * האישור בניהול). column — 'endpoint_id' / 'channel_id' (קבוע, לא מקלט).
+ */
+async function heldWarning(column, id) {
+  const { n } = await one(
+    `select count(*)::int as n from posts p
+      where p.${column} = $1 and ${openPostSql('p')} and p.scheduled_at >= now()`, [id]);
+  return n ? [`${n} פוסטים עתידיים יירדו מהלוח ולא יתפרסמו עד שיופעל שוב — שום דבר לא נמחק`] : [];
+}
+
 async function checkChannelUpdate(a) {
   const ch = await one('select * from channels where id = $1', [a.channel_id]);
   if (!ch) return { error: 'לא נמצא ערוץ עם המזהה הזה' };
@@ -749,9 +783,19 @@ async function checkChannelUpdate(a) {
       }
     }
   }
+  if (a.active === false && ch.active) warnings.push(...await heldWarning('channel_id', a.channel_id));
   return { warnings };
 }
 
+/**
+ * הבדיקה של move_post — אותם כללים ואותו סדר כמו PATCH /posts (ב2), דרך
+ * הפונקציות של הנתיב עצמו: פוסט בפרסום, מועד שעבר (שגיאה, לא אזהרה שנכשלת
+ * אחר כך ב-400), התנגשות באותו יום (sameDayClash — סטטוסים חיים, יום
+ * בשעון ישראל, בלי פוסטים מוחזקים), יום חסום, מעבר ערוץ (פעיל, יש ניסוח,
+ * משבצת של ערוץ אחר), ואז האזהרות הרכות — מרווח, חלון הקמפיין, פוסט מקושר
+ * באותו יום, מכסות. confirm — האם יש אזהרה רכה שהאישור מכסה (ולכן ההצעה
+ * שולחת confirm_warnings). ביטול האישור לפרסום אוטומטי — נאמר בהצעה.
+ */
 async function checkMove({ post_id, scheduled_at, channel_id }) {
   const p = await one('select * from posts where id = $1', [post_id]);
   if (!p) return { error: 'לא נמצא פוסט עם המזהה הזה' };
@@ -759,50 +803,47 @@ async function checkMove({ post_id, scheduled_at, channel_id }) {
 
   const when = scheduled_at ?? p.scheduled_at;
   const target = channel_id ?? p.channel_id;
-  const when_ = new Date(when);
-  if (Number.isNaN(when_.getTime())) return { error: 'התאריך לא תקין' };
+  if (Number.isNaN(new Date(when).getTime())) return { error: 'התאריך לא תקין' };
+  const b = { ...(scheduled_at ? { scheduled_at } : {}), ...(channel_id ? { channel_id } : {}) };
 
-  const ch = await one('select name, blocked_days from channels where id = $1', [target]);
+  const publishing = publishingBlocker(p);
+  if (publishing) return { error: publishing };
+  const blocked = isMove(p, b) && moveBlocker(p, when);
+  if (blocked) return { error: blocked.error };
+
+  const clash = await sameDayClash({ postId: p.id, endpointId: p.endpoint_id, channelId: target, when });
+  if (clash) return { error: `כבר יש פוסט לאותה נקודת קצה בערוץ הזה באותו יום: ${clash.title}` };
+
+  const ch = await one('select name, blocked_days, active from channels where id = $1', [target]);
   if (!ch) return { error: 'לא נמצא ערוץ עם המזהה הזה' };
-  if ((ch.blocked_days ?? []).includes(when_.getDay())) {
-    return { error: `${ch.name} לא מקבל תוכן בימי ${HE_DAYS[when_.getDay()]}` };
+  const blockedDay = blockedDayError(ch, when);
+  if (blockedDay) return { error: blockedDay };
+
+  if (Number(target) !== p.channel_id) {
+    const item = p.content_id
+      ? await one('select id, slot_channel_id from content_items where id = $1', [p.content_id]) : null;
+    const variant = item
+      ? await one('select status from content_variants where content_id = $1 and channel_id = $2',
+                  [item.id, target]) : null;
+    const blocker = channelChangeBlocker({ target: ch, item, variant }, Number(target));
+    if (blocker) return { error: blocker.error };
   }
 
-  if (p.endpoint_id) {
-    const clash = await one(
-      `select title from posts
-        where id <> $1 and endpoint_id = $2 and channel_id = $3 and scheduled_at::date = $4::date`,
-      [p.id, p.endpoint_id, target, when]);
-    if (clash) {
-      return { error: `כבר יש פוסט לאותה נקודת קצה בערוץ הזה באותו יום: ${clash.title}` };
-    }
+  // האזהרות הרכות — כמו בנתיב: חלון הקמפיין רק כשהמועד נשלח, פוסט מקושר רק
+  // כשהיום משתנה, מכסות כשהפוסט נכנס למשבצת שלא נספר בה
+  const soft = [
+    await gapWarning({ endpointId: p.endpoint_id, channelId: target, when, excludePostId: p.id,
+                       contentId: p.content_id }),
+    scheduled_at ? await campaignWindowWarning({ contentId: p.content_id, when }) : null,
+    ymd(new Date(when)) !== ymd(new Date(p.scheduled_at))
+      ? await linkDayWarning({ contentId: p.content_id, when, excludePostId: p.id }) : null,
+    await capWarning({ channelId: target, when, kind: p.kind, excludePostId: p.id }),
+  ].filter(Boolean);
+  const warnings = soft.flatMap((w) => w.caps ?? [w.message]);
+  if (p.status === 'approved' && approvalResetOnChange(p, b)) {
+    warnings.push('האישור לפרסום אוטומטי יבוטל — מעבר לערוץ אחר מחזיר את הפוסט לאישור');
   }
-
-  if (channel_id && channel_id !== p.channel_id && p.content_id) {
-    const v = await one(
-      'select status from content_variants where content_id = $1 and channel_id = $2',
-      [p.content_id, channel_id]);
-    if (!v) return { error: `אין לתוכן הזה גרסה ל${ch.name} — צריך לכתוב אותה קודם` };
-  }
-
-  const warnings = [];
-  if (when_ < new Date()) warnings.push('התאריך החדש כבר עבר');
-
-  // מרווח צמוד מדי הוא אזהרה למשתמש, לא סיבה לפסול את ההצעה
-  const gap = await gapWarning({
-    endpointId: p.endpoint_id, channelId: target, when, excludePostId: p.id,
-    contentId: p.content_id,
-  });
-  if (gap) warnings.push(gap.message);
-  // פוסט מקושר באותו יום — רק כשהיום משתנה (כמו בנתיב); מכסות — כשהפוסט נכנס
-  // לשבוע / ערוץ / יום שלא נספר בו קודם
-  if (ymd(when_) !== ymd(new Date(p.scheduled_at))) {
-    const linked = await linkDayWarning({ contentId: p.content_id, when, excludePostId: p.id });
-    if (linked) warnings.push(linked.message);
-  }
-  const cap = await capWarning({ channelId: target, when, kind: p.kind, excludePostId: p.id });
-  if (cap) warnings.push(...cap.caps);
-  return { warnings };
+  return { warnings, confirm: soft.length > 0 };
 }
 
 /* ========================= הרכבת רשימת הכלים ========================= */
@@ -958,9 +999,10 @@ async function runTool(user, block, proposals) {
   const { summary, ...args } = block.input ?? {};
 
   let warnings = [];
+  let checked = null;
   if (write.check) {
     try {
-      const checked = await write.check(args);
+      checked = await write.check(args);
       if (checked?.error) {
         return { value: { error: checked.error, hint: 'תקן ונסה שוב, או שאל את המשתמש' }, isError: true };
       }
@@ -970,7 +1012,8 @@ async function runTool(user, block, proposals) {
     }
   }
 
-  const req = write.request(args);
+  // הבקשה יודעת מה הבדיקה הציגה (move_post מאשר רק אזהרות שהוצגו)
+  const req = write.request(args, checked);
   const id = remember(user.id, {
     tool: block.name,
     summary: summary || block.name,

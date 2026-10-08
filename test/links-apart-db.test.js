@@ -366,8 +366,11 @@ test('הלוח: פוסט מקושר באותו יום — הזזה ושיוך ת
 test('העוזר (move_post): ההצעה מציגה פוסט מקושר ומכסה, והאישור שולח confirm_warnings', { skip }, async () => {
   const { _internals } = await import('../src/assistant.js');
   const tool = _internals.WRITE_TOOLS.move_post;
-  assert.deepEqual(tool.request({ post_id: 5, scheduled_at: at(18) }),
+  // ב2: confirm_warnings רק כשהבדיקה הציגה אזהרה רכה — לא על עיוור
+  assert.deepEqual(tool.request({ post_id: 5, scheduled_at: at(18) }, { warnings: ['x'], confirm: true }),
     { method: 'PATCH', path: '/posts/5', body: { scheduled_at: at(18), confirm_warnings: true } });
+  assert.deepEqual(tool.request({ post_id: 5, scheduled_at: at(18) }, { warnings: [], confirm: false }),
+    { method: 'PATCH', path: '/posts/5', body: { scheduled_at: at(18) } });
 
   const s = await linkedSetup({ name: 'עוזר קישור' });
   const c = await capSetup('עוזר מכסה');

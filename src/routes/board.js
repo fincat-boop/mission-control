@@ -16,6 +16,7 @@ import { attachToPost, contentCandidates, plannedDate, recordDismissals } from '
 import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
 import { unconfirmedPosts } from '../unconfirmed.js';
+import { postIsLiveSql } from '../live.js';
 
 /** פוסט שתופס את היום שלו על הלוח — אותם מצבים כמו במנוע (LIVE ב-gap.js) */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
@@ -79,7 +80,7 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
 }));
 
 /** הודעת החסימה של יום שהערוץ לא מקבל בו תוכן, או null. target — שורת הערוץ */
-function blockedDayError(target, when) {
+export function blockedDayError(target, when) {
   const dow = new Date(when).getDay();
   if (!(target?.blocked_days ?? []).includes(dow)) return null;
   const names = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -89,10 +90,11 @@ function blockedDayError(target, when) {
 /**
  * פוסט אחר של אותה נקודת קצה באותו ערוץ באותו יום (postId — לא הוא עצמו), או
  * null. היום — בלוח של ישראל בשני הצדדים (פוסט ב-01:00 שייך ליום שלו, לא ליום
- * הקודם ב-UTC). נספרים רק פוסטים חיים שעל הלוח (LIVE_STATUSES), בלי פוסט של
- * קמפיין מושהה שירד מהלוח (אלא אם כבר פורסם) — כמו במנוע.
+ * הקודם ב-UTC). נספרים רק פוסטים חיים שעל הלוח (LIVE_STATUSES), בלי פוסט
+ * מוחזק שירד מהלוח (קמפיין מושהה, ערוץ / נקודה מושבתים — postIsLiveSql),
+ * אלא אם כבר פורסם. גם העוזר בודק דרכה (checkMove).
  */
-function sameDayClash({ postId = null, endpointId, channelId, when }) {
+export function sameDayClash({ postId = null, endpointId, channelId, when }) {
   if (!endpointId) return null;
   return one(
     `select p.id, p.title from posts p
@@ -100,7 +102,7 @@ function sameDayClash({ postId = null, endpointId, channelId, when }) {
        left join campaigns ca     on ca.id = ci.campaign_id
       where ($1::int is null or p.id <> $1) and p.endpoint_id = $2 and p.channel_id = $3
         and p.status = any($5)
-        and (ca.paused_at is null or p.status = 'published')
+        and (p.status = 'published' or ${postIsLiveSql('p')})
         and (p.scheduled_at at time zone 'Asia/Jerusalem')::date
           = ($4::timestamptz at time zone 'Asia/Jerusalem')::date`,
     [postId, endpointId, channelId, when, LIVE_STATUSES]

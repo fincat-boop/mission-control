@@ -85,6 +85,14 @@ const DUE_SQL = `coalesce(t.due_on, case when t.kind <> 'general'
  * ?all=1 — הכול, כולל ההיסטוריה הישנה.
  */
 r.get('/tasks', wrap(async (req, res) => {
+  res.json(await taskList({ all: req.query.all === '1' }));
+}));
+
+/**
+ * רשימת המשימות של הטאב, מקובצת (groupTasks) — גם העוזר (get_tasks) קורא
+ * דרכה, כדי שיראה בדיוק מה שהמשתמש רואה: בלי מה שנפתר, בלי מה שנדחה.
+ */
+export async function taskList({ all: everything = false } = {}) {
   // קודם סוגרים את מה שכבר נפתר — שהרשימה לא תציג משימה שאין בה צורך.
   // כשל כאן לא מפיל את הטאב (ראו closeResolvedTasksSafely)
   await closeResolvedTasksSafely();
@@ -105,10 +113,10 @@ r.get('/tasks', wrap(async (req, res) => {
                                    and v.channel_id = p.channel_id
       where $1 or t.done = false or t.done_at >= now() - interval '14 days'
       order by t.urgent desc, t.due_on nulls last, t.id`,
-    [req.query.all === '1']
+    [everything]
   );
-  res.json(groupTasks(all, { today: localYmd(), weekStart: weekMeta(new Date()).start }));
-}));
+  return groupTasks(all, { today: localYmd(), weekStart: weekMeta(new Date()).start });
+}
 
 /** מונה זול לתגית בטאב ולרענון התקופתי — בלי לשלוף את כל המשימות */
 r.get('/tasks/count', wrap(async (_req, res) => {

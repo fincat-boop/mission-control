@@ -317,3 +317,79 @@ test('22 — מחיקת תוכן: העתידיים שלא פורסמו יורד�
   assert.deepEqual(left.map((p) => p.id), [pub, past].sort((x, y) => x - y));
   assert.ok(left.every((p) => p.content_id === null));
 });
+
+/* ========================= ב2 — העוזר ========================= */
+
+test('ב2 — move_post: חלון הקמפיין מוצג ומאושר; מועד שעבר = שגיאה; ביטול אישור נאמר', { skip }, async () => {
+  const { _internals } = await import('../src/assistant.js');
+  const tool = _internals.WRITE_TOOLS.move_post;
+  const ep = await endpoint('עוזר');
+  const camp = (await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on) values ($1,'השקה',$2,$3) returning id`,
+    [ep, at(1).slice(0, 10), at(6).slice(0, 10)])).id;
+  const ci = await content(ep, [ids.fb, ids.ig], { campaign: camp });
+  const p = await post({ ep, contentId: ci, when: at(2), title: 'בתוך החלון' });
+
+  await inOrg(async () => {
+    const out = await tool.check({ post_id: p, scheduled_at: at(9) });
+    assert.ok(!out.error, out.error);
+    assert.ok(out.warnings.some((w) => /שייך לקמפיין "השקה"/.test(w)), out.warnings.join(' | '));
+    assert.equal(out.confirm, true);
+    // אין אזהרה רכה — אין confirm_warnings בבקשה
+    const quiet = await tool.check({ post_id: p, scheduled_at: at(3) });
+    assert.equal(quiet.confirm, false, quiet.warnings.join(' | '));
+    assert.ok(!('confirm_warnings' in tool.request({ post_id: p, scheduled_at: at(3) }, quiet).body));
+
+    const past = await tool.check({ post_id: p, scheduled_at: minutes(-30) });
+    assert.match(past.error ?? '', /זמן שעבר/);
+  });
+
+  await inOrg(() => db.query("update posts set status = 'approved' where id = $1", [p]));
+  await inOrg(async () => {
+    const moveCh = await tool.check({ post_id: p, channel_id: ids.ig });
+    assert.ok(!moveCh.error, moveCh.error);
+    assert.ok(moveCh.warnings.some((w) => /האישור לפרסום אוטומטי יבוטל/.test(w)), moveCh.warnings.join(' | '));
+    const moveDay = await tool.check({ post_id: p, scheduled_at: at(4) });
+    assert.ok(!moveDay.warnings.some((w) => /האישור/.test(w)), 'הזזת מועד לא מבטלת אישור');
+  });
+});
+
+test('ב2 — move_post: התנגשות לפי כללי הלוח — פוסט של קמפיין מושהה לא חוסם, פוסט חי חוסם', { skip }, async () => {
+  const { _internals } = await import('../src/assistant.js');
+  const tool = _internals.WRITE_TOOLS.move_post;
+  const ep = await endpoint('עוזר-התנגשות');
+  const paused = (await q1(
+    `insert into campaigns (endpoint_id, name, paused_at) values ($1,'מושהה',now()) returning id`, [ep])).id;
+  await post({ ep, contentId: await content(ep, [ids.fb], { campaign: paused }), when: at(5, 9) });
+  const mover = await post({ ep, when: at(4) });
+  await inOrg(async () => {
+    const ok = await tool.check({ post_id: mover, scheduled_at: at(5, 15) });
+    assert.ok(!ok.error, ok.error);
+  });
+  await post({ ep, when: at(6, 9), title: 'חי' });
+  await inOrg(async () => {
+    const clash = await tool.check({ post_id: mover, scheduled_at: at(6, 15) });
+    assert.match(clash.error ?? '', /באותו יום: חי/);
+  });
+});
+
+test('ב2 — get_tasks: אותה רשימה כמו הטאב — בלי מה שנדחה ובלי מה שנפתר', { skip }, async () => {
+  const { _internals } = await import('../src/assistant.js');
+  const ep = await endpoint('משימות');
+  const open = (await q1(
+    "insert into tasks (title, kind, due_on) values ('פתוחה', 'general', current_date) returning id")).id;
+  const snoozed = (await q1(
+    `insert into tasks (title, kind, due_on, snoozed_until)
+     values ('נדחתה', 'general', current_date, now() + interval '1 day') returning id`)).id;
+  const pub = await post({ ep, when: at(-1), status: 'published', publishedAt: at(-1) });
+  const resolved = (await q1(
+    "insert into tasks (title, kind, post_id) values ('לכתוב', 'write', $1) returning id", [pub])).id;
+
+  const out = await inOrg(() => _internals.READ_TOOLS.get_tasks.run({}, null));
+  const shown = [...out.today, ...out.attention, ...out.upcoming].map((t) => t.id);
+  assert.ok(shown.includes(open));
+  assert.ok(!shown.includes(snoozed), 'משימה שנדחתה לא מוצגת');
+  assert.ok(out.snoozed_count >= 1);
+  assert.ok(!shown.includes(resolved), 'משימה שנפתרה נסגרת קודם (closeResolvedTasks)');
+  assert.equal((await q1('select done from tasks where id = $1', [resolved])).done, true);
+});
