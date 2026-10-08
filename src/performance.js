@@ -285,6 +285,9 @@ export async function buildPerformance(from, to) {
     period: { from: period.from, to: period.to, days: period.days },
     measured: scored.length,
     shrink_k: SHRINK_K,
+    // תאימות ל-API (/api/v1, results.read): היה המתג מניהול; מאז סעיף 33 אין מתג,
+    // והשדה נגזר — true כשלפחות נקודה אחת מקבלת עכשיו מכפיל שונה מ-1
+    use_performance: [...nudges.values()].some((x) => x.nudge !== NEUTRAL),
     engine: {
       window_days: ENGINE_WINDOW_DAYS,
       from: range.from,
