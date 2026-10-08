@@ -123,7 +123,7 @@ export async function renderBoard() {
       </div>
       <button class="btn small" id="thisWeek">השבוע</button>
       <div class="spacer"></div>
-      ${can('approve') && state.autopublish
+      ${can('approve') && state.autopublish && b.autopublish_channels > 0
         ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
       ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
     </div>
@@ -250,6 +250,10 @@ function statusTag(p) {
   if (isMissed(p)) return { cls: 'orange', label: 'המועד עבר', hint: 'לא פורסם' };
   const hub = newsletterHubTag(p); // ניוזלטר שהועבר — "ממתין לאישור ב-HUB"
   if (hub) return hub;
+  // מאושר בערוץ שהפרסום האוטומטי כבוי בו — לא יוצא לבד (סעיף 30)
+  if (p.status === 'approved' && p.channel_auto === false) {
+    return { cls: 'orange', label: 'לא יתפרסם לבד', hint: 'הפרסום האוטומטי כבוי לערוץ' };
+  }
   if (AUTO_TAG[p.status]) return AUTO_TAG[p.status];
   // "מוכן" שלא יעבור את בדיקת הפרסום — אותה בדיקה כמו התא בטבלה (סעיף 21)
   if (p.variant_status === 'ready' && p.ready_warn) {

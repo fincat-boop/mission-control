@@ -248,6 +248,10 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), requireAutopublish,
   if (!payload) return bad(res, 'לא נמצא פוסט כזה', 404);
   // ניוזלטר מאושר ב-HUB, לא כאן: "העבר ל-HUB" יוצר שם טיוטה לאישור
   if (payload.post.platform === 'newsletter') return bad(res, NEWSLETTER_NO_APPROVE);
+  // סעיף 30: אישור מגן רק על ערוץ שמתפרסם לבד. ערוץ בלי פרסום אוטומטי
+  // (ידני, וואטסאפ, חיבור כבוי או ערוץ מושבת) — אין מה לאשר, ו"מאושר" שם
+  // היה מבטיח פרסום שלא יקרה
+  if (!channelAutoOn(payload.post)) return bad(res, NOT_AUTO_CHANNEL_ERROR, 409);
   if (!['scheduled', 'failed'].includes(payload.post.status)) {
     return bad(res, 'אפשר לאשר רק פוסט מתוכנן (או כזה שנכשל)');
   }
@@ -256,9 +260,6 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), requireAutopublish,
 
   const blocker = publishBlocker(payload);
   if (blocker) return bad(res, blocker);
-  if (!payload.post.auto_enabled) {
-    return bad(res, 'הפרסום האוטומטי כבוי לערוץ הזה — מדליקים בניהול → ערוצי פרסום');
-  }
 
   const post = await one(
     `update posts set status = 'approved', approved_by = $2, approved_at = now(),
@@ -270,6 +271,17 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), requireAutopublish,
 }));
 
 const isPast = (post, now = new Date()) => new Date(post.scheduled_at).getTime() < now.getTime();
+
+/**
+ * סעיף 30: האם הערוץ של הפוסט מתפרסם לבד — פעיל, עם חיבור שהפרסום
+ * האוטומטי דלוק בו (loadPayload: channel_active, auto_enabled). רק שם
+ * לאישור יש מה להגן עליו.
+ */
+export const channelAutoOn = (post) => post.channel_active !== false && !!post.auto_enabled;
+
+export const NOT_AUTO_CHANNEL_ERROR =
+  'הפרסום האוטומטי לא מופעל לערוץ הזה, ולכן אין מה לאשר — מפרסמים ידנית ומסמנים "פורסם", ' +
+  'או מדליקים פרסום אוטומטי לערוץ בניהול ← ערוצי פרסום';
 
 /**
  * למה פוסט לא נכלל באישור המרוכז, או null אם אפשר לאשר אותו.

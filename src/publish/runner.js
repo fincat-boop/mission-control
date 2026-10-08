@@ -272,7 +272,7 @@ export async function failPost(post, err, {
 /** הפוסט + הערוץ + החיבור + הגרסה + הקבצים — כל מה שצריך לפרסום אחד */
 export async function loadPayload(postId) {
   const post = await one(
-    `select p.*, c.name as channel_name, c.platform,
+    `select p.*, c.name as channel_name, c.platform, c.active as channel_active,
             cc.page_id, cc.ig_user_id, cc.access_token_enc, cc.auto_enabled
        from posts p
        join channels c on c.id = p.channel_id

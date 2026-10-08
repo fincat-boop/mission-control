@@ -221,8 +221,10 @@ async function showReschedule(post) {
   if (previewPost?.id !== post.id) return; // בינתיים נפתח פוסט אחר
   const hint = approves
     ? 'אחרי שהמועד יישמר הפוסט יאושר לפרסום אוטומטי, ויתפרסם במועד החדש.'
-    : post.status === 'approved'
+    : post.status === 'approved' && f.autoReady
       ? 'האישור לפרסום אוטומטי נשאר — הפוסט יתפרסם במועד החדש.'
+    : post.status === 'approved'
+      ? 'הפרסום האוטומטי כבוי לערוץ הזה — במועד החדש מפרסמים ידנית ומסמנים "פורסם".'
       : post.status === 'failed' && state.autopublish
         ? 'הפוסט יישאר מסומן "נכשל" עד שמישהו עם הרשאת אישור יאשר אותו שוב.'
         : post.status === 'failed' && post.maybe_out
@@ -373,7 +375,7 @@ function fillEditForm(post) {
   $('#peTitle').readOnly = !!post.content_id;
   $('#peTitleHint').hidden = !post.content_id;
   $('#peNote').value = post.note ?? '';
-  $('#peHint').textContent = post.status === 'approved'
+  $('#peHint').textContent = post.status === 'approved' && previewFacts?.autoReady
     ? 'הפוסט מאושר לפרסום אוטומטי. שינוי מועד משאיר את האישור; מעבר לערוץ אחר מבטל אותו.'
     : post.content_id ? 'מעבר לערוץ אחר דורש שלתוכן יהיה ניסוח לערוץ הזה.' : '';
   editSnapshot = editValues();
@@ -417,7 +419,7 @@ async function saveEdit() {
     editSnapshot = null;
     toast('הפוסט עודכן.' + (res.approval_reset
       ? ' האישור לפרסום אוטומטי בוטל כי הערוץ השתנה — צריך לאשר שוב.'
-      : post.status === 'approved' && body.scheduled_at
+      : post.status === 'approved' && body.scheduled_at && previewFacts?.autoReady
         ? ' האישור נשאר — הפוסט יפורסם במועד החדש.' : ''));
     await afterChange(post.id);
   } finally {
@@ -788,10 +790,13 @@ export async function openPostPreview(postId) {
       ? `<div class="pvwarn"><b>ממתין לאישור.</b> ${post.urgent ? 'מבצע דחוף' : 'פוסט'} שנוצר בלי הרשאת אישור${
           post.assignee_name ? ` (${esc(post.assignee_name)})` : ''} — לא יתפרסם עד שמישהו עם הרשאת אישור יאשר.${
           post.group_pending > 1 ? ` במבצע הזה ממתינים ${post.group_pending} ערוצים.` : ''}</div>` : ''}
-    ${post.status === 'approved'
+    ${post.status === 'approved' && previewFacts.autoReady
       ? `<div class="pvauto">⚡ מאושר לפרסום אוטומטי${
           post.approved_by_name ? ` — אישר: ${esc(post.approved_by_name)}` : ''}.
           יתפרסם ב-${esc(when)}.</div>` : ''}
+    ${post.status === 'approved' && !previewFacts.autoReady
+      ? `<div class="pvwarn"><b>מאושר, אבל לא יתפרסם לבד</b> — הפרסום האוטומטי כבוי לערוץ הזה.
+          מפרסמים ידנית ומסמנים "פורסם", או מדליקים פרסום אוטומטי לערוץ בניהול ← ערוצי פרסום.</div>` : ''}
     ${nlNotes ?? ''}
     ${post.status === 'publishing' && !nlNotes
       ? (post.platform === 'newsletter'

@@ -87,7 +87,12 @@ export async function buildBoard(anchorDate) {
 
   // בזו אחר זו: כל השאילתות רצות על ה-client של הבקשה, ו-pg לא מריץ
   // שאילתות במקביל על client אחד (Promise.all רק מתור אותן ומזהיר)
-  const channels = await rows('select * from channels where active = true order by sort_order, id');
+  // auto_publish — לערוץ יש חיבור שהפרסום האוטומטי דלוק בו (סעיף 30: רק שם
+  // יש לאישור משמעות; הלוח מסתיר את "אשר את השבוע" כשאין אף ערוץ כזה)
+  const channels = await rows(
+    `select c.*, coalesce(cc.auto_enabled, false) as auto_publish
+       from channels c left join channel_connections cc on cc.channel_id = c.id
+      where c.active = true order by c.sort_order, c.id`);
   const posts = await
     // שיבוצים של קמפיין מושהה, ערוץ מושבת או נקודת קצה מושבתת יורדים
     // מהלוח ולא נספרים (postIsLiveSql). הם נשארים במסד — הכול הפיך.
@@ -158,7 +163,7 @@ export async function buildBoard(anchorDate) {
         date: day.date,
         posts: mine
           .filter((p) => ymd(new Date(p.scheduled_at)) === day.date)
-          .map(shapePost),
+          .map((p) => shapePost({ ...p, channel_auto: ch.auto_publish })),
       })),
     };
   });
@@ -261,6 +266,8 @@ export async function buildBoard(anchorDate) {
     },
     held,
     held_endpoints: heldEndpoints,
+    // ערוצים פעילים (בלי ניוזלטר — הוא לא מאושר כאן) שמתפרסמים לבד
+    autopublish_channels: channels.filter((c) => c.auto_publish && c.platform !== 'newsletter').length,
     channels: byChannel,
     oxygen,
     summary: {
@@ -328,6 +335,9 @@ export function shapePost(p) {
     time: new Date(p.scheduled_at).toTimeString().slice(0, 5),
     published_at: p.published_at,
     has_results: !!p.has_results,
+    // מאושר: האם הערוץ באמת מתפרסם לבד (סעיף 30), וניסיון חוזר שמחכה (סעיף 32)
+    ...(p.status === 'approved'
+      ? { channel_auto: p.channel_auto !== false, publish_retry_at: p.publish_retry_at ?? null } : {}),
     // ניוזלטר שהועבר ל-HUB — לתג "ממתין לאישור ב-HUB" (public/js/core/hubFill.js)
     ...(p.hub_transferred_at || p.hub_status
       ? { hub_status: p.hub_status ?? null, hub_transferred_at: p.hub_transferred_at ?? null } : {}),

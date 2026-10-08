@@ -208,12 +208,13 @@ test('ב — המתג כבוי: אישור, אישור השבוע, פרסם עכ
   const un = await call('POST', `/posts/${approved}/unapprove-publish`);
   assert.equal(un.status, 200, JSON.stringify(un.json));
 
-  // המתג דלוק — אותם נתיבים לא נחסמים על המתג (נכשלים, אם בכלל, מסיבה אחרת)
+  // המתג דלוק — אותם נתיבים לא נחסמים על המתג (נכשלים, אם בכלל, מסיבה אחרת:
+  // כאן — לערוץ אין חיבור עם פרסום אוטומטי, סעיף 30)
   await setAuto(true);
   try {
     const r = await call('POST', `/posts/${id}/approve-publish`);
-    assert.notEqual(r.status, 409);
     assert.doesNotMatch(r.json.error ?? '', /הפרסום האוטומטי כבוי —/);
+    assert.match(r.json.error ?? '', /הפרסום האוטומטי לא מופעל לערוץ הזה/);
   } finally {
     await setAuto(false);
   }
