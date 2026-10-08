@@ -644,8 +644,8 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
  *     או promoDayCap — החלק של הערוץ כשלקמפיין כמה ערוצים (channelCapacities)
  *   ratio — שער היחס: ratioPromoLimit (משקל מכירתי, משולב נספר חלקית). שני
  *     הסוגים עוברים באותו שער (promoRoomAllows — אותה פונקציה כמו המנוע):
- *     קודם המכירתיים, ומה שנשאר מהחדר — למשולבים, כמו סדר הבחירה במנוע
- *     (contentOrder: מכירתי לפני משולב כשקמפיין רץ)
+ *     קודם המשולבים, ומה שנשאר מהחדר — למכירתיים (החלטת משתמש), כמו סדר
+ *     הבחירה במנוע (contentOrder: משולב לפני מכירתי כשקמפיין רץ)
  * קירוב: התקרות לערוץ שלמות לקמפיין הזה — קמפיין מכירתי נוסף באותו ערוץ
  * חולק אותן בפועל; המנוע אוכף, וכאן רק מעריכים כמה נכנס.
  * @returns {{capacity:number, kinds:object, wanted:object, limits:object,
@@ -673,13 +673,13 @@ function kindLimited({ S, mix, channel, settings, weeksTouched, span, availableD
   const pMax = Math.min(P, limits.promo_week, limits.promo_day);
   const hMax = Math.min(H, limits.hybrid_week);
   const v = Math.min(V, limits.value_week);
-  // החדר המכירתי של היחס — מכירתיים קודם, משולבים במה שנשאר (promoRoomAllows)
+  // החדר המכירתי של היחס — משולבים קודם, מכירתיים במה שנשאר (promoRoomAllows)
   const gate = { room: limits.ratio, hybridWeight: hw };
   const used = { promo: 0, value: 0 };
-  let p = 0;
-  while (p < pMax && promoRoomAllows('promo', used, gate)) { p += 1; used.promo += 1; }
   let h = 0;
   while (h < hMax && promoRoomAllows('hybrid', used, gate)) { h += 1; used.promo += hw; }
+  let p = 0;
+  while (p < pMax && promoRoomAllows('promo', used, gate)) { p += 1; used.promo += 1; }
   const ratioCut = p < pMax || h < hMax;
   let binding = null;
   if (ratioCut) binding = 'ratio';

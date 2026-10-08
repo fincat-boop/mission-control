@@ -1702,14 +1702,15 @@ export function gapViolation(own, dates, dateKey, gapsAt = null, settings = null
  *      בין קמפיינים — המפגר ביותר מהנתח שלו בערוץ קודם (debts.campaignLag),
  *      ולא תמיד הוותיק
  *   2. בתוך כל קבוצה — מוכן לפני טיוטה, ואז לפי סוג: כשקמפיין רץ לנקודה
- *      מכירתי → משולב → ערך, אחרת ערך קודם
+ *      משולב → מכירתי → ערך (משולבים קודם בחדר המכירתי של היחס — החלטת
+ *      משתמש; כמו kindLimited בקיבולת), אחרת ערך קודם
  *   3. פיגור שווה — הקמפיין עם המזהה הקטן; בתוך קמפיין — לפי התור
  *      (sort_order); תוכן שוטף — הסדר שבו נטען (הוותיק)
  * מפתח מילוני אחד, כדי שהמיון יהיה עקבי.
  */
 export function contentOrder({ channelId, inCampaign, debts = null }) {
   const rank = inCampaign
-    ? { promo: 0, hybrid: 1, value: 2 }
+    ? { hybrid: 0, promo: 1, value: 2 }
     : { value: 0, hybrid: 1, promo: 2 };
   const isReady = (c) => (c.ready_channel_ids ?? []).includes(channelId);
   const lag = new Map();

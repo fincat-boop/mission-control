@@ -572,16 +572,16 @@ test('משולב עובר באותו שער היחס כמו המכירתי, במ
     channel: { max_per_week: 3, urgent_reserve_pct: 0, max_hybrid_per_week: 1 } });
   assert.equal(capped.capacity, 4);
   assert.equal(capped.limitedBy, 'hybrid_week');
-  // חצי משולב חצי מכירתי: מכירתיים קודם (כמו סדר הבחירה במנוע), המשולבים
-  // במה שנשאר מהחדר — המשקל המכירתי לא עובר את 3
+  // חצי משולב חצי מכירתי: משולבים קודם (החלטת משתמש, כמו סדר הבחירה במנוע),
+  // המכירתיים במה שנשאר מהחדר — המשקל המכירתי לא עובר את 3
   const mixed = channelCapacity({ ...base, channel: { max_per_week: 3, urgent_reserve_pct: 0 },
                                   mix: { hybrid: 1, promo: 1 } });
-  assert.equal(mixed.kinds.promo, 3);
-  assert.equal(mixed.kinds.hybrid, 0);
+  assert.equal(mixed.kinds.hybrid, 6);
+  assert.equal(mixed.kinds.promo, 0);
+  // מעט משולבים: הם נכנסים, והמכירתיים לוקחים את השארית
   const few = channelCapacity({ ...base, channel: { max_per_week: 3, urgent_reserve_pct: 0 },
-                                mix: { hybrid: 5, promo: 1 } });
-  assert.equal(few.kinds.promo + 0.5 * few.kinds.hybrid <= 3, true);
-  assert.deepEqual([few.kinds.promo, few.kinds.hybrid], [2, 2]);
+                                mix: { hybrid: 1, promo: 5 } });
+  assert.deepEqual([few.kinds.hybrid, few.kinds.promo], [2, 2]);   // 2 × 0.5 + 2 = 3
 });
 
 test('promoRoomAllows — שער אחד: חדר קבוע, או לפי הערך בחלון; ערך תמיד נכנס', async () => {
