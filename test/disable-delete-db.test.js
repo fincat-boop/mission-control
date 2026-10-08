@@ -459,6 +459,8 @@ test('16 (הפעלה מחדש) — שום דבר לא נמחק: הפוסטים �
   const missed = await post({ ep, channel: ch, when: minutes(-60), status: 'approved', title: 'פוספס' });
   const pub = await post({ ep, channel: ch, when: at(-2), status: 'published', publishedAt: at(-2) });
   await call('PATCH', `/endpoints/${ep}`, { active: false });
+  // ההשבתה הייתה לפני שעתיים — "פוספס" (לפני שעה) נפל בזמן ההשבתה
+  await q1(`update endpoints set disabled_at = now() - interval '2 hours' where id = $1 returning id`, [ep]);
 
   const imp = await call('GET', `/endpoints/${ep}/delete-impact`);
   assert.equal(imp.json.impact.missed_approved, 1);
@@ -502,7 +504,7 @@ test('16 (קמפיין) — החזרה מהשהיה: מאושר שהמועד ש�
   const ep = await endpoint('השהיה');
   const camp = (await q1(
     `insert into campaigns (endpoint_id, name, starts_on, ends_on, paused_at)
-     values ($1, 'מושהה', $2, $3, now()) returning id`,
+     values ($1, 'מושהה', $2, $3, now() - interval '3 hours') returning id`,
     [ep, at(-5).slice(0, 10), at(20).slice(0, 10)])).id;
   const ci = await content(ep, [ids.fb], { campaign: camp });
   const missed = await post({ ep, contentId: ci, when: minutes(-90), status: 'approved' });
@@ -543,4 +545,79 @@ test('ייבוא חוזר שמשנה סוג — הסוג עובר לפוסטים
         and status in ('scheduled','approved','failed','pending_approval') and scheduled_at > now()`, [item]);
   assert.deepEqual(stale, [], 'כל הפוסטים העתידיים של הפריט עברו לסוג החדש');
   assert.equal(kinds.find((p) => p.id === past).kind, 'value', 'מה שהמועד שלו עבר — לא נוגעים');
+});
+
+/* ========================= סבב 4 — disabled_at / paused_at ========================= */
+
+test('16 — disabled_at: נקבע בהשבתה ומתאפס בהפעלה (טריגר)', { skip }, async () => {
+  const ep = await endpoint('חותמת');
+  await call('PATCH', `/endpoints/${ep}`, { active: false });
+  assert.ok((await q1('select disabled_at from endpoints where id = $1', [ep])).disabled_at);
+  await call('PATCH', `/endpoints/${ep}`, { importance: 4 });
+  assert.ok((await q1('select disabled_at from endpoints where id = $1', [ep])).disabled_at, 'שמירה אחרת לא נוגעת');
+  await call('PATCH', `/endpoints/${ep}`, { active: true });
+  assert.equal((await q1('select disabled_at from endpoints where id = $1', [ep])).disabled_at, null);
+  const ch = await freshChannel('חותמת');
+  await call('PATCH', `/channels/${ch}`, { active: false });
+  assert.ok((await q1('select disabled_at from channels where id = $1', [ch])).disabled_at);
+});
+
+test('16 — מחיקת נקודה מושבתת: מה שהוחזק נמחק, מה שלפני ההשבתה נשאר ומאושר חוזר לאישור', { skip }, async () => {
+  const { unconfirmedPosts } = await import('../src/unconfirmed.js');
+  const ep = await endpoint('מחיקה-מושבתת');
+  const ch = await freshChannel('מחיקה-מושבתת');
+  const preApproved = await post({ ep, channel: ch, when: minutes(-180), status: 'approved', title: 'לפני-מאושר' });
+  const preScheduled = await post({ ep, channel: ch, when: minutes(-170), title: 'לפני' });
+  await call('PATCH', `/endpoints/${ep}`, { active: false });
+  // "עבר זמן": ההשבתה הייתה לפני שעתיים
+  await q1(`update endpoints set disabled_at = now() - interval '2 hours' where id = $1 returning id`, [ep]);
+  const heldPast = await post({ ep, channel: ch, when: minutes(-60), title: 'הוחזק' });
+  const heldApproved = await post({ ep, channel: ch, when: minutes(-30), status: 'approved', title: 'הוחזק-מאושר' });
+  const future = await post({ ep, channel: ch, when: at(3), title: 'עתידי' });
+
+  const imp = (await call('GET', `/endpoints/${ep}/delete-impact`)).json.impact;
+  assert.equal(imp.held_past, 2);
+  assert.equal(imp.future_posts, 1);
+  assert.equal(imp.past_open, 2);
+  assert.equal(imp.missed_approved, 1);
+
+  const r = await call('DELETE', `/endpoints/${ep}?force=1`);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.removed_posts, 3);
+  assert.equal(r.json.approval_reset, 1);
+  for (const id of [heldPast, heldApproved, future]) assert.equal(await statusOf(id), null);
+  assert.equal(await statusOf(preApproved), 'scheduled', 'לא יתפרסם באיחור אחרי שהנקודה נעלמה');
+  assert.equal(await statusOf(preScheduled), 'scheduled');
+  // אין מאושר שעבר בלי נקודה — לא "מאוחר מדי" ולא פרסום; המוחזקים לא ב"לא סומנו"
+  const unconf = (await inOrg(() => unconfirmedPosts())).map((p) => p.id);
+  assert.ok(!unconf.includes(heldPast) && !unconf.includes(heldApproved));
+  assert.equal((await q1(
+    `select count(*)::int as n from posts where id = any($1) and status = 'approved'`,
+    [[preApproved, preScheduled]])).n, 0);
+
+  // הושבתה לפני העמודה (disabled_at ריק): כל העבר שלא פורסם נחשב מוחזק
+  const old = await endpoint('מושבתת-ותיקה', false);
+  const oldPast = await post({ ep: old, channel: ch, when: minutes(-500), title: 'ותיק' });
+  const oldPub = await post({ ep: old, channel: ch, when: at(-3), status: 'published', publishedAt: at(-3) });
+  const r2 = await call('DELETE', `/endpoints/${old}?force=1`);
+  assert.equal(r2.json.removed_posts, 1);
+  assert.equal(await statusOf(oldPast), null);
+  assert.equal(await statusOf(oldPub), 'published');
+});
+
+test('ב — החזרת קמפיין: רק מאושר שהמועד שלו אחרי ההשהיה חוזר לאישור', { skip }, async () => {
+  const ep = await endpoint('השהיה-מתי');
+  const camp = (await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, paused_at)
+     values ($1, 'מושהה', $2, $3, now() - interval '2 hours') returning id`,
+    [ep, at(-5).slice(0, 10), at(20).slice(0, 10)])).id;
+  const ci = await content(ep, [ids.fb], { campaign: camp });
+  const before = await post({ ep, contentId: ci, when: minutes(-180), status: 'approved' });
+  const during = await post({ ep, contentId: ci, when: minutes(-60), status: 'approved' });
+  const imp = await call('GET', `/campaigns/${camp}/pause-impact`);
+  assert.equal(imp.json.resume.missed_approved, 1);
+  const r = await call('POST', `/campaigns/${camp}/resume`, {});
+  assert.equal(r.json.approval_reset, 1);
+  assert.equal(await statusOf(during), 'scheduled');
+  assert.equal(await statusOf(before), 'approved', 'לפני ההשהיה — לא פוספס בגללה');
 });

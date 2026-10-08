@@ -30,14 +30,14 @@ r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
 }));
 
 r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
-  const before = await one('select active from channels where id = $1', [req.params.id]);
+  const before = await one('select active, disabled_at from channels where id = $1', [req.params.id]);
   const c = await updateById('channels', CHANNEL_FIELDS, req.params.id, req.body);
   if (!c) return bad(res, 'לא נמצא ערוץ כזה', 404);
   // הופעל מחדש (releaseHeld, סעיף 16): שום דבר לא נמחק — הפוסטים חוזרים
   // למקומם, מאושר שהמועד שלו עבר חוזר לאישור, והמילוי רק משלים מקום פנוי
   const reactivated = before && !before.active && c.active;
   const { reset, back } = reactivated
-    ? await releaseHeld('channel', c.id) : { reset: 0, back: 0 };
+    ? await releaseHeld('channel', c.id, { since: before.disabled_at }) : { reset: 0, back: 0 };
 
   // קודם מפנים מה שנעשה לא חוקי, ורק אז ממלאים — אחרת המילוי תופס את
   // הימים שהפוסטים המפונים אמורים לעבור אליהם.
@@ -68,7 +68,9 @@ async function channelImpact(id) {
               as future_posts,
             count(p.id) filter (where p.status = 'approved' and p.scheduled_at >= now())::int
               as future_approved,
-            count(p.id) filter (where p.status = 'approved' and p.scheduled_at < now())::int
+            -- מאושרים שפוספסו בזמן ההשבתה (disabled_at; null — כל העבר)
+            count(p.id) filter (where p.status = 'approved' and p.scheduled_at < now()
+                and p.scheduled_at >= coalesce(c.disabled_at, '-infinity'::timestamptz))::int
               as missed_approved,
             count(pr.post_id)::int                                  as results,
             (select count(*)::int from content_variants v

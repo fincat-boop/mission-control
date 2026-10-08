@@ -786,3 +786,29 @@ do $$ begin
       for each row execute function touch_post();
   end if;
 end $$;
+
+-- מתי נקודת קצה / ערוץ הושבתו (סעיף 16). פוסט שהמועד שלו אחרי הרגע הזה היה
+-- מוחזק כל הזמן — לא יצא לאוויר; לפניו — אולי יצא. לפיו: הפעלה מחדש מחזירה
+-- לאישור רק מאושר שפוספס בזמן ההשבתה, ומחיקה של נקודה מושבתת מוחקת רק את
+-- מה שהוחזק. null בנקודה מושבתת = הושבתה לפני העמודה: כל העבר נחשב מוחזק.
+-- טריגר ולא כתיבה בנתיב — כל כותב של active (נתיב, עוזר, סקריפט) מעדכן אותו.
+alter table endpoints add column if not exists disabled_at timestamptz;
+alter table channels  add column if not exists disabled_at timestamptz;
+create or replace function stamp_disabled_at() returns trigger
+language plpgsql as $$
+begin
+  if new.active is distinct from old.active then
+    new.disabled_at := case when new.active then null else now() end;
+  end if;
+  return new;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgname = 'endpoints_disabled_at') then
+    create trigger endpoints_disabled_at before update on endpoints
+      for each row execute function stamp_disabled_at();
+  end if;
+  if not exists (select 1 from pg_trigger where tgname = 'channels_disabled_at') then
+    create trigger channels_disabled_at before update on channels
+      for each row execute function stamp_disabled_at();
+  end if;
+end $$;

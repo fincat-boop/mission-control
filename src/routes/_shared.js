@@ -207,18 +207,23 @@ export async function evictBlocked() {
 }
 
 /**
- * נקודה / ערוץ שהופעלו מחדש (סעיף 16): פוסט מאושר שהמועד שלו עבר בזמן שהיה
- * מוחזק חוזר ל"מתוכנן" בלי אישור — אחרת הטיק הבא היה מפרסם בבת אחת את כל
- * מה שהצטבר (עד MAX_LATE_HOURS אחורה). מכאן הוא עובר במסלול הרגיל: "לא סומן
- * כפורסם" (unconfirmed.js) — מי שרוצה שיצא, משבץ אותו מחדש ומאשר שוב.
- * where — תנאי SQL פנימי על posts p (לא מקלט משתמש). מחזיר כמה חזרו.
+ * החזקה שהסתיימה (סעיף 16): פוסט מאושר שהמועד שלו עבר בזמן שהיה מוחזק חוזר
+ * ל"מתוכנן" בלי אישור — אחרת הטיק הבא היה מפרסם בבת אחת את כל מה שהצטבר
+ * (עד MAX_LATE_HOURS אחורה). מכאן הוא עובר במסלול הרגיל: "לא סומן כפורסם"
+ * (unconfirmed.js) — מי שרוצה שיצא, משבץ אותו מחדש ומאשר שוב.
+ * where — תנאי SQL פנימי על posts p (לא מקלט משתמש), params — שלו.
+ * since — מתי ההחזקה התחילה (paused_at / disabled_at): רק מה שהמועד שלו אחרי
+ * הרגע הזה פוספס בגללה. null — לא ידוע (הושבת לפני העמודה): כל מה שעבר.
+ * מחזיר כמה חזרו.
  */
-export async function resetMissedApprovals(where, params) {
+export async function resetMissedApprovals(where, params, { since = null } = {}) {
+  const n = params.length + 1;
   const r = await query(
     `update posts p set status = 'scheduled', approved_by = null, approved_at = null
       where p.status = 'approved' and p.scheduled_at < now() and ${where}
+        and ($${n}::timestamptz is null or p.scheduled_at >= $${n}::timestamptz)
       returning p.id`,
-    params);
+    [...params, since]);
   return r.rowCount;
 }
 
@@ -249,12 +254,13 @@ export const HELD_SCOPE = {
  * מנקים את מה שעוד לא יצא ולא אושר, והמנוע ממקם מחדש. מאושר עתידי נשאר —
  * מישהו בדק ואישר אותו במועד הזה — אלא אם בזמן ההחזקה פוסט אחר (מחוץ
  * להחזקה) תפס את אותה נקודה+ערוץ+יום: היו יוצאים שניים, ולכן הוא מתפנה.
- * kind — מפתח ב-HELD_SCOPE; id — המזהה שלו.
+ * kind — מפתח ב-HELD_SCOPE; id — המזהה שלו; since — מתי ההחזקה התחילה
+ * (paused_at / disabled_at, נקרא לפני העדכון), ראו resetMissedApprovals.
  * @returns {Promise<{reset:number, cleared:number, back:number}>}
  */
-export async function releaseHeld(kind, id) {
+export async function releaseHeld(kind, id, { since = null } = {}) {
   const scope = HELD_SCOPE[kind];
-  const reset = await resetMissedApprovals(scope('p'), [id]);
+  const reset = await resetMissedApprovals(scope('p'), [id], { since });
   if (kind !== 'campaign') {
     const { n } = await one(
       `select count(*)::int as n from posts p

@@ -732,8 +732,14 @@ function wireManage(ro, connections) {
               : 'אין לה קמפיינים או תוכן.') +
         (x.future_posts ? `\n${futurePosts(x.future_posts)} שלה ${
           x.future_posts === 1 ? 'שלא פורסם יימחק' : 'שלא פורסמו יימחקו'} מהלוח.` : '') +
-        (x.past_open ? `\n${x.past_open === 1 ? 'פוסט אחד שהמועד שלו עבר ולא סומן נשאר'
-          : `${x.past_open} פוסטים שהמועד שלהם עבר ולא סומנו נשארים`} בלי נקודת קצה ובלי תוכן.` : '') +
+        // נקודה מושבתת: מה שהגיע מועדו בזמן ההשבתה הוחזק ולא יצא — נמחק איתה
+        (x.held_past ? `\n${x.held_past === 1
+          ? 'פוסט אחד שהמועד שלו הגיע בזמן שהנקודה מושבתת לא יצא, ויימחק'
+          : `${x.held_past} פוסטים שהמועד שלהם הגיע בזמן שהנקודה מושבתת לא יצאו, ויימחקו`}.` : '') +
+        (x.past_open ? `\n${x.past_open === 1
+          ? `פוסט אחד שהמועד שלו עבר${x.active ? '' : ' לפני ההשבתה'} ולא סומן נשאר`
+          : `${x.past_open} פוסטים שהמועד שלהם עבר${x.active ? '' : ' לפני ההשבתה'} ולא סומנו נשארים`} ` +
+          `בלי נקודת קצה ובלי תוכן${x.active ? '' : ' — מאושר ביניהם חוזר לאישור ולא יתפרסם לבד'}.` : '') +
         (x.published ? `\n${x.published === 1 ? 'פוסט אחד שפורסם נשאר'
           : `${x.published} פוסטים שפורסמו נשארים`} בהיסטוריה.` : '');
       const choice = await deleteOrDisable(msg, x.active && (lost || x.posts),
@@ -744,7 +750,8 @@ function wireManage(ro, connections) {
       } else if (choice === 'delete') {
         const res = await api(`/endpoints/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
         toast(res.removed_posts
-          ? `נקודת הקצה נמחקה, ואיתה ${futurePosts(res.removed_posts)} שלא פורסמו.`
+          ? `נקודת הקצה נמחקה, ואיתה ${res.removed_posts === 1 ? 'פוסט אחד שלא פורסם'
+            : `${res.removed_posts} פוסטים שלא פורסמו`}.`
           : 'נקודת הקצה נמחקה.');
       } else return;
       resetSetupStatus();   // צעד חובה בהקמה יכול לסגת — הלוח שואל שוב

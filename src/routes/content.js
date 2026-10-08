@@ -208,10 +208,11 @@ r.get('/campaigns/:id/pause-impact', wrap(async (req, res) => {
   const c = await one('select id, name, paused_at from campaigns where id = $1', [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
   const n = await pauseImpact(c.id);
-  // מאושרים שהמועד שלהם עבר בזמן ההשהיה — בהחזרה חוזרים לאישור (releaseHeld)
+  // מאושרים שהמועד שלהם עבר בזמן ההשהיה (מ-paused_at) — בהחזרה חוזרים לאישור (releaseHeld)
   const missed = await one(
     `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
-      where ci.campaign_id = $1 and p.status = 'approved' and p.scheduled_at < now()`, [c.id]);
+      where ci.campaign_id = $1 and p.status = 'approved' and p.scheduled_at < now()
+        and ($2::timestamptz is null or p.scheduled_at >= $2::timestamptz)`, [c.id, c.paused_at]);
   res.json({
     paused: !!c.paused_at,
     // השהיה: כל הפתוחים יורדים מהלוח (approved ביניהם)
@@ -232,13 +233,15 @@ r.post('/campaigns/:id/pause', requirePerm('settings'), wrap(async (req, res) =>
 }));
 
 r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) => {
+  // מתי הושהה — לפני העדכון: רק מאושר שהמועד שלו אחרי ההשהיה פוספס בגללה
+  const prev = await one('select paused_at from campaigns where id = $1 for update', [req.params.id]);
   const c = await one(
     'update campaigns set paused_at = null where id = $1 returning *', [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
 
   // מאושר שהמועד שלו עבר — לאישור; עתידי שלא אושר — נמחק ומשובץ מחדש;
   // מאושר עתידי נשאר אלא אם היום שלו נתפס בינתיים (releaseHeld)
-  const { reset, cleared } = await releaseHeld('campaign', c.id);
+  const { reset, cleared } = await releaseHeld('campaign', c.id, { since: prev?.paused_at ?? null });
   const engine = await autoFillCampaign(c.id, req.body?.week);
   res.json({ campaign: c, cleared, approval_reset: reset, engine });
 }));
