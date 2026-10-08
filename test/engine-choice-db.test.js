@@ -372,10 +372,10 @@ test('סעיף 12 — המנוע משבץ בשעת הערוץ; בלי שעה —
   const other = await channel('ערב', 7);
   await q('update channels set default_hour = 19 where id = $1', [other.id]);
   const now = new Date(`${week.days[0].date}T06:00:00`);
-  const u = await inOrg(() => planUrgent({ title: 'מבצע', channel_ids: [morning.id, other.id] }, { now }));
+  const u = await inOrg(() => planUrgent({ title: 'מבצע', endpoint_id: ep.id, channel_ids: [morning.id, other.id] }, { now }));
   assert.deepEqual(u.placements.map((p) => p.time).sort(), ['08:00', '19:00']);
   const fixed = await inOrg(() => planUrgent(
-    { title: 'מבצע', channel_ids: [morning.id], time: '12:30' }, { now }));
+    { title: 'מבצע', endpoint_id: ep.id, channel_ids: [morning.id], time: '12:30' }, { now }));
   assert.equal(fixed.placements[0].time, '12:30');
   await wipe();
 });
