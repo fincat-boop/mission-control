@@ -9,9 +9,9 @@
  * לכללים שהם באמת שגיאה, כמו שני פוסטים לאותה נקודה באותו יום.
  */
 
-import { one } from './db.js';
+import { one, rows } from './db.js';
 import { weekMeta, ymd } from './board.js';
-import { effectiveGap, gapOn } from './capacity.js';
+import { effectiveGap, gapOn, MAX_GAP_DAYS, pairGap } from './capacity.js';
 import { loadGapContext } from './capacity-db.js';
 import { LINK_LIVE_STATUSES, takesRoom, takesRoomSql } from './engine.js';
 import { postIsLiveSql } from './live.js';
@@ -67,8 +67,10 @@ export async function gapFor({ campaignId = null, contentId = null, channelId = 
 
 /**
  * השכן הקרוב (לפני או אחרי) של אותה נקודה באותו ערוץ, כשהוא בתוך המרווח.
- * המרווח לפי הקמפיין של הפוסט שזז/נוצר (gapFor) — campaignId או contentId,
- * מה שבידי הקורא.
+ * המרווח לכל שכן — pairGap (capacity.js), אותה פונקציה כמו המנוע
+ * (gapViolation): המרווח המפורש של הקמפיין של הפוסט שזז/נוצר (campaignId או
+ * contentId) ושל הקמפיין של השכן נספרים שניהם; שכן בלי מרווח מפורש תורם את
+ * ברירת המחדל רק כשגם לפוסט אין (D4).
  * @returns {null | {days:number, min:number, other:object, channel_name:string, message:string}}
  */
 export async function gapWarning({ endpointId, channelId, when, excludePostId = null,
@@ -76,18 +78,23 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
   if (!endpointId || !channelId || !when) return null;
 
   const { min, campaign, derived } = await gapFor({ campaignId, contentId, channelId, when });
-  if (min <= 0) return null;
+  // המרווח המפורש של הפוסט (null — ברירת המחדל, ואז min היא ברירת המחדל בערוץ)
+  const own = campaign ? min : null;
 
-  // השכן הקרוב ביותר בזמן, לפני או אחרי — מרווח נמדד לשני הכיוונים.
-  // "יום" = יום בלוח של ישראל בשני הצדדים (כמו sameDayClash והמנוע): ::date
-  // לבד לוקח את היום באזור הזמן של החיבור (UTC), ופוסט בין 00:00 ל-03:00
-  // נספר ליום הקודם — המרחק יצא גדול או קטן ביום
-  const near = await one(
+  // השכנים בטווח שבו מרווח כלשהו יכול לחול (עד 30 — התקרה של מרווח קמפיין),
+  // לפני או אחרי. "יום" = יום בלוח של ישראל בשני הצדדים (כמו sameDayClash
+  // והמנוע): ::date לבד לוקח את היום באזור הזמן של החיבור (UTC), ופוסט בין
+  // 00:00 ל-03:00 נספר ליום הקודם — המרחק יצא גדול או קטן ביום
+  const horizon = Math.max(min, MAX_GAP_DAYS);
+  const near = await rows(
     `with x as (
        select p.id, p.title, p.scheduled_at, c.name as channel_name,
+              ca.min_gap_days as their_gap, ca.name as their_campaign,
               abs((p.scheduled_at at time zone 'Asia/Jerusalem')::date
                 - ($3::timestamptz at time zone 'Asia/Jerusalem')::date) as days
          from posts p join channels c on c.id = p.channel_id
+         left join content_items ci on ci.id = p.content_id
+         left join campaigns ca     on ca.id = ci.campaign_id
         where p.endpoint_id = $1 and p.channel_id = $2
           and p.status in ${LIVE} and ${ROOM}
           and ($4::int is null or p.id <> $4)
@@ -95,28 +102,35 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
           and p.scheduled_at between $3::timestamptz - make_interval(days => $5 + 2)
                                  and $3::timestamptz + make_interval(days => $5 + 2))
      select * from x where days between 1 and $5
-      order by days, scheduled_at
-      limit 1`,
-    [endpointId, channelId, when, excludePostId, min - 1]
+      order by days, scheduled_at`,
+    [endpointId, channelId, when, excludePostId, horizon]
   );
-  if (!near) return null;
+  const hit = near.map((n) => ({ ...n, need: pairGap(own, n.their_gap, min) }))
+    .find((n) => Number(n.days) < n.need);
+  if (!hit) return null;
 
-  const days = Number(near.days);
-  const rule = campaign
-    ? `המרווח שהוגדר לקמפיין "${campaign.name}" הוא ${min} ימים.`
-    : derived
-      ? `המרווח שהוגדר בערוץ הזה הוא ${min} ימים (נגזר מכמה פוסטים בשבוע הערוץ מפרסם).`
-      : `המרווח שהוגדר הוא ${min} ימים.`;
+  const days = Number(hit.days);
+  const need = hit.need;
+  // מי קבע את המרווח: השכן (מפורש וגדול משל הפוסט), הקמפיין של הפוסט, או ברירת המחדל
+  const theirs = hit.their_gap != null && Number(hit.their_gap) === need &&
+    (own == null || Number(hit.their_gap) > own);
+  const rule = theirs
+    ? `המרווח שהוגדר לקמפיין "${hit.their_campaign}" של הפוסט השכן הוא ${need} ימים.`
+    : campaign
+      ? `המרווח שהוגדר לקמפיין "${campaign.name}" הוא ${need} ימים.`
+      : derived
+        ? `המרווח שהוגדר בערוץ הזה הוא ${need} ימים (נגזר מכמה פוסטים בשבוע הערוץ מפרסם).`
+        : `המרווח שהוגדר הוא ${need} ימים.`;
   return {
     days,
-    min,
-    other: { id: near.id, title: near.title, scheduled_at: near.scheduled_at },
-    channel_name: near.channel_name,
+    min: need,
+    other: { id: hit.id, title: hit.title, scheduled_at: hit.scheduled_at },
+    channel_name: hit.channel_name,
     message: days === 1
-      ? `יש כבר פוסט לאותה נקודת קצה ב${near.channel_name} יום לפני או אחרי ` +
-        `("${near.title}", ${ymd(new Date(near.scheduled_at))}). ${rule}`
-      : `יש כבר פוסט לאותה נקודת קצה ב${near.channel_name} במרחק ${days} ימים ` +
-        `("${near.title}", ${ymd(new Date(near.scheduled_at))}). ${rule}`,
+      ? `יש כבר פוסט לאותה נקודת קצה ב${hit.channel_name} יום לפני או אחרי ` +
+        `("${hit.title}", ${ymd(new Date(hit.scheduled_at))}). ${rule}`
+      : `יש כבר פוסט לאותה נקודת קצה ב${hit.channel_name} במרחק ${days} ימים ` +
+        `("${hit.title}", ${ymd(new Date(hit.scheduled_at))}). ${rule}`,
   };
 }
 

@@ -951,18 +951,30 @@ test('contentOrder — מוכן לפני טיוטה בכל הקבוצות; קמ�
   assert.deepEqual(order([evergreen, newCamp, oldCamp]), [2, 3, 1]);
 });
 
-test('gapViolation — הגדול מבין המרווח של הפוסט לבין המרווח של השכן', () => {
+test('gapViolation — D4: מפורש של כל צד נספר; שכן בלי מפורש — ברירת המחדל רק כשגם למועמד אין', () => {
   const gaps = new Map([['2026-11-05', [7]], ['2026-11-20', [null]]]);
   const dates = ['2026-11-05', '2026-11-20'];
   const s = { min_gap_days: 3 };
-  // מרווח 1 משלו, אבל השכן ב-5.11 ביקש 7
+  // מועמד עם מרווח מפורש 1, אבל השכן ב-5.11 ביקש 7
   assert.equal(gapViolation(1, dates, '2026-11-08', gaps, s), 7);
   assert.equal(gapViolation(1, dates, '2026-11-12', gaps, s), null);
-  // השכן ב-20.11 שוטף — ברירת המחדל (3)
-  assert.equal(gapViolation(1, dates, '2026-11-18', gaps, s), 3);
-  // בלי רישום של השכן — רק המרווח של הפוסט, כמו קודם
+  // השכן ב-20.11 בלי מפורש, והמועמד עם מפורש 1 — רק ה-1 שלו
+  assert.equal(gapViolation(1, dates, '2026-11-18', gaps, s), null);
+  // מועמד בלי מפורש: ברירת המחדל (3) מול שכן בלי מפורש, 7 מול השכן המפורש
+  assert.equal(gapViolation(null, dates, '2026-11-18', gaps, s), 3);
+  assert.equal(gapViolation(null, dates, '2026-11-10', gaps, s), 7);
+  // בלי רישום של השכן — כמו שכן בלי מפורש
   assert.equal(gapViolation(2, ['2026-11-05'], '2026-11-07', null, s), null);
   assert.equal(gapViolation(2, ['2026-11-05'], '2026-11-06', null, s), 2);
+});
+
+test('pairGap — פונקציה אחת למנוע ולאזהרות', async () => {
+  const { pairGap } = await import('../src/capacity.js');
+  assert.equal(pairGap(1, null, 7), 1);
+  assert.equal(pairGap(null, null, 7), 7);
+  assert.equal(pairGap(null, 2, 7), 7);
+  assert.equal(pairGap(2, 5, 7), 5);
+  assert.equal(pairGap(null, 9, 7), 9);
 });
 
 /* ---------- סעיף 12: שעת פרסום לכל ערוץ ---------- */

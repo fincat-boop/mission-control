@@ -4,7 +4,7 @@ import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
 import {
-  averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, promoRoomAllows,
+  averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, pairGap, promoRoomAllows,
   RATIO_WINDOW_DAYS, ratioPromoLimit, ratioWindowStart, weeklyPromoCap, windowRatio,
 } from './capacity.js';
 import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
@@ -809,8 +809,7 @@ export function chooseHoleFills({
       fitsSlotChannel(c, h.channel_id) &&
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
       !notDueOn(c, dateKey) &&
-      gapViolation(contentGap(c, settings, on), neighbours, dateKey, pairGaps.get(pair),
-        settings, on) == null &&
+      gapViolation(ownGapDays(c), neighbours, dateKey, pairGaps.get(pair), settings, on) == null &&
       !linkedSameDay(c, groupDays, dateKey) &&
       reusable(c, slot, history, settings)
     );
@@ -1669,17 +1668,18 @@ function setPairGap(map, key, dateKey, gap) {
 
 /**
  * האם פוסט ביום dateKey מפר מרווח מול השכנים של אותה נקודה באותו ערוץ
- * (dates — התאריכים שלהם). לכל שכן נדרש הגדול מבין המרווח של הפוסט עצמו
- * (own — contentGap) לבין המרווח של השכן (gapsAt: יום → min_gap_days של
- * הקמפיינים שלו; null = ברירת המחדל), שניהם דרך effectiveGap (סעיף 11) —
- * קודם רק המרווח של הפוסט עצמו, וקמפיין עם מרווח קצר נצמד לשכן שביקש מרווח
- * ארוך. שכן בלי רישום — רק own (כמו קודם). מחזירה את המרווח שהופר, או null.
+ * (dates — התאריכים שלהם). candidate — min_gap_days של הקמפיין של הפוסט
+ * (ownGapDays; null = אין מרווח מפורש); gapsAt: יום → min_gap_days של
+ * הקמפיינים של השכנים (null = אין מפורש). לכל שכן — pairGap (capacity.js):
+ * מפורש של כל צד נספר, ושכן בלי מפורש תורם את ברירת המחדל רק כשגם למועמד
+ * אין (סעיף 11, D4). אותה פונקציה באזהרות הלוח (gapWarning ב-gap.js).
+ * מחזירה את המרווח שהופר, או null.
  */
-export function gapViolation(own, dates, dateKey, gapsAt = null, settings = null, on = {}) {
+export function gapViolation(candidate, dates, dateKey, gapsAt = null, settings = null, on = {}) {
+  const def = effectiveGap(null, settings, on);
   for (const d of dates ?? []) {
-    const theirs = (gapsAt?.get(d) ?? []).reduce((m, g) =>
-      Math.max(m, effectiveGap(g == null ? null : { min_gap_days: g }, settings, on)), 0);
-    const need = Math.max(own, theirs);
+    const explicit = (gapsAt?.get(d) ?? []).filter((g) => g != null);
+    const need = pairGap(candidate, explicit.length ? Math.max(...explicit) : null, def);
     if (nearestDays([d], dateKey) < need) return need;
   }
   return null;
@@ -1828,7 +1828,7 @@ export function chooseForSlot(ctx) {
           linkedSameDay(c, groupDays, slot.dateKey) ||
           usedContent.has(`${slot.channel_id}:${c.id}`) ||
           !reusable(c, slot, history, settings)) return false;
-      const gapNeed = gapViolation(contentGap(c, settings, on), neighbours, slot.dateKey,
+      const gapNeed = gapViolation(ownGapDays(c), neighbours, slot.dateKey,
         pairGaps.get(pair), settings, on);
       if (gapNeed != null) { miss(c, 'gap', gapNeed); return false; }
       const why = usage.reason
@@ -1906,8 +1906,6 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
                             now = new Date(), pairDates = new Map(), pairGaps = new Map(),
                             sameDay = new Set(), settings = null, gapCtx = null }) {
   const holes = [];
-  // המרווח הכללי של הערוץ — אין תוכן, ולכן אין קמפיין (effectiveGap, סעיף 5)
-  const gapIn = (ch) => effectiveGap(null, settings, gapOn(gapCtx, ch.id));
   const at = (date, hour) => new Date(`${date}T${String(hour).padStart(2, '0')}:00:00`);
 
   for (const e of endpoints) {
@@ -1924,7 +1922,7 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
       at(dateKey, holeHour(ch)) > now &&
       usage.allows(ch.id, dateKey, 'value') &&
       !sameDay.has(`${e.id}:${ch.id}:${dateKey}`) &&
-      gapViolation(gapIn(ch), pairDates.get(`${e.id}:${ch.id}`), dateKey,
+      gapViolation(null, pairDates.get(`${e.id}:${ch.id}`), dateKey,
         pairGaps.get(`${e.id}:${ch.id}`), settings, gapOn(gapCtx, ch.id)) == null;
     let target = null;
     let day = null;

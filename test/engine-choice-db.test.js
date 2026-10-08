@@ -539,3 +539,30 @@ test('D2 — שער אחד: מילוי השבוע הקרוב מכניס משול
   assert.equal(next.length, 2, JSON.stringify(posts));
   await wipe();
 });
+
+test('D4 — אזהרת המרווח בלוח = הכלל של המנוע (pairGap)', { skip }, async () => {
+  await wipe();
+  const { gapWarning } = await import('../src/gap.js');
+  const ch = await channel('פייסבוק', 1);   // ברירת מחדל: 7 (נקודה אחת, פוסט בשבוע)
+  const ep = await endpoint('נקודה');
+  const wide = await campaign(ep.id, ch.id, { name: 'רחב', starts: inDays(0), ends: inDays(60), gap: 7 });
+  const tight = await campaign(ep.id, ch.id, { name: 'צפוף', starts: inDays(0), ends: inDays(60), gap: 1 });
+  const [w] = await items(ep.id, ch.id, 1, { campaignId: wide.id, prefix: 'רחב' });
+  const [t] = await items(ep.id, ch.id, 1, { campaignId: tight.id, prefix: 'צפוף' });
+  const [plain] = await items(ep.id, ch.id, 1, { prefix: 'שוטף' });
+  const day = (n) => new Date(`${inDays(n)}T10:00:00`).toISOString();
+  await post(ch.id, ep.id, day(20), { status: 'scheduled', contentId: w });
+  await post(ch.id, ep.id, day(40), { status: 'scheduled', contentId: plain });
+  const base = { endpointId: ep.id, channelId: ch.id };
+  await inOrg(async () => {
+    // פוסט "צפוף" 3 ימים מהשכן של "רחב" — המרווח של השכן (7) חל
+    const near = await gapWarning({ ...base, when: day(23), contentId: t });
+    assert.equal(near?.min, 7);
+    assert.match(near.message, /לקמפיין "רחב" של הפוסט השכן הוא 7 ימים/);
+    // 2 ימים מהשכן השוטף (בלי מרווח מפורש) — רק המרווח של "צפוף" (1)
+    assert.equal(await gapWarning({ ...base, when: day(42), contentId: t }), null);
+    // פוסט בלי קמפיין — גם הוא מכבד את המרווח המפורש של השכן
+    assert.equal((await gapWarning({ ...base, when: day(17) }))?.min, 7);
+  });
+  await wipe();
+});

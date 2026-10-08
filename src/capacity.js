@@ -60,6 +60,24 @@ export function effectiveGap(campaign, settings, { channel = null, endpoints = 1
 }
 
 /**
+ * המרווח הנדרש בין פוסט מועמד לשכן של אותה נקודה באותו ערוץ (סעיף 11, D2/D4) —
+ * פונקציה אחת למנוע (gapViolation) ולאזהרות הלוח (gapWarning):
+ *   מרווח מפורש של קמפיין (min_gap_days) — של כל אחד מהצדדים — נספר תמיד;
+ *   שכן בלי מרווח מפורש תורם את ברירת המחדל רק כשגם למועמד אין מרווח מפורש
+ *   (אחרת קמפיין שביקש מרווח 1 היה נחסם בברירת המחדל של שכן שוטף).
+ * required = max(מועמד ?? ברירת מחדל, שכן ?? (מועמד מפורש ? 0 : ברירת מחדל)).
+ * חשבון הקיבולת (channelCapacity.gapCap) לא מכיר שכנים — הערכה בלבד.
+ * @param candidate min_gap_days של הקמפיין של המועמד, או null
+ * @param neighbour min_gap_days של הקמפיין של השכן, או null
+ * @param defaultGap effectiveGap(null, settings, on) — ברירת המחדל בערוץ
+ */
+export function pairGap(candidate, neighbour, defaultGap) {
+  const own = candidate ?? defaultGap;
+  const theirs = neighbour ?? (candidate != null ? 0 : defaultGap);
+  return Math.max(Number(own), Number(theirs));
+}
+
+/**
  * מי מתחרה על כל ערוץ בטווח [from, to] — לנקודות שהמרווח נגזר מהן
  * (derivedGap) ולמגבלת המרווח בלוח (weekGapLimit). נקודה מתחרה בערוץ כשיש
  * לה שם קמפיין חי (פעיל, לא מושהה, נקודה פעילה, חופף לטווח, יושב בערוץ) או
