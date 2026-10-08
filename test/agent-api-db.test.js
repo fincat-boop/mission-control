@@ -191,7 +191,9 @@ test('הרשאה חסרה → 403; Origin → 403; בלי מפתח → 401', { s
   const o = await http('GET', '/api/v1/content', { key: key.secret, headers: { origin: 'https://evil.example' } });
   assert.equal(o.status, 403);
   assert.equal((await agent('GET', '/content', null)).status, 401);
-  assert.equal((await agent('GET', '/content', `${key.secret.slice(0, -1)}x`)).status, 401);
+  // תו אחרון אחר — לא תמיד 'x': מפתח שכבר נגמר ב-x היה נשאר זהה (כישלון ב-1 מ-31 ריצות)
+  const wrong = `${key.secret.slice(0, -1)}${key.secret.at(-1) === 'x' ? 'y' : 'x'}`;
+  assert.equal((await agent('GET', '/content', wrong)).status, 401);
 });
 
 test('יומן הבקשות: מזוהות נרשמות (כולל 403/404), בלי query string', { skip }, async () => {
