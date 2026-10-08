@@ -587,3 +587,25 @@ test('D4 — אזהרת המרווח בלוח = הכלל של המנוע (pairGa
   });
   await wipe();
 });
+
+test('F3 — פאנל "מי מקבל במה": הערוץ הוותיק נספר כמו במנוע (גם "לא אושר שיצא"), בלי ניוזלטר', { skip }, async () => {
+  await wipe();
+  const { buildBoard } = await import('../src/board.js');
+  const fb = await channel('פייסבוק', 7);
+  const wa = await channel('וואטסאפ', 7);
+  const nl = await channel('ניוזלטר', 1);
+  await q("update channels set platform = 'newsletter' where id = $1", [nl.id]);
+  const ep = await endpoint('נקודה');
+  // פייסבוק: לא אושר שיצא, לפני יומיים. וואטסאפ: פורסם לפני 20 יום. ניוזלטר: מעולם
+  await post(fb.id, ep.id, daysAgo(2), { status: 'scheduled' });
+  await post(wa.id, ep.id, daysAgo(20));
+  for (const ch of [fb.id, wa.id, nl.id]) {
+    await post(ch, ep.id, new Date(`${inDays(1)}T12:00:00`), { status: 'scheduled' });
+  }
+  const b = await inOrg(() => buildBoard(inDays(1)));
+  const o = b.oxygen.find((x) => x.endpoint_id === ep.id);
+  assert.equal(o.days_since, 2, JSON.stringify(o));
+  assert.equal(o.stalest_channel?.name, 'וואטסאפ', JSON.stringify(o));
+  assert.equal(o.stalest_channel.days_since, 20);
+  await wipe();
+});

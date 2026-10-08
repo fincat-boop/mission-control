@@ -164,20 +164,17 @@ export async function buildBoard(anchorDate) {
   });
 
   // חמצן: כמה זמן כל נקודת קצה לא פורסמה, וכמה היא משובצת השבוע. לכל
-  // נקודה × ערוץ (סעיף 8) — כדי לומר באיזה ערוץ היא הכי ותיקה
-  const lastPublished = await rows(
-    `select endpoint_id, channel_id, max(published_at) as last_at
-       from posts
-      where status = 'published' and endpoint_id is not null
-      group by endpoint_id, channel_id`
-  );
+  // נקודה × ערוץ (סעיף 8) — כדי לומר באיזה ערוץ היא הכי ותיקה. אותם פוסטים
+  // שהמנוע סופר (F3): פורסם, ו"לא אושר שיצא" לפי המועד — לא ידוע ≠ לא יצא
+  const now = new Date();
+  const { lastAirPerEndpointChannel } = await import('./engine.js');
+  const lastAir = await lastAirPerEndpointChannel(now, now);
   const lastMap = new Map();
-  const lastPair = new Map(lastPublished.map((r) => [`${r.endpoint_id}:${r.channel_id}`, r.last_at]));
-  for (const r of lastPublished) {
+  const lastPair = new Map(lastAir.map((r) => [`${r.endpoint_id}:${r.channel_id}`, r.last_at]));
+  for (const r of lastAir) {
     const cur = lastMap.get(r.endpoint_id);
     if (!cur || new Date(r.last_at) > new Date(cur)) lastMap.set(r.endpoint_id, r.last_at);
   }
-  const now = new Date();
   // תאריך פרסום עתידי לא אמור לקרות, אבל אם קרה — 0 ולא מספר שלילי
   const daysOf = (at) => (at ? Math.max(0, Math.floor((now - new Date(at)) / 86400000)) : null);
 
@@ -188,10 +185,11 @@ export async function buildBoard(anchorDate) {
     const scheduledThisWeek = mine.length;
     const stale = daysSince === null || daysSince > effectiveCadenceDays(e);
     // הערוץ הוותיק ביותר של הנקודה — מבין הערוצים הפעילים שהיא פורסמה בהם
-    // או משובצת בהם השבוע ("עוד לא פורסמה" = הוותיק ביותר). רק כשיש יותר
-    // מערוץ אחד והוא ותיק יותר מהפרסום האחרון בכלל
-    const inUse = channels.filter((ch) => lastPair.has(`${e.id}:${ch.id}`) ||
-      mine.some((p) => p.channel_id === ch.id));
+    // או משובצת בהם השבוע ("עוד לא פורסמה" = הוותיק ביותר), בלי ניוזלטר
+    // (מסלול משלו מול ה-HUB, ולא נספר בוותק של המנוע). רק כשיש יותר מערוץ
+    // אחד והוא ותיק יותר מהפרסום האחרון בכלל
+    const inUse = channels.filter((ch) => ch.platform !== 'newsletter' &&
+      (lastPair.has(`${e.id}:${ch.id}`) || mine.some((p) => p.channel_id === ch.id)));
     const age = (x) => (x.days_since === null ? Infinity : x.days_since);
     let [stalest = null] = inUse
       .map((ch) => ({ channel_id: ch.id, name: ch.name,

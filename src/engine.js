@@ -851,6 +851,35 @@ export function chooseHoleFills({
 
 /* ========================= חוב אוויר ========================= */
 
+/**
+ * הפוסט האחרון של כל נקודה × ערוץ לפני reference, כמו שהמנוע סופר "היה
+ * באוויר" (ראו computeDebts): מה שפורסם; מה שעתיד לצאת לפני reference
+ * (עכשיו ≤ מועד < reference); ומה שהמועד שלו עבר ולא סומן ("לא אושר שיצא" —
+ * UNCONFIRMED_SQL, משוכפל כאן). מקור אחד למנוע ולפאנל "מי מקבל במה" בלוח (F3).
+ * @returns {Promise<{endpoint_id:number, channel_id:number, last_at:Date}[]>}
+ */
+export function lastAirPerEndpointChannel(reference, now = new Date()) {
+  return rows(
+    `select p.endpoint_id, p.channel_id, max(coalesce(p.published_at, p.scheduled_at)) as last_at
+       from posts p
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.endpoint_id is not null
+        and ((p.status = 'published' and coalesce(p.published_at, p.scheduled_at) < $1)
+          or (p.status = any($3::text[]) and p.published_at is null
+              and p.scheduled_at >= $2 and p.scheduled_at < $1
+              and ${postIsLiveSql('p')})
+          or (p.status in ('scheduled', 'approved') and p.published_at is null
+              and p.scheduled_at < $2::timestamptz - interval '30 minutes' and p.scheduled_at < $1
+              and ${postIsLiveSql('p')}
+              and (p.content_id is not null or p.urgent or not p.auto_hole)
+              and exists (select 1 from channels uc where uc.id = p.channel_id
+                             and uc.platform <> 'newsletter')))
+      group by p.endpoint_id, p.channel_id`,
+    [reference, now, UPCOMING_STATUSES]
+  );
+}
+
 /** הסטטוסים של פוסט שתופס שטח — אותם שהמנוע סופר כקיימים על הלוח */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
 
@@ -979,25 +1008,7 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   // הפרסום האחרון, כמו קודם. שיבוץ מוחזק (postIsLiveSql — קמפיין מושהה,
   // ערוץ / נקודה מושבתים) לא נספר: הוא לא על הלוח. אותו כלל כמו UNCONFIRMED_SQL.
   const reference = stalenessReference(week, now);
-  const lastLive = await rows(
-    `select p.endpoint_id, p.channel_id, max(coalesce(p.published_at, p.scheduled_at)) as last_at
-       from posts p
-       left join content_items ci on ci.id = p.content_id
-       left join campaigns ca     on ca.id = ci.campaign_id
-      where p.endpoint_id is not null
-        and ((p.status = 'published' and coalesce(p.published_at, p.scheduled_at) < $1)
-          or (p.status = any($3::text[]) and p.published_at is null
-              and p.scheduled_at >= $2 and p.scheduled_at < $1
-              and ${postIsLiveSql('p')})
-          or (p.status in ('scheduled', 'approved') and p.published_at is null
-              and p.scheduled_at < $2::timestamptz - interval '30 minutes' and p.scheduled_at < $1
-              and ${postIsLiveSql('p')}
-              and (p.content_id is not null or p.urgent or not p.auto_hole)
-              and exists (select 1 from channels uc where uc.id = p.channel_id
-                             and uc.platform <> 'newsletter')))
-      group by p.endpoint_id, p.channel_id`,
-    [reference, now, UPCOMING_STATUSES]
-  );
+  const lastLive = await lastAirPerEndpointChannel(reference, now);
   // הוותק נמדד לכל נקודה × ערוץ (סעיף 8): נקודה שמתפרסמת כל שבוע בוואטסאפ
   // ונעדרת חודשיים מפייסבוק היא "טרייה" רק בוואטסאפ. lastPair — `${נקודה}:${ערוץ}`;
   // lastMap — הנקודה בכלל (האחרון מבין הערוצים), לחורים ולבדיקות
