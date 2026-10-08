@@ -168,11 +168,17 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   if (publishing) return bad(res, publishing, 409);
 
   // הזזה על הלוח עוברת את אותו כלל שהמנוע והמבצע הדחוף מכבדים:
-  // נקודת קצה אחת, מדיה אחת, יום אחד.
-  if (b.scheduled_at || b.channel_id) {
+  // נקודת קצה אחת, מדיה אחת, יום אחד. גם שינוי של נקודת הקצה, הסוג או
+  // התוכן בלי הזזה (עריכת פוסט, החלפת תוכן ממשימת תחזוקה) — אותן בדיקות:
+  // נקודה אחרת יכולה להתנגש באותו יום / במרווח, וסוג אחר — במכסה לסוג
+  // (ניתוק תוכן — content_id ריק — לא מוסיף כלל, ולכן לא מעורר בדיקות)
+  const changed = (key) => key in b && idOrNull(b[key]) !== (current[key] ?? null);
+  const contentChanged = b.content_id != null && changed('content_id');
+  const kindChanged = b.kind != null && b.kind !== current.kind;
+  if (b.scheduled_at || b.channel_id || changed('endpoint_id') || contentChanged || kindChanged) {
     const when = b.scheduled_at ?? current.scheduled_at;
     const channel = b.channel_id ?? current.channel_id;
-    const endpoint = b.endpoint_id ?? current.endpoint_id;
+    const endpoint = 'endpoint_id' in b ? idOrNull(b.endpoint_id) : current.endpoint_id;
 
     const moving = isMove(current, b);
     const blocked = moving && moveBlocker(current, when);
@@ -211,9 +217,9 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       // המרווח של הקמפיין של התוכן שיישאר על הפוסט אחרי העדכון
       await gapWarning({ endpointId: endpoint, channelId: channel, when, excludePostId: current.id,
                          contentId: contentAfter }),
-      // רק כשהתאריך באמת זז — שינוי ערוץ באותו יום לא מעורר אותה שוב
-      b.scheduled_at
-        ? await campaignWindowWarning({ contentId: b.content_id ?? current.content_id, when })
+      // רק כשהתאריך או התוכן באמת משתנים — שינוי ערוץ באותו יום לא מעורר אותה שוב
+      b.scheduled_at || contentChanged
+        ? await campaignWindowWarning({ contentId: contentAfter, when })
         : null,
       relinked
         ? await linkDayWarning({ contentId: contentAfter, when, excludePostId: current.id })
@@ -221,24 +227,6 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       // מכסות — רק כשהפוסט נכנס לשבוע / ערוץ / סוג / יום שלא נספר בו קודם
       await capWarning({ channelId: channel, when, kind: b.kind ?? current.kind,
                          excludePostId: current.id }),
-    );
-    if (warning && !warningsConfirmed(b)) {
-      return res.status(409).json({ error: warning.message, warning, needs_confirm: true });
-    }
-  } else if (b.content_id != null && Number(b.content_id) !== current.content_id) {
-    // רק התוכן מתחלף, בלי הזזה: המרווח תלוי בקמפיין של התוכן, ולכן תוכן של
-    // קמפיין עם מרווח ארוך יותר יכול להפוך שיבוץ תקין לצמוד מדי — אותה
-    // אזהרה ואותו אישור כמו בהזזה
-    const warning = softWarning(
-      await gapWarning({ endpointId: b.endpoint_id ?? current.endpoint_id,
-                         channelId: current.channel_id, when: current.scheduled_at,
-                         excludePostId: current.id, contentId: b.content_id }),
-      await campaignWindowWarning({ contentId: b.content_id, when: current.scheduled_at }),
-      await linkDayWarning({ contentId: b.content_id, when: current.scheduled_at,
-                             excludePostId: current.id }),
-      // תוכן מסוג אחר יכול לחרוג מהתקרה לסוג (התקציב השבועי כבר נספר)
-      await capWarning({ channelId: current.channel_id, when: current.scheduled_at,
-                         kind: b.kind ?? current.kind, excludePostId: current.id }),
     );
     if (warning && !warningsConfirmed(b)) {
       return res.status(409).json({ error: warning.message, warning, needs_confirm: true });

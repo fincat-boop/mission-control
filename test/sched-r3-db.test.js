@@ -176,3 +176,44 @@ test('applyRespace סופר רק מה שנכתב: פוסט שבינתיים בפ
   const after = await q1('select scheduled_at from posts where id = $1', [p.id]);
   assert.equal(+after.scheduled_at, +at(5));
 });
+
+/* ========================= ג: שינוי נקודה / סוג / תוכן בלי הזזה ========================= */
+
+test('PATCH /posts: נקודת קצה אחרת שכבר יש לה פוסט באותו יום בערוץ — נחסם, גם בהחלפת תוכן', { skip }, async () => {
+  const x = await fresh('נקודה אחרת');
+  const other = (await q1("insert into endpoints (name, importance) values ('נקודה ב', 5) returning id")).id;
+  await post(x, { day: 5, title: 'קיים' });
+  const mine = await post(x, { day: 5, h: 14, endpoint: other, title: 'שלי' });
+
+  const r = await call('PATCH', `/posts/${mine.id}`, { endpoint_id: x.ep });
+  assert.equal(r.status, 400, JSON.stringify(r.json));
+  assert.match(r.json.error, /באותו יום: קיים/);
+
+  // החלפת תוכן ממשימת תחזוקה: content_id + endpoint_id בבקשה אחת
+  const it = await q1(
+    `insert into content_items (endpoint_id, kind, title) values ($1, 'value', 'מוצע') returning id`, [x.ep]);
+  const swap = await call('PATCH', `/posts/${mine.id}`,
+    { content_id: it.id, endpoint_id: x.ep, title: 'מוצע', kind: 'value', confirm_warnings: true });
+  assert.equal(swap.status, 400, JSON.stringify(swap.json));
+  const row = await q1('select endpoint_id, content_id from posts where id = $1', [mine.id]);
+  assert.deepEqual(row, { endpoint_id: other, content_id: null });
+
+  // נקודה בלי פוסט באותו יום — עובר
+  const ok = await call('PATCH', `/posts/${mine.id}`, { title: 'רק כותרת' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+});
+
+test('PATCH /posts: סוג אחר שחורג מהתקרה לסוג — אזהרה שאפשר לאשר', { skip }, async () => {
+  const x = await fresh('סוג', { maxValue: 1 });
+  const other = (await q1("insert into endpoints (name, importance) values ('נקודה ג', 5) returning id")).id;
+  await post(x, { day: 5, kind: 'value' });
+  const promo = await post(x, { day: 5, h: 14, kind: 'promo', endpoint: other });
+
+  const r = await call('PATCH', `/posts/${promo.id}`, { kind: 'value' });
+  assert.equal(r.status, 409, JSON.stringify(r.json));
+  assert.equal(r.json.needs_confirm, true);
+  assert.match(r.json.error, /פוסטים מסוג ערך/);
+  const ok = await call('PATCH', `/posts/${promo.id}`, { kind: 'value', confirm_warnings: true });
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+  assert.equal(ok.json.post.kind, 'value');
+});
