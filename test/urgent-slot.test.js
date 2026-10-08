@@ -41,3 +41,21 @@ test('urgentSlotTime — היום מאוחר מדי: אין מועד היום (�
   const now = at('2026-10-05T21:30:00');
   assert.equal(urgentSlotTime(day('2026-10-05T12:00:00'), [10, 0], now), null);
 });
+
+/* ========================= סעיף 7 — למה דחוף לא נכנס ========================= */
+
+test('סעיף 7 — urgentFullReason: השמורה בשימוש, עם המספר ואיפה מגדילים', async () => {
+  const { urgentFullReason } = await import('../src/urgent.js');
+  const ch = { name: 'וואטסאפ', max_per_week: 3, urgent_reserve_pct: 20, max_promo_per_week: 1 };
+  const full = urgentFullReason(ch, '2026-10-14', new Map([['full', 7]]));
+  assert.match(full, /הערוץ מלא, והשמורה לדחופים \(פוסט אחד בשבוע\) כבר בשימוש השבוע/);
+  assert.match(full, /תחת "מתקדם"/);
+  // שמורה 0 — לא "בשימוש", אלא שאין
+  assert.match(urgentFullReason({ ...ch, max_per_week: 2 }, '2026-10-14', new Map()),
+    /אין בו שטח שמור לדחופים/);
+  // הסיבה ששללה הכי הרבה ימים
+  assert.match(urgentFullReason(ch, '2026-10-14', new Map([['full', 1], ['promo_week', 5]])),
+    /עד 1 מכירתיים בשבוע/);
+  assert.match(urgentFullReason(ch, '2026-10-14', new Map([['promo_day', 3]]), 1),
+    /בכל יום כבר יש מכירתי/);
+});

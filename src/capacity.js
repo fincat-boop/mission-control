@@ -10,6 +10,8 @@
  * בתצוגה מקדימה של קמפיין שעוד לא נשמר.
  */
 
+import { urgentReserve } from '../public/js/core/reserve.js';
+
 const DAY = 86400000;
 
 /** ברירת המחדל של המרווח כשגם להגדרות המנוע אין ערך (engine_settings.min_gap_days) */
@@ -475,13 +477,13 @@ export function ratioPromoCap(budget, days, minRatio) {
 }
 
 /**
- * כמה פוסטים בשבוע המנוע רשאי לשבץ בערוץ: התקרה פחות השמורה לדחופים.
- * אותו מספר ש-buildUsage במנוע אוכף — מקור אחד.
+ * כמה פוסטים בשבוע המנוע רשאי לשבץ בערוץ: התקרה פחות השמורה לדחופים
+ * (urgentReserve — מעוגלת לקרוב, סעיף 7). אותו מספר ש-buildUsage במנוע
+ * אוכף — מקור אחד.
  */
 export function channelBudget(channel) {
   const max = Number(channel.max_per_week ?? 1);
-  const reserved = Math.floor(max * (Number(channel.urgent_reserve_pct ?? 20) / 100));
-  return Math.max(0, max - reserved);
+  return Math.max(0, max - urgentReserve(max, channel.urgent_reserve_pct ?? 20));
 }
 
 /**

@@ -130,11 +130,24 @@ test('shareOf — קבועים שמכסים 100% כל הזמן: לאוטומטי
 
 /* ---------- channelBudget / channelCapacity ---------- */
 
-test('channelBudget — תקרה פחות השמורה לדחופים (ברירת מחדל 20%)', () => {
+test('channelBudget — תקרה פחות השמורה לדחופים (ברירת מחדל 20%, מעוגלת לקרוב — סעיף 7)', () => {
   assert.equal(channelBudget({ max_per_week: 5, urgent_reserve_pct: 20 }), 4);
   assert.equal(channelBudget({ max_per_week: 5 }), 4);
-  assert.equal(channelBudget({ max_per_week: 3, urgent_reserve_pct: 20 }), 3); // floor(0.6) = 0
+  // קודם floor(0.6) = 0 — ובערוץ של 3 לא נשאר מקום לדחוף
+  assert.equal(channelBudget({ max_per_week: 3, urgent_reserve_pct: 20 }), 2);
   assert.equal(channelBudget({ max_per_week: 7, urgent_reserve_pct: 0 }), 7);
+});
+
+test('סעיף 7 — urgentReserve: עיגול לקרוב, האחוז נשאר ההגדרה', async () => {
+  const { urgentReserve } = await import('../public/js/core/reserve.js');
+  const table = [[3, 1], [4, 1], [2, 0], [5, 1], [10, 2], [1, 0], [7, 1], [0, 0]];
+  for (const [max, want] of table) assert.equal(urgentReserve(max, 20), want, `${max}`);
+  assert.equal(urgentReserve(4, null), 1);      // ריק = 20%
+  assert.equal(urgentReserve(5, 0), 0);
+  assert.equal(urgentReserve(3, 100), 3);
+  assert.equal(urgentReserve(3, 150), 3);       // לא יותר מהתקרה
+  // 3 נקודות בערוץ של 4 עם השמורה (תקציב 3) → floor(21/3) = 7 (סעיף 5)
+  assert.equal(derivedGap({ max_per_week: 4 }, 3), 7);
 });
 
 test('channelCapacity — 13 יום, 7 בשבוע, מרווח 7 → 2, המרווח מגביל', () => {

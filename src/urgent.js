@@ -2,6 +2,7 @@ import { one, rows } from './db.js';
 import { weekMeta, weekStart, ymd } from './board.js';
 import { gapWarning } from './gap.js';
 import { takesRoomSql } from './engine.js';
+import { urgentReserve } from '../public/js/core/reserve.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const DEFAULT_TIME = '10:00';
@@ -117,35 +118,39 @@ export async function planUrgent(input, { now = new Date() } = {}) {
 
   for (const ch of channels) {
     let placed = null;
+    // למה כל יום נפסל — ההודעה כשלא נמצא יום אומרת את הסיבה, לא "הערוץ מלא" תמיד
+    const why = new Map();
+    const skip = (r) => why.set(r, (why.get(r) ?? 0) + 1);
 
     for (const day of days) {
       const dayKey = ymd(day);
       const wkKey = ymd(weekStart(day));
 
-      if (endpointId && sameDay.has(`${ch.id}:${dayKey}`)) continue;
+      if (endpointId && sameDay.has(`${ch.id}:${dayKey}`)) { skip('same_day'); continue; }
 
       // היום, כשהשעה כבר עברה — השעה העגולה הבאה; מאוחר מדי — מחר
       const at = urgentSlotTime(day, hm, now);
       if (!at) continue;
 
       // יום שהוגדר כחסום למדיה הזו — גם דחוף לא נכנס אליו
-      if ((ch.blocked_days ?? []).includes(day.getDay())) continue;
+      if ((ch.blocked_days ?? []).includes(day.getDay())) { skip('blocked_day'); continue; }
 
+      // דחוף נכנס גם לשמורה (max_per_week כולו, לא רק התקציב של המנוע)
       const inSameWeek = (p) =>
         p.channel_id === ch.id && ymd(weekStart(new Date(p.scheduled_at))) === wkKey;
       const usedThisWeek = countIn(inSameWeek);
-      if (usedThisWeek >= ch.max_per_week) continue;
+      if (usedThisWeek >= ch.max_per_week) { skip('full'); continue; }
 
       if (ch.max_promo_per_week != null) {
         const promoThisWeek = countIn((p) => inSameWeek(p) && p.kind === 'promo');
-        if (promoThisWeek >= ch.max_promo_per_week) continue;
+        if (promoThisWeek >= ch.max_promo_per_week) { skip('promo_week'); continue; }
       }
 
       // תקרת מכירתיים יומית — חוצה ערוצים
       const promoToday = countIn(
         (p) => ymd(new Date(p.scheduled_at)) === dayKey && p.kind === 'promo'
       );
-      if (promoToday >= maxPromoPerDay) continue;
+      if (promoToday >= maxPromoPerDay) { skip('promo_day'); continue; }
 
       if (endpointId) sameDay.add(`${ch.id}:${dayKey}`);
 
@@ -170,7 +175,7 @@ export async function planUrgent(input, { now = new Date() } = {}) {
     }
 
     if (!placed) {
-      warnings.push(`אין שטח פנוי ב${ch.name} עד ${ymd(lastDay)} — הערוץ מלא`);
+      warnings.push(urgentFullReason(ch, ymd(lastDay), why, maxPromoPerDay));
     } else {
       // המבצע נכנס לשטח פנוי, אבל הוא עדיין יכול לנחות צמוד לפוסט קיים
       // של אותה נקודה. זו לא סיבה לעצור מבצע דחוף — רק לומר את זה.
@@ -194,4 +199,36 @@ export async function planUrgent(input, { now = new Date() } = {}) {
       ? placements.map((p) => `${p.channel_name} ${p.day_label}`).join(' · ')
       : 'לא נמצא שטח פנוי',
   };
+}
+
+/**
+ * למה מבצע דחוף לא נכנס לערוץ עד lastDay — הסיבה ששללה הכי הרבה ימים
+ * (why: סיבה → כמה ימים). מלא = גם השמורה לדחופים (urgentReserve, סעיף 7)
+ * כבר בשימוש השבוע: המנוע לא נוגע בה, ולכן היא נגמרה רק בדחופים / פוסטים
+ * ידניים — ואומרים איפה מגדילים אותה.
+ */
+export function urgentFullReason(ch, lastDay, why, maxPromoPerDay = 1) {
+  const top = [...why].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'full';
+  const head = `אין שטח פנוי ב${ch.name} עד ${lastDay}`;
+  switch (top) {
+    case 'promo_week':
+      return `${head} — הערוץ מקבל עד ${ch.max_promo_per_week} מכירתיים בשבוע, והם כבר בשימוש ` +
+        '(בהגדרות הערוץ, תחת "מתקדם")';
+    case 'promo_day':
+      return `${head} — בכל יום כבר יש ${maxPromoPerDay === 1 ? 'מכירתי' : `${maxPromoPerDay} מכירתיים`} ` +
+        'בכל הערוצים יחד (המקסימום בכללי המנוע)';
+    case 'same_day':
+      return `${head} — בכל יום פנוי כבר יש פוסט לאותה נקודת קצה בערוץ`;
+    case 'blocked_day':
+      return `${head} — הימים שנשארו חסומים בערוץ`;
+    default: {
+      const n = urgentReserve(ch.max_per_week, ch.urgent_reserve_pct);
+      if (n === 0) {
+        return `${head} — הערוץ מלא, ואין בו שטח שמור לדחופים. אפשר להגדיר אותו ` +
+          'בהגדרות הערוץ, תחת "מתקדם"';
+      }
+      return `${head} — הערוץ מלא, והשמורה לדחופים (${n === 1 ? 'פוסט אחד' : `${n} פוסטים`} בשבוע) ` +
+        'כבר בשימוש השבוע. אפשר להגדיל אותה בהגדרות הערוץ, תחת "מתקדם"';
+    }
+  }
 }

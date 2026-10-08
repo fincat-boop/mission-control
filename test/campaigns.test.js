@@ -53,7 +53,7 @@ test('angleCount — בלי צרכים מחזיר null', () => {
 test('channelNeeds — קצב × שבועות × נתח כשהמרווח לא מגביל (מרווח 1)', () => {
   const camp = { starts_on: '2026-08-01', ends_on: '2026-08-07', active: true, importance: 5 };
   const needs = channelNeeds(camp, [{ id: 1, max_per_week: 3 }], [camp], { gapDays: 1 });
-  assert.equal(needs.get(1), 3); // שבוע אחד, נתח 1, קצב 3 (השמורה: floor(0.6) = 0)
+  assert.equal(needs.get(1), 2); // שבוע אחד, נתח 1, קצב 3 פחות השמורה: round(0.6) = 1 (סעיף 7)
 });
 
 test('channelNeeds — מרווח 7 (ברירת המחדל של המנוע): פוסט אחד בשבוע לערוץ', () => {
@@ -92,7 +92,8 @@ import { generalGridFor, gridFor, resolvePeriod, structureChangeError } from '..
 const twoWeeks = {
   starts_on: '2026-11-01', ends_on: '2026-11-14', active: true, importance: 5, structure: 'general',
 };
-const chA = { id: 1, name: 'פייסבוק', max_per_week: 3 };
+// בלי שמורה לדחופים — הבדיקות כאן על צורת הרשת; העיגול של השמורה נבדק ב-capacity.test.js
+const chA = { id: 1, name: 'פייסבוק', max_per_week: 3, urgent_reserve_pct: 0 };
 const chB = { id: 2, name: 'ניוזלטר', max_per_week: 1 };
 const GAP1 = { gapDays: 1 };
 const slotItem = (id, channel, order, status) => ({

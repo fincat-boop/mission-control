@@ -8,6 +8,7 @@ import { openGeneric } from '../ui/dialog.js';
 import { multiSelectHtml, wireMultiSelects } from '../ui/multiSelect.js';
 import { engineToast } from '../ui/engineDialog.js';
 import { resetSetupStatus } from '../ui/setup.js';
+import { urgentReserve } from '../core/reserve.js';
 
 /* ========================= ניהול ========================= */
 
@@ -210,6 +211,12 @@ function connectionBlock(c, conn, ro, hubReady) {
  * פרטי ערוץ בשלושה בלוקים, כל אחד עם מודל שמירה אחד:
  * קיבולת וימים חסומים — נשמרים בכל שינוי; חיבור ופרסום — בכפתור.
  */
+/** "שמור לדחופים: 1 בשבוע" — המספר שהאחוז נותן בפועל (urgentReserve, סעיף 7) */
+function reserveNote(max, pct) {
+  const n = urgentReserve(max, pct);
+  return `שמור לדחופים: ${n === 0 ? 'אף פוסט' : n === 1 ? 'פוסט אחד' : `${n} פוסטים`} בשבוע`;
+}
+
 /** שורת הסיכום של "מתקדם" בערוץ: רק מה שהוגדר בו, כדי שלא יהיה מוסתר בשקט */
 function advSummary(c) {
   const bits = [
@@ -249,6 +256,7 @@ function channelItem(c, ro, conn, hubReady) {
           ${num('מתוכם משולבים — לכל היותר', 'max_hybrid_per_week', c.max_hybrid_per_week, 'hybrid')}
           ${num('מתוכם ערך — לכל היותר', 'max_value_per_week', c.max_value_per_week, 'value')}
           ${num('שטח ששמור לפוסטים דחופים (%)', 'urgent_reserve_pct', c.urgent_reserve_pct)}
+          <div class="fhint" data-reserve-note="${c.id}">${esc(reserveNote(c.max_per_week, c.urgent_reserve_pct))}</div>
           ${num('עדיפות ערוץ (1–10)', 'efficiency', c.efficiency, '', 10)}
           <div class="fhint">
             עדיפות ריקה = ניטרלי. היא מכריעה רק בין שני מועדים שקולים בשבוע — לא קובעת כמה
@@ -542,6 +550,17 @@ function wireManage(ro, connections) {
       engineToast(res, 'נשמר.');
       await refreshBoard();
     })));
+
+  // המספר שהאחוז לדחופים נותן מתעדכן תוך כדי הקלדה (לפני השמירה ביציאה)
+  $$('#manage [data-ch-field="max_per_week"], #manage [data-ch-field="urgent_reserve_pct"]')
+    .forEach((inp) => inp.addEventListener('input', () => {
+      const id = inp.dataset.id;
+      const note = $(`#manage [data-reserve-note="${id}"]`);
+      if (!note) return;
+      const val = (f) => $(`#manage [data-ch-field="${f}"][data-id="${id}"]`)?.value.trim();
+      const pct = val('urgent_reserve_pct');
+      note.textContent = reserveNote(val('max_per_week'), pct === '' ? null : pct);
+    }));
 
   $$('#manage [data-ch-field]').forEach((inp) =>
     inp.addEventListener('change', run(async () => {
