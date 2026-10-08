@@ -10,10 +10,12 @@
 
 /**
  * הסדר שבו נבחרת הסיבה של תוכן שלא נכנס, כשנחסם בכמה משבצות מסיבות שונות:
- * קודם המגבלות לפי סוג, אחר כך הנתח (שבוע מרוסן) והמרווח.
+ * קודם המגבלות לפי סוג של הערוץ, אחר כך הנתח (שבוע מרוסן) והמרווח, ובסוף
+ * מכירתי ליום — תוכן שגם המרווח עצר אותו פשוט מחכה לתורו (gap), וזה המצב
+ * הרגיל ולא תקלה (planWeek לא מציג אותו).
  */
 export const LIMIT_ORDER = ['ratio_cap', 'ratio', 'promo_week', 'hybrid_week', 'value_week',
-                            'promo_day', 'share', 'gap'];
+                            'share', 'gap', 'promo_day'];
 /** המגבלות לפי סוג — מה שההודעה אחרי שמירה (engineToast) אומרת */
 export const KIND_LIMITS = new Set(['ratio_cap', 'ratio', 'promo_week', 'hybrid_week',
                                     'value_week', 'promo_day']);

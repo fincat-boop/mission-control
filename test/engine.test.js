@@ -843,7 +843,7 @@ test('buildUsage — סעיף 6: שער היחס לכל ערוץ, ערוץ קט�
 
 import { notPlacedLimits, notPlacedNotes } from '../src/engine.js';
 
-test('סעיף 6 — notPlacedLimits: סיבה אחת לכל תוכן×ערוץ, לפי הסדר; ערך רק בתקרת ערך', () => {
+test('סעיף 6 — notPlacedLimits: סיבה אחת לכל תוכן×ערוץ, לפי הסדר; ערך רק בתקרת ערך', async () => {
   const chs = [{ id: 1, name: 'פייסבוק' }, { id: 2, name: 'וואטסאפ' }];
   const c = (id, kind) => ({ id, kind, eligible_channel_ids: [1, 2] });
   const misses = new Map([
@@ -862,6 +862,9 @@ test('סעיף 6 — notPlacedLimits: סיבה אחת לכל תוכן×ערוץ,
   assert.equal(by['ratio:1'].count, 1);
   assert.equal(by['gap:1'].count, 1);
   assert.equal(by['value_week:2'].kinds.value, 1);
+  // S2: מרווח לפני מכירתי ליום — מי שגם המרווח עצר רק מחכה לתורו
+  const LIMIT = (await import('../src/engine.js')).LIMIT_ORDER;
+  assert.ok(LIMIT.indexOf('gap') < LIMIT.indexOf('promo_day'));
 });
 
 test('סעיף 6 — notPlacedNotes: כל הודעה אומרת את המגבלה עם המספרים', () => {

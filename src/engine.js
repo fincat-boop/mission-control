@@ -300,7 +300,8 @@ export async function planWeek(anchorDate, {
           cap: shareCap.get(chId) ?? 0 }
       : null),
   });
-  notes.push(...notPlacedNotes(limits));
+  // תוכן שרק מחכה למרווח — המצב הרגיל, לא "לא נכנס"
+  notes.push(...notPlacedNotes(limits.filter((x) => x.reason !== 'gap')));
 
   const result = {
     week: { start: week.start, end: week.end, label: week.label },
