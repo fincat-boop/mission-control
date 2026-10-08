@@ -347,7 +347,11 @@ function wirePlan(campaign, endpointId, content) {
               ? `${imp.resume.cleared} פוסטים עתידיים שלא אושרו יימחקו, והמנוע ישבץ את הקמפיין מחדש במקומות פנויים.`
               : 'המנוע ישבץ את הקמפיין מחדש במקומות פנויים.') +
             (imp.resume.kept_approved
-              ? `\n${imp.resume.kept_approved} פוסטים שאושרו לפרסום אוטומטי נשארים במקומם.` : ''),
+              ? `\n${imp.resume.kept_approved} פוסטים שאושרו לפרסום אוטומטי נשארים במקומם.` : '') +
+            (imp.resume.missed_approved
+              ? `\n${imp.resume.missed_approved === 1 ? 'פוסט מאושר אחד שהמועד שלו עבר'
+                : `${imp.resume.missed_approved} פוסטים מאושרים שהמועד שלהם עבר`} בזמן ההשהיה ` +
+                `${imp.resume.missed_approved === 1 ? 'חוזר' : 'חוזרים'} לאישור — לא יתפרסמו לבד.` : ''),
             { okLabel: 'החזר לפעילות', danger: imp.resume.cleared > 0 })
         : await confirmDialog(`להשהות את "${name}"?\n` +
             (imp.pause.hidden
@@ -362,6 +366,7 @@ function wirePlan(campaign, endpointId, content) {
       if (paused) {
         engineToast(res, 'הקמפיין חזר לפעול.' +
           (res.cleared ? ` ${res.cleared} פוסטים ישנים נוקו.` : '') +
+          (res.approval_reset ? ` ${res.approval_reset} מאושרים שהמועד שלהם עבר חזרו לאישור.` : '') +
           (res.engine?.placed || res.engine?.attached
             ? '' : ' המנוע ימקם אותו מחדש בפעם הבאה שיש מקום.'));
       } else {

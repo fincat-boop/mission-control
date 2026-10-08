@@ -459,10 +459,27 @@ const heldToast = (done, n) =>
   (n ? `${done} — ${futurePosts(n)} ${n === 1 ? 'ירד' : 'ירדו'} מהלוח עד שתפעיל שוב. שום דבר לא נמחק.`
      : `${done} — שום דבר לא נמחק.`);
 
-const enabledToast = (done, reset) =>
-  (reset ? `${done}. ${reset === 1 ? 'פוסט מאושר אחד שהמועד שלו עבר' : `${reset} פוסטים מאושרים שהמועד שלהם עבר`} ` +
-    `בזמן ההשבתה ${reset === 1 ? 'חזר לאישור — לא יתפרסם' : 'חזרו לאישור — לא יתפרסמו'} לבד.`
-    : `${done} — הפוסטים חזרו ללוח.`);
+/**
+ * שאלת ההפעלה מחדש — כמו החזרת קמפיין מהשהיה (releaseHeld בשרת): עתידיים שלא
+ * אושרו נמחקים ומשובצים מחדש, מאושרים נשארים, מאושר שהמועד שלו עבר חוזר לאישור.
+ */
+function enableQuestion(what, x, it) {
+  const cleared = (x.future_posts ?? 0) - (x.future_approved ?? 0);
+  return `להפעיל מחדש את ${what}?\n` +
+    (cleared
+      ? `${futurePosts(cleared)} שלא ${cleared === 1 ? 'אושר יימחק' : 'אושרו יימחקו'}, והמנוע ישבץ ${it} מחדש במקומות פנויים — בזמן ההשבתה המקום היה פנוי לאחרים.`
+      : `המנוע ישבץ ${it} מחדש במקומות פנויים.`) +
+    (x.future_approved ? `\n${x.future_approved === 1 ? 'פוסט אחד שאושר לפרסום אוטומטי נשאר'
+      : `${x.future_approved} פוסטים שאושרו לפרסום אוטומטי נשארים`} במקומם.` : '') +
+    (x.missed_approved ? `\n${x.missed_approved === 1 ? 'פוסט מאושר אחד שהמועד שלו עבר חוזר'
+      : `${x.missed_approved} פוסטים מאושרים שהמועד שלהם עבר חוזרים`} לאישור — לא יתפרסמו לבד.` : '');
+}
+
+const enabledToast = (done, res) =>
+  `${done}.` +
+  (res.cleared ? ` ${res.cleared === 1 ? 'פוסט ישן אחד נוקה' : `${res.cleared} פוסטים ישנים נוקו`}.` : '') +
+  (res.approval_reset ? ` ${res.approval_reset === 1 ? 'מאושר אחד שהמועד שלו עבר חזר'
+    : `${res.approval_reset} מאושרים שהמועד שלהם עבר חזרו`} לאישור.` : '');
 
 /**
  * מחיקה של ערוץ / נקודת קצה. כשיש מה לאבד והישות פעילה — השבתה היא
@@ -759,25 +776,25 @@ function wireManage(ro, connections) {
     })));
 
   // השבתה = כמו השהיית קמפיין (סעיף 16): האישור אומר כמה פוסטים יוחזקו.
-  // הפעלה — בלי שאלה; מאושר שהמועד שלו עבר בינתיים חוזר לאישור (השרת)
+  // הפעלה = כמו החזרת קמפיין מהשהיה (releaseHeld בשרת): האישור אומר מה יימחק
+  // וישובץ מחדש, מה נשאר, ומה חוזר לאישור
   $$('#manage [data-toggle-endpoint]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       const id = b.dataset.toggleEndpoint;
       const disabling = b.dataset.active === 'true';
-      let held = 0;
-      if (disabling) {
-        const { impact: x } = await api(`/endpoints/${id}/delete-impact`);
-        held = x.future_posts;
-        if (!(await confirmDialog(disableQuestion(`נקודת הקצה "${x.name}"`, x,
-          'שלה', 'הקמפיינים שלה לא יקבלו שטח בזמן הזה. ', 'אותה'),
-        { okLabel: 'השבת נקודת קצה' }))) return;
-      }
+      const { impact: x } = await api(`/endpoints/${id}/delete-impact`);
+      const held = x.future_posts;
+      if (!(await confirmDialog(disabling
+        ? disableQuestion(`נקודת הקצה "${x.name}"`, x, 'שלה', 'הקמפיינים שלה לא יקבלו שטח בזמן הזה. ', 'אותה')
+        : enableQuestion(`נקודת הקצה "${x.name}"`, x, 'אותה'),
+      { okLabel: disabling ? 'השבת נקודת קצה' : 'הפעל נקודת קצה',
+        danger: !disabling && x.future_posts > x.future_approved }))) return;
       const res = await api(`/endpoints/${id}`,
         { method: 'PATCH', body: { active: !disabling, week: state.week } });
       if (disabling) {
         resetSetupStatus();   // הושבת — ההקמה יכולה לסגת
         toast(heldToast('נקודת הקצה הושבתה', held));
-      } else toast(enabledToast('נקודת הקצה הופעלה', res.approval_reset));
+      } else engineToast(res, enabledToast('נקודת הקצה הופעלה', res));
       await reload();
     })));
 
@@ -785,19 +802,19 @@ function wireManage(ro, connections) {
     b.addEventListener('click', run(async () => {
       const id = b.dataset.toggleChannel;
       const disabling = b.dataset.active === 'true';
-      let held = 0;
-      if (disabling) {
-        const { impact: x } = await api(`/channels/${id}/delete-impact`);
-        held = x.future_posts;
-        if (!(await confirmDialog(disableQuestion(`הערוץ "${x.name}"`, x, 'בו', '', 'אותו'),
-          { okLabel: 'השבת ערוץ' }))) return;
-      }
+      const { impact: x } = await api(`/channels/${id}/delete-impact`);
+      const held = x.future_posts;
+      if (!(await confirmDialog(disabling
+        ? disableQuestion(`הערוץ "${x.name}"`, x, 'בו', '', 'אותו')
+        : enableQuestion(`הערוץ "${x.name}"`, x, 'אותו'),
+      { okLabel: disabling ? 'השבת ערוץ' : 'הפעל ערוץ',
+        danger: !disabling && x.future_posts > x.future_approved }))) return;
       const res = await api(`/channels/${id}`,
         { method: 'PATCH', body: { active: !disabling, week: state.week } });
       if (disabling) {
         resetSetupStatus();   // הושבת — ההקמה יכולה לסגת
         toast(heldToast('הערוץ הושבת', held));
-      } else toast(enabledToast('הערוץ הופעל', res.approval_reset));
+      } else engineToast(res, enabledToast('הערוץ הופעל', res));
       await reload();
     })));
 

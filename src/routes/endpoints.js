@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { autoFill, bad, resetMissedApprovals, updateById, wrap } from './_shared.js';
+import { autoFill, bad, refillCampaigns, releaseHeld, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { effectiveCadenceDays } from '../board.js';
 import { requirePerm } from '../auth.js';
@@ -44,13 +44,23 @@ r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
   const before = await one('select active from endpoints where id = $1', [req.params.id]);
   const e = await updateById('endpoints', ENDPOINT_FIELDS, req.params.id, req.body);
   if (!e) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
-  // הופעלה מחדש: מאושר שהמועד שלו עבר בזמן ההשבתה חוזר לאישור, ולא יוצא
-  // בפרץ בטיק הבא (סעיף 16)
-  const reset = before && !before.active && e.active
-    ? await resetMissedApprovals('p.endpoint_id = $1', [e.id]) : 0;
+  // הופעלה מחדש — כמו קמפיין שחזר מהשהיה (releaseHeld, סעיף 16): מאושר
+  // שהמועד שלו עבר חוזר לאישור (בלי פרץ בטיק הבא), עתידי שלא אושר נמחק
+  // והמנוע ממקם מחדש את הקמפיינים שלה — בזמן ההשבתה המקום שלה היה פנוי לאחרים
+  if (before && !before.active && e.active) {
+    const { reset, cleared } = await releaseHeld('endpoint', e.id);
+    const ids = await rows(
+      `select id from campaigns
+        where endpoint_id = $1 and active and paused_at is null
+          and (ends_on is null or ends_on >= current_date)
+        order by id`, [e.id]);
+    const engine = await refillCampaigns(ids.map((x) => x.id), req.body?.week);
+    return res.json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine,
+                      approval_reset: reset, cleared });
+  }
   const engine = await autoFill(req.body?.week);
   res.json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine,
-             approval_reset: reset });
+             approval_reset: 0, cleared: 0 });
 }));
 
 /**
@@ -59,6 +69,7 @@ r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
  *   future_posts — פוסטים עתידיים שלא פורסמו: בהשבתה מוחזקים (יורדים מהלוח
  *     ולא יוצאים), במחיקה נמחקים. future_approved — כמה מהם אושרו לפרסום.
  *   past_open — המועד עבר ולא סומנו (אולי יצאו): נשארים גם במחיקה, בלי נקודה ובלי תוכן.
+ *   missed_approved — מאושרים שהמועד שלהם עבר: בהפעלה מחדש חוזרים לאישור.
  *   published — נשארים בהיסטוריה תמיד (בלי נקודה ובלי תוכן אחרי מחיקה).
  *   posts — הכול (לשאלה אם יש בכלל מה לאבד).
  */
@@ -74,6 +85,8 @@ async function endpointImpact(id) {
                 and ${FUTURE_OPEN} and p.status = 'approved') as future_approved,
             (select count(*)::int from posts p where p.endpoint_id = e.id
                 and ${openPostSql('p')} and p.scheduled_at < now()) as past_open,
+            (select count(*)::int from posts p where p.endpoint_id = e.id
+                and p.status = 'approved' and p.scheduled_at < now()) as missed_approved,
             (select count(*)::int from posts p where p.endpoint_id = e.id
                 and p.status = 'published') as published
        from endpoints e where e.id = $1`,

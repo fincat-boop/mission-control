@@ -1,5 +1,5 @@
 import multer from 'multer';
-import { currentOrg, one, query } from '../db.js';
+import { currentOrg, one, query, rows } from '../db.js';
 import { applyWeek, lockEngine, withEngineLock } from '../engine.js';
 import { weekMeta, ymd } from '../board.js';
 import { relocateBlocked } from '../respace.js';
@@ -220,6 +220,70 @@ export async function resetMissedApprovals(where, params) {
       returning p.id`,
     params);
   return r.rowCount;
+}
+
+/**
+ * מה "מוחזק" לכל סוג החזקה — תנאי SQL על פוסט בכינוי a, כשהמזהה הוא $1:
+ * קמפיין מושהה (התוכן שלו), נקודה מושבתת, ערוץ מושבת.
+ */
+export const HELD_SCOPE = {
+  campaign: (a) => `exists (select 1 from content_items hci
+                             where hci.id = ${a}.content_id and hci.campaign_id = $1)`,
+  endpoint: (a) => `${a}.endpoint_id = $1`,
+  channel: (a) => `${a}.channel_id = $1`,
+};
+
+/**
+ * חזרה מהחזקה — קמפיין שחזר מהשהיה, נקודה או ערוץ שהופעלו מחדש (סעיף 16).
+ * כלל אחד לשלושתם:
+ *   - מאושר שהמועד שלו עבר בזמן ההחזקה חוזר לאישור (resetMissedApprovals) —
+ *     בלי פרץ פרסומים בטיק הבא.
+ *   - המשבצות העתידיות קפאו, ובינתיים המנוע כבר יכול היה למלא את המקום
+ *     במשהו אחר (המוחזקים לא תופסים מקום). במקום להחזיר אוטומטית לאותו מקום
+ *     (וליצור התנגשות או חריגה מהמכסות), מנקים את מה שעוד לא יצא ולא אושר,
+ *     והמנוע ממקם מחדש (refillCampaigns).
+ *   - מאושר עתידי נשאר: מישהו בדק ואישר אותו במועד הזה. רק אם בזמן ההחזקה
+ *     פוסט אחר (מחוץ להחזקה) תפס את אותה נקודה+ערוץ+יום — היו יוצאים שניים,
+ *     בניגוד לכלל של הלוח, ולכן הוא מתפנה כמו השאר.
+ * kind — מפתח ב-HELD_SCOPE; id — המזהה שלו.
+ * @returns {Promise<{reset:number, cleared:number}>}
+ */
+export async function releaseHeld(kind, id) {
+  const scope = HELD_SCOPE[kind];
+  const reset = await resetMissedApprovals(scope('p'), [id]);
+  const cleared = await rows(
+    `delete from posts p
+      where ${scope('p')}
+        and p.status in ('scheduled','failed','pending_approval','hole')
+        and p.scheduled_at >= now()
+      returning p.id`,
+    [id]
+  );
+  const clashed = await rows(
+    `delete from posts p
+      where ${scope('p')}
+        and p.status = 'approved' and p.scheduled_at >= now()
+        and exists (select 1 from posts o
+                     where o.id <> p.id and o.endpoint_id = p.endpoint_id
+                       and o.channel_id = p.channel_id
+                       and (o.scheduled_at at time zone 'Asia/Jerusalem')::date
+                         = (p.scheduled_at at time zone 'Asia/Jerusalem')::date
+                       and not (${scope('o')}))
+      returning p.id`,
+    [id]
+  );
+  return { reset, cleared: cleared.length + clashed.length };
+}
+
+/**
+ * שיבוץ מחדש אחרי releaseHeld: כל תקופת הקמפיינים שהשתחררו (autoFillCampaign,
+ * כולל השבוע שהלקוח מציג), ובלי קמפיינים — רק השבוע המוצג (autoFill).
+ */
+export async function refillCampaigns(campaignIds, week) {
+  if (!campaignIds.length) return autoFill(week);
+  const results = [];
+  for (const id of campaignIds) results.push(await autoFillCampaign(id, week));
+  return mergeFillResults(results);
 }
 
 // המסלול הישן (multipart → bytea): פעיל מקומית ולפני שאחסון המדיה ב-R2

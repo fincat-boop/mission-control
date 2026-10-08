@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { requirePerm } from '../auth.js';
 import {
-  autoFill, autoFillCampaign, bad, lockEngineOr503, parseIdList, titleFromFilename, updateById,
-  upload, wrap,
+  autoFill, autoFillCampaign, bad, lockEngineOr503, parseIdList, releaseHeld, titleFromFilename,
+  updateById, upload, wrap,
 } from './_shared.js';
 import { revalidateCampaignPosts, SHIFT_STATUSES } from '../campaign-shift.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
@@ -208,12 +208,16 @@ r.get('/campaigns/:id/pause-impact', wrap(async (req, res) => {
   const c = await one('select id, name, paused_at from campaigns where id = $1', [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
   const n = await pauseImpact(c.id);
+  // מאושרים שהמועד שלהם עבר בזמן ההשהיה — בהחזרה חוזרים לאישור (releaseHeld)
+  const missed = await one(
+    `select count(*)::int as n from posts p join content_items ci on ci.id = p.content_id
+      where ci.campaign_id = $1 and p.status = 'approved' and p.scheduled_at < now()`, [c.id]);
   res.json({
     paused: !!c.paused_at,
     // השהיה: כל הפתוחים יורדים מהלוח (approved ביניהם)
     pause: { hidden: n.open, approved: n.approved },
     // החזרה: מה שלא אושר נמחק ומשובץ מחדש; מה שאושר לפרסום אוטומטי נשאר
-    resume: { cleared: n.open - n.approved, kept_approved: n.approved },
+    resume: { cleared: n.open - n.approved, kept_approved: n.approved, missed_approved: missed.n },
   });
 }));
 
@@ -232,38 +236,11 @@ r.post('/campaigns/:id/resume', requirePerm('settings'), wrap(async (req, res) =
     'update campaigns set paused_at = null where id = $1 returning *', [req.params.id]);
   if (!c) return bad(res, 'לא נמצא קמפיין כזה', 404);
 
-  // המשבצות הישנות קפאו בזמן ההשהיה — בינתיים המנוע כבר יכול היה למלא
-  // את אותו יום/ערוץ עם משהו אחר. במקום להחזיר אוטומטית לאותו מקום
-  // (וליצור התנגשות), מנקים את מה שעוד לא יצא לאוויר והמנוע ממקם מחדש.
-  // פוסט שאושר לפרסום אוטומטי נשאר: מישהו בדק ואישר אותו במועד הזה,
-  // ומחיקה שקטה שלו הייתה מבטלת החלטה של אדם.
-  const cleared = await rows(
-    `delete from posts p using content_items ci
-      where ci.id = p.content_id and ci.campaign_id = $1
-        and p.status in ('scheduled','failed','pending_approval','hole')
-        and p.scheduled_at >= now()
-      returning p.id`,
-    [c.id]
-  );
-  // מאושר שבזמן ההשהיה המנוע מילא את אותה נקודה+ערוץ+יום — היו יוצאים שניים,
-  // בניגוד לכלל של הלוח. האישור ניתן לפני שהיום התמלא, אז הוא מתפנה כמו השאר.
-  const clashed = await rows(
-    `delete from posts p using content_items ci
-      where ci.id = p.content_id and ci.campaign_id = $1
-        and p.status = 'approved' and p.scheduled_at >= now()
-        and exists (select 1 from posts o
-                     where o.id <> p.id and o.endpoint_id = p.endpoint_id
-                       and o.channel_id = p.channel_id
-                       and (o.scheduled_at at time zone 'Asia/Jerusalem')::date
-                         = (p.scheduled_at at time zone 'Asia/Jerusalem')::date
-                       and (o.content_id is null or o.content_id not in
-                            (select id from content_items where campaign_id = $1)))
-      returning p.id`,
-    [c.id]
-  );
-
+  // מאושר שהמועד שלו עבר — לאישור; עתידי שלא אושר — נמחק ומשובץ מחדש;
+  // מאושר עתידי נשאר אלא אם היום שלו נתפס בינתיים (releaseHeld)
+  const { reset, cleared } = await releaseHeld('campaign', c.id);
   const engine = await autoFillCampaign(c.id, req.body?.week);
-  res.json({ campaign: c, cleared: cleared.length + clashed.length, engine });
+  res.json({ campaign: c, cleared, approval_reset: reset, engine });
 }));
 
 /** סידור מחדש של התוכן בתוך קמפיין */

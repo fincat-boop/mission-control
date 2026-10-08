@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { autoFill, bad, evictBlocked, resetMissedApprovals, updateById, wrap } from './_shared.js';
+import { autoFill, bad, evictBlocked, refillCampaigns, releaseHeld, updateById, wrap } from './_shared.js';
 import { openPostSql } from '../live.js';
 import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
@@ -33,15 +33,25 @@ r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   const before = await one('select active from channels where id = $1', [req.params.id]);
   const c = await updateById('channels', CHANNEL_FIELDS, req.params.id, req.body);
   if (!c) return bad(res, 'לא נמצא ערוץ כזה', 404);
-  // הופעל מחדש: מאושר שהמועד שלו עבר בזמן ההשבתה חוזר לאישור (סעיף 16)
-  const reset = before && !before.active && c.active
-    ? await resetMissedApprovals('p.channel_id = $1', [c.id]) : 0;
+  // הופעל מחדש — כמו קמפיין שחזר מהשהיה (releaseHeld, סעיף 16): מאושר שהמועד
+  // שלו עבר חוזר לאישור, עתידי שלא אושר נמחק והמנוע ממקם מחדש
+  const reactivated = before && !before.active && c.active;
+  const { reset, cleared } = reactivated
+    ? await releaseHeld('channel', c.id) : { reset: 0, cleared: 0 };
 
   // קודם מפנים מה שנעשה לא חוקי, ורק אז ממלאים — אחרת המילוי תופס את
   // הימים שהפוסטים המפונים אמורים לעבור אליהם.
   const relocated = 'blocked_days' in (req.body ?? {}) ? await evictBlocked() : null;
-  const engine = await autoFill(req.body?.week);
-  res.json({ channel: c, engine, relocated, approval_reset: reset });
+  // הקמפיינים שרצים בערוץ — לכל התקופה שלהם; אחרת השבוע המוצג
+  const ids = reactivated ? await rows(
+    `select ca.id from campaigns ca
+       join campaign_channels cc on cc.campaign_id = ca.id and cc.channel_id = $1
+       join endpoints e on e.id = ca.endpoint_id and e.active
+      where ca.active and ca.paused_at is null
+        and (ca.ends_on is null or ca.ends_on >= current_date)
+      order by ca.id`, [c.id]) : [];
+  const engine = await refillCampaigns(ids.map((x) => x.id), req.body?.week);
+  res.json({ channel: c, engine, relocated, approval_reset: reset, cleared });
 }));
 
 /**
@@ -58,6 +68,8 @@ async function channelImpact(id) {
               as future_posts,
             count(p.id) filter (where p.status = 'approved' and p.scheduled_at >= now())::int
               as future_approved,
+            count(p.id) filter (where p.status = 'approved' and p.scheduled_at < now())::int
+              as missed_approved,
             count(pr.post_id)::int                                  as results,
             (select count(*)::int from content_variants v
               where v.channel_id = c.id and coalesce(btrim(v.body), '') <> '') as variants

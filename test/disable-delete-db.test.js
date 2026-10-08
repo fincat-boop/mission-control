@@ -448,3 +448,49 @@ test('16 (יום חסום) — פוסט מוחזק על יום חסום לא ב�
   assert.ok(ids.includes(a));
   assert.ok(!ids.includes(b));
 });
+
+test('16 (הפעלה מחדש) — כמו החזרת קמפיין: עתידי שלא אושר נמחק ומשובץ מחדש, מאושר נשאר', { skip }, async () => {
+  const ep = await endpoint('חזרה');
+  const ch = await freshChannel('חזרה');
+  const ci = await content(ep, [ch], { title: 'ישובץ מחדש' });
+  const stale = await post({ ep, channel: ch, contentId: ci, when: at(2), title: 'ישן' });
+  const kept = await post({ ep, channel: ch, when: at(4), status: 'approved', title: 'מאושר' });
+  const missed = await post({ ep, channel: ch, when: minutes(-60), status: 'approved', title: 'פוספס' });
+  const pub = await post({ ep, channel: ch, when: at(-2), status: 'published', publishedAt: at(-2) });
+  await call('PATCH', `/endpoints/${ep}`, { active: false });
+
+  const imp = await call('GET', `/endpoints/${ep}/delete-impact`);
+  assert.equal(imp.json.impact.missed_approved, 1);
+  const r = await call('PATCH', `/endpoints/${ep}`, { active: true, week: at(2) });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.cleared, 1);
+  assert.equal(r.json.approval_reset, 1);
+  assert.equal(await statusOf(stale), null, 'עתידי שלא אושר נמחק');
+  assert.equal(await statusOf(kept), 'approved');
+  assert.equal(await statusOf(missed), 'scheduled');
+  assert.equal(await statusOf(pub), 'published');
+
+  // ערוץ: אותו כלל
+  const ch2 = await freshChannel('חזרה-ערוץ');
+  const s2 = await post({ ep, channel: ch2, when: at(5), title: 'ישן בערוץ' });
+  await call('PATCH', `/channels/${ch2}`, { active: false });
+  const rc = await call('PATCH', `/channels/${ch2}`, { active: true });
+  assert.equal(rc.json.cleared, 1);
+  assert.equal(await statusOf(s2), null);
+});
+
+test('16 (קמפיין) — החזרה מהשהיה: מאושר שהמועד שלו עבר חוזר לאישור', { skip }, async () => {
+  const ep = await endpoint('השהיה');
+  const camp = (await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, paused_at)
+     values ($1, 'מושהה', $2, $3, now()) returning id`,
+    [ep, at(-5).slice(0, 10), at(20).slice(0, 10)])).id;
+  const ci = await content(ep, [ids.fb], { campaign: camp });
+  const missed = await post({ ep, contentId: ci, when: minutes(-90), status: 'approved' });
+  const imp = await call('GET', `/campaigns/${camp}/pause-impact`);
+  assert.equal(imp.json.resume.missed_approved, 1);
+  const r = await call('POST', `/campaigns/${camp}/resume`, {});
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.approval_reset, 1);
+  assert.equal(await statusOf(missed), 'scheduled');
+});
