@@ -233,7 +233,9 @@ function epConseq(x) {
   if (x.share_pct === undefined) return `חשיבות ${x.importance} ← ${cadence}`;
   if (x.share_pct === null) return `חשיבות ${x.importance} ← אין לה קמפיין שרץ השבוע; ${cadence}`;
   const where = x.channels.length === 1 ? `ב${x.channels[0]}` : 'בערוצים שלה';
-  return `חשיבות ${x.importance} ← בערך ${x.share_pct}% מהמקום של הקמפיינים ${where} השבוע, ${cadence}`;
+  return x.fixed
+    ? `חשיבות ${x.importance} ← ${x.share_pct}% מהמקום ${where} השבוע (נתח קבוע), ${cadence}`
+    : `חשיבות ${x.importance} ← בערך ${x.share_pct}% מהמקום של הקמפיינים ${where} השבוע, ${cadence}`;
 }
 
 /** ערוץ: כמה המנוע ממלא, השמורה, והמרווח שנגזר */
@@ -280,10 +282,9 @@ function paintConseq(c) {
     ? `← בערוצים שלך בפועל: ${active.map((ch) => `${ch.name} ${daysHe(ch.gap_days)}`).join(' · ')}`
     : '');
   set('ratio', !c.ratio_on ? '← כבוי: אין מגבלה לפי יחס.'
-    : active.length ? `← ${active.map((ch) => (ch.promo_28 == null
-      ? `${ch.name}: בלי מגבלה (אין בו מקום למנוע)`
-      : `${ch.name} (${ch.max_per_week} בשבוע): עד ${ch.promo_28} מכירתיים ב-${
-        c.ratio_window_days} יום, ${ch.promo_week} בשבוע`)).join(' · ')}` : '');
+    : active.length ? `← מכירתיים לכל היותר ב-${c.ratio_window_days} יום (ובשבוע): ${
+      active.map((ch) => (ch.promo_28 == null ? `${ch.name} בלי מגבלה`
+        : `${ch.name} ${ch.promo_28} (${ch.promo_week})`)).join(' · ')}` : '');
 }
 
 let conseqSeq = 0;
@@ -465,9 +466,9 @@ function systemGroup(users, settings, backupsRes, ro, apiKeysRes) {
           <div class="fhint enghint-row">1 = נספר כמו מכירתי מלא, 0.5 = חצי מכירתי וחצי ערך, 0 = נספר כערך.</div>
           ${eng('התראה על פוסט חסר תוכן — כמה שעות לפני המועד', 'content_alert_hours', s.content_alert_hours)}
           <!-- סעיף 33: אין מתג — הביצועים משפיעים לבד. id נשאר ל"לכלל בניהול" בטאב נתונים -->
-          <div class="fhint enghint-row" id="engUsePerf" tabindex="-1">
-            ביצועים משפיעים על נקודת קצה מ-5 תוצאות ומעלה, עד ±15% מהחשיבות שלה — לפי 180 הימים
-            האחרונים. ערוצים, ימים ושעות רק מוצגים בטאב "נתונים" ולא משנים את השיבוץ.
+          <div class="fhint" id="engUsePerf" tabindex="-1">
+            <b>ביצועים נמדדים</b> — משפיעים על נקודת קצה מ-5 תוצאות ומעלה ב-180 הימים האחרונים,
+            עד ±15% מהחשיבות שלה. ערוצים, ימים ושעות רק מוצגים בטאב "נתונים" ולא משנים את השיבוץ.
           </div>
         </div>
       </details>

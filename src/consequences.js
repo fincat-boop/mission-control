@@ -55,10 +55,12 @@ export function settingConsequences(base, draft = {}) {
     const importance = epImportance.get(e.id);
     // הנקודה בכל ערוץ: סכום הנתחים של הקמפיינים שלה; משוקלל בתקציבי הערוצים שבהם יש לה
     const per = new Map();
+    const counted = new Set();
     for (const [ch, byCampaign] of shares) {
       for (const c of campaigns) {
         if (c.endpoint_id !== e.id || !byCampaign.has(c.id)) continue;
         per.set(ch, (per.get(ch) ?? 0) + byCampaign.get(c.id));
+        counted.add(c);
       }
     }
     const mine = active.filter((ch) => per.has(ch.id));
@@ -67,6 +69,8 @@ export function settingConsequences(base, draft = {}) {
       importance,
       share_pct: mine.length ? Math.round(blendShares(per, mine) * 100) : null,
       channels: mine.map((ch) => ch.name),
+      // כל הקמפיינים שלה בנתח קבוע (⋮) — החשיבות לא משנה את הנתח, רק את הקצב
+      fixed: counted.size > 0 && [...counted].every((c) => c.share_pct != null),
       cadence_days: effectiveCadenceDays({ importance }),
     };
   });

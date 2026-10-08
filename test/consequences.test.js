@@ -61,8 +61,17 @@ test('סעיף 35 — נקודה: הנתח בערוצים שלה השבוע (כ�
   assert.deepEqual(a.channels, ['פייסבוק', 'אינסטגרם']);
   // פייסבוק: 7 מול 3 (המושהה לא נספר) = 70%; אינסטגרם: לבד = 100%; משוקלל 4:2
   assert.equal(a.share_pct, Math.round(((0.7 * 4 + 1 * 2) / 6) * 100));
+  assert.equal(a.fixed, false);
   // בלי קמפיין שרץ — null
   assert.equal(c.endpoints.find((e) => e.id === 3).share_pct, null);
+  // נתח קבוע: החשיבות לא משנה את הנתח
+  const fixed = base();
+  fixed.campaigns[0].share_pct = 40;
+  const f1 = settingConsequences(fixed).endpoints.find((e) => e.id === 1);
+  const f2 = settingConsequences(fixed, { endpoints: { 1: 2 } }).endpoints.find((e) => e.id === 1);
+  assert.equal(f1.fixed, true);
+  assert.equal(f1.share_pct, f2.share_pct);
+  assert.notEqual(f1.cadence_days, f2.cadence_days);
 });
 
 test('סעיף 35 — טיוטה לפני שמירה: חשיבות, פוסטים בשבוע, מרווח ויחס', () => {
