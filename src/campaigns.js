@@ -1,16 +1,16 @@
 import { one, rows } from './db.js';
-import { ymd } from './board.js';
+import { weekMeta, ymd } from './board.js';
 import { assetView } from './media.js';
 import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 import {
-  averageSharesByChannel, blendByChannel, channelCapacity, channelEndpoints, channelSharesOf,
-  effectiveGap, endToFit, gapOn, gapToFit, normalizeSharesByChannel, placeableWindow, shareKey,
-  shareOf, siblingsOf,
+  averageSharesByChannel, blendByChannel, blendShares, channelCapacity, channelEndpoints,
+  channelSharesOf, effectiveGap, endToFit, gapOn, gapToFit, placeableWindow, ratioWindowStart,
+  shareKey, shareOf, siblingsOf,
 } from './capacity.js';
 import { loadGapDays } from './gap.js';
-import { CAMPAIGNS_WEIGHTED_SQL, CHANNEL_IDS_SQL, loadStandalone } from './capacity-db.js';
+import { airCounts, CAMPAIGNS_WEIGHTED_SQL, CHANNEL_IDS_SQL, loadStandalone } from './capacity-db.js';
 import { postIsLiveSql } from './live.js';
 
 // הטעינה של ברירת המחדל יושבת ב-gap.js (מקום אחד); כאן רק מייצאים הלאה
@@ -1281,65 +1281,87 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
 }
 
 /**
- * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין.
+ * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין (מסך
+ * האסטרטגיה). אותם מספרים כמו טופס הקמפיין והמנוע (סעיף 34):
  *
- * הנתח (target_pct): הנתח המנורמל של הקמפיין היום, בכל ערוץ מול מי שיושב בו
- * (normalizeSharesByChannel — אותו חשבון כמו הרשת והמנוע) ומשוקלל בתקציבי
- * הערוצים שיש בהם קמפיינים (blendByChannel): share_pct שנקבע ידנית (מוקטן אם
- * הסכום בערוץ עובר 100%), ובלעדיו חלק מהיתרה לפי חשיבות נקודת הקצה. נמדד על היום ולא על החלון של
- * כל קמפיין, כדי שהשורות יהיו מאותו בסיס והסכום שלהן לא יעבור 100%.
- * auto = הנתח נגזר, לא נקבע. בפועל (actual_pct): הפרסומים של התוכן של
- * הקמפיין מתוך הפרסומים של כל הקמפיינים בטבלה — אותו בסיס כמו הנתח, שמתחלק
- * בין קמפיינים (תוכן שוטף ופוסטים בלי תוכן לא נספרים בשום צד).
+ * הנתח (target_pct) — בדיוק המספר שבטופס: הנתח הממוצע של הקמפיין על כל
+ * התקופה שלו, בכל ערוץ שלו מול מי שיושב בו (shareOf — averageSharesByChannel),
+ * משוקלל בתקציבי הערוצים שלו (blendShares). share_pct קבוע (⋮) גובר; בלעדיו —
+ * חלק מהיתרה לפי החשיבות של נקודת הקצה. קודם — הנתח של היום בלבד, משוקלל בכל
+ * הערוצים שיש בהם קמפיינים, והמספר לא הסכים עם הטופס. מכאן שהסכום של השורות
+ * יכול לעבור 100% (כל קמפיין נמדד על התקופה והערוצים שלו).
+ *
+ * בפועל (actual_pct) — מה שהמנוע סופר (airCounts): פורסם + חי על הלוח (כולל
+ * "לא סומנו כפורסמו"), בחלון של המנוע — 28 הימים שמסתיימים בסוף השבוע הנוכחי
+ * (strategyTargets / ratioWindowStart). בכל ערוץ של הקמפיין: החלק שלו מהפוסטים
+ * של הקמפיינים שמתחרים בערוץ (תוכן שוטף לא נספר), ואז אותו שקלול כמו הנתח —
+ * אותו בסיס משני הצדדים. published — מתוכם מה שסומן פורסם.
+ * קמפיין מושהה / של נקודה מושבתת לא נספר — הוא לא מתחרה על שטח (normalizeShares).
  */
-export async function currentAllocation() {
-  const today = ymd(new Date());
-  const channels = await rows('select * from channels where active = true');
-  const shares = blendByChannel(
-    normalizeSharesByChannel(await rows(CAMPAIGNS_WEIGHTED_SQL),
-      { from: today, to: today, channelIds: channels.map((ch) => ch.id) }),
-    new Map(channels.map((ch) => [ch.id, ch])));
-  const running = await rows(
-    `select c.*, e.name as endpoint_name
-       from campaigns c join endpoints e on e.id = c.endpoint_id and e.active
-      where c.active = true and c.paused_at is null
-        and (c.starts_on is null or c.starts_on <= $1)
-        and (c.ends_on is null or c.ends_on >= $1)
-      order by c.id`,
-    [today]
-  );
+export async function currentAllocation(now = new Date()) {
+  const today = ymd(now);
+  const week = weekMeta(now);
+  const from = ratioWindowStart(week.days[0].date);
+  const to = week.days[week.days.length - 1].date;
+
+  const list = await rows(CAMPAIGNS_WEIGHTED_SQL);
+  const channels = await rows('select * from channels order by sort_order, id');
+  const links = await rows('select campaign_id, channel_id from campaign_channels');
+  const names = new Map((await rows('select id, name from endpoints')).map((e) => [e.id, e.name]));
+  const channelById = new Map(channels.map((ch) => [ch.id, ch]));
+  // הערוצים של קמפיין — כמו myChannels בטופס (campaignsWithHealth)
+  const channelsOf = (c) => links.filter((l) => l.campaign_id === c.id)
+    .map((l) => channelById.get(l.channel_id)).filter(Boolean);
+
+  const competing = (c) => c.active && !c.paused_at && c.endpoint_active !== false;
+  const running = list.filter((c) => competing(c) &&
+    (c.starts_on == null || c.starts_on <= today) && (c.ends_on == null || c.ends_on >= today))
+    .sort((a, b) => a.id - b.id);
   if (running.length === 0) return { window: null, rows: [] };
 
-  const from = running.map((c) => c.starts_on).filter(Boolean).sort()[0] ?? today;
+  // ערוץ → (קמפיין → פוסטים באוויר בחלון), רק קמפיינים שמתחרים על שטח
+  const live = new Set(list.filter(competing).map((c) => c.id));
+  const byChannel = new Map();
+  const publishedOf = new Map();
+  for (const r of await airCounts(from, to)) {
+    if (r.campaign_id == null || !live.has(r.campaign_id)) continue;
+    if (!byChannel.has(r.channel_id)) byChannel.set(r.channel_id, new Map());
+    const m = byChannel.get(r.channel_id);
+    m.set(r.campaign_id, (m.get(r.campaign_id) ?? 0) + r.n);
+    publishedOf.set(r.campaign_id, (publishedOf.get(r.campaign_id) ?? 0) + r.published);
+  }
+  const inWindow = (id) => [...byChannel.values()].reduce((s, m) => s + (m.get(id) ?? 0), 0);
 
-  const counts = await rows(
-    `select ci.campaign_id, count(*)::int as n
-       from posts p join content_items ci on ci.id = p.content_id
-      where p.status = 'published' and ci.campaign_id = any($3::int[])
-        and p.published_at >= $1::date and p.published_at < ($2::date + 1)
-      group by ci.campaign_id`,
-    [from, today, running.map((c) => c.id)]
-  );
-  const total = counts.reduce((s, c) => s + c.n, 0);
-  const countMap = new Map(counts.map((c) => [c.campaign_id, c.n]));
+  const out = running.map((c) => {
+    const mine = channelsOf(c);
+    const target = Math.round(shareOf(c, list, mine) * 100);
+    // בכל ערוץ: החלק של הקמפיין מהפוסטים של הקמפיינים בערוץ — ואז אותו שקלול
+    const per = new Map(mine.map((ch) => {
+      const m = byChannel.get(ch.id) ?? new Map();
+      const total = [...m.values()].reduce((s, n) => s + n, 0);
+      return [ch.id, total ? (m.get(c.id) ?? 0) / total : 0];
+    }));
+    const actual = Math.round(blendShares(per, mine) * 100);
+    return {
+      campaign_id: c.id,
+      campaign_name: c.name,
+      endpoint_id: c.endpoint_id,
+      endpoint_name: names.get(c.endpoint_id) ?? '',
+      target_pct: target,
+      auto: c.share_pct == null,
+      actual_pct: actual,
+      live: inWindow(c.id),
+      published: publishedOf.get(c.id) ?? 0,
+      lagging: target - actual > 8,
+    };
+  }).sort((a, b) => b.target_pct - a.target_pct);
 
   return {
-    window: { from, to: today, total_published: total },
-    rows: running.map((c) => {
-      const n = countMap.get(c.id) ?? 0;
-      const actual = total > 0 ? Math.round((n / total) * 100) : 0;
-      const target = Math.round((shares.get(c.id) ?? 0) * 100);
-      return {
-        campaign_id: c.id,
-        campaign_name: c.name,
-        endpoint_id: c.endpoint_id,
-        endpoint_name: c.endpoint_name,
-        target_pct: target,
-        auto: c.share_pct == null,
-        actual_pct: actual,
-        published: n,
-        lagging: target - actual > 8,
-      };
-    }).sort((a, b) => b.target_pct - a.target_pct),
+    window: {
+      from, to,
+      total_live: out.reduce((s, r) => s + r.live, 0),
+      total_published: out.reduce((s, r) => s + r.published, 0),
+    },
+    rows: out,
   };
 }

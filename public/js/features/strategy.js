@@ -68,8 +68,8 @@ export async function renderStrategy() {
         <p class="sub" style="color:var(--muted);font-size:12.5px;margin-top:3px">
           כל קפסולה היא קמפיין לאורך חייו, בצבע נקודת הקצה שלו.
           ${can('settings') ? 'גוררים אותה כדי להזיז את הקמפיין בזמן.' : ''}
-          חשיבות ונתח של קמפיין נקבעים בטופס הקמפיין, בטאב "קמפיינים ותוכן";
-          החשיבות של נקודת קצה — בטאב "ניהול".</p>
+          הנתח של קמפיין נגזר מהחשיבות של נקודת הקצה שלו (בטאב "ניהול"); נתח קבוע — מתפריט ⋮
+          של הקמפיין, בטאב "קמפיינים ותוכן".</p>
       </div>
     </div>
 
@@ -349,27 +349,29 @@ function allocPanel(alloc) {
   if (!alloc?.window || !alloc.rows.length) {
     return '<div class="alloc"><div class="empty">אין קמפיינים שרצים עכשיו.</div></div>';
   }
-  // שורה לכל קמפיין: הנתח (קבוע, או אוטומטי לפי חשיבות נקודת הקצה) מול מה שפורסם בפועל
+  // שורה לכל קמפיין: הנתח — אותו מספר כמו בטופס הקמפיין — מול מה שהמנוע סופר באוויר
   const rows = alloc.rows.map((r) => `
     <div class="arow">
       <span class="an">${esc(r.campaign_name)}<small>${esc(r.endpoint_name)}</small></span>
       <div class="abar">
-        <div class="target" style="width:${r.target_pct}%"></div>
-        <div class="actual" style="width:${r.actual_pct}%"></div>
+        <div class="target" style="width:${Math.min(100, r.target_pct)}%"></div>
+        <div class="actual" style="width:${Math.min(100, r.actual_pct)}%"></div>
       </div>
       <span class="at">נתח ${r.target_pct}%${r.auto ? ' (אוטומטי)' : ''} · בפועל ${r.actual_pct}%
-        ${r.lagging ? '<span class="off">⚠ מפגר</span>' : '<span class="ok">✓</span>'}</span>
+        ${r.lagging ? '<span class="off">⚠ מפגר</span>' : '<span class="ok">✓</span>'}
+        <small>${r.live} פוסטים באוויר, ${r.published} סומנו פורסמו</small></span>
     </div>`).join('');
 
   return `<div class="alloc">
-    <h4>יעד מול ביצוע — ${fmtDate(alloc.window.from)} עד היום</h4>
+    <h4>יעד מול ביצוע — ${fmtDate(alloc.window.from)} עד ${fmtDate(alloc.window.to)}</h4>
     ${rows}
-    <p class="sumline alloc-how">איך נקבע הנתח: אוטומטי לפי החשיבות של נקודת הקצה — קמפיין
-      מקבל את החלק של החשיבות של הנקודה שלו מתוך החשיבות של כל הקמפיינים הפעילים שהתאריכים שלהם
-      חופפים לשלו, גם מושהים (למשל נקודה בחשיבות 6 מול 4 = 60% ו-40%; שני קמפיינים של אותה
-      נקודה מתחלקים שווה). נתח קבוע שנקבע לקמפיין (בתפריט ⋮ שלו) גובר.</p>
-    <p class="sumline">בפועל: מתוך ${alloc.window.total_published} פרסומים של תוכן הקמפיינים
-      האלה מאז ${fmtDate(alloc.window.from)} (תוכן שוטף לא נספר).</p>
+    <p class="sumline alloc-how">איך נקבע הנתח: אוטומטי לפי החשיבות של נקודת הקצה — בכל ערוץ של
+      הקמפיין, מול הקמפיינים שיושבים באותו ערוץ בזמן שלו (למשל נקודה בחשיבות 6 מול 4 = 60% ו-40%;
+      שני קמפיינים של אותה נקודה מתחלקים שווה), בממוצע על כל התקופה שלו — אותו מספר כמו בטופס
+      הקמפיין. קמפיינים מושהים ונקודות מושבתות לא נספרים. נתח קבוע (בתפריט ⋮ של הקמפיין) גובר.</p>
+    <p class="sumline">בפועל: החלק של הקמפיין מהפוסטים של כל הקמפיינים בערוצים שלו, בחלון של
+      המנוע — מה שפורסם, מה שמתוכנן עד סוף השבוע ומה שלא סומן כפורסם, כמו שהמנוע סופר. תוכן שוטף
+      לא נספר.</p>
   </div>`;
 }
 

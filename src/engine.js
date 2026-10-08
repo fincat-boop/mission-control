@@ -7,7 +7,7 @@ import {
   averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, pairGap, promoRoomAllows,
   RATIO_WINDOW_DAYS, ratioPromoLimit, ratioWindowStart, weeklyPromoCap, windowRatio,
 } from './capacity.js';
-import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
+import { airCounts, CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
 import { itemAssetsSql } from './links.js';
 import { endpointLiveSql, postIsLiveSql } from './live.js';
@@ -1050,22 +1050,7 @@ export async function computeDebts(endpoints, settings, nudges = null, week = we
   // קמפיין מושהה לא נספר (כמו existing ב-planWeek), אלא אם כבר פורסם.
   // לכל נקודה × ערוץ × קמפיין (campaign_id null — תוכן שוטף / בלי תוכן): הנקודה
   // סוכמת על הקמפיינים, והקמפיין לבד — לבחירה בתוך הנקודה (סעיף 11)
-  const byCampaign = targetPct.size === 0 ? [] : await rows(
-    `select p.endpoint_id, p.channel_id, ci.campaign_id, count(*)::int as n
-       from posts p
-       left join content_items ci on ci.id = p.content_id
-       left join campaigns ca     on ca.id = ci.campaign_id
-      where p.endpoint_id is not null
-        and p.status = any($3::text[])
-        and (p.status = 'published' or ${postIsLiveSql('p')})
-        -- פוסט שפורסם נספר לפי מתי שפורסם, אחר — לפי מתי שמתוכנן. שני תנאים
-        -- נפרדים ולא coalesce, כדי שהאינדקסים על published_at ו-scheduled_at ישמשו
-        and ((p.published_at >= $1::date and p.published_at < ($2::date + 1))
-          or (p.published_at is null
-              and p.scheduled_at >= $1::date and p.scheduled_at < ($2::date + 1)))
-      group by p.endpoint_id, p.channel_id, ci.campaign_id`,
-    [from, to, LIVE_STATUSES]
-  );
+  const byCampaign = targetPct.size === 0 ? [] : await airCounts(from, to);
   const countMap = new Map();
   for (const r of byCampaign) {
     const k = `${r.endpoint_id}:${r.channel_id}`;

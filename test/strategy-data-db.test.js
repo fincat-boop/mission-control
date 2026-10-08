@@ -115,3 +115,48 @@ test('סעיף 33 — המנוע ומסך הנתונים: אותו חלון (180
   assert.equal(debts.parts(c.id).importance, 0.6);
   assert.equal(debts.parts(c.id).performance, null);
 });
+
+/* ========================= סעיף 34 ========================= */
+
+test('סעיף 34 — מסך האסטרטגיה: אותו נתח כמו טופס הקמפיין, ו"בפועל" כמו שהמנוע סופר', { skip }, async () => {
+  await wipe();
+  const { campaignsWithHealth, currentAllocation } = await import('../src/campaigns.js');
+  const fb = await channel('פייסבוק', 5);      // תקציב 4 (שמורה 1)
+  const ig = await channel('אינסטגרם', 3);     // תקציב 2 (שמורה 1)
+  const a = await endpoint('א', 6);
+  const b = await endpoint('ב', 4);
+  const a1 = await campaign(a.id, [fb.id, ig.id], { name: 'א1', starts: inDays(-10), ends: inDays(20) });
+  const b1 = await campaign(b.id, [fb.id], { name: 'ב1', starts: inDays(-10), ends: inDays(5) });
+  const c1 = await campaign(b.id, [ig.id], { name: 'קבוע', starts: inDays(-10), ends: inDays(40), share: 30 });
+  const paused = await campaign(a.id, [fb.id], { name: 'מושהה', starts: inDays(-10), ends: inDays(20) });
+  await q('update campaigns set paused_at = now() where id = $1', [paused.id]);
+
+  // א1: פורסם + לא סומן כפורסם (מתוכנן שעבר) בפייסבוק, פורסם באינסטגרם; ב1: שניים בפייסבוק.
+  // המושהה: מתוכנן שעבר — מוחזק, לא נספר
+  await post(fb.id, a.id, `${inDays(-3)}T10:00:00`, { campaignId: a1.id });
+  await post(fb.id, a.id, `${inDays(-2)}T10:00:00`, { campaignId: a1.id, status: 'scheduled' });
+  await post(ig.id, a.id, `${inDays(-1)}T10:00:00`, { campaignId: a1.id });
+  await post(fb.id, b.id, `${inDays(-4)}T10:00:00`, { campaignId: b1.id });
+  await post(fb.id, b.id, `${inDays(-5)}T10:00:00`, { campaignId: b1.id });
+  await post(fb.id, a.id, `${inDays(-1)}T12:00:00`, { campaignId: paused.id, status: 'scheduled' });
+
+  const form = new Map((await inOrg(() => campaignsWithHealth())).map((c) => [c.id, c]));
+  const alloc = await inOrg(() => currentAllocation());
+  const row = new Map(alloc.rows.map((r) => [r.campaign_id, r]));
+
+  assert.ok(!row.has(paused.id), 'מושהה לא בטבלה');
+  // הנתח = המספר שבטופס (share_auto לאוטומטי, share_pct לקבוע)
+  assert.equal(row.get(a1.id).target_pct, form.get(a1.id).share_auto);
+  assert.equal(row.get(b1.id).target_pct, form.get(b1.id).share_auto);
+  assert.equal(row.get(c1.id).target_pct, 30);
+  assert.equal(row.get(c1.id).auto, false);
+
+  // בפועל: פייסבוק — א1 2 מ-4 (כולל הלא מסומן), אינסטגרם — א1 1 מ-1; משוקלל בתקציבים 4 ו-2
+  assert.equal(row.get(a1.id).actual_pct, Math.round(((0.5 * 4 + 1 * 2) / 6) * 100));
+  assert.equal(row.get(b1.id).actual_pct, 50);
+  assert.equal(row.get(c1.id).actual_pct, 0);
+  assert.equal(row.get(a1.id).live, 3);
+  assert.equal(row.get(a1.id).published, 2);
+  assert.equal(row.get(b1.id).published, 2);
+  assert.equal(alloc.window.to >= inDays(0), true, 'החלון נגמר בסוף השבוע הנוכחי');
+});

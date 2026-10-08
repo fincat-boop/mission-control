@@ -9,6 +9,7 @@
 
 import { one, rows } from './db.js';
 import { channelEndpoints } from './capacity.js';
+import { postIsLiveSql } from './live.js';
 
 /**
  * הערוצים של כל קמפיין כעמודה בשורה — siblingsOf ו-normalizeSharesByChannel
@@ -70,4 +71,40 @@ export async function loadGapContext(from, to, { settings = undefined, campaigns
     channels: new Map(channels.map((ch) => [ch.id, ch])),
     endpoints: channelEndpoints(list, standalone, { from, to }),
   };
+}
+
+/** הסטטוסים של פוסט שתופס שטח — כמו LIVE_STATUSES במנוע */
+const AIR_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
+
+/**
+ * כמה פוסטים "באוויר" בחלון [from, to] (תאריכים, כולל) לכל נקודה × ערוץ ×
+ * קמפיין (campaign_id null — תוכן שוטף / בלי תוכן). זה ה"בפועל" שהמנוע רודף
+ * בפיגור מהנתח (computeDebts) ושמסך האסטרטגיה מציג (currentAllocation, סעיף
+ * 34) — שאילתה אחת לשניהם.
+ *
+ * נספר: מה שפורסם (לפי מתי שפורסם), ומה שעוד חי על הלוח — מתוכנן / מאושר /
+ * ממתין / בפרסום / נכשל (לפי המועד), כולל "לא סומנו כפורסמו" (מתוכנן שהמועד שלו
+ * עבר, UNCONFIRMED_SQL) — לא ידוע ≠ לא יצא. שיבוץ מוחזק (postIsLiveSql — קמפיין
+ * מושהה, ערוץ / נקודה מושבתים) לא נספר, אלא אם כבר פורסם.
+ * published — מתוכם מה שסומן פורסם.
+ * @returns {Promise<{endpoint_id:number, channel_id:number, campaign_id:number|null,
+ *                    n:number, published:number}[]>}
+ */
+export function airCounts(from, to) {
+  return rows(
+    `select p.endpoint_id, p.channel_id, ci.campaign_id, count(*)::int as n,
+            count(*) filter (where p.status = 'published')::int as published
+       from posts p
+       left join content_items ci on ci.id = p.content_id
+      where p.endpoint_id is not null
+        and p.status = any($3::text[])
+        and (p.status = 'published' or ${postIsLiveSql('p')})
+        -- פוסט שפורסם נספר לפי מתי שפורסם, אחר — לפי מתי שמתוכנן. שני תנאים
+        -- נפרדים ולא coalesce, כדי שהאינדקסים על published_at ו-scheduled_at ישמשו
+        and ((p.published_at >= $1::date and p.published_at < ($2::date + 1))
+          or (p.published_at is null
+              and p.scheduled_at >= $1::date and p.scheduled_at < ($2::date + 1)))
+      group by p.endpoint_id, p.channel_id, ci.campaign_id`,
+    [from, to, AIR_STATUSES]
+  );
 }
