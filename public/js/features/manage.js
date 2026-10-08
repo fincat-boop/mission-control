@@ -107,9 +107,9 @@ function endpointItem(e, channels, ro) {
         <input type="number" min="1" max="10" value="${e.importance}"
                data-ep-field="importance" data-id="${e.id}" ${ro ? 'disabled' : ''}>
       </div>
-      <!-- התדירות נגזרת מהחשיבות בלבד; המרווח בין פוסטים נקבע בכל קמפיין -->
-      <div class="fhint">תדירות אוטומטית לפי החשיבות: פעם ב־<b data-ep-cadence="${e.id}">${e.effective_min_days}</b> ימים.
-        המרווח בין פוסטים נקבע בכל קמפיין.</div>
+      <!-- שורת ההשלכה (סעיף 35): הנתח והקצב — מהשרת (POST /settings/consequences) -->
+      <div class="fhint" data-conseq="ep-${e.id}">${esc(epConseq({
+        importance: e.importance, cadence_days: e.effective_min_days }))}</div>
 
       <div class="subsec">
         <h4>סיכום</h4>
@@ -222,6 +222,83 @@ function connectionBlock(c, conn, ro, hubReady) {
  * קיבולת וימים חסומים — נשמרים בכל שינוי; חיבור ופרסום — בכפתור.
  */
 /** "שמור לדחופים: 1 בשבוע" — המספר שהאחוז נותן בפועל (urgentReserve, סעיף 7) */
+/* ---------- שורות ההשלכה (סעיף 35) ---------- */
+
+// המספרים מהשרת (src/consequences.js — capacity.js); כאן רק הניסוח
+const daysHe = (n) => (n === 0 ? 'בלי מרווח' : n === 1 ? 'יום אחד' : `${n} ימים`);
+
+/** נקודת קצה: הנתח בערוצים שלה השבוע והקצב. share_pct undefined — עוד לא נטען */
+function epConseq(x) {
+  const cadence = `פוסט כל ~${x.cadence_days} ימים`;
+  if (x.share_pct === undefined) return `חשיבות ${x.importance} ← ${cadence}`;
+  if (x.share_pct === null) return `חשיבות ${x.importance} ← אין לה קמפיין שרץ השבוע; ${cadence}`;
+  const where = x.channels.length === 1 ? `ב${x.channels[0]}` : 'בערוצים שלה';
+  return `חשיבות ${x.importance} ← בערך ${x.share_pct}% מהמקום של הקמפיינים ${where} השבוע, ${cadence}`;
+}
+
+/** ערוץ: כמה המנוע ממלא, השמורה, והמרווח שנגזר */
+const chConseq = (x) => `← המנוע ממלא עד ${x.budget} בשבוע (שמור לדחופים ${x.reserve}) · ` +
+  `מרווח ברירת מחדל: ${daysHe(x.gap_days)}`;
+
+/** הערכים שבשדות עכשיו — לפני שמירה */
+function conseqDraft() {
+  const val = (el) => (el ? el.value.trim() : '');
+  const endpoints = {};
+  for (const inp of $$('#manage [data-ep-field="importance"]')) {
+    if (val(inp) !== '') endpoints[inp.dataset.id] = Number(val(inp));
+  }
+  const channels = {};
+  for (const ch of state.channels ?? []) {
+    const f = (name) => $(`#manage [data-ch-field="${name}"][data-id="${ch.id}"]`);
+    const max = val(f('max_per_week'));
+    const pct = val(f('urgent_reserve_pct'));
+    channels[ch.id] = {
+      ...(max !== '' ? { max_per_week: Number(max) } : {}),
+      urgent_reserve_pct: pct === '' ? null : Number(pct),
+    };
+  }
+  const gap = val($('#manage [data-engine="min_gap_days"]'));
+  const ratioOn = $('#engRatioOn')?.checked;
+  return {
+    endpoints, channels,
+    settings: {
+      ...(gap !== '' ? { min_gap_days: Number(gap) } : {}),
+      ...(ratioOn == null ? {} : { min_value_per_promo: ratioOn ? Number(val($('#engRatioVal'))) || 3 : 0 }),
+    },
+  };
+}
+
+function paintConseq(c) {
+  const set = (key, text) => {
+    const el = $(`#manage [data-conseq="${key}"]`);
+    if (el) el.textContent = text;
+  };
+  for (const e of c.endpoints) set(`ep-${e.id}`, epConseq(e));
+  for (const ch of c.channels) set(`ch-${ch.id}`, chConseq(ch));
+  const active = c.channels.filter((ch) => ch.active);
+  set('gap', active.length
+    ? `← בערוצים שלך בפועל: ${active.map((ch) => `${ch.name} ${daysHe(ch.gap_days)}`).join(' · ')}`
+    : '');
+  set('ratio', !c.ratio_on ? '← כבוי: אין מגבלה לפי יחס.'
+    : active.length ? `← ${active.map((ch) => (ch.promo_28 == null
+      ? `${ch.name}: בלי מגבלה (אין בו מקום למנוע)`
+      : `${ch.name} (${ch.max_per_week} בשבוע): עד ${ch.promo_28} מכירתיים ב-${
+        c.ratio_window_days} יום, ${ch.promo_week} בשבוע`)).join(' · ')}` : '');
+}
+
+let conseqSeq = 0;
+let conseqTimer = null;
+/** מחשב מחדש את כל השורות מהערכים שבשדות; תשובה ישנה (הקלדה מהירה) נזרקת */
+async function refreshConseq() {
+  const seq = ++conseqSeq;
+  const c = await api('/settings/consequences', { method: 'POST', body: conseqDraft() });
+  if (seq === conseqSeq) paintConseq(c);
+}
+const scheduleConseq = () => {
+  clearTimeout(conseqTimer);
+  conseqTimer = setTimeout(() => refreshConseq().catch(() => {}), 250);
+};
+
 function reserveNote(max, pct) {
   const n = urgentReserve(max, pct);
   return `שמור לדחופים: ${n === 0 ? 'אף פוסט' : n === 1 ? 'פוסט אחד' : `${n} פוסטים`} בשבוע`;
@@ -261,6 +338,7 @@ function channelItem(c, ro, conn, hubReady) {
         <h4>קיבולת <span class="savenote">נשמר ביציאה מהשדה</span></h4>
         ${num('פוסטים בשבוע', 'max_per_week', c.max_per_week)}
         <div class="fhint">כמה פוסטים הערוץ מפרסם בשבוע. מזה נגזר גם כמה תוכן כל קמפיין צריך בערוץ.</div>
+        <div class="fhint" data-conseq="ch-${c.id}"></div>
         <details class="adv">
           <summary>מתקדם${advSummary(c)}</summary>
           ${num('מתוכם מכירתיים — לכל היותר', 'max_promo_per_week', c.max_promo_per_week, 'promo')}
@@ -370,6 +448,7 @@ function systemGroup(users, settings, backupsRes, ro, apiKeysRes) {
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
           ${eng('ברירת מחדל: ימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ — לכל היותר; בערוץ שיש בו מקום לכמה פוסטים בשבוע המרווח קטן יותר לבד. כל קמפיין יכול לקבוע משלו', 'min_gap_days', s.min_gap_days)}
+          <div class="fhint enghint-row" data-conseq="gap"></div>
           ${eng('פוסטים מכירתיים ביום — לכל היותר, בכל הערוצים יחד', 'max_promo_per_day', s.max_promo_per_day)}
           <div class="prow">
             <label class="cbline">
@@ -380,7 +459,8 @@ function systemGroup(users, settings, backupsRes, ro, apiKeysRes) {
                    value="${s.min_value_per_promo > 0 ? s.min_value_per_promo : 3}"
                    data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 && !ro ? '' : 'disabled'}>
           </div>
-          <div class="fhint enghint-row">כשמסומן, כל ערוץ מקבל מכירתיים לפי היחס מתוך הפוסטים שלו בשבוע — ערוץ של 4 בשבוע ביחס 3 מקבל עד 4 מכירתיים בחודש ועד אחד בשבוע. משולב נספר לפי המשקל שלמטה.</div>
+          <div class="fhint enghint-row">כשמסומן, כל ערוץ מקבל מכירתיים לפי היחס מתוך הפוסטים שלו בשבוע. משולב נספר לפי המשקל שלמטה.</div>
+          <div class="fhint enghint-row" data-conseq="ratio"></div>
           ${eng('כמה פוסט "משולב" נחשב מכירתי (0–1)', 'hybrid_weight', s.hybrid_weight, '0.1')}
           <div class="fhint enghint-row">1 = נספר כמו מכירתי מלא, 0.5 = חצי מכירתי וחצי ערך, 0 = נספר כערך.</div>
           ${eng('התראה על פוסט חסר תוכן — כמה שעות לפני המועד', 'content_alert_hours', s.content_alert_hours)}
@@ -569,14 +649,17 @@ function wireManage(ro, connections, apiKeysRes, pubStatus) {
     inp.addEventListener('change', run(async () => {
       const res = await api(`/endpoints/${inp.dataset.id}`,
         { method: 'PATCH', body: { [inp.dataset.epField]: Number(inp.value), week: state.week } });
-      // התדירות נגזרת מהחשיבות — השורה שמתחת לשדה מתעדכנת מיד
-      const cadence = $(`[data-ep-cadence="${inp.dataset.id}"]`);
-      if (cadence && res?.endpoint?.effective_min_days != null) {
-        cadence.textContent = res.endpoint.effective_min_days;
-      }
       engineToast(res, 'נשמר.');
       await refreshBoard();
     })));
+
+  // שורות ההשלכה (סעיף 35): מתעדכנות תוך כדי הקלדה, לפני השמירה
+  $$(['#manage [data-ep-field="importance"]', '#manage [data-ch-field="max_per_week"]',
+      '#manage [data-ch-field="urgent_reserve_pct"]', '#manage [data-engine="min_gap_days"]',
+      '#engRatioVal'].join(', '))
+    .forEach((inp) => inp.addEventListener('input', scheduleConseq));
+  $('#engRatioOn')?.addEventListener('change', scheduleConseq);
+  refreshConseq().catch(() => {});
 
   // המספר שהאחוז לדחופים נותן מתעדכן תוך כדי הקלדה (לפני השמירה ביציאה)
   $$('#manage [data-ch-field="max_per_week"], #manage [data-ch-field="urgent_reserve_pct"]')

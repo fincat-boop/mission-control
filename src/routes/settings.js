@@ -6,6 +6,9 @@ import { readBackupLayers } from '../backup-status.js';
 import { isPlatformOrg } from '../platform.js';
 import { setupSteps } from '../setup.js';
 import { resetToManual } from '../publish/runner.js';
+import { CAMPAIGNS_WEIGHTED_SQL, loadStandalone } from '../capacity-db.js';
+import { settingConsequences } from '../consequences.js';
+import { weekMeta } from '../board.js';
 
 const r = Router();
 
@@ -33,6 +36,24 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
   const manualReset = req.body?.autopublish_enabled === false ? await resetToManual() : null;
   const engine = await autoFill(req.body?.week);
   res.json({ settings: s, engine, ...(manualReset ? { manual_reset: manualReset } : {}) });
+}));
+
+/**
+ * שורת ההשלכה מתחת להגדרות השיבוץ בניהול (סעיף 35): מה הערכים שבשדות עושים
+ * בפועל — לפני שמירה. הגוף = הטיוטה (consequences.js); לא כותב כלום. פתוח
+ * לכל משתמש מחובר, כמו המסך עצמו.
+ */
+r.post('/settings/consequences', wrap(async (req, res) => {
+  const week = weekMeta(new Date());
+  const base = {
+    campaigns: await rows(CAMPAIGNS_WEIGHTED_SQL),
+    channels: await rows('select * from channels order by sort_order, id'),
+    endpoints: await rows('select id, name, importance from endpoints order by id'),
+    standalone: await loadStandalone(),
+    settings: await one('select * from engine_settings limit 1'),
+    week: { from: week.days[0].date, to: week.days[week.days.length - 1].date },
+  };
+  res.json(settingConsequences(base, req.body ?? {}));
 }));
 
 /* ========================= רשימת ההקמה ========================= */

@@ -160,3 +160,75 @@ test('סעיף 34 — מסך האסטרטגיה: אותו נתח כמו טופס
   assert.equal(row.get(b1.id).published, 2);
   assert.equal(alloc.window.to >= inDays(0), true, 'החלון נגמר בסוף השבוע הנוכחי');
 });
+
+/* ========================= סעיף 35 ========================= */
+
+test('סעיף 35 — POST /settings/consequences: אותם מספרים כמו capacity.js והמנוע', { skip }, async () => {
+  await wipe();
+  const { default: express } = await import('express');
+  const { default: settingsRoutes } = await import('../src/routes/settings.js');
+  const cap = await import('../src/capacity.js');
+  const { loadGapContext, CAMPAIGNS_WEIGHTED_SQL } = await import('../src/capacity-db.js');
+  const { strategyTargets } = await import('../src/engine.js');
+  const { weekMeta } = await import('../src/board.js');
+
+  const fb = await channel('פייסבוק', 5);
+  const ig = await channel('אינסטגרם', 3);
+  const a = await endpoint('א', 7);
+  const b = await endpoint('ב', 3);
+  await campaign(a.id, [fb.id, ig.id], { name: 'א1', starts: inDays(-10), ends: inDays(30) });
+  await campaign(b.id, [fb.id], { name: 'ב1', starts: inDays(-10), ends: inDays(30) });
+
+  const app = express();
+  app.use(express.json());
+  const pending = new Set();
+  app.use((req, res, next) => {
+    req.user = { id: null, is_owner: true, perm_settings: true };
+    const p = db.withOrg(org, () => new Promise((resolve) => {
+      res.on('finish', resolve);
+      res.on('close', resolve);
+      next();
+    })).catch(() => {}).finally(() => pending.delete(p));
+    pending.add(p);
+  });
+  app.use(settingsRoutes);
+  const server = app.listen(0);
+  const post35 = async (body) => {
+    const res = await fetch(`http://localhost:${server.address().port}/settings/consequences`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const json = await res.json();
+    await Promise.all([...pending]);
+    return json;
+  };
+  try {
+    const week = weekMeta(new Date());
+    const from = week.days[0].date;
+    const to = week.days[6].date;
+    const c = await post35({});
+
+    // ערוץ: המרווח והתקציב — כמו המנוע (loadGapContext + effectiveGap)
+    const ctx = await inOrg(() => loadGapContext(from, to));
+    for (const ch of [fb, ig]) {
+      const row = c.channels.find((x) => x.id === ch.id);
+      assert.equal(row.gap_days, cap.effectiveGap(null, ctx.settings, cap.gapOn(ctx, ch.id)));
+      assert.equal(row.budget, cap.channelBudget(ch));
+    }
+    // נקודה: היעד של המנוע לשבוע (strategyTargets) בכל ערוץ, משוקלל בתקציבים
+    const campaigns = await q(CAMPAIGNS_WEIGHTED_SQL);
+    const { targetPct } = strategyTargets(campaigns, week, { channelIds: [fb.id, ig.id] });
+    const per = new Map([[fb.id, targetPct.get(fb.id).get(a.id) / 100],
+                         [ig.id, targetPct.get(ig.id).get(a.id) / 100]]);
+    assert.equal(c.endpoints.find((e) => e.id === a.id).share_pct,
+      Math.round(cap.blendShares(per, [fb, ig]) * 100));
+
+    // טיוטה: חשיבות 3 לנקודה א — 50% בפייסבוק, ולא נשמר כלום
+    const d = await post35({ endpoints: { [a.id]: 3 }, settings: { min_gap_days: 1 } });
+    assert.equal(d.endpoints.find((e) => e.id === a.id).share_pct,
+      Math.round(((0.5 * 4 + 1 * 2) / 6) * 100));
+    assert.ok(d.channels.every((ch) => ch.gap_days <= 1));
+    assert.equal((await q1('select importance from endpoints where id = $1', [a.id])).importance, 7);
+    assert.equal((await q1('select min_gap_days from engine_settings')).min_gap_days, 7);
+  } finally {
+    server.close();
+  }
+});
