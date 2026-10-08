@@ -2,9 +2,37 @@ import { $, $$, esc, run, toast, toastAction } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { state } from '../core/state.js';
 import { refreshAfterPostChange } from '../ui/refresh.js';
-import { KIND_HE } from '../core/format.js';
+import { KIND_HE, ymd } from '../core/format.js';
 
 /* ========================= מילוי אוטומטי: הודעה + ביטול ========================= */
+
+/** תחילת השבוע (ראשון) של היום + n שבועות, YYYY-MM-DD — כמו weekMeta בשרת */
+function weekStartIn(n, now = new Date()) {
+  const d = new Date(now);
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay() + 7 * n);
+  return ymd(d);
+}
+
+/**
+ * לאילו שבועות הוויתור נרשם, במילים — מ-covered_weeks של המילוי (השבוע
+ * הנוכחי והבא במילוי אוטומטי, סעיף 13; כל התקופה בשמירת קמפיין)
+ */
+export function undoWeeksPhrase(weeks, now = new Date()) {
+  const list = [...new Set(weeks ?? [])].sort();
+  const thisWeek = weekStartIn(0, now);
+  const nextWeek = weekStartIn(1, now);
+  if (list.length === 1) {
+    if (list[0] === thisWeek) return 'לשבוע הזה';
+    if (list[0] === nextWeek) return 'לשבוע הבא';
+    const [, m, d] = list[0].split('-').map(Number);
+    return `לשבוע של ${d}.${m}`;
+  }
+  if (list.length === 2 && list[0] === thisWeek && list[1] === nextWeek) {
+    return 'לשבוע הזה ולשבוע הבא';
+  }
+  return list.length ? 'לשבועות האלה' : 'לשבוע הזה';
+}
 
 /**
  * "בטל" על מילוי של המנוע: מוחק את הפוסטים שנוצרו ומחזיר שיוכים לפוסט
@@ -23,7 +51,7 @@ const undoFill = run(async (fill) => {
     : '';
   toast(r.removed || r.detached
     ? `המילוי בוטל — הלוח חזר למה שהיה, והמנוע לא יחזיר את התוכן הזה ${
-      fill.weeks > 1 ? 'לשבועות האלה' : 'לשבוע הזה'}.${kept}`
+      undoWeeksPhrase(fill.covered_weeks)}.${kept}`
     : r.kept
       ? `לא בוטל כלום —${kept.replace(/\.$/, '')} כמו שהם.`
       : 'אין מה לבטל — הפוסטים כבר השתנו או יצאו לאוויר.');

@@ -1006,3 +1006,13 @@ test('nearWeeks — השבוע הנוכחי והבא, לא משנה מה מוצ�
   assert.deepEqual(nearWeeks(new Date('2026-10-08T12:00:00')), ['2026-10-04', '2026-10-11']);
   assert.deepEqual(nearWeeks(new Date('2026-10-10T23:30:00')), ['2026-10-04', '2026-10-11']);
 });
+
+test('F2 — "בטל": ההודעה אומרת לאיזה שבוע הוויתור נרשם', async () => {
+  const { undoWeeksPhrase } = await import('../public/js/ui/engineDialog.js');
+  const now = new Date('2026-10-08T10:00:00');   // חמישי, השבוע מ-4.10
+  assert.equal(undoWeeksPhrase(['2026-10-04'], now), 'לשבוע הזה');
+  assert.equal(undoWeeksPhrase(['2026-10-11'], now), 'לשבוע הבא');
+  assert.equal(undoWeeksPhrase(['2026-10-11', '2026-10-04'], now), 'לשבוע הזה ולשבוע הבא');
+  assert.equal(undoWeeksPhrase(['2026-11-01'], now), 'לשבוע של 1.11');
+  assert.equal(undoWeeksPhrase(['2026-10-04', '2026-10-11', '2026-10-18'], now), 'לשבועות האלה');
+});
