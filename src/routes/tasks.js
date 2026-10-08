@@ -102,8 +102,10 @@ export async function taskList({ all: everything = false } = {}) {
             -- הטקסט ל"העתק טקסט": הגרסה הנוכחית של התוכן לערוץ של הפוסט
             -- (בוואטסאפ — הנוסח לוואטסאפ, לא גוף התוכן הכללי), חי ולא מה
             -- שנשמר כשהמשימה נוצרה. אחריה מה שנשמר במשימה, ואז הכותרת.
-            coalesce(nullif(btrim(v.body), ''), nullif(btrim(t.meta->>'body'), ''),
-                     p.title, t.title) as copy_text
+            -- ניוזלטר (פרסום ידני — המתג כבוי): הנושא, לא גוף ה-HTML
+            coalesce(case when c.platform = 'newsletter' then nullif(btrim(v.meta->>'subject'), '')
+                          else nullif(btrim(v.body), '') end,
+                     nullif(btrim(t.meta->>'body'), ''), p.title, t.title) as copy_text
        from tasks t
        left join users u            on u.id = t.assignee_id
        left join endpoints e        on e.id = t.endpoint_id

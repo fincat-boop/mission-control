@@ -886,6 +886,40 @@ begin
   perform set_config('app.current_org', '', true);
 end $$;
 
+-- כרגע אין פרסום אוטומטי (החלטת המשתמש 8.10.26): כשמתג-העל
+-- (engine_settings.autopublish_enabled) כבוי, המערכת מתנהגת כאילו פרסום
+-- אוטומטי לא קיים — ובכיבוי (PATCH /settings, runner.js resetToManual)
+-- מאושר ונכשל חוזרים למתוכנן. הצעד הזה עושה את אותו ניקוי פעם אחת לכל ארגון
+-- שהמתג שלו כבוי ביום העלייה (או שאין לו שורת הגדרות), עם app.current_org שלו:
+--   1. פוסט approved ← scheduled, בלי approved_by / approved_at.
+--   2. פוסט failed ← scheduled, בלי publish_error (וגם בלי approved_by /
+--      approved_at). נכשל שהמועד שלו עבר מופיע אז כ"עבר המועד" / "לא סומנו
+--      כפורסמו" — כמו כל פוסט ידני שלא סומן.
+--   3. משימות כשל פתוחות (tasks.kind = 'failed', done = false) של הפוסטים
+--      האלה ← נסגרות (done, done_at = now()).
+--   publishing ו-published — לא נוגעים. ארגון שהמתג שלו דלוק — לא נוגעים.
+do $$
+declare o record;
+begin
+  insert into app_migrations (key) values ('manual_only_v1') on conflict do nothing;
+  if not found then return; end if;
+  for o in select id from orgs loop
+    perform set_config('app.current_org', o.id::text, true);
+    continue when exists (select 1 from engine_settings s
+                           where s.org_id = o.id and s.autopublish_enabled);
+    with moved as (
+      update posts p
+         set status = 'scheduled', approved_by = null, approved_at = null, publish_error = null
+       where p.org_id = o.id and p.status in ('approved', 'failed')
+      returning p.id
+    )
+    update tasks t set done = true, done_at = now()
+      from moved m
+     where t.post_id = m.id and t.kind = 'failed' and not t.done;
+  end loop;
+  perform set_config('app.current_org', '', true);
+end $$;
+
 -- ========================= API לסוכנים: מפתחות =========================
 -- מפתח לכל סוכן חיצוני, עם הרשאות (src/agent-api, הועתק מ-Backbone).
 --   - נשמר רק sha256 של המפתח. המפתח מוצג פעם אחת בהנפקה ואינו ניתן לשחזור.

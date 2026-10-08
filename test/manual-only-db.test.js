@@ -170,3 +170,197 @@ test('א — מבצע דחוף בלי נקודה: התצוגה המקדימה מ
   assert.equal(ok.status, 201, JSON.stringify(ok.json));
   assert.ok(ok.json.posts.every((p) => p.endpoint_id === ids.ep));
 });
+
+/* ========================= ב — אין פרסום אוטומטי כשהמתג כבוי ========================= */
+
+test('ב — המתג כבוי: אישור, אישור השבוע, פרסם עכשיו והעבר ל-HUB — 409; ביטול אישור עובד', { skip }, async () => {
+  await setAuto(false);
+  const id = await post({ title: 'לאישור' });
+  const nl = await post({ title: 'ניוזלטר', channel: ids.nl });
+  for (const [path, target] of [
+    ['/posts/:id/approve-publish', id], ['/publish/approve-week', id],
+    ['/posts/:id/publish-now', id], ['/posts/:id/newsletter/transfer', nl],
+  ]) {
+    const r = await call('POST', path.replace(':id', target), {});
+    assert.equal(r.status, 409, path);
+    assert.match(r.json.error, /הפרסום האוטומטי כבוי/, path);
+  }
+  assert.equal(await statusOf(id), 'scheduled');
+
+  // ביטול אישור — מחזיר מצב, לא מפרסם: לא חסום
+  const approved = await post({ title: 'מאושר מלפני', status: 'approved' });
+  const un = await call('POST', `/posts/${approved}/unapprove-publish`);
+  assert.equal(un.status, 200, JSON.stringify(un.json));
+
+  // המתג דלוק — אותם נתיבים לא נחסמים על המתג (נכשלים, אם בכלל, מסיבה אחרת)
+  await setAuto(true);
+  try {
+    const r = await call('POST', `/posts/${id}/approve-publish`);
+    assert.notEqual(r.status, 409);
+    assert.doesNotMatch(r.json.error ?? '', /הפרסום האוטומטי כבוי —/);
+  } finally {
+    await setAuto(false);
+  }
+});
+
+test('ב — כיבוי המתג: מאושר ונכשל חוזרים למתוכנן, משימות הכשל נסגרות; publishing לא זז', { skip }, async () => {
+  await setAuto(true);
+  const approved = await post({ title: 'מאושר', status: 'approved' });
+  const failed = await post({ title: 'נכשל', status: 'failed', error: 'הטוקן פג', at: -60 * 5 });
+  const publishing = await post({ title: 'בפרסום', status: 'publishing', at: -2 });
+  const task = await q1(
+    `insert into tasks (title, kind, post_id, urgent, done) values ('פרסום נכשל', 'failed', $1, true, false)
+     returning id`, [failed]);
+
+  const status = await call('GET', '/publish/status');
+  assert.ok(status.json.manual_reset.approved >= 1);
+  assert.ok(status.json.manual_reset.failed >= 1);
+
+  const r = await call('PATCH', '/settings', { autopublish_enabled: false });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.settings.autopublish_enabled, false);
+  assert.ok(r.json.manual_reset.approved >= 1 && r.json.manual_reset.failed >= 1);
+
+  const rows = await qa(
+    'select id, status, approved_at, publish_error from posts where id = any($1::int[]) order by id',
+    [[approved, failed, publishing]]);
+  const by = new Map(rows.map((x) => [x.id, x]));
+  assert.equal(by.get(approved).status, 'scheduled');
+  assert.equal(by.get(approved).approved_at, null);
+  assert.equal(by.get(failed).status, 'scheduled');
+  assert.equal(by.get(failed).publish_error, null);
+  assert.equal(by.get(publishing).status, 'publishing');
+  assert.equal((await q1('select done from tasks where id = $1', [task.id])).done, true);
+
+  // הדלקה לא נוגעת בכלום
+  const on = await call('PATCH', '/settings', { autopublish_enabled: true });
+  assert.equal(on.json.manual_reset, undefined);
+  await setAuto(false);
+});
+
+test('ב — טיק כשהמתג כבוי: ניוזלטר שהגיע מועדו לא מוכשל, ומקבל משימת "לפרסם היום" עם הנושא', { skip }, async () => {
+  const runner = await import('../src/publish/runner.js');
+  await setAuto(false);
+  // המועד עבר לפני 10 דקות — כשהמתג דלוק זה "ניוזלטר לא הועבר ל-HUB" ונכשל
+  const id = await post({ title: 'ניוזלטר היום', channel: ids.nl, at: -10 });
+  await runner.publishTickForOrg(org);
+  assert.equal(await statusOf(id), 'scheduled');
+  assert.equal((await q1(
+    "select count(*)::int as n from tasks where post_id = $1 and kind = 'failed'", [id])).n, 0);
+
+  // משימת היום — בשעה קבועה, בלי תלות בשעון של ההרצה
+  const noon = new Date(minutes(-10));
+  noon.setHours(12, 0, 0, 0);
+  await runner.manualPublishPrep(org, noon);
+  const t = await q1(
+    "select title, subtitle, meta from tasks where post_id = $1 and kind = 'publish'", [id]);
+  assert.ok(t, 'נוצרה משימת "לפרסם היום"');
+  assert.equal(t.title, 'לפרסם היום בניוזלטר: ניוזלטר היום');
+  assert.equal(t.subtitle, runner.NEWSLETTER_SUB_READY);
+
+  // המתג דלוק — אותו מצב: נכשל עם משימת כשל (ההתנהגות של היום)
+  const id2 = await post({ title: 'ניוזלטר דלוק', channel: ids.nl, at: -10 });
+  await setAuto(true);
+  try {
+    await runner.publishTickForOrg(org);
+  } finally {
+    await setAuto(false);
+  }
+  assert.equal(await statusOf(id2), 'failed');
+});
+
+test('ב — המתג כבוי: נכשל שמקבל מועד חדש חוזר למתוכנן ומשימת הכשל נסגרת; דלוק — נשאר נכשל', { skip }, async () => {
+  await setAuto(false);
+  const id = await post({ title: 'נכשל להזזה', status: 'failed', error: 'נתקע', at: -60 * 3 });
+  const task = await q1(
+    "insert into tasks (title, kind, post_id, urgent) values ('נכשל', 'failed', $1, true) returning id", [id]);
+  const r = await call('PATCH', `/posts/${id}`, { scheduled_at: days(20), confirm_warnings: true });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.post.status, 'scheduled');
+  assert.equal(r.json.post.publish_error, null);
+  assert.equal((await q1('select done from tasks where id = $1', [task.id])).done, true);
+
+  await setAuto(true);
+  try {
+    const id2 = await post({ title: 'נכשל דלוק', status: 'failed', error: 'נתקע', at: -60 * 3 });
+    const r2 = await call('PATCH', `/posts/${id2}`, { scheduled_at: days(21), confirm_warnings: true });
+    assert.equal(r2.status, 200, JSON.stringify(r2.json));
+    assert.equal(r2.json.post.status, 'failed');
+  } finally {
+    await setAuto(false);
+  }
+});
+
+/* ========================= הצעדים החד-פעמיים ========================= */
+
+test('צעדים חד-פעמיים: orphan_posts_v1 ו-manual_only_v1', { skip }, async () => {
+  const camp = (await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on)
+     values ($1, 'קמפיין', current_date - 5, current_date + 30) returning id`, [ids.ep2])).id;
+  const inCamp = (await q1(
+    `insert into content_items (endpoint_id, campaign_id, kind, title) values ($1,$2,'value','בקמפיין')
+     returning id`, [ids.ep2, camp])).id;
+
+  const p = {
+    // orphan_posts_v1
+    withCamp: await post({ endpoint: null, content: inCamp, title: 'יתום עם קמפיין' }),
+    noContent: await post({ endpoint: null, content: null, title: 'יתום בלי תוכן' }),
+    loose: await post({ endpoint: null, content: ids.ready, title: 'יתום עם תוכן שוטף' }),
+    published: await post({ endpoint: null, content: null, status: 'published', at: -60 * 24,
+                            title: 'פורסם בלי נקודה' }),
+    publishingOrphan: await post({ endpoint: null, content: null, status: 'publishing', at: -5,
+                                   title: 'בדרך בלי נקודה' }),
+    // manual_only_v1
+    approved: await post({ status: 'approved', title: 'מאושר ישן' }),
+    failed: await post({ status: 'failed', error: 'נכשל', at: -60, title: 'נכשל ישן' }),
+    publishing: await post({ status: 'publishing', at: -3, title: 'בפרסום' }),
+  };
+  const orphanTask = await q1(
+    "insert into tasks (title, kind, post_id) values ('לכתוב', 'write', $1) returning id", [p.noContent]);
+  const failTask = await q1(
+    "insert into tasks (title, kind, post_id, urgent) values ('נכשל', 'failed', $1, true) returning id",
+    [p.failed]);
+
+  // ארגון שני שהמתג שלו דלוק — manual_only_v1 לא נוגע בו
+  const org2 = (await db.pool.query("insert into orgs (name) values ('manual-only-on') returning id")).rows[0].id;
+  const kept = await db.withOrg(org2, async () => {
+    await db.query('insert into engine_settings (autopublish_enabled) values (true)');
+    const ep = (await db.one("insert into endpoints (name, importance) values ('א', 5) returning id")).id;
+    const ch = (await db.one(
+      "insert into channels (name, platform, max_per_week) values ('פ', 'facebook', 7) returning id")).id;
+    return (await db.one(
+      `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at, status)
+       values ($1,$2,'מאושר דלוק','value', now() + interval '3 days', 'approved') returning id`,
+      [ch, ep])).id;
+  });
+
+  await setAuto(false);
+  await db.pool.query("delete from app_migrations where key in ('orphan_posts_v1', 'manual_only_v1')");
+  await db.migrate();
+
+  const after1 = new Map((await qa(
+    'select id, status, endpoint_id, publish_error, approved_at from posts where id = any($1::int[])',
+    [Object.values(p)])).map((x) => [x.id, x]));
+  assert.equal(after1.get(p.withCamp).endpoint_id, ids.ep2, 'יתום עם קמפיין מקבל את הנקודה של הקמפיין');
+  assert.equal(after1.has(p.noContent), false, 'יתום בלי תוכן נמחק');
+  assert.equal(after1.has(p.loose), false, 'יתום עם תוכן בלי קמפיין נמחק');
+  assert.equal(after1.get(p.published).endpoint_id, null, 'פורסם — לא נוגעים');
+  assert.equal(after1.get(p.publishingOrphan).status, 'publishing', 'בדרך — לא נוגעים');
+  assert.equal(await q1('select id from tasks where id = $1', [orphanTask.id]), null,
+    'המשימות של היתום נמחקו איתו');
+
+  assert.equal(after1.get(p.approved).status, 'scheduled');
+  assert.equal(after1.get(p.approved).approved_at, null);
+  assert.equal(after1.get(p.failed).status, 'scheduled');
+  assert.equal(after1.get(p.failed).publish_error, null);
+  assert.equal(after1.get(p.publishing).status, 'publishing');
+  assert.equal((await q1('select done from tasks where id = $1', [failTask.id])).done, true);
+
+  const other = await db.withOrg(org2, () => db.one('select status from posts where id = $1', [kept]));
+  assert.equal(other.status, 'approved', 'ארגון שהמתג שלו דלוק — לא נוגעים');
+
+  // פעם אחת בלבד: עלייה נוספת לא מוחקת שוב
+  const again = await post({ endpoint: null, content: null, title: 'יתום אחרי הצעד' });
+  await db.migrate();
+  assert.equal(await statusOf(again), 'scheduled');
+});

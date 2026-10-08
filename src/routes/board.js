@@ -8,7 +8,7 @@ import {
 import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
-import { emitPostEvent } from '../publish/runner.js';
+import { autopublishOn, emitPostEvent } from '../publish/runner.js';
 import { hubStale, hubUnverified } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
 import { contentState } from '../publish/readiness.js';
@@ -288,6 +288,18 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
       `update posts set status = 'scheduled', approved_by = null, approved_at = null
         where id = $1 and status = 'approved' returning *`,
       [current.id]) ?? post;
+  }
+  // פרסום אוטומטי כבוי (runner.js AUTOPUBLISH_OFF_ERROR): נכשל שקיבל מועד
+  // חדש חוזר למתוכנן — אין מי שיאשר אותו שוב, ובלי זה הוא היה נשאר אדום
+  // לתמיד. משימת הכשל שלו נסגרת. מתג דלוק — נשאר נכשל עד אישור, כמו היום.
+  if (current.status === 'failed' && isMove(current, b) && !(await autopublishOn())) {
+    post = await one(
+      `update posts set status = 'scheduled', publish_error = null, approved_by = null,
+                        approved_at = null
+        where id = $1 and status = 'failed' returning *`, [current.id]) ?? post;
+    await query(
+      "update tasks set done = true, done_at = now() where post_id = $1 and kind = 'failed' and not done",
+      [current.id]);
   }
   res.json({ post, approval_reset: approvalReset });
 }));

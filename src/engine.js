@@ -942,7 +942,9 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
               and ${postIsLiveSql('p')}
               and (p.content_id is not null or p.urgent or not p.auto_hole)
               and exists (select 1 from channels uc where uc.id = p.channel_id
-                             and uc.platform <> 'newsletter')))
+                             and (uc.platform <> 'newsletter'
+                                  or not exists (select 1 from engine_settings s
+                                                  where s.autopublish_enabled)))))
       group by p.endpoint_id`,
     [reference, now, UPCOMING_STATUSES]
   );

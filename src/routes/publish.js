@@ -5,8 +5,8 @@ import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
 import { encryptSecret, decryptSecret } from '../publish/crypto.js';
 import { verifyConnection } from '../publish/meta.js';
-import { loadPayload, publishBlocker, publishOne, resetPublishing,
-         transferNewsletter } from '../publish/runner.js';
+import { AUTOPUBLISH_OFF_ERROR, autopublishOn, loadPayload, publishBlocker, publishOne,
+         resetPublishing, transferNewsletter } from '../publish/runner.js';
 import { HubMailError, audienceLists, hubFillUrl, hubMailReady, hubOrigins,
          newsletterTemplate, newsletterPreview } from '../hub-mail.js';
 import { NEWSLETTER_NO_APPROVE, hubStale, hubUnverified } from '../publish/newsletter.js';
@@ -29,10 +29,16 @@ r.get('/publish/status', wrap(async (_req, res) => {
             cc.access_token_enc is not null as has_token,
             cc.last_check_at, cc.last_check_ok, cc.last_check_note
        from channel_connections cc`);
+  // כמה פוסטים יחזרו למתוכנן בכיבוי המתג (resetToManual) — לחלון האישור בניהול
+  const reset = await one(
+    `select count(*) filter (where status = 'approved')::int as approved,
+            count(*) filter (where status = 'failed')::int   as failed
+       from posts where status in ('approved', 'failed')`);
   res.json({
     autopublish_enabled: settings?.autopublish_enabled ?? false,
     hub_mail_ready: hubMailReady(),
     connections,
+    manual_reset: reset,
   });
 }));
 
@@ -223,10 +229,20 @@ r.delete('/channels/:id/connection', requirePerm('settings'), wrap(async (req, r
 /* ========================= אישור ושליחה פר-פוסט ========================= */
 
 /**
+ * מתג-העל כבוי = אין פרסום אוטומטי בכלל (runner.js AUTOPUBLISH_OFF_ERROR):
+ * אישור, אישור השבוע, "פרסם עכשיו" ו"העבר ל-HUB" נדחים. ביטול אישור ושחרור
+ * פרסום תקוע — לא כאן בכוונה: הם מחזירים מצב, לא מפרסמים.
+ */
+const requireAutopublish = wrap(async (_req, res, next) => {
+  if (!(await autopublishOn())) return bad(res, AUTOPUBLISH_OFF_ERROR, 409);
+  next();
+});
+
+/**
  * אישור שליחה אוטומטית לפוסט בודד. הבדיקות רצות כאן, לא רק בשליחה —
  * כדי שבעיה תתגלה מול המשתמש שמאשר, לא בלילה מול אף אחד.
  */
-r.post('/posts/:id/approve-publish', requirePerm('approve'), wrap(async (req, res) => {
+r.post('/posts/:id/approve-publish', requirePerm('approve'), requireAutopublish, wrap(async (req, res) => {
   const payload = await loadPayload(req.params.id);
   if (!payload) return bad(res, 'לא נמצא פוסט כזה', 404);
   // ניוזלטר מאושר ב-HUB, לא כאן: "העבר ל-HUB" יוצר שם טיוטה לאישור
@@ -273,7 +289,7 @@ export function weekApprovalReason(payload, now = new Date()) {
  * בבת אחת. שום דבר לא נשלח מיד — הרַנֶר שולח כל אחד במועד שנקבע לו.
  * מה שלא עומד בתנאים חוזר עם הסיבה (skipped), לא נופל בשקט.
  */
-r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) => {
+r.post('/publish/approve-week', requirePerm('approve'), requireAutopublish, wrap(async (req, res) => {
   const week = weekMeta(req.body?.week);
   const from = week.startDate;
   const to = new Date(week.endDate);
@@ -323,7 +339,7 @@ r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) =>
  * בעל העסק שם, עם המועד של הפוסט. idempotent — לחיצה שנייה מחזירה את מה
  * שכבר הועבר. הרשאת approve, כמו אישור לפרסום אוטומטי.
  */
-r.post('/posts/:id/newsletter/transfer', requirePerm('approve'), wrap(async (req, res) => {
+r.post('/posts/:id/newsletter/transfer', requirePerm('approve'), requireAutopublish, wrap(async (req, res) => {
   let out;
   try {
     out = await transferNewsletter(req.params.id, req.user);
@@ -374,7 +390,7 @@ r.post('/posts/:id/unapprove-publish', requirePerm('approve'), wrap(async (req, 
 }));
 
 /** שליחה מיידית, בלי לחכות לטיק — למי שרוצה לראות את זה קורה עכשיו */
-r.post('/posts/:id/publish-now', requirePerm('approve'), wrap(async (req, res) => {
+r.post('/posts/:id/publish-now', requirePerm('approve'), requireAutopublish, wrap(async (req, res) => {
   // ניוזלטר לא "מתפרסם עכשיו" מכאן — הוא עובר ל-HUB ומאושר שם
   const target = await one(
     `select c.platform from posts p join channels c on c.id = p.channel_id where p.id = $1`,

@@ -35,6 +35,49 @@ import { endpointLiveSql } from '../live.js';
  * המועד ולא הועבר — משימה (newsletterNotTransferred), לא שליחה.
  */
 
+/**
+ * מתג-העל כבוי = אין פרסום אוטומטי בכלל (החלטת המשתמש 8.10.26: "כרגע ועד
+ * הודעה חדשה אין דבר כזה שליחה אוטומטית"). לא רק הטיק של פייסבוק ואינסטגרם
+ * עוצר: אישור לפרסום, "אשר את השבוע", "פרסם עכשיו" ו"העבר ל-HUB" נדחים
+ * (409), ניוזלטר שהגיע מועדו לא מוכשל אלא מקבל משימת "לפרסם היום" כמו כל
+ * ערוץ ידני, והממשק מסתיר את כל אלה (state.autopublish).
+ */
+export const AUTOPUBLISH_OFF_ERROR =
+  'הפרסום האוטומטי כבוי — מפרסמים ידנית ומסמנים פורסם (ניהול ← ערוצי פרסום)';
+
+/** האם מתג-העל של הארגון הפעיל דלוק */
+export async function autopublishOn() {
+  const s = await one('select autopublish_enabled from engine_settings limit 1');
+  return !!s?.autopublish_enabled;
+}
+
+/**
+ * מעבר לפרסום ידני בלבד (כיבוי המתג — PATCH /settings, וצעד manual_only_v1
+ * ב-schema.sql עושה אותו דבר פעם אחת): מאושר לפרסום אוטומטי ונכשל חוזרים
+ * למתוכנן — בלי אישור ובלי הודעת הכשל — ומשימות הכשל הפתוחות שלהם נסגרות.
+ * נכשל שהמועד שלו עבר מופיע אז כ"עבר המועד" וברשימת "לא סומנו כפורסמו".
+ * publishing — לא נוגעים: הוא כבר יצא לדרך (failStuckPublishing / ה-HUB סוגרים).
+ * @returns {Promise<{approved:number, failed:number}>}
+ */
+export async function resetToManual() {
+  const moved = await rows(
+    `with t as (select id, status from posts where status in ('approved', 'failed') for update)
+     update posts p set status = 'scheduled', approved_by = null, approved_at = null,
+                        publish_error = null
+       from t where p.id = t.id
+     returning p.id, t.status as was`);
+  if (moved.length) {
+    await query(
+      `update tasks set done = true, done_at = now()
+        where kind = 'failed' and done = false and post_id = any($1::int[])`,
+      [moved.map((x) => x.id)]);
+  }
+  return {
+    approved: moved.filter((x) => x.was === 'approved').length,
+    failed: moved.filter((x) => x.was === 'failed').length,
+  };
+}
+
 const MAX_LATE_HOURS = 12;   // approved שפוספס ביותר מזה — נכשל, לא מתפרסם באיחור
 
 // השלמה אחרי השבתה (שרת שנפל, טיק ארוך): פוסט שהמועד שלו עבר ביותר מ-
@@ -599,9 +642,12 @@ export async function publishTickForOrg(orgId = currentOrg()) {
   // וואטסאפ נשלח ידנית — המשימה שלו לא תלויה במתג הפרסום האוטומטי
   await whatsappPrep(orgId);
 
-  // ניוזלטר שהגיע מועדו ולא הועבר ל-HUB — משימה, לא שליחה (וגם לא תלוי
-  // במתג: שום דבר לא יוצא מכאן)
-  await tickStep(orgId, 'בדיקת ניוזלטרים שלא הועברו נכשלה:', newsletterNotTransferred);
+  // ניוזלטר שהגיע מועדו ולא הועבר ל-HUB — נכשל עם משימה, לא שליחה. רק
+  // כשהמתג דלוק: כבוי, אין "העבר ל-HUB" בכלל, והניוזלטר מקבל משימת "לפרסם
+  // היום" כמו כל ערוץ ידני (manualPublishPrep)
+  await tickStep(orgId, 'בדיקת ניוזלטרים שלא הועברו נכשלה:', async () => {
+    if (await autopublishOn()) await newsletterNotTransferred();
+  });
 
   // פוסטים שאושרו והגיע זמנם. איחור גדול מדי לא מתפרסם — נכשל עם הסבר.
   // קמפיין מושהה / נקודה מושבתת — לא יוצא, גם פוסט שאושר לפני (הלוח מסתיר אותו).
@@ -764,6 +810,10 @@ export const MANUAL_SUB_READY = 'מעתיקים את הטקסט, מפרסמים 
 export const MANUAL_SUB_NOT_READY =
   'הטקסט לערוץ הזה עוד לא מוכן — משלימים אותו בתוכן, ואז מפרסמים ומסמנים פורסם';
 export const MANUAL_SUB_TITLE_ONLY = 'מבצע דחוף, כותרת בלבד — מפרסמים ומסמנים פורסם';
+// ניוזלטר כשהפרסום האוטומטי כבוי: אין "העבר ל-HUB" — שולחים אותו ב-HUB ביד
+export const NEWSLETTER_SUB_READY = 'שולחים את הניוזלטר ב-HUB ומסמנים פורסם';
+export const NEWSLETTER_SUB_NOT_READY =
+  'הניוזלטר עוד לא מוכן — משלימים אותו בתוכן, ואז שולחים ב-HUB ומסמנים פורסם';
 
 /** מאיזו שעה (שעון ישראל) נוצרות משימות "לפרסם היום" של היום */
 export const PUBLISH_DAY_FROM_HOUR = 6;
@@ -798,6 +848,7 @@ export function publishTaskTitle(p) {
 export function publishTaskSubtitle(p) {
   if (p.urgent && p.content_id == null) return MANUAL_SUB_TITLE_ONLY;
   if (p.platform === 'whatsapp') return p.ready ? WA_SUB_READY : WA_SUB_NOT_READY;
+  if (p.platform === 'newsletter') return p.ready ? NEWSLETTER_SUB_READY : NEWSLETTER_SUB_NOT_READY;
   return p.ready ? MANUAL_SUB_READY : MANUAL_SUB_NOT_READY;
 }
 
@@ -810,8 +861,9 @@ export function publishTaskSubtitle(p) {
  * פוסט שנוסף מאוחר יותר באותו יום מקבל משימה בטיק הבא.
  *
  * "לא מתפרסם לבד": אין חיבור עם פרסום אוטומטי לערוץ (channel_connections
- * .auto_enabled) או שהמתג הכללי (autopublish_enabled) כבוי. בלי ניוזלטר (יש
- * לו מסלול משלו דרך ה-HUB), בלי קמפיין מושהה או ערוץ מושבת, ובלי פוסט בלי
+ * .auto_enabled) או שהמתג הכללי (autopublish_enabled) כבוי. ניוזלטר — רק
+ * כשהמתג כבוי (דלוק — יש לו מסלול משלו דרך ה-HUB; כבוי — שולחים אותו ידנית
+ * ב-HUB ומסמנים פורסם). בלי קמפיין מושהה או ערוץ מושבת, ובלי פוסט בלי
  * כותרת. מבצע דחוף (כותרת בלבד) — כן. לא דחופה: הדחיפות מחושבת בקריאה
  * (routes/tasks.js — היום/באיחור).
  *
@@ -832,7 +884,7 @@ export async function manualPublishPrep(orgId, now = new Date()) {
             t.id as task_id, t.done as task_done,
             coalesce(t.meta->>'text_ready', t.meta->>'wa_ready')::boolean as task_ready
        from posts p
-       join channels c on c.id = p.channel_id and c.active and c.platform <> 'newsletter'
+       join channels c on c.id = p.channel_id and c.active
        left join channel_connections cc on cc.channel_id = c.id
        left join content_variants v on v.content_id = p.content_id
             and v.channel_id = p.channel_id
@@ -847,6 +899,9 @@ export async function manualPublishPrep(orgId, now = new Date()) {
         -- ערוץ שמתפרסם לבד (חיבור עם פרסום אוטומטי + המתג הכללי דלוק) — לא כאן
         and not (coalesce(cc.auto_enabled, false)
                  and exists (select 1 from engine_settings s where s.autopublish_enabled))
+        -- ניוזלטר: כשהמתג דלוק יש לו מסלול משלו (העבר ל-HUB); כבוי — ידני כמו כולם
+        and (c.platform <> 'newsletter'
+             or not exists (select 1 from engine_settings s where s.autopublish_enabled))
         and not exists (select 1 from content_items ci
                           join campaigns ca on ca.id = ci.campaign_id
                          where ci.id = p.content_id and ca.paused_at is not null)
@@ -879,7 +934,9 @@ async function writePublishTask(p, action) {
        JSON.stringify({
          publish_day: true,
          ...(p.platform === 'whatsapp' ? { wa_send: true } : {}),
-         text_ready: p.ready, body: p.ready ? p.body : null,
+         // ניוזלטר: הגוף הוא HTML / שדות תבנית, לא טקסט להעתקה — "העתק טקסט"
+         // מעתיק את הנושא (routes/tasks.js copy_text)
+         text_ready: p.ready, body: p.ready && p.platform !== 'newsletter' ? p.body : null,
          // האחראי של הפוסט מפרסם — פעם אחת (task-lifecycle.js autoAssignee)
          ...(p.assignee_id ? { assignee_auto: true } : {}),
        }),
