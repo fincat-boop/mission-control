@@ -11,6 +11,7 @@ import {
 } from './capacity.js';
 import { loadGapDays } from './gap.js';
 import { CAMPAIGNS_WEIGHTED_SQL, CHANNEL_IDS_SQL, loadStandalone } from './capacity-db.js';
+import { postIsLiveSql } from './live.js';
 
 // הטעינה של ברירת המחדל יושבת ב-gap.js (מקום אחד); כאן רק מייצאים הלאה
 // לקוראים הקיימים (routes/content.js)
@@ -358,6 +359,8 @@ export async function loadCapacityPreview(draft, channelIds) {
       `select p.channel_id, count(*)::int as n
          from posts p join content_items ci on ci.id = p.content_id
         where ci.campaign_id = $1 and p.status = any($2::text[]) and p.scheduled_at < $3
+          -- מוחזק (ערוץ / נקודה מושבתים, קמפיין מושהה) לא על הלוח — אלא אם פורסם
+          and (p.status = 'published' or ${postIsLiveSql('p')})
         group by p.channel_id`,
       [self, TAKES_ROOM, new Date(`${win.from}T00:00:00`)]);
     for (const x of r) placed[x.channel_id] = x.n;

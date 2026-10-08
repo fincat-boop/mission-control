@@ -252,3 +252,19 @@ test('U1 — צעד חד-פעמי: קמפיין רץ בלי מרווח מקבל 
   assert.equal(second[later], null);
   assert.deepEqual({ ...second, [later]: undefined }, { ...first, [later]: undefined });
 });
+
+test('S5 — חלון ההתאמה: מה שכבר על הלוח לפני היום נספר רק כשהוא חי (לא מוחזק)', { skip }, async () => {
+  const ch = await channel('ערוץ מוחזק', 7, 0);
+  const ep = await endpoint('נקודת מוחזק');
+  const c = await campaign(ep, 'התחיל בעבר', inDays(-10), inDays(10), [ch], { gap: 1 });
+  await items(ep, ch, 3, { campaignId: c });
+  const [first] = await q('select id from content_items where campaign_id = $1 order by id limit 1', [c]);
+  await q(`insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at, status)
+           values ($1, $2, $3, 'עבר', 'value', now() - interval '5 days', 'scheduled')`, [ch, ep, first.id]);
+  const placed = async () => (await call('POST', '/campaigns/capacity-preview',
+    { id: c, assume_complete: true })).json.fixed.channels[0].placed ?? 0;
+  assert.equal(await placed(), 1);
+  // נקודה מושבתת — הפוסט מוחזק, לא על הלוח
+  await q('update endpoints set active = false where id = $1', [ep]);
+  assert.equal(await placed(), 0);
+});
