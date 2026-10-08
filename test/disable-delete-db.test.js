@@ -393,3 +393,58 @@ test('ב2 — get_tasks: אותה רשימה כמו הטאב — בלי מה ש�
   assert.ok(!shown.includes(resolved), 'משימה שנפתרה נסגרת קודם (closeResolvedTasks)');
   assert.equal((await q1('select done from tasks where id = $1', [resolved])).done, true);
 });
+
+/* ========================= סבב 2 — מסירות מהסריקה, חזרה מהחזקה ========================= */
+
+/** ערוץ ידני חדש לבדיקה (בלי שמורת דחופים) */
+async function freshChannel(name, { max = 7, blocked = [] } = {}) {
+  return (await q1(
+    `insert into channels (name, platform, max_per_week, urgent_reserve_pct, blocked_days)
+     values ($1, 'manual', $2, 0, $3::int[]) returning id`,
+    [`${name}-${Date.now()}`, max, blocked])).id;
+}
+
+test('16 (מנוע) — פוסטים מוחזקים לא תופסים מקום בערוץ: המנוע משבץ במקומם', { skip }, async () => {
+  const engine = await import('../src/engine.js');
+  const ch = await freshChannel('מנוע', { max: 2 });
+  const off = await endpoint('מנוע-מושבתת');
+  const live = await endpoint('מנוע-חיה');
+  const ci = await content(live, [ch], { title: 'מחכה למקום' });
+  // שבוע רחוק: שני פוסטים של הנקודה (עוד פעילה) ממלאים את התקרה
+  await post({ ep: off, channel: ch, when: '2031-09-16T10:00:00+03:00' });
+  await post({ ep: off, channel: ch, when: '2031-09-18T10:00:00+03:00' });
+  const now = new Date('2031-09-14T08:00:00+03:00');
+  const placedHere = async () => (await inOrg(() => engine.planWeek('2031-09-14', { holes: false, now })))
+    .placements.filter((p) => p.channel_id === ch && p.content_id === ci).length;
+  assert.equal(await placedHere(), 0, 'התקרה מלאה בפוסטים חיים');
+  await q1('update endpoints set active = false where id = $1 returning id', [off]);
+  assert.equal(await placedHere(), 1, 'המוחזקים לא נספרים בתקרה');
+});
+
+test('16 (מכסות) — capWarning לא סופר פוסטים מוחזקים', { skip }, async () => {
+  const { capWarning } = await import('../src/gap.js');
+  const ch = await freshChannel('מכסה', { max: 2 });
+  const off = await endpoint('מכסה-מושבתת');
+  // שבוע רחוק וקבוע (שלישי–חמישי) — אותו שבוע לוח
+  await post({ ep: off, channel: ch, when: '2031-10-07T09:00:00+03:00' });
+  await post({ ep: off, channel: ch, when: '2031-10-08T09:00:00+03:00' });
+  const when = '2031-10-09T12:00:00+03:00';
+  const warnLive = await inOrg(() => capWarning({ channelId: ch, when, kind: 'value' }));
+  assert.ok(warnLive?.caps.some((x) => /2 מתוך 2 פוסטים בשבוע/.test(x)), JSON.stringify(warnLive));
+  await q1('update endpoints set active = false where id = $1 returning id', [off]);
+  assert.equal(await inOrg(() => capWarning({ channelId: ch, when, kind: 'value' })), null);
+});
+
+test('16 (יום חסום) — פוסט מוחזק על יום חסום לא בהתראה ולא בפינוי', { skip }, async () => {
+  const { postsOnBlockedDays } = await import('../src/respace.js');
+  const when = at(3);
+  const ch = await freshChannel('חסום', { blocked: [new Date(when).getDay()] });
+  const live = await endpoint('חסום-חיה');
+  const off = await endpoint('חסום-מושבתת');
+  const a = await post({ ep: live, channel: ch, when });
+  const b = await post({ ep: off, channel: ch, when, title: 'מוחזק' });
+  await q1('update endpoints set active = false where id = $1 returning id', [off]);
+  const ids = (await inOrg(() => postsOnBlockedDays())).map((p) => p.id);
+  assert.ok(ids.includes(a));
+  assert.ok(!ids.includes(b));
+});

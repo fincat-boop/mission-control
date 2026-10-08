@@ -137,6 +137,8 @@ export async function buildAlerts(user = null) {
       where p.status in ('scheduled','approved','publishing','failed','pending_approval')
         and p.scheduled_at >= now() - interval '1 day'
         and (ca.id is null or (ca.active and ca.paused_at is null) or p.status = 'published')
+        -- פוסט מוחזק (ערוץ / נקודה מושבתים, קמפיין מושהה) לא על הלוח — לא מתנגש
+        and ${postIsLiveSql('p')}
       group by e.name, c.name, (p.scheduled_at at time zone 'Asia/Jerusalem')::date
      having count(*) > 1`
   );

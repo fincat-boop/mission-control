@@ -10,6 +10,7 @@ import {
   withEngineLock,
 } from './engine.js';
 import { effectiveGap } from './capacity.js';
+import { postIsLiveSql } from './live.js';
 
 /**
  * מרווח מחדש שבוע שכבר משובץ.
@@ -301,6 +302,8 @@ export async function postsOnBlockedDays(weeks = HORIZON_WEEKS) {
       where p.status in ('scheduled','approved','pending_approval')
         and p.scheduled_at >= date_trunc('day', now())
         and p.scheduled_at <= $1
+        -- פוסט מוחזק (קמפיין מושהה, ערוץ / נקודה מושבתים) לא על הלוח ולא יוצא
+        and ${postIsLiveSql('p')}
       order by p.scheduled_at`,
     [until]
   );

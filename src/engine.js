@@ -6,6 +6,7 @@ import { spreadDate } from '../public/js/core/period.js';
 import { averageShares, channelBudget, effectiveGap } from './capacity.js';
 import { isEmptyContent } from './publish/readiness.js';
 import { itemAssetsSql } from './links.js';
+import { postIsLiveSql } from './live.js';
 
 /**
  * מנוע השיבוץ.
@@ -99,10 +100,10 @@ export async function planWeek(anchorDate, {
                   where cc.campaign_id = ci.campaign_id and cc.channel_id = ci.slot_channel_id))
          group by ci.id, ca.id
          order by ci.created_at, ci.id`);
-  // שיבוץ של קמפיין מושהה יורד מהלוח (board.js) ולכן גם לא אמור לתפוס
-  // מקום בקיבולת שהמנוע רואה — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק.
-  // פוסט שכבר פורסם נשאר תפוס גם אם הקמפיין הושהה אחרי מכן — זו עובדה
-  // שכבר קרתה, בדיוק כמו ב-board.js.
+  // שיבוץ מוחזק — קמפיין מושהה, ערוץ או נקודה מושבתים (postIsLiveSql, סעיף 16) —
+  // יורד מהלוח (board.js) ולכן גם לא תופס מקום בקיבולת ובמונים שהמנוע רואה
+  // (buildUsage) — אחרת ערוץ נראה מלא בזמן שהלוח הפעיל ריק. פוסט שכבר פורסם
+  // נשאר תפוס — זו עובדה שכבר קרתה, בדיוק כמו ב-board.js.
   const onBoard = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.scheduled_at, p.status,
             p.title, p.published_at, p.auto_hole
@@ -111,7 +112,7 @@ export async function planWeek(anchorDate, {
        left join campaigns ca     on ca.id = ci.campaign_id
       where p.scheduled_at >= $1 and p.scheduled_at <= $2
         and p.status in ('scheduled','approved','publishing','failed','published','pending_approval')
-        and (ca.paused_at is null or p.status = 'published')`,
+        and (p.status = 'published' or ${postIsLiveSql('p')})`,
     [from, to]
   );
   // מה שתופס מקום — קיבולת, אותו יום, חורים, מילוי מרוסן. פוסט שנכשל ושהמועד
@@ -828,7 +829,8 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   // באמת עלו לאוויר. קודם נמדד מהיום לפי הפרסום האחרון בלבד, ושבוע
   // עתידי התעלם ממה שכבר שובץ לפניו — בלאק פריידי קיבל 0/12 משבצות.
   // בשבוע הנוכחי (ייחוס = עכשיו) אין "עתיד לפני הייחוס", ולכן זה בדיוק
-  // הפרסום האחרון, כמו קודם. שיבוץ של קמפיין מושהה לא נספר (לא על הלוח).
+  // הפרסום האחרון, כמו קודם. שיבוץ מוחזק (postIsLiveSql — קמפיין מושהה,
+  // ערוץ / נקודה מושבתים) לא נספר: הוא לא על הלוח. אותו כלל כמו UNCONFIRMED_SQL.
   const reference = stalenessReference(week, now);
   const lastLive = await rows(
     `select p.endpoint_id, max(coalesce(p.published_at, p.scheduled_at)) as last_at
@@ -839,13 +841,13 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
         and ((p.status = 'published' and coalesce(p.published_at, p.scheduled_at) < $1)
           or (p.status = any($3::text[]) and p.published_at is null
               and p.scheduled_at >= $2 and p.scheduled_at < $1
-              and ca.paused_at is null)
+              and ${postIsLiveSql('p')})
           or (p.status in ('scheduled', 'approved') and p.published_at is null
               and p.scheduled_at < $2::timestamptz - interval '30 minutes' and p.scheduled_at < $1
-              and ca.paused_at is null
+              and ${postIsLiveSql('p')}
               and (p.content_id is not null or p.urgent or not p.auto_hole)
               and exists (select 1 from channels uc where uc.id = p.channel_id
-                             and uc.active and uc.platform <> 'newsletter')))
+                             and uc.platform <> 'newsletter')))
       group by p.endpoint_id`,
     [reference, now, UPCOMING_STATUSES]
   );
@@ -853,8 +855,9 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
 
   // פער מהנתח של הקמפיינים שרצים בשבוע המתוכנן. קמפיין מושהה לא מתחרה על
   // שטח (normalizeShares מסנן אותו), בדיוק כמו שהוא לא מוצג בלוח.
+  // endpoint_active — קמפיין של נקודה מושבתת לא מתחרה (normalizeShares, סעיף 16)
   const campaigns = await rows(
-    `select c.*, e.importance as endpoint_importance
+    `select c.*, e.importance as endpoint_importance, e.active as endpoint_active
        from campaigns c join endpoints e on e.id = c.endpoint_id`);
   const { targetPct, from, to, shares } = strategyTargets(campaigns, week);
   // "בפועל" נספר מכל מה שתופס שטח — גם מה שמתוכנן לשבוע הזה ולפניו, לא רק
@@ -867,7 +870,7 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
        left join campaigns ca     on ca.id = ci.campaign_id
       where p.endpoint_id is not null
         and p.status = any($3::text[])
-        and (ca.paused_at is null or p.status = 'published')
+        and (p.status = 'published' or ${postIsLiveSql('p')})
         -- פוסט שפורסם נספר לפי מתי שפורסם, אחר — לפי מתי שמתוכנן. שני תנאים
         -- נפרדים ולא coalesce, כדי שהאינדקסים על published_at ו-scheduled_at ישמשו
         and ((p.published_at >= $1::date and p.published_at < ($2::date + 1))
@@ -1355,8 +1358,8 @@ export async function linkGroupDays(from, to) {
        from posts p join content_items ci on ci.id = p.content_id
        left join campaigns ca on ca.id = ci.campaign_id
       where p.status = any($3)
-        -- פוסט של קמפיין מושהה ירד מהלוח (אלא אם כבר פורסם), כמו existing
-        and (ca.paused_at is null or p.status = 'published')
+        -- פוסט מוחזק ירד מהלוח (אלא אם כבר פורסם), כמו existing
+        and (p.status = 'published' or ${postIsLiveSql('p')})
         and (ci.linked_to_id is not null
              or exists (select 1 from content_items f where f.linked_to_id = ci.id))
         and p.scheduled_at >= $1::timestamptz - interval '2 days'

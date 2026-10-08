@@ -13,6 +13,7 @@ import { one } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import { effectiveGap } from './capacity.js';
 import { LINK_LIVE_STATUSES, takesRoom, takesRoomSql } from './engine.js';
+import { postIsLiveSql } from './live.js';
 
 const LIVE = "('scheduled','approved','publishing','failed','published','pending_approval')";
 const LIVE_LIST = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
@@ -214,7 +215,8 @@ export async function capWarning({ channelId, when, kind, excludePostId = null }
   const curAt = curLive ? new Date(cur.scheduled_at) : null;
   const sameWeek = curLive && cur.channel_id === Number(channelId) && curAt >= from && curAt <= to;
 
-  // פוסט של קמפיין מושהה ירד מהלוח ולא תופס מקום (אלא אם כבר פורסם) — כמו במנוע
+  // פוסט מוחזק (קמפיין מושהה, ערוץ / נקודה מושבתים — postIsLiveSql) ירד מהלוח
+  // ולא תופס מקום (אלא אם כבר פורסם) — כמו במנוע
   const n = await one(
     `select count(*)::int as total,
             count(*) filter (where p.kind = $5)::int as of_kind
@@ -222,7 +224,7 @@ export async function capWarning({ channelId, when, kind, excludePostId = null }
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca     on ca.id = ci.campaign_id
       where p.channel_id = $1 and p.status = any($4) and ${ROOM}
-        and (ca.paused_at is null or p.status = 'published')
+        and (p.status = 'published' or ${postIsLiveSql('p')})
         and p.scheduled_at >= $2 and p.scheduled_at <= $3
         and ($6::int is null or p.id <> $6)`,
     [channelId, from, to, LIVE_LIST, kind ?? null, excludePostId]
@@ -247,7 +249,7 @@ export async function capWarning({ channelId, when, kind, excludePostId = null }
          left join content_items ci on ci.id = p.content_id
          left join campaigns ca     on ca.id = ci.campaign_id
         where p.kind = 'promo' and p.status = any($2) and ${ROOM}
-          and (ca.paused_at is null or p.status = 'published')
+          and (p.status = 'published' or ${postIsLiveSql('p')})
           and (p.scheduled_at at time zone 'Asia/Jerusalem')::date
             = ($1::timestamptz at time zone 'Asia/Jerusalem')::date
           and ($3::int is null or p.id <> $3)`,
