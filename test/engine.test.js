@@ -974,3 +974,19 @@ test('channelHour — שעת הערוץ, בלעדיה 10:00; לא אחרי 22:00
   const week = weekMeta('2026-11-10');
   assert.ok(buildSlots(week, [channel({ default_hour: 18 })], null).every((s) => s.hour === 18));
 });
+
+/* ---------- סעיף 13: מתי המילוי היומי רץ ---------- */
+
+test('msUntilNext — הפעם הבאה של 05:30; אחריה — מחר', async () => {
+  const { msUntilNext } = await import('../src/maintenance.js');
+  const h = (s) => msUntilNext({ hour: 5, minute: 30 }, new Date(s)) / 60000;
+  assert.equal(h('2026-10-08T05:00:00'), 30);
+  assert.equal(h('2026-10-08T06:00:00'), 23.5 * 60);
+  assert.equal(h('2026-10-08T05:30:00'), 24 * 60);
+});
+
+test('nearWeeks — השבוע הנוכחי והבא, לא משנה מה מוצג', async () => {
+  const { nearWeeks } = await import('../src/routes/_shared.js');
+  assert.deepEqual(nearWeeks(new Date('2026-10-08T12:00:00')), ['2026-10-04', '2026-10-11']);
+  assert.deepEqual(nearWeeks(new Date('2026-10-10T23:30:00')), ['2026-10-04', '2026-10-11']);
+});

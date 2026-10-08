@@ -370,3 +370,61 @@ export async function mediaMaintenance({ store = mediaStore, now = new Date() } 
     }
   });
 }
+
+/* ========================= מילוי יומי (סעיף 13) ========================= */
+
+/** מתי המילוי היומי רץ — לפני שמישהו פותח את הלוח בבוקר, בשעון ישראל */
+export const DAILY_FILL_AT = { hour: 5, minute: 30 };
+
+/**
+ * המילוי היומי של הארגון הנוכחי (בתוך withOrg): השבוע הנוכחי והבא דרך
+ * dailyFill — אותו מילוי מרוסן של כל שינוי, תחת נעילת המנוע של הארגון.
+ * ריצה חוזרת לא מוסיפה כלום (המנוע ממלא רק מקום פנוי). כשנכנס משהו — שורה
+ * ביומן הפעולות (via='system'); בלי "בטל" — אלה פוסטים רגילים של המנוע.
+ * @returns {Promise<object>} תוצאת המילוי (mergeFillResults)
+ */
+export async function dailyFillOrg() {
+  const { dailyFill } = await import('./routes/_shared.js');
+  const out = await dailyFill();
+  const n = (out.placed ?? 0) + (out.attached ?? 0);
+  if (n) {
+    const bits = [
+      out.placed && `שובצו ${out.placed} פוסטים`,
+      out.attached && `${out.attached} פוסטים חסרי תוכן קיבלו תוכן`,
+    ].filter(Boolean);
+    await logSystem('fill', 'engine', null,
+      `מילוי יומי של השבוע הנוכחי והבא: ${bits.join(', ')}`,
+      { weeks: out.covered_weeks ?? [], created_ids: out.created_ids ?? [],
+        attached: (out.attached_items ?? []).map((a) => a.post_id) });
+  }
+  return out;
+}
+
+/** המילוי היומי לכל ארגון */
+export async function dailyFillAllOrgs() {
+  await forEachOrg(() => dailyFillOrg());
+}
+
+/** כמה מילישניות עד הפעם הבאה ש-hour:minute (שעון התהליך — ישראל) מגיעה */
+export function msUntilNext({ hour, minute }, now = new Date()) {
+  const at = new Date(now);
+  at.setHours(hour, minute, 0, 0);
+  if (at <= now) at.setDate(at.getDate() + 1);
+  return at - now;
+}
+
+/**
+ * מריץ fn כל יום ב-at (שעון התהליך), בשרשרת setTimeout שמחושבת מחדש בכל
+ * פעם — כך שמעבר שעון לא מזיז את השעה. stop() — לכיבוי מסודר.
+ */
+export function scheduleDaily(fn, at = DAILY_FILL_AT) {
+  let handle = null;
+  const arm = () => {
+    handle = setTimeout(async () => {
+      try { await fn(); } catch (e) { console.error('משימה יומית נכשלה:', e); }
+      arm();
+    }, msUntilNext(at));
+  };
+  arm();
+  return { stop: () => clearTimeout(handle) };
+}

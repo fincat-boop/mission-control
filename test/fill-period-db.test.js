@@ -155,7 +155,7 @@ test('המנוע לא מציע משבצת לפני עכשיו — לא ימים 
 const { ymd, weekMeta } = await import('../src/board.js');
 /** YYYY-MM-DD בעוד n ימים (זמן מקומי) */
 const inDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
-const { autoFillCampaign, campaignFillWeeks } = await import('../src/routes/_shared.js');
+const { autoFillCampaign, campaignFillWeeks, nearWeeks } = await import('../src/routes/_shared.js');
 /** תחילת השבוע (YYYY-MM-DD) של פוסט */
 const weekOf = (at) => weekMeta(new Date(at)).start;
 
@@ -261,7 +261,8 @@ test('קמפיין חדש עם תוכן (שכפול) ממלא את כל השבו
   // ראשון בעוד 3 שבועות, ועד השבת שאחרי שבועיים — בדיוק 3 שבועות
   const first = weekMeta(inDays(21));
   const ends = weekMeta(inDays(35)).end;
-  const viewed = weekMeta(inDays(0)).start;
+  // סעיף 13: מלא — השבוע הנוכחי והבא (nearWeeks), לא השבוע שהלקוח מציג
+  const near = nearWeeks();
   const r = await call('POST', `/campaigns/${src.id}/duplicate`, {
     endpoint_id: x.ep, name: 'שלושה שבועות', starts_on: first.start, ends_on: ends,
     period: 'custom', channel_ids: [x.ch], week: inDays(0),
@@ -276,12 +277,13 @@ test('קמפיין חדש עם תוכן (שכפול) ממלא את כל השבו
   const inCamp = posts.filter((p) => campWeeks.includes(weekOf(p.scheduled_at)));
   assert.deepEqual(inCamp.map((p) => weekOf(p.scheduled_at)).sort(), campWeeks, JSON.stringify(fill.summary));
   assert.ok(inCamp.every((p) => p.campaign_id === copyId), 'בשבועות שלא מוצגים — רק התוכן של הקמפיין');
-  // מחוץ לשבועות של הקמפיין — רק השבוע שמוצג, שמתמלא במלואו כמו קודם
-  assert.ok(posts.every((p) => campWeeks.includes(weekOf(p.scheduled_at)) || weekOf(p.scheduled_at) === viewed));
+  // מחוץ לשבועות של הקמפיין — רק השבוע הנוכחי והבא, שמתמלאים במלואם (סעיף 13)
+  assert.ok(posts.every((p) => campWeeks.includes(weekOf(p.scheduled_at)) ||
+    near.includes(weekOf(p.scheduled_at))));
   assert.equal(fill.placed, posts.length);
   assert.ok(fill.weeks >= 3);
 
-  assert.deepEqual(fill.covered_weeks, [viewed, ...campWeeks].sort());
+  assert.deepEqual(fill.covered_weeks, [...near, ...campWeeks].sort());
   const undo = await call('POST', '/engine/undo',
     { created: fill.created_items, attached: fill.attached_items, weeks: fill.covered_weeks });
   assert.equal(undo.status, 200, JSON.stringify(undo.json));
@@ -353,7 +355,8 @@ test('קמפיין מושהה לא מתמלא — גם לא בעריכה שלו'
   const r = await call('PATCH', `/campaigns/${c.id}`, { min_gap_days: 2, week: inDays(21) });
   assert.equal(r.status, 200, JSON.stringify(r.json));
   const direct = await inOrg(() => autoFillCampaign(c.id));
-  assert.equal(direct.weeks, undefined, 'בלי תקופה למלא — רק השבוע שמוצג');
+  // בלי תקופה למלא — רק השבוע הנוכחי והבא (סעיף 13; קודם — השבוע שמוצג)
+  assert.deepEqual(direct.covered_weeks, nearWeeks());
   const placed = await q('select id from posts where content_id = any($1::int[])', [mine]);
   assert.equal(placed.length, 0);
   await cleanup(x);

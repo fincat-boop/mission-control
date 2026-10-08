@@ -21,8 +21,32 @@ export const wrap = (fn) => (req, res, next) =>
 export const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
 /**
- * מריץ מילוי אוטומטי של המנוע לשבוע שהלקוח מציג, אחרי שינוי בקלט שלו
- * (כלל, קמפיין, תוכן, נקודת קצה, ערוץ). לא נכשלת כשאין מה למלא, ולא
+ * השבועות שהמילוי האוטומטי המלא עובר עליהם (סעיף 13, החלטה ה2): השבוע
+ * הנוכחי והשבוע הבא, בשעון ישראל (התהליך רץ ב-TZ=Asia/Jerusalem) — לא משנה
+ * איזה שבוע הלקוח מציג. תחילות שבוע, YYYY-MM-DD.
+ */
+export function nearWeeks(now = new Date()) {
+  const start = weekMeta(now).start;
+  // צהריים ולא חצות — שמעבר שעון לא יזיז את היום
+  const next = new Date(`${start}T12:00:00`);
+  next.setDate(next.getDate() + 7);
+  return [start, ymd(next)];
+}
+
+/** מילוי מלא (לא מרוסן לקמפיין) של השבוע הנוכחי והבא, בתוך נעילת המנוע של הקורא */
+async function fillNearWeeks() {
+  const results = [];
+  for (const w of nearWeeks()) results.push(await applyWeek(`${w}T12:00:00`, { holes: false }));
+  return mergeFillResults(results);
+}
+
+/**
+ * מריץ מילוי אוטומטי של המנוע אחרי שינוי בקלט שלו (כלל, תוכן שוטף, נקודת
+ * קצה, ערוץ) — על השבוע הנוכחי והבא (nearWeeks, סעיף 13). קודם המילוי רץ על
+ * השבוע שהלקוח הציג: מי שדפדף לינואר ושינה ערוץ מילא את ינואר וצרך שם את
+ * התוכן השוטף, והשבוע הנוכחי נשאר ריק. week — השבוע שהלקוח מציג; נשאר
+ * בחתימה (הלקוח עדיין שולח אותו), ולא משפיע. התשובה מאוחדת על שני השבועות
+ * (mergeFillResults), כך ש"בטל" מכסה את שניהם. לא נכשלת כשאין מה למלא, ולא
  * מפילה את הבקשה המקורית אם הריצה נתקלת בבעיה — המוטציה שכבר נשמרה
  * חשובה יותר מהמילוי האוטומטי שאחריה.
  *
@@ -35,8 +59,7 @@ export const bad = (res, msg, code = 400) => res.status(code).json({ error: msg 
  * אחורה בשקט — כולל השינוי שהמשתמש ביקש. ה-savepoint תוחם את הנזק למילוי.
  */
 export function autoFill(week) {
-  return guardedFill('autoFill',
-    () => withEngineLock(() => applyWeek(week, { holes: false })));
+  return guardedFill('autoFill', () => withEngineLock(fillNearWeeks));
 }
 
 /**
@@ -57,7 +80,7 @@ export async function lockEngineOr503(res) {
 }
 
 /**
- * savepoint + fail-soft משותפים ל-autoFill ול-autoFillCampaign (ראו למעלה).
+ * savepoint + fail-soft משותפים ל-autoFill, ל-autoFillCampaign ולמילוי היומי (ראו למעלה).
  * בתוך ה-savepoint — נעילת המנוע של הארגון (lockEngine) עד ה-commit של
  * הבקשה. מילוי אחר שמחזיק אותה יותר מ-5 שניות: המילוי הזה מוותר (תשובה
  * ריקה + לוג), והשינוי של המשתמש נשמר כרגיל. לפני withEngineLock, כדי
@@ -143,14 +166,14 @@ export function mergeFillResults(list) {
  * השבועות לפי הסדר, באותה טרנזקציה: כל שבוע רואה את מה שנכתב בקודמים
  * (ותק, מרווח, תוכן חד-פעמי שכבר שובץ).
  *
- * מרוסן לקמפיין (onlyCampaignId): בשבועות שהמשתמש לא מסתכל עליהם משובץ
- * ומשויך רק התוכן של הקמפיין הזה — שמירת קמפיין לא צורכת תוכן שוטף של
- * נקודות אחרות לחודשים קדימה. השבוע שהלקוח מציג (viewedWeek) מתמלא במלואו,
- * כמו autoFill — גם כשהוא מחוץ לתקופת הקמפיין, כדי שלא יאבד שום דבר
- * ממה שהמילוי של השבוע המוצג עשה עד עכשיו.
+ * מרוסן לקמפיין (onlyCampaignId): בשבועות הרחוקים משובץ ומשויך רק התוכן
+ * של הקמפיין הזה — שמירת קמפיין לא צורכת תוכן שוטף של נקודות אחרות לחודשים
+ * קדימה. השבוע הנוכחי והבא (nearWeeks, סעיף 13) מתמלאים במלואם, כמו
+ * autoFill — גם כשהם מחוץ לתקופת הקמפיין. קודם — השבוע שהלקוח הציג.
  *
- * קמפיין בלי תקופה למלא (campaignFillWeeks → null) — רק השבוע שהלקוח
- * הציג, כמו קודם: למשל השהיה/השבתה מפנה מקום שאחרים יכולים לתפוס.
+ * קמפיין בלי תקופה למלא (campaignFillWeeks → null) — רק השבוע הנוכחי והבא,
+ * כמו autoFill: למשל השהיה/השבתה מפנה מקום שאחרים יכולים לתפוס.
+ * viewedWeek — השבוע שהלקוח מציג; נשאר בחתימה ולא משפיע (סעיף 13).
  */
 export function autoFillCampaign(campaignId, viewedWeek) {
   return guardedFill('autoFillCampaign', async () => {
@@ -159,28 +182,28 @@ export function autoFillCampaign(campaignId, viewedWeek) {
         [campaignId])
       : null;
     const weeks = campaignFillWeeks(c);
-    if (!weeks) return withEngineLock(() => applyWeek(viewedWeek, { holes: false }));
-    const viewed = viewedWeekStart(viewedWeek);
-    const all = [...new Set([...weeks, ...(viewed ? [viewed] : [])])].sort();
+    if (!weeks) return withEngineLock(fillNearWeeks);
+    const near = nearWeeks();
+    const all = [...new Set([...weeks, ...near])].sort();
     return withEngineLock(async () => {
       const results = [];
       for (const w of all) {
         results.push(await applyWeek(`${w}T12:00:00`,
-          { holes: false, onlyCampaignId: w === viewed ? null : c.id }));
+          { holes: false, onlyCampaignId: near.includes(w) ? null : c.id }));
       }
       return mergeFillResults(results);
     });
   });
 }
 
-/** תחילת השבוע שהלקוח מציג, או null — בלי שבוע, או שבוע שבור (לא מפיל את המילוי) */
-function viewedWeekStart(week) {
-  if (week == null || week === '') return null;
-  try {
-    return weekMeta(week).start;
-  } catch {
-    return null;
-  }
+/**
+ * המילוי היומי (סעיף 13): השבוע הנוכחי והבא של הארגון הנוכחי, כך שהשבועות
+ * הקרובים מתמלאים גם כשאף אחד לא פותח אותם. אותו מסלול כמו autoFill (savepoint,
+ * נעילת המנוע, מרוסן — רק תוכן קיים), ולכן ריצה חוזרת לא מוסיפה כלום. בלי
+ * "בטל": הפוסטים שלו הם פוסטים רגילים של המנוע. רץ בתוך withOrg (forEachOrg).
+ */
+export function dailyFill() {
+  return guardedFill('dailyFill', () => withEngineLock(fillNearWeeks));
 }
 
 /** תשובת מילוי ריקה — אותה צורה כמו applyWeek, כדי שהלקוח לא יצטרך לבדוק */

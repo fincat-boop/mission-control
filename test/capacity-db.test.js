@@ -186,8 +186,11 @@ test('סעיף 6 — קמפיין מכירתי בערוץ של 3 בשבוע: ~1 
   assert.equal(row.needs[ch], 4);
 
   const fill = await inOrg(() => autoFillCampaign(c));
-  const posts = await q('select scheduled_at, kind from posts where id = any($1::int[])',
-    [fill.created_ids]);
+  // רק הפוסטים של הקמפיין: השבוע הנוכחי והבא מתמלאים במלואם (סעיף 13), גם
+  // בתוכן שנשאר מבדיקות אחרות בארגון
+  const posts = await q(
+    `select p.scheduled_at, p.kind from posts p join content_items ci on ci.id = p.content_id
+      where p.id = any($1::int[]) and ci.campaign_id = $2`, [fill.created_ids, c]);
   assert.equal(posts.length, 4, JSON.stringify(posts.map((p) => weekOf(p.scheduled_at))));
   assert.ok(posts.every((p) => p.kind === 'promo'));
   // מפוזר: לא יותר מאחד בשבוע, ולא יותר משניים בכל 4 שבועות רצופים

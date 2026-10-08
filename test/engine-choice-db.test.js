@@ -379,3 +379,50 @@ test('סעיף 12 — המנוע משבץ בשעת הערוץ; בלי שעה —
   assert.equal(fixed.placements[0].time, '12:30');
   await wipe();
 });
+
+/* ========================= 13. מילוי אוטומטי: השבוע והבא ========================= */
+
+test('סעיף 13 — שינוי ערוץ כשמוצג שבוע +5 ממלא את השבוע הנוכחי והבא, לא את +5', { skip }, async () => {
+  await wipe();
+  const { nearWeeks } = await import('../src/routes/_shared.js');
+  const ch = await channel('פייסבוק', 7);
+  const ep = await endpoint('נקודה');
+  await items(ep.id, ch.id, 10, { prefix: 'שוטף' });
+  const far = weekMeta(inDays(35)).start;
+  const res = await call('PATCH', `/channels/${ch.id}`, { max_per_week: 7, week: far });
+  assert.equal(res.status, 200, JSON.stringify(res.json));
+  const near = nearWeeks();
+  const posts = await q('select scheduled_at from posts where channel_id = $1', [ch.id]);
+  const weeks = new Set(posts.map((p) => weekOf(p.scheduled_at)));
+  assert.ok(!weeks.has(far), 'השבוע המוצג לא התמלא');
+  assert.ok([...weeks].every((w) => near.includes(w)), JSON.stringify([...weeks]));
+  assert.ok(weeks.has(near[1]), 'השבוע הבא התמלא');
+  // התשובה מכסה את שני השבועות — "בטל" אחד לכולם
+  assert.deepEqual(res.json.engine.covered_weeks, near);
+  assert.equal(res.json.engine.created_ids.length, posts.length);
+  await wipe();
+});
+
+test('סעיף 13 — המילוי היומי ממלא את השבוע והבא פעם אחת; ריצה חוזרת לא מוסיפה', { skip }, async () => {
+  await wipe();
+  const { nearWeeks } = await import('../src/routes/_shared.js');
+  const { dailyFillOrg } = await import('../src/maintenance.js');
+  const ch = await channel('פייסבוק', 3);
+  const ep = await endpoint('נקודה');
+  await items(ep.id, ch.id, 12, { prefix: 'שוטף' });
+  const first = await inOrg(() => dailyFillOrg());
+  assert.ok(first.placed >= 3, JSON.stringify(first.summary));
+  const posts = await q('select scheduled_at from posts where channel_id = $1', [ch.id]);
+  const near = nearWeeks();
+  assert.ok(posts.every((p) => near.includes(weekOf(p.scheduled_at))));
+  assert.ok(posts.some((p) => weekOf(p.scheduled_at) === near[1]));
+  const second = await inOrg(() => dailyFillOrg());
+  assert.equal(second.placed, 0);
+  assert.equal((await q('select id from posts')).length, posts.length);
+  // ביומן הפעולות — פעם אחת, כמערכת
+  const log = await q("select via, summary from activity_log where entity = 'engine'");
+  assert.equal(log.length, 1);
+  assert.equal(log[0].via, 'system');
+  assert.match(log[0].summary, /מילוי יומי/);
+  await wipe();
+});

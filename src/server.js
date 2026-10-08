@@ -9,7 +9,8 @@ import { loadUser } from './auth.js';
 import { csrfGuard } from './csrf.js';
 import { audit } from './audit.js';
 import {
-  backupNow, cleanupStaleUrgent, forEachOrg, mediaMaintenance, suggestContentSwaps, sweepTasks,
+  backupNow, cleanupStaleUrgent, dailyFillAllOrgs, forEachOrg, mediaMaintenance, scheduleDaily,
+  suggestContentSwaps, sweepTasks,
 } from './maintenance.js';
 import { publishTickForOrg, refreshNewsletterMetrics } from './publish/runner.js';
 import { armTickHeartbeat, tickFinished, tickStarted } from './publish/heartbeat.js';
@@ -181,9 +182,14 @@ const timers = [
   }, HOUR),
 ];
 
+// מילוי יומי של השבוע הנוכחי והבא (סעיף 13, החלטה ה2) — 05:30 בשעון ישראל,
+// לכל ארגון, כך שהשבועות הקרובים מתמלאים גם כשאף אחד לא פותח אותם
+const dailyFill = scheduleDaily(() => dailyFillAllOrgs());
+
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     timers.forEach(clearTimeout);
+    dailyFill.stop();
     server.close(async () => {
       await pool.end();
       process.exit(0);
