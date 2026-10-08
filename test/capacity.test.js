@@ -621,3 +621,16 @@ test('promoRoomStatus — כרטיס היחס בלוח: ⚠ רק מעבר לחד
   assert.equal(off.room, null);
   assert.equal(off.over, false);
 });
+
+test('kindLimited — סבב 3: החדר שנשאר כשסוג אחד נחתך עובר לסוג השני (כמו המנוע)', () => {
+  const base = { from: '2026-11-01', to: '2026-11-28', share: 1, gapDays: 1, settings: RULES };
+  // ערוץ של 7, 4 שבועות: חדר של 7. משולבים — עד 1 בשבוע (4 = 2.0), והמכירתיים
+  // לוקחים את כל השארית (5 = 5.0) — קודם רק את החלק היחסי שלהם (4)
+  const r = channelCapacity({ ...base, mix: { promo: 1, hybrid: 7 },
+    channel: { max_per_week: 7, urgent_reserve_pct: 0, max_hybrid_per_week: 1 } });
+  assert.deepEqual([r.kinds.hybrid, r.kinds.promo], [4, 5]);
+  // ובכיוון השני: מכירתי עד 1 בשבוע — המשולבים לוקחים את השארית
+  const back = channelCapacity({ ...base, mix: { promo: 7, hybrid: 1 },
+    channel: { max_per_week: 7, urgent_reserve_pct: 0, max_promo_per_week: 1 } });
+  assert.deepEqual([back.kinds.promo, back.kinds.hybrid], [4, 6]);   // 4 + 6 × 0.5 = 7
+});

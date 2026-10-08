@@ -715,12 +715,26 @@ function kindLimited({ S, mix, channel, settings, weeksTouched, span, availableD
   let p = 0;
   while (p < pMax && promoRoomAllows('promo', used, gate)) { p += 1; used.promo += 1; }
   const ratioCut = p < pMax || h < hMax;
+  // החדר המכירתי שנשאר כשסוג אחד נחתך (יחס או תקרה לסוג) עובר לסוג השני
+  // שיש לקמפיין — משולב ואז מכירתי, כמו המנוע — עד S, החדר והתקרות: המנוע
+  // ממלא את המשבצת בסוג שעוד נכנס, וקודם הקיבולת דיווחה פחות ממנו. ערך לא
+  // מקבל את השארית — החלק שלו נשאר לפי התוכן (mix)
+  let left = S - (p + h + v);
+  const promoCap = Math.min(limits.promo_week, limits.promo_day);
+  while (n.hybrid && left > 0 && h < limits.hybrid_week && promoRoomAllows('hybrid', used, gate)) {
+    h += 1; used.promo += hw; left -= 1;
+  }
+  while (n.promo && left > 0 && p < promoCap && promoRoomAllows('promo', used, gate)) {
+    p += 1; used.promo += 1; left -= 1;
+  }
   let binding = null;
-  if (ratioCut) binding = 'ratio';
-  else if (P > limits.promo_week && limits.promo_week <= limits.promo_day) binding = 'promo_week';
-  else if (P > limits.promo_day) binding = 'promo_day';
-  else if (H > limits.hybrid_week) binding = 'hybrid_week';
-  else if (V > limits.value_week) binding = 'value_week';
+  if (left > 0) {
+    if (ratioCut) binding = 'ratio';
+    else if (P > limits.promo_week && limits.promo_week <= limits.promo_day) binding = 'promo_week';
+    else if (P > limits.promo_day) binding = 'promo_day';
+    else if (H > limits.hybrid_week) binding = 'hybrid_week';
+    else if (V > limits.value_week) binding = 'value_week';
+  }
   return { capacity: p + h + v, kinds: { promo: p, hybrid: h, value: v },
            wanted: { promo: P, hybrid: H, value: V }, limits, binding };
 }
