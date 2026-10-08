@@ -570,6 +570,11 @@ function disableQuestion(what, x, whose, extra, it) {
   return `להשבית את ${what}?\n${posts}\n${extra}שום דבר לא נמחק.`;
 }
 
+/** ערוץ שהושבת (D1): המאושרים שלו חזרו לאישור */
+const resetTail = (res) => (res?.approval_reset
+  ? ` ${res.approval_reset === 1 ? 'פוסט מאושר אחד חזר' : `${res.approval_reset} פוסטים מאושרים חזרו`} לאישור.`
+  : '');
+
 const heldToast = (done, n) =>
   (n ? `${done} — ${futurePosts(n)} ${n === 1 ? 'ירד' : 'ירדו'} מהלוח עד שתפעיל שוב. שום דבר לא נמחק.`
      : `${done} — שום דבר לא נמחק.`);
@@ -922,8 +927,8 @@ function wireManage(ro, connections, apiKeysRes, pubStatus) {
       const choice = await deleteOrDisable(msg, x.active && (x.published || x.other || x.variants),
         CHANNEL_DISABLE_NOTE, 'מחק ערוץ');
       if (choice === 'disable') {
-        await api(`/channels/${id}`, { method: 'PATCH', body: { active: false, week: state.week } });
-        toast(heldToast('הערוץ הושבת', x.future_posts));
+        const res = await api(`/channels/${id}`, { method: 'PATCH', body: { active: false, week: state.week } });
+        toast(heldToast('הערוץ הושבת', x.future_posts) + resetTail(res));
       } else if (choice === 'delete') {
         await api(`/channels/${id}?force=1`, { method: 'DELETE', body: { week: state.week } });
         toast('הערוץ נמחק.');
@@ -961,14 +966,15 @@ function wireManage(ro, connections, apiKeysRes, pubStatus) {
       const { impact: x } = await api(`/channels/${id}/delete-impact`);
       const held = x.future_posts;
       if (!(await confirmDialog(disabling
-        ? disableQuestion(`הערוץ "${x.name}"`, x, 'בו', '', 'אותו')
+        ? disableQuestion(`הערוץ "${x.name}"`, x, 'בו',
+          x.future_approved ? 'האישור לפרסום אוטומטי שלהם יבוטל — חוזרים לאישור. ' : '', 'אותו')
         : enableQuestion(`הערוץ "${x.name}"`, x, 'בו'),
       { okLabel: disabling ? 'השבת ערוץ' : 'הפעל ערוץ' }))) return;
       const res = await api(`/channels/${id}`,
         { method: 'PATCH', body: { active: !disabling, week: state.week } });
       if (disabling) {
         resetSetupStatus();   // הושבת — ההקמה יכולה לסגת
-        toast(heldToast('הערוץ הושבת', held));
+        toast(heldToast('הערוץ הושבת', held) + resetTail(res));
       } else engineToast(res, enabledToast('הערוץ הופעל', res));
       await reload();
     })));

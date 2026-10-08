@@ -1,6 +1,6 @@
-import { api, postWithGapCheck } from '../core/api.js';
+import { api, approvalResetText, postWithGapCheck } from '../core/api.js';
 import { can, epColor, state, persistView } from '../core/state.js';
-import { $, $$, copyLinkButton, copyText, esc, run, toast, wireCopyLinks } from '../core/dom.js';
+import { $, $$, copyLinkButton, copyText, esc, run, toast, toastNote, wireCopyLinks } from '../core/dom.js';
 import { describeMailVariant, openNewsletterEditor } from '../ui/hubFill.js';
 import { CELL, KIND_HE, TONE_CLASS, fmtDate, isImage, isVideo, kb, ymd } from '../core/format.js';
 import { refreshAlerts, refreshBoard } from '../ui/refresh.js';
@@ -1033,13 +1033,16 @@ function openLinkRules(campaign, reload) {
         { okLabel: 'אישור' }))) return { keepOpen: true };
       const res = await api(path, { method: 'POST',
         body: { rules, links_apart: v.links_apart, week: state.week } });
+      // עוקבות שנותקו יצאו עם עותק של הקבצים — מה שאושר בהן חזר לאישור (סעיף 31)
+      const resetNote = res.approval_reset ? ` ${approvalResetText(res.approval_reset)}` : '';
+      if (resetNote) toastNote(approvalResetText(res.approval_reset));
       engineToast(res, (rules.length
         ? `נשמר. ${res.linked ? `${res.linked} פוסטים הועתקו. ` : ''}פוסט חדש בעמודת מקור יועתק לבד.`
         : 'הקישור בין העמודות הוסר.') +
         (res.unlinked ? ` ${res.unlinked} פוסטים נותקו.` : '') +
         (res.skipped?.length ? ` ${res.skipped.length} לא הועתקו: ${res.skipped[0]}` : '') +
         (res.shift ? ` ${shiftNote(res.shift)}`.trimEnd() : '') +
-        downgradeNote(res.downgraded));
+        downgradeNote(res.downgraded) + resetNote);
       await reload();
       return false;
     },

@@ -13,7 +13,7 @@ import { NEWSLETTER_NO_APPROVE, hubStale, hubUnverified } from '../publish/newsl
 import { weekMeta } from '../board.js';
 import { friendlyPublishError } from '../publish/errors.js';
 import { postIsLiveSql } from '../live.js';
-import { approvalDigest } from '../publish/approval.js';
+import { approvalDigest, resetChannelApprovals } from '../publish/approval.js';
 
 const r = Router();
 
@@ -164,7 +164,7 @@ r.put('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res)
 
   const tokenEnc = b.access_token?.trim() ? encryptSecret(b.access_token.trim()) : null;
   const saved = await one(
-    'select last_check_ok from channel_connections where channel_id = $1', [channel.id]);
+    'select last_check_ok, auto_enabled from channel_connections where channel_id = $1', [channel.id]);
   const blocked = autoEnableBlocker({ wantsAuto: b.auto_enabled, newToken: !!tokenEnc, saved });
   if (blocked) return bad(res, blocked);
 
@@ -189,7 +189,10 @@ r.put('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res)
     [channel.id, b.page_id?.trim() || null, b.ig_user_id?.trim() || null,
      tokenEnc, b.auto_enabled ?? null]
   );
-  res.json({ connection: c });
+  // הפרסום האוטומטי כובה לערוץ (ביד, או כי הוזן טוקן חדש שעוד לא נבדק) —
+  // המאושרים שלו חוזרים לאישור (D1)
+  const approvalReset = saved?.auto_enabled && !c.auto_enabled ? await resetChannelApprovals(channel.id) : 0;
+  res.json({ connection: c, approval_reset: approvalReset });
 }));
 
 /** בדיקת חיים: קריאה אמיתית ל-Graph עם הטוקן השמור, והתוצאה נשמרת לתצוגה */
@@ -225,7 +228,8 @@ r.post('/channels/:id/connection/verify', requirePerm('settings'), wrap(async (r
 
 r.delete('/channels/:id/connection', requirePerm('settings'), wrap(async (req, res) => {
   await query('delete from channel_connections where channel_id = $1', [req.params.id]);
-  res.json({ ok: true });
+  // בלי חיבור אין פרסום אוטומטי — המאושרים של הערוץ חוזרים לאישור (D1)
+  res.json({ ok: true, approval_reset: await resetChannelApprovals(req.params.id) });
 }));
 
 /* ========================= אישור ושליחה פר-פוסט ========================= */
@@ -256,6 +260,12 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), requireAutopublish,
   if (!['scheduled', 'failed'].includes(payload.post.status)) {
     return bad(res, 'אפשר לאשר רק פוסט מתוכנן (או כזה שנכשל)');
   }
+  // נכשל שאולי כבר עלה (maybeOutSql — מטא לא ענתה, פרסום שנקטע...): אישור
+  // היה מפרסם אותו שוב — פרסום כפול (F4)
+  if (payload.post.status === 'failed' && (await one(
+    `select ${maybeOutSql('p')} as maybe from posts p where p.id = $1`, [payload.post.id]))?.maybe) {
+    return bad(res, MAYBE_LIVE_ERROR, 409);
+  }
   // מועד שעבר: הרַנֶר היה מפרסם מיד (או מכשיל אחרי 12 שעות) — לא מה שאושר
   if (isPast(payload.post)) return bad(res, 'המועד עבר — קבעו מועד חדש ואז אשרו');
 
@@ -280,6 +290,9 @@ const isPast = (post, now = new Date()) => new Date(post.scheduled_at).getTime()
  * לאישור יש מה להגן עליו.
  */
 export const channelAutoOn = (post) => post.channel_active !== false && !!post.auto_enabled;
+
+/** נכשל שאולי כבר עלה — לא מאשרים לפרסום שוב (F4) */
+export const MAYBE_LIVE_ERROR = 'ייתכן שהפוסט כבר עלה — בדקו בפלטפורמה וסמנו פורסם או מחקו';
 
 export const NOT_AUTO_CHANNEL_ERROR =
   'הפרסום האוטומטי לא מופעל לערוץ הזה, ולכן אין מה לאשר — מפרסמים ידנית ומסמנים "פורסם", ' +
@@ -311,7 +324,8 @@ r.post('/publish/approve-week', requirePerm('approve'), requireAutopublish, wrap
   to.setHours(23, 59, 59, 999);
 
   const candidates = await rows(
-    `select p.id, p.title from posts p
+    `select p.id, p.title, (p.status = 'failed' and ${maybeOutSql('p')}) as maybe_out
+       from posts p
        join channels c on c.id = p.channel_id
       where p.scheduled_at >= $1 and p.scheduled_at <= $2
         and p.status in ('scheduled', 'failed')
@@ -326,7 +340,8 @@ r.post('/publish/approve-week', requirePerm('approve'), requireAutopublish, wrap
   const eligible = [];
   const digests = [];
   const skipped = [];
-  for (const { id, title } of candidates) {
+  for (const { id, title, maybe_out: maybeOut } of candidates) {
+    if (maybeOut) { skipped.push({ id, title, reason: MAYBE_LIVE_ERROR }); continue; }
     const payload = await loadPayload(id);
     const reason = payload ? weekApprovalReason(payload) : 'הפוסט לא נמצא';
     if (reason) skipped.push({ id, title, reason });
@@ -414,11 +429,16 @@ r.post('/posts/:id/unapprove-publish', requirePerm('approve'), wrap(async (req, 
 r.post('/posts/:id/publish-now', requirePerm('approve'), requireAutopublish, wrap(async (req, res) => {
   // ניוזלטר לא "מתפרסם עכשיו" מכאן — הוא עובר ל-HUB ומאושר שם
   const target = await one(
-    `select c.platform from posts p join channels c on c.id = p.channel_id where p.id = $1`,
+    `select c.platform, c.active as channel_active, cc.auto_enabled
+       from posts p join channels c on c.id = p.channel_id
+       left join channel_connections cc on cc.channel_id = c.id
+      where p.id = $1`,
     [req.params.id]);
   if (target?.platform === 'newsletter') {
     return bad(res, 'ניוזלטר לא נשלח מכאן — לוחצים "העבר ל-HUB" ומאשרים את השליחה ב-HUB');
   }
+  // רק בערוץ שמתפרסם לבד (D2) — כמו אישור
+  if (target && !channelAutoOn(target)) return bad(res, NOT_AUTO_CHANNEL_ERROR, 409);
   // publishOne פותח טרנזקציה משלו לכל שלב (runner.js) — הפרסום לא תלוי
   // בטרנזקציית הבקשה ובחיבור שלה, וגם דפדפן שהתנתק באמצע (וידאו לאינסטגרם
   // — דקות) לא מפיל את שמירת התוצאה. ולכן אין כאן נעילה על הפוסט לפני.

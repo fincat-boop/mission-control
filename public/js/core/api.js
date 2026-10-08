@@ -31,23 +31,27 @@ export async function api(path, options = {}) {
   return data;
 }
 
-/** "N פוסטים מאושרים חזרו לאישור" — טהורה, לבדיקה */
-export function approvalResetText(n) {
-  return n === 1 ? 'פוסט מאושר אחד חזר לאישור — התוכן שלו השתנה אחרי האישור.'
-    : `${n} פוסטים מאושרים חזרו לאישור — התוכן שלהם השתנה אחרי האישור.`;
+/**
+ * "N פוסטים מאושרים חזרו לאישור" — טהורה, לבדיקה. why: 'content' (התוכן
+ * השתנה, סעיף 31) או 'channel' (הערוץ הפסיק להתפרסם לבד, D1)
+ */
+export function approvalResetText(n, why = 'content') {
+  const head = n === 1 ? 'פוסט מאושר אחד חזר לאישור' : `${n} פוסטים מאושרים חזרו לאישור`;
+  if (why === 'channel') return `${head} — הערוץ כבר לא מתפרסם לבד.`;
+  return `${head} — ${n === 1 ? 'התוכן שלו' : 'התוכן שלהם'} השתנה אחרי האישור.`;
 }
 
 /**
  * סעיף 31: עריכת תוכן (גרסה, קבצים, קישור) שהחזירה פוסטים מאושרים לאישור —
  * השרת מחזיר approval_reset: N, וההודעה יוצאת מכאן, מכל מקום שעורך תוכן
- * (טופס, שמירה אוטומטית, העלאה). רק נתיבי תוכן וקבצים: בנתיבים אחרים
- * approval_reset אומר דבר אחר, והמסך שלהם כבר מסביר אותו.
+ * (טופס, שמירה אוטומטית, העלאה). גם חיבור ערוץ (D1 — כיבוי האוטומטי או
+ * ניתוק). בנתיבים אחרים approval_reset אומר דבר אחר, והמסך שלהם מסביר אותו.
  */
 export function noteApprovalReset(path, data) {
   const n = Number(data?.approval_reset);
-  if (/^\/(content|assets)\//.test(path) && Number.isInteger(n) && n > 0) {
-    toastNote(approvalResetText(n));
-  }
+  if (!Number.isInteger(n) || n <= 0) return;
+  if (/^\/(content|assets)\//.test(path)) toastNote(approvalResetText(n));
+  else if (/^\/channels\/\d+\/connection$/.test(path)) toastNote(approvalResetText(n, 'channel'));
 }
 
 /** כפתור האישור אומר מה קורה — לא "אישור" (docs/ux-overhaul.md, כפתורים) */

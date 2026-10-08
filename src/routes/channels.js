@@ -4,6 +4,7 @@ import { openPostSql } from '../live.js';
 import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
 import { LinkError, releaseLinks } from '../links.js';
+import { resetChannelApprovals } from '../publish/approval.js';
 
 const r = Router();
 
@@ -44,6 +45,8 @@ r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   const reactivated = before && !before.active && c.active;
   const { reset, back } = reactivated
     ? await releaseHeld('channel', c.id, { since: before.disabled_at }) : { reset: 0, back: 0 };
+  // הושבת (D1): ערוץ מושבת לא מתפרסם — המאושרים שלו חוזרים לאישור
+  const disabledReset = before?.active && !c.active ? await resetChannelApprovals(c.id) : 0;
 
   // קודם מפנים מה שנעשה לא חוקי, ורק אז ממלאים — אחרת המילוי תופס את
   // הימים שהפוסטים המפונים אמורים לעבור אליהם.
@@ -57,7 +60,7 @@ r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
         and (ca.ends_on is null or ca.ends_on >= current_date)
       order by ca.id`, [c.id]) : [];
   const engine = await refillCampaigns(ids.map((x) => x.id), req.body?.week);
-  res.json({ channel: c, engine, relocated, approval_reset: reset, back });
+  res.json({ channel: c, engine, relocated, approval_reset: reset + disabledReset, back });
 }));
 
 /**

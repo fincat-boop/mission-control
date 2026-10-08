@@ -78,6 +78,7 @@ before(async () => {
   const { default: board } = await import('../src/routes/board.js');
   const { default: publish } = await import('../src/routes/publish.js');
   const { default: contentRoutes } = await import('../src/routes/content.js');
+  const { default: channelRoutes } = await import('../src/routes/channels.js');
 
   await db.migrate();
   org = (await db.pool.query("insert into orgs (name) values ('autopublish-gate-test') returning id")).rows[0].id;
@@ -112,6 +113,7 @@ before(async () => {
   app.use(board);
   app.use(publish);
   app.use(contentRoutes);
+  app.use(channelRoutes);
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => res.status(500).json({ error: err.message }));
   server = app.listen(0);
@@ -344,14 +346,36 @@ async function duePost(min = 1) {
   return id;
 }
 
+/**
+ * פוסט פייסבוק עם שתי תמונות, מאושר, שהמועד שלו הגיע. כל תמונה עולה קודם
+ * כלא-מפורסמת (9/photos — קריאה שלא מעלה), ורק אז 9/feed מעלה את הפוסט
+ */
+async function imageDuePost() {
+  const ci = await content();
+  await inOrg(async () => {
+    for (const name of ['a.png', 'b.png']) {
+      await db.query(
+        `insert into content_assets (content_id, filename, mime, size_bytes, data)
+         values ($1, $2, 'image/png', 8, decode('89504e470d0a1a0a', 'hex'))`, [ci, name]);
+    }
+  });
+  const id = await post({ contentId: ci });
+  await approve(id);
+  await inOrg(() => db.query(`update posts set scheduled_at = now() - interval '1 minute' where id = $1`, [id]));
+  return id;
+}
+/** הגבלת קצב רק על העלאת התמונות (לא מעלה את הפוסט) */
+const photosRejected = (code) => (path) => (path === '9/photos' ? graphError(code) : undefined);
+
 const failedTasks = (id) => qa(`select id from tasks where post_id = $1 and kind = 'failed' and not done`, [id]);
 const logRows = (id) => qa('select ok, error from publish_log where post_id = $1 order by id', [id]);
 
-test('32 — דחייה זמנית מפורשת (הגבלת קצב): ניסיון חוזר אחד אחרי 15 דק\', בלי משימה ואירוע; כשל שני — נכשל רגיל', { skip }, async () => {
-  const id = await duePost();
+test('32 — דחייה זמנית מפורשת (הגבלת קצב) בקריאה שלא מעלה: ניסיון חוזר אחד אחרי 15 דק\', בלי משימה ואירוע; כשל שני — נכשל רגיל', { skip }, async () => {
+  const id = await imageDuePost();
   await onlyThese(id);
   await withHub(async (events) => {
-    await withGraph(() => graphError(4), () => runner.publishTickForOrg(org));
+    const first = await withGraph(photosRejected(4), () => runner.publishTickForOrg(org));
+    assert.equal(first.some((c) => c.path === '9/feed'), false, 'הפוסט עצמו לא נשלח');
     let p = await postRow(id);
     assert.equal(p.status, 'approved');
     const wait = new Date(p.publish_retry_at).getTime() - Date.now();
@@ -367,7 +391,7 @@ test('32 — דחייה זמנית מפורשת (הגבלת קצב): ניסיו�
 
     // הגיע הזמן — שוב נדחה: נכשל, משימה, אירוע
     await inOrg(() => db.query(`update posts set publish_retry_at = now() - interval '1 minute' where id = $1`, [id]));
-    await withGraph(() => graphError(4), () => runner.publishTickForOrg(org));
+    await withGraph(photosRejected(4), () => runner.publishTickForOrg(org));
     p = await postRow(id);
     assert.equal(p.status, 'failed');
     assert.equal(p.publish_retry_at, null);
@@ -378,9 +402,9 @@ test('32 — דחייה זמנית מפורשת (הגבלת קצב): ניסיו�
 });
 
 test('32 — ניסיון חוזר שהצליח — פורסם, publish_retry_at מתאפס', { skip }, async () => {
-  const id = await duePost();
+  const id = await imageDuePost();
   await onlyThese(id);
-  await withGraph(() => graphError(17), () => runner.publishTickForOrg(org));
+  await withGraph(photosRejected(2), () => runner.publishTickForOrg(org));
   assert.equal((await postRow(id)).status, 'approved');
   await inOrg(() => db.query(`update posts set publish_retry_at = now() - interval '1 minute' where id = $1`, [id]));
   await withGraph(null, () => runner.publishTickForOrg(org));
@@ -389,11 +413,13 @@ test('32 — ניסיון חוזר שהצליח — פורסם, publish_retry_at
   assert.equal(p.publish_retry_at, null);
 });
 
-test('32 — לא מנסים שוב: מטא לא ענתה בזמן, תקלת רשת, "תקלה זמנית" על הקריאה שמעלה את הפוסט', { skip }, async () => {
+test('32 — לא מנסים שוב: מטא לא ענתה בזמן, תקלת רשת, וכל שגיאה מהקריאה שמעלה — גם הגבלת קצב (D3)', { skip }, async () => {
   const cases = [
     () => { throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); },
     () => { throw new TypeError('fetch failed'); },
     () => graphError(2, 500),
+    () => graphError(4),
+    () => graphError(17),
   ];
   for (const make of cases) {
     const id = await duePost();
@@ -464,6 +490,13 @@ test('32 — "להעביר ל-HUB": יממה לפני ניוזלטר שלא הו
   const t = await hubTasks(soon);
   assert.equal(t.length, 1);
   assert.match(t[0].title, /להעביר ל-HUB/);
+  // היעד — היום שלפני הניוזלטר (F3); for_at — מועד הניוזלטר
+  const due = await q1(
+    `select t.due_on::text as due, ((p.scheduled_at at time zone 'Asia/Jerusalem')::date - 1)::text as want,
+            (t.meta->>'for_at')::timestamptz = p.scheduled_at as same_at
+       from tasks t join posts p on p.id = t.post_id where t.id = $1`, [t[0].id]);
+  assert.equal(due.due, due.want);
+  assert.equal(due.same_at, true);
   assert.equal((await hubTasks(far)).length, 0);
 
   // הועבר — נסגרת
@@ -492,4 +525,113 @@ test('32 — "להעביר ל-HUB": יממה לפני ניוזלטר שלא הו
     await setAuto(true);
   }
   await inOrg(() => db.query('delete from posts where id = any($1)', [[soon, far, moved]]));
+});
+
+/* ========================= סבב 2 — החלטות מנהל ותיקונים ========================= */
+
+/** ערוץ פייסבוק נוסף עם חיבור אוטומטי — שלא ישפיע על שאר הבדיקות */
+async function autoChannel(name) {
+  const { encryptSecret } = await import('../src/publish/crypto.js');
+  return inOrg(async () => {
+    const ch = (await db.one(
+      "insert into channels (name, platform, max_per_week) values ($1, 'facebook', 14) returning id", [name])).id;
+    await db.query(
+      `insert into channel_connections (channel_id, page_id, access_token_enc, auto_enabled, last_check_ok)
+       values ($1, '7', $2, true, true)`, [ch, encryptSecret('tok')]);
+    return ch;
+  });
+}
+
+async function approvedOn(channel) {
+  const id = await post({ channel, contentId: await content({ channel }) });
+  await approve(id);
+  return id;
+}
+
+test('D1 — כיבוי אוטומטי לערוץ, ניתוק חיבור והשבתת ערוץ: המאושרים שלו חוזרים לאישור', { skip }, async () => {
+  // כיבוי האוטומטי
+  const a = await autoChannel('פייסבוק D1-א');
+  const [a1, a2] = [await approvedOn(a), await approvedOn(a)];
+  const other = await approvedOn(ids.fb);
+  const off = await call('PUT', `/channels/${a}/connection`, { auto_enabled: false });
+  assert.equal(off.status, 200, JSON.stringify(off.json));
+  assert.equal(off.json.approval_reset, 2);
+  for (const id of [a1, a2]) {
+    const p = await postRow(id);
+    assert.equal(p.status, 'scheduled');
+    assert.equal(p.approved_at, null);
+    assert.equal(p.approved_digest, null);
+  }
+  assert.equal((await postRow(other)).status, 'approved', 'ערוץ אחר לא זז');
+  // שמירה חוזרת כשכבר כבוי — אין מה להחזיר
+  assert.equal((await call('PUT', `/channels/${a}/connection`, { auto_enabled: false })).json.approval_reset, 0);
+
+  // ניתוק החיבור
+  const b = await autoChannel('פייסבוק D1-ב');
+  const b1 = await approvedOn(b);
+  const del = await call('DELETE', `/channels/${b}/connection`);
+  assert.equal(del.json.approval_reset, 1);
+  assert.equal((await postRow(b1)).status, 'scheduled');
+
+  // השבתת הערוץ
+  const c = await autoChannel('פייסבוק D1-ג');
+  const c1 = await approvedOn(c);
+  const dis = await call('PATCH', `/channels/${c}`, { active: false });
+  assert.equal(dis.status, 200, JSON.stringify(dis.json));
+  assert.equal(dis.json.approval_reset, 1);
+  assert.equal((await postRow(c1)).status, 'scheduled');
+});
+
+test('D2 — "פרסם עכשיו" בערוץ שלא מתפרסם לבד — 409 עם אותו הסבר כמו אישור', { skip }, async () => {
+  const id = await post({ channel: ids.fbOff, contentId: await content({ channel: ids.fbOff }) });
+  const calls = await withGraph(null, async () => {
+    const r = await call('POST', `/posts/${id}/publish-now`);
+    assert.equal(r.status, 409, JSON.stringify(r.json));
+    assert.match(r.json.error, /הפרסום האוטומטי לא מופעל לערוץ הזה/);
+  });
+  assert.equal(calls.length, 0);
+  assert.equal((await postRow(id)).status, 'scheduled');
+});
+
+test('F4 — נכשל שאולי כבר עלה: אישור — 409; אישור השבוע — מדולג עם אותה סיבה', { skip }, async () => {
+  const id = await post({ contentId: await content() });
+  await inOrg(() => db.query(`update posts set status = 'failed', publish_error = $2 where id = $1`,
+    [id, runner.STUCK_SOCIAL_ERROR]));
+  const r = await call('POST', `/posts/${id}/approve-publish`);
+  assert.equal(r.status, 409, JSON.stringify(r.json));
+  assert.match(r.json.error, /ייתכן שהפוסט כבר עלה/);
+  assert.equal((await postRow(id)).status, 'failed');
+
+  const week = (await postRow(id)).scheduled_at.toISOString().slice(0, 10);
+  const w = await call('POST', '/publish/approve-week', { week });
+  assert.equal(w.status, 200, JSON.stringify(w.json));
+  const skippedRow = w.json.skipped.find((x) => x.id === id);
+  assert.match(skippedRow?.reason ?? '', /ייתכן שהפוסט כבר עלה/);
+  assert.equal((await postRow(id)).status, 'failed');
+
+  // נכשל שבוודאות לא עלה — מאושר כרגיל
+  const sure = await post({ contentId: await content() });
+  await inOrg(() => db.query(`update posts set status = 'failed', publish_error = 'החיבור לפייסבוק פג' where id = $1`, [sure]));
+  assert.equal((await call('POST', `/posts/${sure}/approve-publish`)).status, 200);
+});
+
+test('F1 — המשימה המרוכזת של כשל תצורה לא נשמרה: משימה ואירוע לפוסט עצמו', { skip }, async () => {
+  const id = await duePost();
+  await onlyThese(id);
+  // בלי האינדקס הייחודי ה-on conflict נכשל — recordConfigNotice מחזיר undefined
+  await db.pool.query('drop index if exists tasks_config_failed_uidx');
+  try {
+    await withHub(async (events) => {
+      await withGraph(() => graphError(190), () => runner.publishTickForOrg(org));
+      assert.equal((await postRow(id)).status, 'failed');
+      assert.equal((await failedTasks(id)).length, 1, 'משימת כשל לפוסט');
+      const ev = events.filter((e) => e.type === 'post_publish_failed');
+      assert.equal(ev.length, 1);
+      assert.equal(ev[0].data.grouped, undefined);
+    });
+  } finally {
+    await db.pool.query(`create unique index if not exists tasks_config_failed_uidx
+      on tasks (org_id, (meta->>'config_kind'))
+      where kind = 'failed' and done = false and post_id is null and (meta->>'config_kind') is not null`);
+  }
 });

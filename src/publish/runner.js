@@ -293,11 +293,13 @@ export async function failPost(post, err, {
   // התקלה ואירוע אחד לשעה, לא אחד לכל פוסט. הפוסט עצמו נכשל כרגיל
   const configKind = internal ? null : configErrorKind(message, post.platform);
   const notice = configKind ? await recordConfigNotice(configKind, title, message, who) : null;
+  // המשימה המרוכזת לא נשמרה — חוזרים למשימה ולאירוע של הפוסט, לא כשל שקט (F1)
+  const grouped = !!(configKind && notice);
   // deferNotify — האירוע חוזר לקורא (notify) והוא שולח אותו אחרי ה-commit:
   // שלא יצא אירוע על כשל שהתגלגל אחורה, ושה-HUB לא יחזיק טרנזקציה פתוחה
   let event = null;
-  if (notify && (!configKind || notice?.emit)) {
-    const extra = configKind
+  if (notify && (!grouped || notice.emit)) {
+    const extra = grouped
       ? { error: message, who, grouped: true, config_kind: configKind, count: notice.count }
       : { error: message, who };
     const args = ['post_publish_failed', post, extra,
@@ -305,7 +307,7 @@ export async function failPost(post, err, {
     if (deferNotify) event = () => emitPostEvent(...args);
     else await emitPostEvent(...args);
   }
-  if (!configKind) await recordFailedTask(post, title, message, who);
+  if (!grouped) await recordFailedTask(post, title, message, who);
   return { ok: false, error: message, ...(event ? { notify: event } : {}) };
 }
 
@@ -1155,7 +1157,8 @@ export async function newsletterTransferPrep(orgId) {
     await tickStep(orgId, `משימת "להעביר ל-HUB" לפוסט #${p.id} נכשלה:`, () => query(
       `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent, due_on, meta, assignee_id)
        values ($1, $2, 'approve', $3, $4, false,
-               ($5::timestamptz at time zone 'Asia/Jerusalem')::date,
+               -- היעד: היום שלפני הניוזלטר — נספרת ב"היום" יום לפני (F3)
+               ($5::timestamptz at time zone 'Asia/Jerusalem')::date - 1,
                jsonb_build_object('hub_transfer', true, 'for_at', $5::timestamptz), $6)
        on conflict (post_id, (meta->>'for_at')) where kind = 'approve' and (meta->>'hub_transfer') = 'true'
        do nothing`,

@@ -552,8 +552,9 @@ const MISSED_CHIP = ['עבר המועד', 'warn'];
  * בפוטר. הסדר: קודם מה שהמצב מזמין, עריכה באמצע, הסרה אחרונה אחרי מפריד.
  */
 function menuKeys(post, f, p) {
-  // פרסום אוטומטי כבוי (state.autopublish) — בלי "פרסם עכשיו" / "בטל אישור"
-  const connected = f.autopublish && AUTO_PLATFORMS.includes(post.platform) && post.autopub_connected;
+  // פרסום אוטומטי כבוי (state.autopublish) — בלי "פרסם עכשיו" / "בטל אישור".
+  // "פרסם עכשיו" רק בערוץ שמתפרסם לבד (autoReady, D2 — השרת דוחה ב-409 אחרת)
+  const connected = f.autoReady;
   const future = new Date(post.scheduled_at) > new Date();
   const menu = [];
   if (post.platform === 'newsletter') return newsletterMenuKeys(post, f, p, future);
@@ -564,7 +565,8 @@ function menuKeys(post, f, p) {
     if (p.content) menu.push('markPublished');
     if (p.content && !future) menu.push('reschedule');
   } else if (post.status === 'approved') {
-    if (p.approve && f.autopublish) menu.push('unapprove', 'publishNow');
+    if (p.approve && f.autopublish) menu.push('unapprove');
+    if (p.approve && connected) menu.push('publishNow');
     if (p.content) menu.push('markPublished');
     if (p.content && isMissed(post)) menu.push('reschedule');
   } else if (post.status === 'published') {

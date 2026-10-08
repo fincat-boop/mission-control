@@ -108,3 +108,19 @@ export async function recordReapproveTask(post) {
     [`לאשר מחדש: ${post.title}`, `${post.channel_name} — ${CHANGED_AFTER_APPROVAL}`,
      post.id, post.endpoint_id ?? null, post.assignee_id ?? null]);
 }
+
+/**
+ * הערוץ הפסיק להתפרסם לבד (החלטת מנהל D1, סבב 2 של שלב 7): פרסום אוטומטי
+ * כובה לערוץ, החיבור נמחק, או שהערוץ הושבת. "מאושר" שם כבר לא מגן על
+ * כלום — כל המאושרים של הערוץ חוזרים למתוכנן (כמו resetToManual, מצומצם
+ * לערוץ): בלי אישור, טביעה, ניסיון חוזר והודעת הכשל של הניסיון הראשון.
+ * publishing — לא נוגעים (כבר יצא לדרך).
+ * @returns {Promise<number>} כמה חזרו לאישור
+ */
+export async function resetChannelApprovals(channelId) {
+  const back = await rows(
+    `update posts set status = 'scheduled', approved_by = null, approved_at = null,
+                      approved_digest = null, publish_retry_at = null, publish_error = null
+      where channel_id = $1 and status = 'approved' returning id`, [channelId]);
+  return back.length;
+}

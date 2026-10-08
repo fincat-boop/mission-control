@@ -168,11 +168,11 @@ const META_RETRY_TEMPORARY = META_TEMPORARY;
 /**
  * האם מותר לנסות שוב לבד, פעם אחת (runner.js scheduleRetry). רק דחייה
  * מפורשת וזמנית שבוודאות לא העלתה כלום:
- *   - מטא ענתה בשגיאה (יש code ו-status מהתשובה עצמה) עם קוד הגבלת קצב —
- *     בכל קריאה, גם זו שמעלה את הפוסט: הבקשה נדחתה לפני שבוצעה;
- *   - מטא ענתה "תקלה זמנית / לא צפויה" (1, 2) — רק כשזו לא הייתה הקריאה
- *     שמעלה את הפוסט (live, meta.js): שם "לא צפויה" יכולה להיות גם אחרי
- *     שהפוסט עלה;
+ *   - מטא ענתה בשגיאה (יש code ו-status מהתשובה עצמה) עם קוד הגבלת קצב או
+ *     תקלה זמנית — ורק בקריאה שלא מעלה את הפוסט (יצירת קונטיינר, העלאת
+ *     תמונה לא מפורסמת, בדיקת סטטוס). שגיאה כלשהי מהקריאה שמעלה (live —
+ *     feed / photos / videos / media_publish, meta.js) — לעולם לא, גם הגבלת
+ *     קצב: אי אפשר להוכיח שמטא לא ביצעה (החלטת מנהל D3);
  *   - ה-HUB ענה בעצמו (answered) ב-5xx.
  * לעולם לא: חוסר מענה (graph_timeout), תקלת רשת, עיבוד שלא הסתיים, שגיאה
  * בלי קוד — אולי עלה, ופרסום חוזר היה כפול.
@@ -182,8 +182,8 @@ export function retryableRejection(err) {
   if (err.name === 'HubMailError') return err.answered === true && Number(err.status) >= 500;
   const code = Number(err.code);
   if (!Number.isFinite(code) || !Number.isFinite(Number(err.status))) return false;
-  if (META_RETRY_RATE.includes(code)) return true;
-  return META_RETRY_TEMPORARY.includes(code) && err.live !== true;
+  if (err.live !== false) return false; // רק כשידוע שזו לא הקריאה שמעלה
+  return META_RETRY_RATE.includes(code) || META_RETRY_TEMPORARY.includes(code);
 }
 
 /**

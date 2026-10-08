@@ -147,16 +147,19 @@ test('MAYBE_OUT_PATTERNS — תופסות בדיוק את ההודעות של "�
 
 test('retryableRejection — רק דחייה מפורשת וזמנית; לעולם לא "אולי עלה"', async () => {
   const { retryableRejection } = await import('../src/publish/errors.js');
-  const g = (code, extra = {}) => Object.assign(new Error('x'), { code, status: 400, ...extra });
-  for (const code of [4, 17, 32, 341, 613]) assert.equal(retryableRejection(g(code, { live: true })), true, String(code));
-  assert.equal(retryableRejection(g(2)), true);
-  assert.equal(retryableRejection(g(1, { live: true })), false, 'תקלה לא צפויה בקריאה שמעלה — אולי עלה');
+  const g = (code, extra = {}) => Object.assign(new Error('x'), { code, status: 400, live: false, ...extra });
+  for (const code of [1, 2, 4, 17, 32, 341, 613]) assert.equal(retryableRejection(g(code)), true, String(code));
+  // D3: שום שגיאה מהקריאה שמעלה את הפוסט — גם לא הגבלת קצב; וגם לא כשלא ידוע איזו קריאה
+  for (const code of [1, 2, 4, 17, 341]) {
+    assert.equal(retryableRejection(g(code, { live: true })), false, `live ${code}`);
+    assert.equal(retryableRejection(g(code, { live: undefined })), false, `unknown ${code}`);
+  }
   assert.equal(retryableRejection(g(190)), false);
   assert.equal(retryableRejection(g(368)), false);
   assert.equal(retryableRejection(Object.assign(new Error('t'), { kind: 'graph_timeout', maybeLive: false })), false);
   assert.equal(retryableRejection(Object.assign(new Error('t'), { kind: 'processing_timeout' })), false);
   assert.equal(retryableRejection(new TypeError('fetch failed')), false);
-  assert.equal(retryableRejection(Object.assign(new Error('x'), { code: 4 })), false, 'בלי status — לא תשובה של מטא');
+  assert.equal(retryableRejection(Object.assign(new Error('x'), { code: 4, live: false })), false, 'בלי status — לא תשובה של מטא');
   assert.equal(retryableRejection('rate limit'), false);
   const hub = (status, answered) => Object.assign(new Error('h'), { name: 'HubMailError', status, answered });
   assert.equal(retryableRejection(hub(503, true)), true);
