@@ -614,6 +614,14 @@ create table if not exists engine_dismissals (
 );
 create unique index if not exists engine_dismissals_key_idx
   on engine_dismissals (org_id, week_start, content_id, channel_id);
+-- סעיף 14: מחיקת פוסט של תוכן בקמפיין חוסמת את התוכן בערוץ לכל תקופת הקמפיין,
+-- לא רק לשבוע. campaign_id — הקמפיין שהתוכן היה בו כשנמחק; הרשומה חלה על כל
+-- שבוע כל עוד התוכן עדיין שייך לאותו קמפיין. null = ויתור לשבוע בלבד (כמו קודם).
+-- נמחקת עם הקמפיין, או 8 שבועות אחרי שהוא נגמר (recordDismissals).
+alter table engine_dismissals
+  add column if not exists campaign_id int references campaigns(id) on delete cascade;
+create index if not exists engine_dismissals_campaign_idx
+  on engine_dismissals (campaign_id) where campaign_id is not null;
 
 -- ========================= ניוזלטר: העברה ל-HUB =========================
 -- ניוזלטר נשאר טיוטה בלוח עד "העבר ל-HUB" (runner.js transferNewsletter).

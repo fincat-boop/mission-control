@@ -426,3 +426,55 @@ test('סעיף 13 — המילוי היומי ממלא את השבוע והבא 
   assert.match(log[0].summary, /מילוי יומי/);
   await wipe();
 });
+
+/* ========================= 14. מחיקת פוסט של קמפיין ========================= */
+
+test('סעיף 14 — פוסט קמפיין שנמחק לא חוזר לשבוע אחר בשמירת הקמפיין; שיוך מפורש מחזיר', { skip }, async () => {
+  await wipe();
+  const { autoFillCampaign } = await import('../src/routes/_shared.js');
+  const ch = await channel('פייסבוק', 1);
+  const ep = await endpoint('נקודה');
+  const s = weekMeta(inDays(21)).start;
+  const e = weekMeta(inDays(42)).end;
+  const c = await campaign(ep.id, ch.id, { starts: s, ends: e });
+  const ids = await items(ep.id, ch.id, 2, { campaignId: c.id, prefix: 'קמפיין' });
+  await inOrg(() => autoFillCampaign(c.id, null));
+  const [first] = await q('select id, content_id from posts where content_id = $1', [ids[0]]);
+  assert.ok(first, 'הפריט הראשון שובץ');
+
+  const del = await call('DELETE', `/posts/${first.id}`);
+  assert.equal(del.status, 200, JSON.stringify(del.json));
+  // שמירת הקמפיין ממלאת שוב את כל התקופה — הפריט שנמחק לא חוזר לשום שבוע
+  const save = await call('PATCH', `/campaigns/${c.id}`, { min_gap_days: 2 });
+  assert.equal(save.status, 200, JSON.stringify(save.json));
+  await inOrg(() => autoFillCampaign(c.id, null));
+  assert.deepEqual(await q('select scheduled_at from posts where content_id = $1', [ids[0]]), []);
+  // הפריט השני עדיין משובץ כרגיל
+  assert.equal((await q('select id from posts where content_id = $1', [ids[1]])).length, 1);
+
+  // "שייך תוכן" / פוסט ידני עם התוכן — החסימה יורדת
+  const when = new Date(`${weekMeta(inDays(35)).days[2].date}T09:00:00`);
+  const manual = await call('POST', '/posts', {
+    channel_id: ch.id, endpoint_id: ep.id, content_id: ids[0], title: 'ידני', kind: 'value',
+    scheduled_at: when.toISOString(), confirm_warnings: true,
+  });
+  assert.equal(manual.status, 201, JSON.stringify(manual.json));
+  assert.deepEqual(await q('select id from engine_dismissals where content_id = $1', [ids[0]]), []);
+  await wipe();
+});
+
+test('סעיף 14 — תוכן שוטף שנמחק חסום רק לשבוע שלו', { skip }, async () => {
+  await wipe();
+  const ch = await channel('פייסבוק', 7);
+  const ep = await endpoint('נקודה');
+  const [it] = await items(ep.id, ch.id, 1, { prefix: 'שוטף' });
+  const week = weekMeta(inDays(14));
+  const p = await post(ch.id, ep.id, new Date(`${week.days[3].date}T10:00:00`),
+    { status: 'scheduled', contentId: it });
+  await call('DELETE', `/posts/${p.id}`);
+  const rows = await q('select week_start, campaign_id from engine_dismissals where content_id = $1', [it]);
+  assert.deepEqual(rows.map((r) => [String(r.week_start).slice(0, 10), r.campaign_id]), [[week.start, null]]);
+  const next = await inOrg(() => engine.planWeek(weekMeta(inDays(21)).days[3].date, { holes: false }));
+  assert.ok(next.placements.some((x) => x.content_id === it), 'בשבוע שאחרי — חוזר');
+  await wipe();
+});

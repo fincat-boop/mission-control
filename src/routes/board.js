@@ -13,7 +13,7 @@ import { hubStale, hubUnverified } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
 import { contentState } from '../publish/readiness.js';
 import {
-  attachToPost, contentCandidates, plannedDate, recordDismissals, takesRoomSql,
+  attachToPost, contentCandidates, liftDismissals, plannedDate, recordDismissals, takesRoomSql,
 } from '../engine.js';
 import { candidateColumnsSql, fitsSlotChannel } from '../candidates.js';
 import { itemAssetsSql } from '../links.js';
@@ -78,6 +78,8 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
     [b.channel_id, b.endpoint_id ?? null, b.content_id ?? null, b.title, b.kind,
      b.scheduled_at, b.assignee_id ?? null, b.urgent ?? false, b.note ?? null]
   );
+  // שיבוץ ידני עם תוכן גובר על חסימה ממחיקה קודמת (סעיף 14)
+  if (post.content_id) await liftDismissals(post.content_id, post.channel_id);
   res.status(201).json({ post });
 }));
 
@@ -242,6 +244,8 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   }
 
   let post = await updateById('posts', POST_FIELDS, req.params.id, b);
+  // תוכן שהמשתמש שם בפוסט ביד גובר על חסימה ממחיקה קודמת (סעיף 14)
+  if (contentChanged && post?.content_id) await liftDismissals(post.content_id, post.channel_id);
   // האישור לפרסום אוטומטי ניתן על מה שיוצא בפועל: הערוץ (החיבור, הניסוח),
   // התוכן ונקודת הקצה — שינוי של אחד מהם מחזיר למתוכנן. מועד בלבד משאיר.
   const approvalReset = current.status === 'approved' && approvalResetOnChange(current, b);
@@ -403,8 +407,9 @@ r.delete('/posts/:id/results', requirePerm('content'), wrap(async (req, res) => 
 /**
  * הסרת פוסט מהלוח. בכוונה בלי מילוי אוטומטי אחריה: מי שמוחק פוסט רוצה
  * מקום פנוי, לא פוסט אחר (לרוב עם אותו תוכן) שקופץ למקומו. התוכן נרשם
- * כוויתור לשבוע הזה בערוץ הזה, כדי שגם מילוי שיופעל משינוי אחר לא יחזיר
- * אותו לשם (engine_dismissals).
+ * כוויתור בערוץ הזה, כדי שגם מילוי שיופעל משינוי אחר לא יחזיר אותו
+ * (engine_dismissals): תוכן של קמפיין — לכל תקופת הקמפיין (סעיף 14), שוטף —
+ * לשבוע הזה. להזיז רק את המועד — "הזז לתאריך אחר", לא מחיקה.
  */
 r.delete('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   // נעילה ובדיקה לפני המחיקה — פוסט שבדרך לפלטפורמה לא נמחק (ראו publishingBlocker)
@@ -416,7 +421,7 @@ r.delete('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
     'delete from posts where id = $1 returning id, content_id, channel_id, scheduled_at',
     [req.params.id]
   );
-  if (post?.content_id) await recordDismissals([post]);
+  if (post?.content_id) await recordDismissals([post], { campaignWide: true });
   res.json({ ok: true });
 }));
 
@@ -541,6 +546,8 @@ r.post('/posts/:id/attach-content', requirePerm('content'), wrap(async (req, res
     content_id: c.id, title: c.title, kind: c.kind, endpoint_id: c.endpoint_id,
   });
   if (!done) return bad(res, 'הפוסט השתנה בינתיים — רעננו ונסו שוב', 409);
+  // שיוך מפורש גובר על חסימה ממחיקה קודמת של אותו תוכן בערוץ (סעיף 14)
+  await liftDismissals(c.id, post.channel_id);
   // תוכן בלי טקסט ובלי מדיה (כותרת בלבד): "לכתוב" נשארת פתוחה — attachToPost,
   // אותו כלל כמו במילוי של המנוע
   res.json({ post: done.post, draft: c.variant_status !== 'ready',

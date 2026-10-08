@@ -142,8 +142,15 @@ export async function planWeek(anchorDate, {
   // (usedContent למטה, מכל onBoard)
   const existing = onBoard.filter((p) => takesRoom(p, now));
   const campaigns = await rows('select * from campaigns where active = true and paused_at is null');
-  // תוכן שהמשתמש הוריד מהשבוע הזה (מחיקת פוסט / ביטול מילוי) — לא חוזר
-  const dismissals = await rows('select content_id, channel_id from engine_dismissals where week_start = $1', [week.start]);
+  // תוכן שהמשתמש הוריד מהשבוע הזה (מחיקת פוסט / ביטול מילוי) — לא חוזר. פוסט
+  // של קמפיין שנמחק — לכל תקופת הקמפיין, כל עוד התוכן עדיין בו (סעיף 14)
+  const dismissals = await rows(
+    `select d.content_id, d.channel_id from engine_dismissals d
+      where d.week_start = $1
+         or (d.campaign_id is not null and exists (
+               select 1 from content_items dci
+                where dci.id = d.content_id and dci.campaign_id = d.campaign_id))`,
+    [week.start]);
 
   const notes = [];
   if (channels.length === 0) notes.push('אין ערוצים פעילים.');
@@ -547,23 +554,50 @@ export async function attachToPost(postId, c) {
  * weeks — "בטל" על מילוי של כמה שבועות (autoFillCampaign): הוויתור נרשם
  * לכל שבוע שהמילוי עבר עליו, לא רק לשבוע של הפוסט — אחרת השמירה הבאה של
  * הקמפיין הייתה מחזירה את אותו תוכן לשבוע אחר בתקופה.
+ *
+ * campaignWide — מחיקת פוסט (סעיף 14): תוכן של קמפיין נחסם בערוץ לכל תקופת
+ * הקמפיין (campaign_id ברשומה), לא רק לשבוע — קודם השמירה הבאה של הקמפיין
+ * החזירה אותו לשבוע שאחרי. תוכן שוטף — לשבוע, כמו קודם. "הזז לתאריך אחר"
+ * נשאר הדרך לשנות רק את המועד; שיוך מפורש של המשתמש מסיר את החסימה
+ * (liftDismissals).
  * @param {{content_id:number|null, channel_id:number, scheduled_at:string|Date}[]} list
- * @param {{weeks?:string[]}} [opts] תחילות שבוע, YYYY-MM-DD
+ * @param {{weeks?:string[], campaignWide?:boolean}} [opts] weeks — תחילות שבוע, YYYY-MM-DD
  */
-export async function recordDismissals(list, { weeks = [] } = {}) {
+export async function recordDismissals(list, { weeks = [], campaignWide = false } = {}) {
   const items = (list ?? []).filter((x) => x?.content_id && x.channel_id && x.scheduled_at);
   if (items.length === 0) return;
   for (const x of items) {
+    const campaignId = campaignWide
+      ? (await one('select campaign_id from content_items where id = $1', [x.content_id]))?.campaign_id ?? null
+      : null;
     const all = new Set([weekMeta(x.scheduled_at).start, ...weeks]);
     for (const week of all) {
       await query(
-        `insert into engine_dismissals (week_start, content_id, channel_id)
-         values ($1,$2,$3) on conflict do nothing`,
-        [week, x.content_id, x.channel_id]
+        `insert into engine_dismissals (week_start, content_id, channel_id, campaign_id)
+         values ($1,$2,$3,$4)
+         on conflict (org_id, week_start, content_id, channel_id)
+           do update set campaign_id = coalesce(excluded.campaign_id, engine_dismissals.campaign_id)`,
+        [week, x.content_id, x.channel_id, campaignId]
       );
     }
   }
-  await query(`delete from engine_dismissals where week_start < current_date - 56`);
+  // חסימה לכל הקמפיין נשמרת עד 8 שבועות אחרי שהוא נגמר
+  await query(
+    `delete from engine_dismissals d
+      where d.week_start < current_date - 56
+        and (d.campaign_id is null or not exists (
+              select 1 from campaigns ca where ca.id = d.campaign_id
+                 and (ca.ends_on is null or ca.ends_on >= current_date - 56)))`);
+}
+
+/**
+ * שיוך מפורש של המשתמש (שייך תוכן, פוסט ידני עם תוכן, החלפת תוכן בפוסט) גובר
+ * על חסימה שנרשמה במחיקה (סעיף 14): התוכן חוזר להיות זמין למנוע בערוץ הזה.
+ */
+export async function liftDismissals(contentId, channelId) {
+  if (!contentId || !channelId) return;
+  await query('delete from engine_dismissals where content_id = $1 and channel_id = $2',
+    [contentId, channelId]);
 }
 
 /**
