@@ -5,7 +5,7 @@ import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel
 import { spreadDate } from '../public/js/core/period.js';
 import {
   averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, promoRoomAllows,
-  RATIO_WINDOW_DAYS, ratioPromoCap, ratioWindowStart, weeklyPromoCap, windowRatio,
+  RATIO_WINDOW_DAYS, ratioPromoLimit, ratioWindowStart, weeklyPromoCap, windowRatio,
 } from './capacity.js';
 import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
@@ -171,8 +171,7 @@ export async function planWeek(anchorDate, {
   // לפי תקרה צפויה (ראו buildUsage). שער היחס נמדד על 28 יום לכל ערוץ:
   // שלושת השבועות שלפני השבוע (prior) והשבוע עצמו
   const prior = await priorKinds(from);
-  const usage = buildUsage(channels, existing, settings,
-    { projectedPromoCap: onlyCampaignId != null, prior });
+  const usage = buildUsage(channels, existing, settings, { prior });
 
   // תוכן שכבר משובץ השבוע — או שהמשתמש הוריד מהשבוע — לא יוצע שוב לאותו ערוץ
   const usedContent = blockedContent(onBoard, dismissals);
@@ -709,10 +708,10 @@ export function selectPlanItems(plan, selected) {
 }
 
 /**
- * בדיקה חוזרת של שער היחס על מה שנבחר בפועל. התכנון אישר כל מכירתי ומשולב
- * מול כל ההצעה; אם המשתמש הוריד פריטי ערך, מה שנשען עליהם כבר לא מאוזן.
- * קודם נכנס כל מה שאינו עובר בשער (ערך, פוסטים חסרי תוכן, שיוכים), ורק אז
- * כל מכירתי ומשולב, לפי הסדר, נבדק מחדש מול usage.allows — אותו שער כמו בתכנון.
+ * בדיקה חוזרת של שער היחס על מה שנבחר בפועל: קודם נכנס כל מה שאינו עובר
+ * בשער (ערך, פוסטים חסרי תוכן, שיוכים), ואז כל מכירתי ומשולב, לפי הסדר, מול
+ * usage.allows — אותו שער כמו בתכנון. השער הוא חדר מכירתי (promoRoomAllows),
+ * ולכן חלק ממה שתוכנן נכנס תמיד; רשת ביטחון מול מצב שהשתנה בין התכנון לכתיבה.
  * @returns {{placements:object[], dropped:object[]}}
  */
 export function recheckSelection(plan, { channels, existing, settings, prior = new Map() }) {
@@ -730,8 +729,8 @@ export function recheckSelection(plan, { channels, existing, settings, prior = n
     } else {
       dropped.push({
         key: p.key, title: p.title,
-        reason: `בלי פריטי הערך שהורדו מהסימון אין מספיק ערך לאזן את הפוסט ${
-          p.kind === 'hybrid' ? 'המשולב' : 'המכירתי'}`,
+        reason: `החדר של היחס בערוץ כבר מלא — הפוסט ${
+          p.kind === 'hybrid' ? 'המשולב' : 'המכירתי'} לא נכנס`,
       });
     }
   }
@@ -1195,31 +1194,25 @@ const KIND_CAP_FIELD = { promo: 'max_promo_per_week', value: 'max_value_per_week
  * מצב הקיבולת של שבוע: תקציב לכל ערוץ, מונים לפי סוג/יום/שעה, ושער היחס
  * בין ערך למכירתי.
  *
- * שער היחס (סעיף 6) — לכל ערוץ בנפרד, על 28 ימים: שלושת השבועות שלפני
- * השבוע המתוכנן (prior — מה שתופס מקום או פורסם בהם) ועוד השבוע עצמו, כולל
- * מה שמתוכנן באותה ריצה. מכירתי נכנס כשיש בחלון מספיק ערך (ratioAllowsPromo
- * ב-capacity.js) — כך ערוץ קטן מקבל מכירתי בקצב הנכון בממוצע, ולא 0 בכל
- * שבוע כמו בשער השבועי הישן.
- *
- * projectedPromoCap — שבוע מרוסן של מילוי קמפיין (onlyCampaignId): הלוח
- * של השבוע עוד לא מלא (שבועות רחוקים מתמלאים בתוכן הקמפיין בלבד), ולכן
- * "כמה ערך כבר יש" לא אומר כלום — קמפיין שכולו מכירתי (בלאק פריידי) היה
- * מקבל 0 בשקט. במקומו תקרה צפויה לכל ערוץ: ratioPromoCap (אותו חשבון כמו
- * הקיבולת של הקמפיין) מכירתיים ב-28 הימים, ולא יותר מרבע ממנה בשבוע אחד —
- * כדי שלא ייערמו כולם בשבוע הראשון. משולב נספר חלקית (kindWeights). 0 = שער כבוי.
+ * שער היחס (סעיף 6) — שער אחד בכל מילוי (רגיל, יומי, מרוסן לקמפיין) ובקיבולת:
+ * לכל ערוץ בנפרד, המשקל המכירתי (kindWeights — משולב נספר חלקית) ב-28 ימים —
+ * שלושת השבועות שלפני השבוע המתוכנן (prior — מה שתופס מקום או פורסם בהם)
+ * ועוד השבוע עצמו, כולל מה שמתוכנן באותה ריצה — לא עובר את ratioPromoLimit
+ * של החלון, ובשבוע אחד לא את weeklyPromoCap (רבע ממנה), דרך promoRoomAllows.
+ * קודם השבועות הקרובים נבדקו מול הערך שכבר בחלון, ושבוע מרוסן מול התקרה
+ * הצפויה — שני שערים שלא הסכימו (משולבים: 0 בשבוע הקרוב, והרשת הבטיחה
+ * אותם). 0 ביחס = שער כבוי.
  *
  * reason(…) — למה פוסט מסוג kind לא נכנס לערוץ ביום (null = נכנס): 'full'
  * (התקציב השבועי), 'blocked_day', 'promo_week' / 'hybrid_week' / 'value_week'
- * (התקרה לסוג), 'promo_day' (מכירתי ליום בכל הערוצים), 'ratio' (אין מספיק
- * ערך בחלון), 'ratio_cap' (התקרה הצפויה בשבוע מרוסן). detail(…) — המספרים
- * של המגבלה, להודעה (notPlacedNotes).
+ * (התקרה לסוג), 'promo_day' (מכירתי ליום בכל הערוצים), 'ratio' (החדר
+ * המכירתי של היחס). detail(…) — המספרים של המגבלה, להודעה (notPlacedNotes).
  *
  * blocked — זוגות `${channel}:${content}` שנחסמו בשער היחס (כשהקורא מעביר
  * contentId), כדי לומר למשתמש כמה פוסטים מכירתיים לא שובצו בגללו.
  * @param opts.prior Map<channelId, {promo, value, hybrid}> — 21 הימים שלפני השבוע
  */
-export function buildUsage(channels, existing, settings,
-                           { projectedPromoCap = false, prior = new Map() } = {}) {
+export function buildUsage(channels, existing, settings, { prior = new Map() } = {}) {
   const byChannel = new Map();
   for (const ch of channels) {
     // חלק מהקיבולת נשמר לדברים דחופים ולכן המנוע לא נוגע בו. אותו חשבון
@@ -1270,24 +1263,19 @@ export function buildUsage(channels, existing, settings,
   const promoWeight = () => kindWeights(weekKind, hybridWeight).promo;
   const valueWeight = () => kindWeights(weekKind, hybridWeight).value;
 
-  /** התקרה הצפויה של מכירתיים ב-28 יום בערוץ (שבוע מרוסן) */
-  const promoCapOf = (u) => ratioPromoCap(u.budget, RATIO_WINDOW_DAYS, minRatio);
+  /** החדר המכירתי של היחס ב-28 הימים בערוץ (ratioPromoLimit) ובשבוע אחד */
+  const promoRoomOf = (u) => ratioPromoLimit(u.budget, RATIO_WINDOW_DAYS, RATIO_WINDOW_DAYS / 7,
+    minRatio);
   /**
    * שער היחס בערוץ לפוסט מסוג kind (מכירתי או משולב — promoRoomAllows, אותה
-   * פונקציה כמו הקיבולת), מול החלון win ומונה השבוע week: 'ratio' /
-   * 'ratio_cap' / null. משולב נבדק על אותו חדר במשקל שלו (hybrid_weight) —
-   * קודם רק מכירתי נבדק, ומשולבים ששובצו אחריו העבירו את התקרה
+   * פונקציה כמו הקיבולת), מול החלון win ומונה השבוע week: 'ratio' / null
    */
   const ratioReason = (u, win, week, kind = 'promo') => {
-    if (projectedPromoCap) {
-      const cap = promoCapOf(u);
-      if (cap === Infinity) return null;
-      const fits = (w, room) => promoRoomAllows(kind, kindWeights(w, hybridWeight),
-        { room, hybridWeight });
-      return fits(win, cap) && fits(week, weeklyPromoCap(u.budget, minRatio)) ? null : 'ratio_cap';
-    }
-    return promoRoomAllows(kind, kindWeights(win, hybridWeight),
-      { minRatio, budget: u.budget, hybridWeight }) ? null : 'ratio';
+    const room = promoRoomOf(u);
+    if (room === Infinity) return null;
+    const fits = (w, r) => promoRoomAllows(kind, kindWeights(w, hybridWeight),
+      { room: r, hybridWeight });
+    return fits(win, room) && fits(week, weeklyPromoCap(u.budget, minRatio)) ? null : 'ratio';
   };
   const block = (channelId, contentId) => {
     promoBlocked += 1;
@@ -1408,7 +1396,8 @@ export function buildUsage(channels, existing, settings,
         ratio: windowRatio(minRatio, u.budget),
         value: Number(w.value.toFixed(1)),
         promo: Number(w.promo.toFixed(1)),
-        ratio_cap: promoCapOf(u) === Infinity ? null : promoCapOf(u),
+        ratio_cap: promoRoomOf(u) === Infinity ? null : promoRoomOf(u),
+        week_cap: promoRoomOf(u) === Infinity ? null : weeklyPromoCap(u.budget, minRatio),
         hybrid_weight: hybridWeight,
         budget: u.budget,
         // המספר שהמשתמש קבע לערוץ ("פוסטים בשבוע"), לא התקציב אחרי השמורה

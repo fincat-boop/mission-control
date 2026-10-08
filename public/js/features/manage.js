@@ -370,7 +370,7 @@ function systemGroup(users, settings, backupsRes, ro, apiKeysRes) {
                    value="${s.min_value_per_promo > 0 ? s.min_value_per_promo : 3}"
                    data-engine="min_value_per_promo" ${s.min_value_per_promo > 0 && !ro ? '' : 'disabled'}>
           </div>
-          <div class="fhint enghint-row">כשמסומן, המנוע לא משבץ פוסט מכירתי אם אין מספיק פוסטי ערך באותו שבוע.</div>
+          <div class="fhint enghint-row">כשמסומן, כל ערוץ מקבל מכירתיים לפי היחס מתוך הפוסטים שלו בשבוע — ערוץ של 4 בשבוע ביחס 3 מקבל עד 4 מכירתיים בחודש ועד אחד בשבוע. משולב נספר לפי המשקל שלמטה.</div>
           ${eng('כמה פוסט "משולב" נחשב מכירתי (0–1)', 'hybrid_weight', s.hybrid_weight, '0.1')}
           <div class="fhint enghint-row">1 = נספר כמו מכירתי מלא, 0.5 = חצי מכירתי וחצי ערך, 0 = נספר כערך.</div>
           ${eng('התראה על פוסט חסר תוכן — כמה שעות לפני המועד', 'content_alert_hours', s.content_alert_hours)}

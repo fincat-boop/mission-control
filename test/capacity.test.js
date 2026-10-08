@@ -464,7 +464,7 @@ test('סעיף 5 — weekGapLimit: מרווח של קמפיין שמגביל א�
 /* ========================= סעיף 6 — מכירתי בתוך הקיבולת ========================= */
 
 import { kindMix } from '../src/campaigns.js';
-import { ratioAllowsPromo, ratioPromoCap, windowRatio } from '../src/capacity.js';
+import { promoRoomAllows, ratioPromoCap, windowRatio } from '../src/capacity.js';
 
 const RULES = { min_value_per_promo: 3, max_promo_per_day: 1, hybrid_weight: 0.5 };
 
@@ -478,10 +478,10 @@ test('סעיף 6 — יחס על 28 יום: ערוץ של 3 בשבוע ביחס 
   assert.equal(windowRatio(5, 1), 3);
   assert.equal(ratioPromoCap(1, 28, 5), 1);
   assert.equal(windowRatio(3, 4), 3);
-  // השער: ערך ≥ יחס × (מכירתי + 1)
-  assert.equal(ratioAllowsPromo({ value: 3, promo: 0 }, 3, 3), true);
-  assert.equal(ratioAllowsPromo({ value: 5, promo: 1 }, 3, 3), false);
-  assert.equal(ratioAllowsPromo({ value: 0, promo: 0 }, 0, 3), true);
+  // השער (שלב 3, D2): חדר מכירתי קבוע — לא תלוי בכמה ערך כבר יש בחלון
+  assert.equal(promoRoomAllows('promo', { promo: 2 }, { room: 3 }), true);
+  assert.equal(promoRoomAllows('promo', { promo: 3 }, { room: 3 }), false);
+  assert.equal(promoRoomAllows('promo', { promo: 9 }, { room: Infinity }), true);
 });
 
 test('סעיף 6 — קיבולת לפי סוג: קמפיין מכירתי בערוץ של 3 מקבל רק את מה שהיחס מאפשר', () => {
@@ -584,19 +584,15 @@ test('משולב עובר באותו שער היחס כמו המכירתי, במ
   assert.deepEqual([few.kinds.hybrid, few.kinds.promo], [2, 2]);   // 2 × 0.5 + 2 = 3
 });
 
-test('promoRoomAllows — שער אחד: חדר קבוע, או לפי הערך בחלון; ערך תמיד נכנס', async () => {
+test('promoRoomAllows — שער אחד: חדר קבוע במשקל מכירתי; ערך תמיד נכנס', async () => {
   const { promoRoomAllows } = await import('../src/capacity.js');
   const gate = { room: 3, hybridWeight: 0.5 };
   assert.equal(promoRoomAllows('hybrid', { promo: 2.5 }, gate), true);
   assert.equal(promoRoomAllows('hybrid', { promo: 3 }, gate), false);
   assert.equal(promoRoomAllows('promo', { promo: 2.5 }, gate), false);
   assert.equal(promoRoomAllows('value', { promo: 99 }, gate), true);
-  // לפי הערך: ערוץ של 3 (יחס 3): משולב אחרי 4 ערך — 4.5 ≥ 3 × 0.5
-  const byValue = { minRatio: 3, budget: 3, hybridWeight: 0.5 };
-  assert.equal(promoRoomAllows('hybrid', { value: 1, promo: 0 }, byValue), true);
-  assert.equal(promoRoomAllows('hybrid', { value: 0, promo: 0 }, byValue), false);
-  assert.equal(promoRoomAllows('promo', { value: 3, promo: 0 }, byValue), true);
-  assert.equal(promoRoomAllows('promo', { value: 5, promo: 1 }, byValue), false);
+  // יחס 0 = שער כבוי
+  assert.equal(promoRoomAllows('promo', { promo: 99 }, { room: Infinity }), true);
 });
 
 test('R3 — קמפיין מכירתי קצר: רבע מהתקרה של 28 יום בכל שבוע, כמו המילוי המרוסן', async () => {

@@ -465,32 +465,21 @@ export function windowRatio(minRatio, budget) {
 }
 
 /**
- * שער היחס — פונקציה אחת למנוע ולקיבולת (סעיף 6 + משולב/מכירתי משלב 2):
- * האם פוסט מסוג kind נכנס, מול המשקלים (kindWeights) של הפוסטים בחלון.
- * "משולב" נספר hybrid_weight כמכירתי (ו-1−hybrid_weight כערך) — ולכן גם הוא
- * עובר בשער, על אותו "חדר מכירתי": קודם רק מכירתי נבדק, והקיבולת ניכתה
- * משולבים מהחדר בזמן שהמנוע הכניס אותם בלי בדיקה, כך שמשולבים ששובצו אחרי
- * המכירתיים העבירו את המשקל המכירתי מעל התקרה. ערך — תמיד נכנס.
- *   room != null — חדר קבוע במשקל מכירתי (ratioPromoLimit בקיבולת, התקרה
- *     הצפויה / השבועית בשבוע מרוסן במנוע): המשקל המכירתי אחרי הפוסט ≤ room
- *   room == null — לפי הערך שבחלון (השער הרגיל במנוע): ערך ≥ יחס × מכירתי,
- *     שניהם אחרי הפוסט (windowRatio)
- * @param weights {promo, value} — kindWeights של מה שכבר בחלון
+ * שער היחס — פונקציה אחת לכל מילוי של המנוע (רגיל, יומי, מרוסן לקמפיין)
+ * ולקיבולת: האם פוסט מסוג kind נכנס לחדר המכירתי, מול המשקל המכירתי
+ * (kindWeights) של מה שכבר בחלון. "משולב" נספר hybrid_weight כמכירתי —
+ * ולכן גם הוא עובר בשער, על אותו חדר. ערך — תמיד נכנס.
+ * room — החדר במשקל מכירתי: ratioPromoLimit של החלון (28 יום), או
+ * weeklyPromoCap לשבוע אחד; Infinity — השער כבוי (יחס 0). המשקל אחרי הפוסט ≤ room.
+ * קודם השבועות הקרובים נבדקו מול הערך שכבר בחלון ושבוע מרוסן מול התקרה —
+ * שני שערים, והרשת הבטיחה משולבים שהשבוע הקרוב לא הכניס.
+ * @param weights {promo} — kindWeights של מה שכבר בחלון
  */
-export function promoRoomAllows(kind, weights, { room = null, minRatio = 0, budget = 0,
-                                                 hybridWeight = 0.5 } = {}) {
-  const add = kindWeights({ [kind]: 1 }, hybridWeight);
-  if (add.promo <= 0) return true;
-  const promo = (weights.promo ?? 0) + add.promo;
+export function promoRoomAllows(kind, weights, { room = Infinity, hybridWeight = 0.5 } = {}) {
+  const add = kindWeights({ [kind]: 1 }, hybridWeight).promo;
+  if (add <= 0 || room === Infinity) return true;
   // שבר עשרוני (משולב 0.3) — סובלנות לעיגול
-  if (room != null) return room === Infinity || promo <= room + 1e-9;
-  const r = windowRatio(minRatio, budget);
-  return r <= 0 || (weights.value ?? 0) + add.value + 1e-9 >= r * promo;
-}
-
-/** שער היחס למכירתי נוסף (promoRoomAllows, לפי הערך בחלון): ערך ≥ יחס × (מכירתי + 1) */
-export function ratioAllowsPromo(weights, minRatio, budget) {
-  return promoRoomAllows('promo', weights, { minRatio, budget });
+  return (weights.promo ?? 0) + add <= room + 1e-9;
 }
 
 /**
@@ -516,7 +505,7 @@ export function ratioPromoLimit(budget, days, weeksTouched, minRatio) {
 
 /**
  * כמה מכירתיים (במשקל — משולב נספר חלקית) נכנסים לערוץ בטווח של days ימים
- * אם שאר הפוסטים בו ערך — אותו אי-שוויון כמו ratioAllowsPromo, בערוץ מלא:
+ * אם שאר הפוסטים בו ערך — ערך ≥ יחס × מכירתי בערוץ מלא:
  * floor(תקציב × שבועות / (1 + יחס)). טווח קצר מ-28 יום נמדד כחלון שלם —
  * שער היחס של המנוע מסתכל על 28 הימים שמסביב. Infinity — השער כבוי.
  * לקיבולת של קמפיין ולמילוי המרוסן במנוע (שבועות שעוד אין בהם ערך לספור).

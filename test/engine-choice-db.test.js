@@ -523,3 +523,19 @@ for (const { perWeek, kinds } of HYBRID_CASES) {
     await wipe();
   });
 }
+
+test('D2 — שער אחד: מילוי השבוע הקרוב מכניס משולבים לפי החדר גם בלי פוסטי ערך בערוץ', { skip }, async () => {
+  await wipe();
+  const { autoFill, nearWeeks } = await import('../src/routes/_shared.js');
+  const ch = await channel('ערוץ 3', 3);
+  const ep = await endpoint('נקודה');
+  const c = await campaign(ep.id, ch.id, { starts: inDays(0), ends: inDays(20), gap: 1 });
+  const ids = await items(ep.id, ch.id, 9, { campaignId: c.id, kind: 'hybrid' });
+  await inOrg(() => autoFill());
+  const posts = await q('select scheduled_at, kind from posts where content_id = any($1::int[])', [ids]);
+  const next = posts.filter((p) => weekOf(p.scheduled_at) === nearWeeks()[1]);
+  // ערוץ של 3, יחס 3: חדר של 3 ב-28 יום ו-1 בשבוע → 2 משולבים (0.5 כל אחד) בשבוע
+  // (קודם: השער לפי הערך שבחלון — 0 בערוץ בלי פוסטי ערך)
+  assert.equal(next.length, 2, JSON.stringify(posts));
+  await wipe();
+});

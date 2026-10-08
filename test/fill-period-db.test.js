@@ -462,7 +462,7 @@ test('קמפיין שכולו מכירתי: בשבועות מרוסנים מקב
   assert.ok(posts.every((p) => p.kind === 'promo'));
   assert.ok(fill.promo_blocked > 0, 'החסומים נספרים — לא בשקט');
   // וההודעה אומרת איזו מגבלה עצרה, עם המספרים — לא "חסר תוכן ערך"
-  assert.ok(fill.limit_notes.some((n) => /עד 7 מכירתיים ב-28 ימים/.test(n)), fill.limit_notes.join(' | '));
+  assert.ok(fill.limit_notes.some((n) => /עד 7 מכירתיים ב-28 יום/.test(n)), fill.limit_notes.join(' | '));
   assert.ok(!fill.limit_notes.some((n) => /עוד תוכן ערך/.test(n)));
 
   await q('delete from posts where channel_id = $1', [ch2.id]);

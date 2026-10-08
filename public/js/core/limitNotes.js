@@ -14,10 +14,10 @@
  * מכירתי ליום — תוכן שגם המרווח עצר אותו פשוט מחכה לתורו (gap), וזה המצב
  * הרגיל ולא תקלה (planWeek לא מציג אותו).
  */
-export const LIMIT_ORDER = ['ratio_cap', 'ratio', 'promo_week', 'hybrid_week', 'value_week',
+export const LIMIT_ORDER = ['ratio', 'promo_week', 'hybrid_week', 'value_week',
                             'share', 'gap', 'promo_day'];
 /** המגבלות לפי סוג — מה שההודעה אחרי שמירה (engineToast) אומרת */
-export const KIND_LIMITS = new Set(['ratio_cap', 'ratio', 'promo_week', 'hybrid_week',
+export const KIND_LIMITS = new Set(['ratio', 'promo_week', 'hybrid_week',
                                     'value_week', 'promo_day']);
 /** רק המגבלות לפי סוג */
 export const kindLimits = (limits) => (limits ?? []).filter((x) => KIND_LIMITS.has(x.reason));
@@ -69,8 +69,7 @@ function postsOf(n, kinds = {}) {
 
 /**
  * המשפט לכל קבוצה של notPlacedLimits — המגבלה שעצרה בפועל, עם המספרים.
- * בלי "צריך עוד תוכן ערך" כשזה לא יעזור: רק בשער היחס הרגיל (ratio), שבו
- * עוד ערך בערוץ באמת מפנה מקום. גם ל-mergeFillResults (כמה שבועות).
+ * גם ל-mergeFillResults (כמה שבועות).
  */
 export function notPlacedNotes(limits) {
   return (limits ?? []).map((x) => {
@@ -81,11 +80,9 @@ export function notPlacedNotes(limits) {
       ? ` משולב נספר כ-${x.hybrid_weight ?? 0.5} מכירתי.` : '';
     switch (x.reason) {
       case 'ratio':
-        return `${head}: נדרשים ${x.ratio} פוסטי ערך לכל מכירתי, וכשהמנוע בדק היו בערוץ ` +
-          `ב-28 הימים ${x.value} ערך מול ${x.promo} מכירתיים. עוד תוכן ערך לערוץ הזה יפנה להם מקום.${hybrid}`;
-      case 'ratio_cap':
-        return `${head}: ביחס של ${x.ratio} ערך לכל מכירתי, ערוץ של ${x.max_per_week ?? x.budget} פוסטים בשבוע ` +
-          `מכניס עד ${x.ratio_cap} מכירתיים ב-28 ימים, ולא יותר מרבע מהם בשבוע אחד.${hybrid}`;
+        // שער אחד (promoRoomAllows): החדר המכירתי ב-28 יום ובשבוע אחד
+        return `${head}: עד ${x.ratio_cap} מכירתיים ב-28 יום בערוץ של ${x.max_per_week ?? x.budget} ` +
+          `בשבוע (יחס 1 ל-${x.ratio})${x.week_cap != null ? `, ועד ${x.week_cap} בשבוע אחד` : ''}.${hybrid}`;
       case 'promo_week':
       case 'hybrid_week':
       case 'value_week': {
