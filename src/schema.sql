@@ -758,3 +758,31 @@ alter table content_items add column if not exists import_batch uuid;
 -- או עדכון). "לא נגעו בו מאז הייבוא" = updated_at לא עבר את הרגע הזה, ולכן
 -- פריט שעודכן בייבוא נשאר בר-עדכון בייבוא הבא. ריק = לא הגיע מייבוא כזה.
 alter table content_items add column if not exists imported_at timestamptz;
+
+-- ========================= "בטל" על מילוי: רק מה שלא נגעו בו =========================
+-- מתי פוסט השתנה לאחרונה — ומכאן "עדיין בדיוק כמו שהמילוי יצר אותו"
+-- (updated_at = created_at: אותה טרנזקציה). "בטל" על מילוי של המנוע מוחק רק
+-- פוסט כזה; פוסט שהמשתמש גרר, הזיז שעה, שינה כותרת או ערוץ אחרי המילוי נשאר
+-- (routes/engine.js /engine/undo). טריגר ולא עדכון בכל נתיב: כל שינוי במה
+-- שהפוסט הוא (מועד, ערוץ, נקודה, תוכן, כותרת, סוג, מצב...) מקדם אותו, גם
+-- בנתיב שעוד ייכתב. שדות המעקב של הפרסום (hub_polled_at וכו') — לא.
+-- שורות קיימות מקבלות את רגע העלייה — אחרי כך הן ממילא עברו את חצי השעה.
+alter table posts add column if not exists updated_at timestamptz not null default now();
+create or replace function touch_post() returns trigger
+language plpgsql as $$
+begin
+  if (new.scheduled_at, new.channel_id, new.endpoint_id, new.content_id, new.title, new.kind,
+      new.status, new.note, new.assignee_id, new.urgent)
+     is distinct from
+     (old.scheduled_at, old.channel_id, old.endpoint_id, old.content_id, old.title, old.kind,
+      old.status, old.note, old.assignee_id, old.urgent) then
+    new.updated_at := now();
+  end if;
+  return new;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgname = 'posts_touch') then
+    create trigger posts_touch before update on posts
+      for each row execute function touch_post();
+  end if;
+end $$;

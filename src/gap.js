@@ -67,16 +67,24 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
   const { min, campaign } = await gapFor({ campaignId, contentId });
   if (min <= 0) return null;
 
-  // השכן הקרוב ביותר בזמן, לפני או אחרי — מרווח נמדד לשני הכיוונים
+  // השכן הקרוב ביותר בזמן, לפני או אחרי — מרווח נמדד לשני הכיוונים.
+  // "יום" = יום בלוח של ישראל בשני הצדדים (כמו sameDayClash והמנוע): ::date
+  // לבד לוקח את היום באזור הזמן של החיבור (UTC), ופוסט בין 00:00 ל-03:00
+  // נספר ליום הקודם — המרחק יצא גדול או קטן ביום
   const near = await one(
-    `select p.id, p.title, p.scheduled_at, c.name as channel_name,
-            abs(p.scheduled_at::date - $3::date) as days
-       from posts p join channels c on c.id = p.channel_id
-      where p.endpoint_id = $1 and p.channel_id = $2
-        and p.status in ${LIVE} and ${ROOM}
-        and ($4::int is null or p.id <> $4)
-        and abs(p.scheduled_at::date - $3::date) between 1 and $5
-      order by days, p.scheduled_at
+    `with x as (
+       select p.id, p.title, p.scheduled_at, c.name as channel_name,
+              abs((p.scheduled_at at time zone 'Asia/Jerusalem')::date
+                - ($3::timestamptz at time zone 'Asia/Jerusalem')::date) as days
+         from posts p join channels c on c.id = p.channel_id
+        where p.endpoint_id = $1 and p.channel_id = $2
+          and p.status in ${LIVE} and ${ROOM}
+          and ($4::int is null or p.id <> $4)
+          -- טווח גס סביב המועד (האינדקס), והמרחק המדויק בימי ישראל למטה
+          and p.scheduled_at between $3::timestamptz - make_interval(days => $5 + 2)
+                                 and $3::timestamptz + make_interval(days => $5 + 2))
+     select * from x where days between 1 and $5
+      order by days, scheduled_at
       limit 1`,
     [endpointId, channelId, when, excludePostId, min - 1]
   );

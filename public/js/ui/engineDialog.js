@@ -8,7 +8,7 @@ import { KIND_HE } from '../core/format.js';
 
 /**
  * "בטל" על מילוי של המנוע: מוחק את הפוסטים שנוצרו ומחזיר שיוכים לפוסט
- * חסר תוכן. השרת מתעלם ממה שכבר השתנה (פורסם, אושר, עבר חצי שעה).
+ * חסר תוכן. השרת מתעלם ממה שכבר השתנה (פורסם, אושר, נערך, עבר חצי שעה).
  */
 const undoFill = run(async (fill) => {
   const r = await api('/engine/undo', {
@@ -16,10 +16,17 @@ const undoFill = run(async (fill) => {
     body: { created: fill.created_items ?? [], attached: fill.attached_items ?? [],
             weeks: fill.covered_weeks ?? [] },
   });
+  // פוסטים שנערכו אחרי המילוי (גרירה, שעה, כותרת) נשארים — אומרים כמה
+  const kept = r.kept
+    ? ` ${r.kept === 1 ? 'פוסט אחד שערכת' : `${r.kept} פוסטים שערכת`} אחרי המילוי ${
+      r.kept === 1 ? 'נשאר' : 'נשארו'}.`
+    : '';
   toast(r.removed || r.detached
     ? `המילוי בוטל — הלוח חזר למה שהיה, והמנוע לא יחזיר את התוכן הזה ${
-      fill.weeks > 1 ? 'לשבועות האלה' : 'לשבוע הזה'}.`
-    : 'אין מה לבטל — הפוסטים כבר השתנו או יצאו לאוויר.');
+      fill.weeks > 1 ? 'לשבועות האלה' : 'לשבוע הזה'}.${kept}`
+    : r.kept
+      ? `לא בוטל כלום —${kept.replace(/\.$/, '')} כמו שהם.`
+      : 'אין מה לבטל — הפוסטים כבר השתנו או יצאו לאוויר.');
   await refreshAfterPostChange();
 });
 

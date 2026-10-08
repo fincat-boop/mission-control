@@ -244,8 +244,10 @@ export async function applyRespace(moves) {
   for (const m of moves) {
     const was = new Date(m.post.scheduled_at);
     if (m.from === m.dateKey && was.getHours() === m.hour) continue;
-    await query('update posts set scheduled_at = $1 where id = $2 and status = any($3)', [m.to, m.post.id, MOVABLE]);
-    changed += 1;
+    // רק מה שבאמת נכתב: פוסט שבינתיים יצא לפרסום / פורסם לא עובר את סינון
+    // הסטטוס, ולא נספר כ"הוזז"
+    const r = await query('update posts set scheduled_at = $1 where id = $2 and status = any($3)', [m.to, m.post.id, MOVABLE]);
+    changed += r.rowCount;
   }
   return changed;
 }

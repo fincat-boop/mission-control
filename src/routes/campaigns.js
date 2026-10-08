@@ -9,12 +9,12 @@ import {
 
 // האימות של המרווח יושב ב-campaigns.js (גם העוזר בודק דרכו); מיוצא גם מכאן
 export { gapDaysError };
-import { currentOrg, one, rows, tx } from '../db.js';
+import { currentOrg, one, query, rows, tx } from '../db.js';
 import { TRASH_DAYS, mediaReady, mediaStore, newMediaKey } from '../media.js';
 import { requirePerm } from '../auth.js';
 import { isDate, rerunPeriod, runName } from '../../public/js/core/period.js';
 import { ymd } from '../board.js';
-import { revalidateCampaignPosts, shiftCampaignPosts } from '../campaign-shift.js';
+import { revalidateCampaignPosts, SHIFT_STATUSES, shiftCampaignPosts } from '../campaign-shift.js';
 import { effectiveGap } from '../capacity.js';
 import { STALE_CAMPAIGN, staleCampaign } from '../variant-lock.js';
 
@@ -723,8 +723,14 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
     ? daysBetweenDates(before.starts_on, b.starts_on) : 0;
   // בלי הזזה: שינוי שמהדק כלל (סיום מוקדם יותר, מרווח גדול יותר) — הפוסטים
   // שכבר בלוח נבדקים מחדש מול הכלל הזה בלבד. הזזה בודקת את כולם בעצמה
-  const revalidate = !shiftDays &&
+  let revalidate = !shiftDays &&
     tightensCampaignRules(before, b, await one('select * from engine_settings limit 1'));
+  // נקודת קצה אחרת: התוכן והפוסטים שעוד לא יצאו עוברים איתה (למטה), ושם
+  // יכולים לפגוש פוסטים של הנקודה החדשה באותו יום / בתוך המרווח — אותו
+  // יום ומרווח הם כלל gap של הבדיקה. בהזזה — כל הכללים נבדקים ממילא
+  const endpointChanged = b.endpoint_id != null && b.endpoint_id !== '' &&
+    Number(b.endpoint_id) !== before.endpoint_id;
+  if (endpointChanged && !shiftDays) revalidate = { ...(revalidate || {}), gap: true };
   // ההזזה / הבדיקה והמילוי שאחריה תחת אותה נעילת מנוע של הארגון, עד ה-commit —
   // נלקחת לפני כל כתיבה, כדי שנעילה תפוסה לא תשאיר שמירה חצויה
   if ((shiftDays || revalidate) && !(await lockEngineOr503(res))) return;
@@ -732,6 +738,22 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   const c = await updateById('campaigns', CAMPAIGN_FIELDS, req.params.id, b);
   if (Array.isArray(b.channel_ids)) {
     await tx((client) => setCampaignChannels(client, c.id, b.channel_ids));
+  }
+
+  // המנוע משבץ לפי נקודת הקצה של פריט התוכן, והנתח/הקיבולת לפי של הקמפיין —
+  // בלי זה התוכן והפוסטים נשארו על הנקודה הישנה. פורסם / בפרסום — היסטוריה
+  let endpointPosts = 0;
+  if (endpointChanged) {
+    await query(
+      'update content_items set endpoint_id = $2 where campaign_id = $1 and endpoint_id is distinct from $2',
+      [c.id, c.endpoint_id]);
+    endpointPosts = (await query(
+      `update posts p set endpoint_id = ci.endpoint_id
+         from content_items ci
+        where ci.id = p.content_id and ci.campaign_id = $1
+          and p.endpoint_id is distinct from ci.endpoint_id
+          and p.status = any($2) and p.scheduled_at > now()`,
+      [c.id, SHIFT_STATUSES])).rowCount;
   }
 
   // אחרי השמירה: הפוסטים נבדקים מול החלון, המרווח והקישורים החדשים.
@@ -745,7 +767,7 @@ r.patch('/campaigns/:id', requirePerm('settings'), wrap(async (req, res) => {
   const engine = FILL_FIELDS.some((k) => b[k] !== undefined)
     ? await autoFillCampaign(c.id, b.week)
     : await autoFill(b.week);
-  res.json({ campaign: c, moved_posts: shift.moved ?? 0, shift, engine });
+  res.json({ campaign: c, moved_posts: shift.moved ?? 0, shift, endpoint_posts: endpointPosts, engine });
 }));
 
 /** YYYY-MM-DD מעמודת date או מהגוף; null כשאין */

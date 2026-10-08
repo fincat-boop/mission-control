@@ -50,7 +50,10 @@ r.post('/engine/apply', requirePerm('content'), wrap(async (req, res) => {
 /**
  * "בטל" על מילוי של המנוע. רק מה שלא השתנה מאז:
  *  - created [{post_id, content_id}] — נמחק רק פוסט שעדיין מתוכנן, לא פורסם,
- *    נוצר בחצי השעה האחרונה, עם אותו תוכן, ובלי תוצאות שנמדדו.
+ *    נוצר בחצי השעה האחרונה, עם אותו תוכן, ובלי תוצאות שנמדדו — ורק אם הוא
+ *    עדיין בדיוק כמו שהמילוי יצר אותו (updated_at = created_at, טריגר
+ *    posts_touch). פוסט שגררו, שהזיזו לו שעה או ששינו לו כותרת אחרי המילוי
+ *    נשאר, ונספר ב-kept — הבדיקה בשרת, לא לפי מה שהלקוח זוכר.
  *  - attached [{post_id, content_id, title, prev_title, prev_kind, closed_task_ids}]
  *    — חוזר לפוסט חסר תוכן רק אם עדיין מתוכנן, עם אותו תוכן ואותה כותרת
  *    שהשיוך כתב; המשימות שהשיוך סגר (לכתוב/החלפה) נפתחות שוב.
@@ -75,10 +78,23 @@ r.post('/engine/undo', requirePerm('content'), wrap(async (req, res) => {
           where p.id = x.id and p.content_id is not distinct from x.content_id
             and p.status = 'scheduled' and p.published_at is null
             and p.created_at > now() - interval '30 minutes'
+            and p.updated_at = p.created_at
             and not exists (select 1 from post_results r where r.post_id = p.id)
         returning p.id, p.content_id, p.channel_id, p.scheduled_at`,
         [created.map((x) => x.id), created.map((x) => x.content)])
     : [];
+  // מה שנוצר במילוי ועדיין על הלוח, אבל נערך מאז — נשאר, והלקוח אומר כמה
+  const gone = new Set(removed.map((p) => p.id));
+  const rest = created.filter((x) => !gone.has(x.id));
+  const kept = rest.length
+    ? (await one(
+        `select count(*)::int as n from posts p
+           join unnest($1::int[], $2::int[]) as x(id, content_id)
+             on p.id = x.id and p.content_id is not distinct from x.content_id
+          where p.published_at is null and p.updated_at > p.created_at
+            and p.status not in ('published','publishing')`,
+        [rest.map((x) => x.id), rest.map((x) => x.content)])).n
+    : 0;
 
   const detached = [];
   for (const a of attached) {
@@ -114,7 +130,7 @@ r.post('/engine/undo', requirePerm('content'), wrap(async (req, res) => {
     .map((w) => { try { return weekMeta(`${w}T12:00:00`).start; } catch { return null; } })
     .filter(Boolean);
   await recordDismissals([...removed, ...detached], { weeks });
-  res.json({ removed: removed.length, detached: detached.length,
+  res.json({ removed: removed.length, detached: detached.length, kept,
              ignored: created.length + attached.length - removed.length - detached.length });
 }));
 
