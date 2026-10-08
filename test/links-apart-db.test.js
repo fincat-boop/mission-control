@@ -287,14 +287,17 @@ test('POST /posts — יום חסום ואותה נקודה באותו יום נ
 
     await call('POST', '/posts',
       { channel_id: s.ch, endpoint_id: s.ep2, title: 'שני', kind: 'value', scheduled_at: at(19) });
-    const over = { channel_id: s.ch, title: 'שלישי', kind: 'value', scheduled_at: at(20) };
+    // אין פוסט בלי נקודת קצה (8.10.26) — השלישי והרביעי באותו יום, כל אחד לנקודה אחרת
+    const over = { channel_id: s.ch, endpoint_id: s.ep, title: 'שלישי', kind: 'value',
+                   scheduled_at: at(20) };
     const warn = await call('POST', '/posts', over);
     assert.equal(warn.status, 409, JSON.stringify(warn.json));
     assert.equal(warn.json.needs_confirm, true);
     assert.match(warn.json.error, /2 מתוך 2 פוסטים בשבוע/);
     const ok = await call('POST', '/posts', { ...over, confirm_warnings: true });
     assert.equal(ok.status, 201);
-    const legacy = await call('POST', '/posts', { ...over, title: 'רביעי', confirm_gap: true });
+    const legacy = await call('POST', '/posts',
+      { ...over, endpoint_id: s.ep2, title: 'רביעי', confirm_gap: true });
     assert.equal(legacy.status, 201);
   } finally {
     await capCleanup(s);
@@ -355,9 +358,11 @@ test('הלוח: פוסט מקושר באותו יום — הזזה ושיוך ת
     const done = await call('PATCH', `/posts/${hole}`, { scheduled_at: at(18, 12), confirm_warnings: true });
     assert.equal(done.status, 200, JSON.stringify(done.json));
 
-    // POST /posts עם תוכן מקושר באותו יום
-    const direct = await call('POST', '/posts', { channel_id: s.b, title: 'ידני', kind: 'value',
-      content_id: s.follower, scheduled_at: at(18, 16) });
+    // POST /posts עם תוכן מקושר באותו יום. הפוסט מקבל את הנקודה של התוכן (אין
+    // פוסט בלי נקודה) — ולכן קודם מורידים את העוקבת מ-B, שלא תתנגש באותו יום
+    await inOrg(() => db.query('delete from posts where id = $1', [hole]));
+    const direct = await call('POST', '/posts', { channel_id: s.b, endpoint_id: s.ep, title: 'ידני',
+      kind: 'value', content_id: s.follower, scheduled_at: at(18, 16) });
     assert.equal(direct.status, 409, JSON.stringify(direct.json));
     assert.match(direct.json.error, /פוסט מקושר/);
   } finally {

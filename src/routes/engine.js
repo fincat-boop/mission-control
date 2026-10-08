@@ -170,7 +170,7 @@ r.post('/urgent/commit', requirePerm('content'), wrap(async (req, res) => {
         `insert into posts (channel_id, endpoint_id, title, kind, scheduled_at,
                             status, assignee_id, urgent, note, urgent_group)
          values ($1,$2,$3,'promo',$4,$5,$6,true,$7,$8) returning *`,
-        [p.channel_id, b.endpoint_id ?? null, b.title, p.scheduled_at,
+        [p.channel_id, Number(b.endpoint_id), b.title, p.scheduled_at,
          needsApproval ? 'pending_approval' : 'scheduled',
          b.assignee_id ?? req.user.id, p.note ?? null, group]
       );
@@ -180,7 +180,7 @@ r.post('/urgent/commit', requirePerm('content'), wrap(async (req, res) => {
           `insert into tasks (title, subtitle, kind, post_id, endpoint_id, urgent)
            values ($1,$2,'approve',$3,$4,true)`,
           [`לאשר: ${b.title}`, `${p.channel_name} · ${p.day_label} · דורש הרשאת אישור`,
-           post.id, b.endpoint_id ?? null]
+           post.id, Number(b.endpoint_id)]
         );
       }
     }

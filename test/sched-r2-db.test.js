@@ -140,7 +140,7 @@ test('דחוף עד שני — שבוע שכבר מלא שלישי–שבת לא
   const roomy = await fresh('דחוף פנוי', { maxPerWeek: 5 });
   await fillDays(roomy, '2031-06-17', 4);         // 4 מתוך 5 — יש מקום אחד
   await inOrg(async () => {
-    const input = (x) => ({ title: 'מבצע', until: '2031-06-16', channel_ids: [x.ch] });
+    const input = (x) => ({ title: 'מבצע', until: '2031-06-16', channel_ids: [x.ch], endpoint_id: x.ep });
     const a = await planUrgent(input(full), { now });
     assert.deepEqual(a.placements, []);
     assert.match(a.warnings.join(' '), /אין שטח פנוי/);
@@ -158,7 +158,8 @@ test('דחוף — נכשל שהמועד שלו עבר לא תופס מקום', 
     `insert into posts (channel_id, endpoint_id, kind, title, status, scheduled_at)
      values ($1, $2, 'value', 'נכשל', 'failed', '2031-06-23T10:00:00')`, [x.ch, x.ep]));
   await inOrg(async () => {
-    const plan = await planUrgent({ title: 'מבצע', until: '2031-06-26', channel_ids: [x.ch] },
+    const plan = await planUrgent({ title: 'מבצע', until: '2031-06-26', channel_ids: [x.ch],
+                                    endpoint_id: x.ep },
       { now });
     assert.equal(plan.placements.length, 1);
   });
@@ -185,7 +186,7 @@ test('אישור דחוף: מילוי אחר מחזיק את נעילת המנו
   const x = await fresh('דחוף נעול');
   const commit = () => fetch(`${base}/urgent/commit`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ title: 'מבצע נעול', channel_ids: [x.ch] }),
+    body: JSON.stringify({ title: 'מבצע נעול', channel_ids: [x.ch], endpoint_id: x.ep }),
   });
 
   let release;

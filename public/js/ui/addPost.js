@@ -29,6 +29,9 @@ export function wireAddPostDialog() {
  * הערוצים הפעילים שמקבלים תוכן ביום הזה.
  */
 export function openAddPost(channelId, date, channelName) {
+  // אין פוסט בלי נקודת קצה (החלטת המשתמש 8.10.26) — בלי נקודה פעילה אין מה לשבץ
+  const endpoints = activeEndpoints();
+  if (!endpoints.length) return toast('אין נקודת קצה פעילה — מוסיפים אחת בניהול, ואז משבצים', true);
   const pickChannel = !channelId;
   if (pickChannel) {
     const dow = new Date(`${date}T00:00:00`).getDay();
@@ -39,7 +42,9 @@ export function openAddPost(channelId, date, channelName) {
   }
   $('#apChannelRow').hidden = !pickChannel;
   addSlotCtx = { channelId, date };
-  fillSelect($('#apEndpoint'), state.endpoints, 'name', 'ללא נקודת קצה');
+  fillSelect($('#apEndpoint'), endpoints, 'name');
+  // ברירת המחדל: הנקודה שנבחרה בטאב התוכן, אחרת הראשונה (החשובה ביותר)
+  if (endpoints.some((e) => e.id === state.planEndpoint)) $('#apEndpoint').value = state.planEndpoint;
   $('#apContext').textContent = pickChannel ? fmtDate(date) : `${channelName} · ${fmtDate(date)}`;
   $('#apTitle').value = '';
   $('#apKind').value = 'value';
@@ -52,6 +57,9 @@ export function openAddPost(channelId, date, channelName) {
   $('#apTitle').focus();
   run(refreshContentOptions)();
 }
+
+/** נקודות הקצה שאפשר לשבץ להן (פעילות), לפי הסדר של הרשימה — החשובה קודם */
+export const activeEndpoints = () => state.endpoints.filter((e) => e.active !== false);
 
 /**
  * בחירת תוכן לפוסט — כדי שפוסט ידני לא ייוולד "חסר תוכן" כשכבר יש מה לשים
@@ -98,6 +106,8 @@ async function submitManualPost(reorganizeAfter) {
   const content = candidates.find((x) => x.id === Number($('#apContent').value)) ?? null;
   const title = $('#apTitle').value.trim() || content?.title || '';
   if (!title) return toast('צריך כותרת לפוסט, או לבחור תוכן', true);
+  const endpointId = numOrNull($('#apEndpoint').value);
+  if (!endpointId) return toast('צריך לבחור נקודת קצה', true);
 
   const [h, m] = $('#apTime').value.split(':').map(Number);
   const at = new Date(`${addSlotCtx.date}T00:00:00`);
@@ -105,7 +115,7 @@ async function submitManualPost(reorganizeAfter) {
 
   const created = await postWithGapCheck('/posts', {
     channel_id: addSlotCtx.channelId,
-    endpoint_id: numOrNull($('#apEndpoint').value),
+    endpoint_id: endpointId,
     title,
     kind: content?.kind ?? $('#apKind').value,
     scheduled_at: at.toISOString(),

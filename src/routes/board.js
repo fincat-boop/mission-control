@@ -39,6 +39,10 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
   }
+  // אין פוסט בלי נקודת קצה (החלטת המשתמש 8.10.26): כל קמפיין שייך לנקודה,
+  // ופוסט בלי נקודה הוא פוסט בלי קמפיין — כרטיס אפור שאיש לא מתכנן
+  const epErr = await postEndpointError({ endpointId: b.endpoint_id, contentId: b.content_id });
+  if (epErr) return bad(res, epErr.error, epErr.status);
   // מועד שעבר לא יתפרסם לעולם (כמו בהזזה — moveBlocker). אותו יום בשעה
   // מאוחרת יותר — בסדר.
   const when = new Date(b.scheduled_at);
@@ -80,6 +84,30 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   );
   res.status(201).json({ post });
 }));
+
+export const ENDPOINT_REQUIRED = 'צריך לבחור נקודת קצה לפוסט — אין פוסט בלי נקודת קצה';
+
+/**
+ * למה נקודת הקצה של פוסט לא תקינה, או null: חובה, קיימת ופעילה, ואם יש לפוסט
+ * תוכן — הנקודה של התוכן (תוכן תמיד שייך לנקודה, ותוכן של קמפיין — לנקודה
+ * של הקמפיין). { status, error }. גם PATCH /posts (כשהנקודה או התוכן משתנים).
+ */
+export async function postEndpointError({ endpointId, contentId = null }) {
+  const id = idOrNull(endpointId);
+  if (!id || !Number.isInteger(id) || id <= 0) return { status: 400, error: ENDPOINT_REQUIRED };
+  const ep = await one('select active from endpoints where id = $1', [id]);
+  if (!ep) return { status: 404, error: 'לא נמצאה נקודת קצה כזו' };
+  if (!ep.active) return { status: 409, error: 'נקודת הקצה הזו מושבתת — בוחרים נקודה פעילה' };
+  const cid = idOrNull(contentId);
+  if (cid) {
+    const item = await one('select endpoint_id from content_items where id = $1', [cid]);
+    if (!item) return { status: 404, error: 'לא נמצא תוכן כזה' };
+    if (item.endpoint_id !== id) {
+      return { status: 400, error: 'התוכן שייך לנקודת קצה אחרת מזו של הפוסט' };
+    }
+  }
+  return null;
+}
 
 /** הודעת החסימה של יום שהערוץ לא מקבל בו תוכן, או null. target — שורת הערוץ */
 export function blockedDayError(target, when) {
@@ -177,6 +205,16 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   const changed = (key) => key in b && idOrNull(b[key]) !== (current[key] ?? null);
   const contentChanged = b.content_id != null && changed('content_id');
   const kindChanged = b.kind != null && b.kind !== current.kind;
+  // אין פוסט בלי נקודת קצה: אי אפשר לאפס אותה, ותוכן חדש / נקודה חדשה — רק
+  // כשהם תואמים (postEndpointError). פוסט ישן בלי נקודה (פורסם לפני הכלל)
+  // עדיין נערך בכותרת / בהערה — נבדק רק מה שהבקשה משנה.
+  if (changed('endpoint_id') || contentChanged) {
+    const epErr = await postEndpointError({
+      endpointId: 'endpoint_id' in b ? b.endpoint_id : current.endpoint_id,
+      contentId: 'content_id' in b ? b.content_id : current.content_id,
+    });
+    if (epErr) return bad(res, epErr.error, epErr.status);
+  }
   if (b.scheduled_at || b.channel_id || changed('endpoint_id') || contentChanged || kindChanged) {
     const when = b.scheduled_at ?? current.scheduled_at;
     const channel = b.channel_id ?? current.channel_id;

@@ -116,16 +116,16 @@ test('ב1 — POST /posts מתעלם מ-status בגוף: פוסט ידני נו�
 
 test('ב1 — POST /posts דוחה מועד שעבר; אותו יום בשעה מאוחרת יותר — בסדר', { skip }, async () => {
   const past = await call('POST', '/posts', {
-    channel_id: ids.fb, title: 'בעבר', kind: 'value', scheduled_at: minutes(-5),
+    channel_id: ids.fb, endpoint_id: ids.ep, title: 'בעבר', kind: 'value', scheduled_at: minutes(-5),
   });
   assert.equal(past.status, 400);
   assert.equal(past.json.error, 'אי אפשר לשבץ פוסט לזמן שעבר');
   const broken = await call('POST', '/posts', {
-    channel_id: ids.fb, title: 'שבור', kind: 'value', scheduled_at: 'לא-תאריך',
+    channel_id: ids.fb, endpoint_id: ids.ep, title: 'שבור', kind: 'value', scheduled_at: 'לא-תאריך',
   });
   assert.equal(broken.status, 400);
   const soon = await call('POST', '/posts', {
-    channel_id: ids.wa, title: 'עוד מעט', kind: 'value', scheduled_at: minutes(2),
+    channel_id: ids.wa, endpoint_id: ids.ep, title: 'עוד מעט', kind: 'value', scheduled_at: minutes(2),
   });
   assert.equal(soon.status, 201, JSON.stringify(soon.json));
 });
