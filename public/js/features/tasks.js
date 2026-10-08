@@ -355,7 +355,9 @@ function taskRow(t) {
 
   let action = '';
   if (t.done) action = '';
-  else if (t.kind === 'approve' && t.post_id && can('approve')) {
+  // משימת אישור של פוסט שממתין לאישור — "אשר". "לאשר מחדש" (meta.reapprove) —
+  // רק "פתח": מאשרים מחדש אחרי שבודקים את התוכן ובוחרים מועד
+  else if (t.kind === 'approve' && t.post_id && can('approve') && !t.meta?.reapprove) {
     action = `<button class="btn small act" data-approve="${t.post_id}">אשר</button>`;
   } else if (t.kind === 'publish' && t.post_id) {
     action = `<button class="btn small act" data-copy="${esc(t.copy_text)}">העתק טקסט</button>

@@ -43,6 +43,8 @@ const AUTO_ASSIGN_KINDS = ['write', 'swap', 'publish'];
  *                    שהמועד עבר ביותר מיממה
  *   failed         — הפוסט פורסם, או אושר שוב למועד עתידי
  *   approve        — הפוסט כבר לא ממתין לאישור
+ *   approve (לאשר מחדש, meta.reapprove — סעיף 31) — הפוסט אושר שוב או
+ *                    פורסם, או יממה אחרי המועד (ואז הוא ברשימת "לא סומנו")
  */
 export function taskCloseReason(t, now = new Date()) {
   if (t.done || t.post_id == null) return null;
@@ -74,6 +76,11 @@ export function taskCloseReason(t, now = new Date()) {
       if (published) return 'published';
       return t.post_status === 'approved' && future ? 'reapproved' : null;
     case 'approve':
+      if (t.meta?.reapprove) {
+        if (published) return 'published';
+        if (t.post_status === 'approved') return 'reapproved';
+        return expired ? 'expired' : null;
+      }
       return t.post_status !== 'pending_approval' ? 'resolved' : null;
     default:
       return null;

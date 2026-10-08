@@ -311,7 +311,10 @@ test('קישור בודק רק "לא באותו יום" — פוסט של העו
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.deepEqual(r.json.shift, { kept: 1, rescheduled: 0, approved: 0 });
     const kept = await q1('select status, scheduled_at from posts where id = $1', [x.posts[1].post]);
-    assert.equal(kept.status, 'approved');
+    // נשאר במקומו. האישור כן חוזר — העוקבת יוצאת מעכשיו עם התוכן של המקור,
+    // לא עם מה שאושר (סעיף 31)
+    assert.equal(kept.status, 'scheduled');
+    assert.equal(r.json.approval_reset, 1);
     assert.equal(new Date(kept.scheduled_at).getTime(), at(6).getTime());
     assert.ok(await exists(x.posts[2].post), 'פוסט שלא נגע בקישור לא נבדק');
   } finally {

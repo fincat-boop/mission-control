@@ -1,4 +1,4 @@
-import { api, SESSION_ERROR } from './api.js';
+import { api, noteApprovalReset, SESSION_ERROR } from './api.js';
 import { sessionExpired } from './session.js';
 import { esc } from './dom.js';
 import { state } from './state.js';
@@ -102,6 +102,7 @@ async function legacyMultipart(path, files, extraFields, onProgress) {
   });
   if (res.status === 401) { sessionExpired(); throw new Error(SESSION_ERROR); }
   if (!res.ok) throw new Error(res.data.error || 'הקבצים לא נשמרו');
+  noteApprovalReset(path, res.data); // סעיף 31 — כמו api()
   return res.data;
 }
 

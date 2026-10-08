@@ -1,5 +1,6 @@
 import { confirmDialog } from './confirm.js';
 import { sessionExpired } from './session.js';
+import { toastNote } from './dom.js';
 
 /** ההודעה של פעולה שנכשלה כי החיבור פג — החלון של session.js מסביר את השאר */
 export const SESSION_ERROR = 'החיבור פג — מתחברים מחדש וחוזרים על הפעולה';
@@ -26,7 +27,27 @@ export async function api(path, options = {}) {
     err.payload = data;
     throw err;
   }
+  noteApprovalReset(path, data);
   return data;
+}
+
+/** "N פוסטים מאושרים חזרו לאישור" — טהורה, לבדיקה */
+export function approvalResetText(n) {
+  return n === 1 ? 'פוסט מאושר אחד חזר לאישור — התוכן שלו השתנה אחרי האישור.'
+    : `${n} פוסטים מאושרים חזרו לאישור — התוכן שלהם השתנה אחרי האישור.`;
+}
+
+/**
+ * סעיף 31: עריכת תוכן (גרסה, קבצים, קישור) שהחזירה פוסטים מאושרים לאישור —
+ * השרת מחזיר approval_reset: N, וההודעה יוצאת מכאן, מכל מקום שעורך תוכן
+ * (טופס, שמירה אוטומטית, העלאה). רק נתיבי תוכן וקבצים: בנתיבים אחרים
+ * approval_reset אומר דבר אחר, והמסך שלהם כבר מסביר אותו.
+ */
+export function noteApprovalReset(path, data) {
+  const n = Number(data?.approval_reset);
+  if (/^\/(content|assets)\//.test(path) && Number.isInteger(n) && n > 0) {
+    toastNote(approvalResetText(n));
+  }
 }
 
 /** כפתור האישור אומר מה קורה — לא "אישור" (docs/ux-overhaul.md, כפתורים) */

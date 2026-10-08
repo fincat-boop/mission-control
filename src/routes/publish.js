@@ -13,6 +13,7 @@ import { NEWSLETTER_NO_APPROVE, hubStale, hubUnverified } from '../publish/newsl
 import { weekMeta } from '../board.js';
 import { friendlyPublishError } from '../publish/errors.js';
 import { postIsLiveSql } from '../live.js';
+import { approvalDigest } from '../publish/approval.js';
 
 const r = Router();
 
@@ -261,11 +262,12 @@ r.post('/posts/:id/approve-publish', requirePerm('approve'), requireAutopublish,
   const blocker = publishBlocker(payload);
   if (blocker) return bad(res, blocker);
 
+  // הטביעה של מה שאושר (סעיף 31): שינוי תוכן אחרי זה מחזיר לאישור
   const post = await one(
     `update posts set status = 'approved', approved_by = $2, approved_at = now(),
-            publish_error = null
+            publish_error = null, approved_digest = $3
       where id = $1 returning *`,
-    [payload.post.id, req.user.id]
+    [payload.post.id, req.user.id, approvalDigest(payload)]
   );
   res.json({ post });
 }));
@@ -322,20 +324,25 @@ r.post('/publish/approve-week', requirePerm('approve'), requireAutopublish, wrap
   );
 
   const eligible = [];
+  const digests = [];
   const skipped = [];
   for (const { id, title } of candidates) {
     const payload = await loadPayload(id);
     const reason = payload ? weekApprovalReason(payload) : 'הפוסט לא נמצא';
     if (reason) skipped.push({ id, title, reason });
-    else eligible.push(id);
+    else {
+      eligible.push(id);
+      digests.push(approvalDigest(payload)); // סעיף 31 — מה שאושר
+    }
   }
 
   if (eligible.length) {
     await query(
-      `update posts set status = 'approved', approved_by = $2, approved_at = now(),
-              publish_error = null
-        where id = any($1)`,
-      [eligible, req.user.id]
+      `update posts p set status = 'approved', approved_by = $3, approved_at = now(),
+              publish_error = null, approved_digest = x.digest
+         from unnest($1::int[], $2::text[]) as x(id, digest)
+        where p.id = x.id`,
+      [eligible, digests, req.user.id]
     );
   }
 

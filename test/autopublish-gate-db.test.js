@@ -156,3 +156,155 @@ test('30 — הלוח: autopublish_channels סופר רק ערוצים פעיל�
     await inOrg(() => db.query('update channel_connections set auto_enabled = true where channel_id = $1', [ids.fb]));
   }
 });
+
+/* ========================= 31 — שינוי תוכן אחרי אישור ========================= */
+
+/** פוסטים מאושרים אחרים לא יוצאים בטיק של הבדיקה */
+async function onlyThese(...keep) {
+  await inOrg(() => db.query(
+    `update posts set status = 'scheduled' where status in ('approved', 'publishing') and not (id = any($1))`,
+    [keep]));
+}
+
+/** Graph מדומה: כל קריאה מצליחה (או לפי onCall) ונרשמת */
+async function withGraph(onCall, fn) {
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (!u.includes('graph.facebook.com')) return realFetch(url, opts);
+    const path = new URL(u).pathname.replace(/^\/v[\d.]+\//, '');
+    calls.push({ path });
+    const out = await onCall?.(path, calls.length);
+    if (out instanceof Response) return out;
+    return new Response(JSON.stringify({ id: `9_${calls.length}` }), { status: 200 });
+  };
+  try { await fn(); } finally { globalThis.fetch = realFetch; }
+  return calls;
+}
+
+/** פוסט מאושר (דרך הנתיב) על תוכן חדש — מחזיר { ci, id } */
+async function approvedPost(opts = {}) {
+  const ci = await content(opts);
+  const id = await post({ contentId: ci, at: opts.at ?? 60 * 24 * 3 });
+  await approve(id);
+  return { ci, id };
+}
+
+const putVariant = (ci, body) => call('PUT', `/content/${ci}/variants/${ids.fb}`, body);
+
+test('31 — שינוי טקסט בגרסה: מאושר עתידי חוזר לאישור (approval_reset); שמירה בלי שינוי — לא', { skip }, async () => {
+  const { ci, id } = await approvedPost();
+  const same = await putVariant(ci, { body: 'טקסט מוכן', status: 'ready' });
+  assert.equal(same.status, 200, JSON.stringify(same.json));
+  assert.equal(same.json.approval_reset, 0);
+  assert.equal((await postRow(id)).status, 'approved');
+
+  const r = await putVariant(ci, { body: 'טקסט אחר', status: 'ready' });
+  assert.equal(r.json.approval_reset, 1);
+  const p = await postRow(id);
+  assert.equal(p.status, 'scheduled');
+  assert.equal(p.approved_at, null);
+  assert.equal(p.approved_digest, null);
+});
+
+test('31 — meta (תגובה ראשונה) וחזרה לטיוטה מחזירים לאישור', { skip }, async () => {
+  const a = await approvedPost();
+  const r1 = await putVariant(a.ci, { status: 'ready', meta: { first_comment: 'תגובה' } });
+  assert.equal(r1.status, 200, JSON.stringify(r1.json));
+  assert.equal(r1.json.approval_reset, 1);
+  assert.equal((await postRow(a.id)).status, 'scheduled');
+
+  const b = await approvedPost();
+  const r2 = await putVariant(b.ci, { status: 'draft' });
+  assert.equal(r2.json.approval_reset, 1);
+  assert.equal((await postRow(b.id)).status, 'scheduled');
+});
+
+test('31 — קובץ שנוסף או נמחק מחזיר לאישור; מה שעבר / פורסם לא זז', { skip }, async () => {
+  const { ci, id } = await approvedPost();
+  // פוסטים נוספים על אותו תוכן: מאושר שהמועד שלו עבר, ופורסם
+  const past = await post({ contentId: ci, at: -60, status: 'approved' });
+  const pub = await post({ contentId: ci, at: -60 * 24, status: 'published' });
+
+  const fd = new FormData();
+  fd.append('files', new Blob([Buffer.from('89504e470d0a1a0a', 'hex')], { type: 'image/png' }), 'a.png');
+  const res = await fetch(`${base}/content/${ci}/variants/${ids.fb}/assets`, { method: 'POST', body: fd });
+  const up = await res.json();
+  await Promise.all([...pending]);
+  assert.equal(res.status, 201, JSON.stringify(up));
+  assert.equal(up.approval_reset, 1);
+  assert.equal((await postRow(id)).status, 'scheduled');
+  assert.equal((await postRow(past)).status, 'approved');
+  assert.equal((await postRow(pub)).status, 'published');
+  await inOrg(() => db.query("update posts set status = 'scheduled' where id = $1", [past]));
+
+  // אישור מחדש עם הקובץ — ואז מחיקתו
+  await approve(id);
+  const del = await call('DELETE', `/assets/${up.assets[0].id}`);
+  assert.equal(del.status, 200, JSON.stringify(del.json));
+  assert.equal(del.json.approval_reset, 1);
+  assert.equal((await postRow(id)).status, 'scheduled');
+});
+
+test('31 — משבצת מקושרת: עריכה במקור מחזירה לאישור את הפוסט של העוקבת', { skip }, async () => {
+  const { src, fol } = await inOrg(async () => {
+    const camp = (await db.one(
+      `insert into campaigns (name, endpoint_id, structure, starts_on, ends_on)
+       values ('כללי', $1, 'general', current_date, current_date + 30) returning id`, [ids.ep])).id;
+    for (const ch of [ids.wa, ids.fb]) {
+      await db.query('insert into campaign_channels (campaign_id, channel_id) values ($1,$2)', [camp, ch]);
+    }
+    const s = (await db.one(
+      `insert into content_items (endpoint_id, campaign_id, slot_channel_id, sort_order, kind, title)
+       values ($1,$2,$3,1,'value','מקור') returning id`, [ids.ep, camp, ids.wa])).id;
+    const f = (await db.one(
+      `insert into content_items (endpoint_id, campaign_id, slot_channel_id, sort_order, kind, title, linked_to_id)
+       values ($1,$2,$3,1,'value','מקור',$4) returning id`, [ids.ep, camp, ids.fb, s])).id;
+    await db.query(
+      `insert into content_variants (content_id, channel_id, status, body) values ($1,$2,'ready','משותף'),
+              ($3,$4,'ready','משותף')`, [s, ids.wa, f, ids.fb]);
+    return { src: s, fol: f };
+  });
+  const id = await post({ contentId: fol });
+  await approve(id);
+
+  const r = await call('PUT', `/content/${src}/variants/${ids.wa}`, { body: 'משותף — מתוקן', status: 'ready' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.approval_reset, 1);
+  assert.equal((await postRow(id)).status, 'scheduled');
+});
+
+test('31 — הטיק: טביעה שלא תואמת (שינוי שעקף את הנתיבים) — לא מפרסם; חוזר למתוכנן עם "לאשר מחדש"', { skip }, async () => {
+  const { ci, id } = await approvedPost();
+  // שינוי ישיר במסד (כמו ייבוא) ומועד שהגיע
+  await inOrg(() => db.query(
+    `update content_variants set body = 'שונה בשקט' where content_id = $1 and channel_id = $2`, [ci, ids.fb]));
+  await inOrg(() => db.query(`update posts set scheduled_at = now() - interval '1 minute' where id = $1`, [id]));
+  await onlyThese(id);
+
+  const calls = await withGraph(null, () => runner.publishTickForOrg(org));
+  assert.equal(calls.length, 0, 'שום דבר לא נשלח');
+  const p = await postRow(id);
+  assert.equal(p.status, 'scheduled');
+  assert.equal(p.approved_at, null);
+  assert.equal(p.publishing_started_at, null);
+  const tasks = await qa(`select title, done from tasks where post_id = $1 and kind = 'approve'
+                            and meta->>'reapprove' = 'true'`, [id]);
+  assert.equal(tasks.length, 1);
+  assert.match(tasks[0].title, /לאשר מחדש/);
+  // סימן אחד: לא נכנס ל"לא סומנו כפורסמו" כל עוד המשימה פתוחה
+  await inOrg(() => db.query(`update posts set scheduled_at = now() - interval '2 hours' where id = $1`, [id]));
+  const { unconfirmedPosts } = await import('../src/unconfirmed.js');
+  assert.equal((await inOrg(() => unconfirmedPosts())).some((x) => x.id === id), false);
+  await inOrg(() => db.query('delete from posts where id = $1', [id]));
+});
+
+test('31 — הטיק: טביעה תואמת — מפרסם כרגיל', { skip }, async () => {
+  const { id } = await approvedPost();
+  await inOrg(() => db.query(`update posts set scheduled_at = now() - interval '1 minute' where id = $1`, [id]));
+  await onlyThese(id);
+  const calls = await withGraph(null, () => runner.publishTickForOrg(org));
+  assert.ok(calls.some((c) => c.path === '9/feed'));
+  assert.equal((await postRow(id)).status, 'published');
+});

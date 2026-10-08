@@ -31,6 +31,10 @@ function setToastRole(t, urgent) {
  * שקראו אותה היא שגיאה שלא קרתה.
  */
 export function toast(msg, isError = false) {
+  // הערה שמחכה (toastNote) — נשארת גלויה גם כשהפעולה מודיעה "נשמר" מיד אחריה
+  if (!isError && note && Date.now() < note.until && !String(msg).includes(note.text)) {
+    msg = `⚠ ${String(msg).replace(/^\s*⚠\s*/, '')} ${note.text}`;
+  }
   const t = $('#toast');
   const warn = !isError && String(msg).trimStart().startsWith('⚠');
   const sticky = isError || warn;
@@ -56,6 +60,19 @@ export function toast(msg, isError = false) {
   close.addEventListener('click', hideToast, { once: true });
   t.replaceChildren(text, close);
   t.style.display = 'block';
+}
+
+let note = null; // { text, until } — ראו toastNote
+
+/**
+ * הודעת אזהרה שלא נבלעת: מוצגת מיד (ננעצת עד ✕, כמו כל ⚠), וכל הודעה רגילה
+ * שמגיעה בשניות הקרובות — "נשמר", "הקובץ עלה" — מצורפת אליה במקום להחליף
+ * אותה. לשרת שמדווח על תוצאת לוואי של שמירה (סעיף 31: פוסטים שחזרו לאישור).
+ */
+export function toastNote(text, ms = 6000) {
+  note = null;
+  toast(`⚠ ${text}`);
+  note = { text, until: Date.now() + ms };
 }
 
 /** ריחוף או פוקוס על טוסט עם פעולה עוצרים את הספירה; היציאה מחדשת אותה */

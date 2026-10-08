@@ -42,6 +42,7 @@ export const UNCONFIRMED_SQL = `(
  * הרשימה שההתראה סופרת וחלון האישור מציג — אותה שאילתה, כך שהמספר בהתראה
  * הוא מספר השורות בחלון. פוסט שיש לו משימת "לפרסם היום" פתוחה (שלא נדחתה)
  * לא נכנס: המשימה היא הסימן שלו עד שהיא פגה בסוף היום (סימן אחד לפוסט).
+ * כך גם משימת "לאשר מחדש" (approval.js) — עד שהיא פגה יממה אחרי המועד.
  */
 export function unconfirmedPosts() {
   return rows(
@@ -53,7 +54,10 @@ export function unconfirmedPosts() {
       where ${UNCONFIRMED_SQL}
         and p.scheduled_at >= now() - interval '${UNCONFIRMED_MAX_DAYS} days'
         and not exists (select 1 from tasks t
-                         where t.post_id = p.id and t.kind = 'publish' and not t.done
+                         where t.post_id = p.id and not t.done
+                           and (t.kind = 'publish'
+                                -- "לאשר מחדש" (סעיף 31): הטיק סירב לפרסם — ידוע שלא יצא
+                                or (t.kind = 'approve' and (t.meta->>'reapprove') = 'true'))
                            and (t.snoozed_until is null or t.snoozed_until <= now()))
       order by p.scheduled_at, p.id`
   );

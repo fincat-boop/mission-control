@@ -16,6 +16,7 @@ import {
 import { contentBlocker, coverAsset, isStory, postMedia } from './readiness.js';
 import { LOCAL_TZ, localYmd } from '../task-lifecycle.js';
 import { endpointLiveSql } from '../live.js';
+import { CHANGED_AFTER_APPROVAL, approvalDigest, recordReapproveTask } from './approval.js';
 
 /**
  * מסלול הפרסום האוטומטי.
@@ -482,11 +483,17 @@ async function failClaimed(orgId, postId, post, error, opts = {}) {
  * שלב ההכנה, בטרנזקציה קצרה: הפוסט, הגרסה והקבצים, מה חוסם, והטוקן.
  * מחזיר את כל מה שהקריאה ל-Graph צריכה — או { post, error, failOpts }.
  */
-async function preparePublish(postId) {
+async function preparePublish(postId, { checkDigest = false } = {}) {
   const payload = await loadPayload(postId);
   if (!payload) return { post: null, error: 'הפוסט נעלם' };
 
   const { post, variant, assets } = payload;
+  // סעיף 31: הטיק מפרסם רק את מה שאושר. התוכן השתנה מאז (נתיב שלא החזיר
+  // לאישור) — לא מפרסמים; חוזר למתוכנן עם "לאשר מחדש". טביעה ריקה = אושר
+  // לפני שהיו טביעות. "פרסם עכשיו" (checkDigest=false) — אדם לוחץ על מה שהוא רואה
+  if (checkDigest && post.approved_digest && approvalDigest(payload) !== post.approved_digest) {
+    return { post, changed: true };
+  }
   const blocker = publishBlocker(payload);
   if (blocker) return { post, error: blocker };
   if (post.platform === 'newsletter') {
@@ -505,6 +512,31 @@ async function preparePublish(postId) {
     options: publishOptions({ platform: post.platform, variant, media }),
     cover: post.platform === 'instagram' ? coverAsset({ variant, assets }) : null,
   };
+}
+
+/**
+ * הטיק סירב לפרסם פוסט שהתוכן שלו השתנה אחרי האישור (סעיף 31): publishing
+ * (שעוד לא נשלח לשום מקום) → מתוכנן בלי אישור, משימת "לאשר מחדש" ושורה
+ * ביומן. לא "נכשל": שום דבר לא יצא ולא נדחה, אדם צריך להחליט. נכשלה
+ * השמירה — נשאר publishing ויסומן כתקוע (כמו כל שמירה שנכשלה).
+ */
+async function refuseChanged(orgId, post) {
+  try {
+    await recordOutcome(orgId, async () => {
+      const back = await one(
+        `update posts set status = 'scheduled', approved_by = null, approved_at = null,
+                          approved_digest = null, publishing_started_at = null
+          where id = $1 and status = 'publishing' returning id`, [post.id]);
+      if (!back) return;
+      await bestEffort('יצירת משימת "לאשר מחדש" נכשלה:', () => recordReapproveTask(post));
+      await logActivity('publish_refused', post,
+        `לא פורסם — "${post.title}" ב${post.channel_name}: ${CHANGED_AFTER_APPROVAL}`);
+    });
+  } catch (e) {
+    console.error(`החזרת פוסט #${post.id} לאישור נכשלה — נשאר publishing עד שיזוהה כתקוע:`, e.message);
+  }
+  console.log(`פוסט #${post.id} ("${post.title}") לא פורסם — התוכן השתנה אחרי האישור`);
+  return { ok: false, error: CHANGED_AFTER_APPROVAL };
 }
 
 /** הקריאה לפלטפורמה — בלי טרנזקציה פתוחה (יכולה לקחת דקות בוידאו לאינסטגרם) */
@@ -569,10 +601,11 @@ export async function publishOne(postId,
 
   let prep;
   try {
-    prep = await withOrg(orgId, () => preparePublish(postId));
+    prep = await withOrg(orgId, () => preparePublish(postId, { checkDigest: dueOnly }));
   } catch (e) {
     prep = { post: null, error: `שליפת נתוני הפוסט נכשלה: ${e.message}` };
   }
+  if (prep.changed) return refuseChanged(orgId, prep.post);
   if (prep.error) return failClaimed(orgId, postId, prep.post, prep.error, prep.failOpts);
 
   const { post, token, options } = prep;

@@ -600,6 +600,17 @@ end $$;
 alter table posts add column if not exists urgent_group uuid;
 create index if not exists posts_urgent_group_idx on posts (urgent_group) where urgent_group is not null;
 
+-- approved_digest (סעיף 31): טביעת התוכן שאושר לפרסום אוטומטי — הגרסה לערוץ
+-- (מצב, טקסט, meta) והקבצים לפי הסדר (src/publish/approval.js). שינוי תוכן
+-- שמשנה אותה מחזיר פוסט מאושר עתידי לאישור, והטיק לא מפרסם כשהיא לא תואמת.
+-- ריק = אושר לפני העמודה (או לא מאושר).
+alter table posts add column if not exists approved_digest text;
+
+-- "לאשר מחדש" (סעיף 31): הטיק סירב לפרסם פוסט שהתוכן שלו השתנה אחרי האישור.
+-- לכל היותר משימה פתוחה אחת לפוסט (on conflict ב-approval.js).
+create unique index if not exists tasks_reapprove_uidx
+  on tasks (post_id) where kind = 'approve' and done = false and (meta->>'reapprove') = 'true';
+
 -- ========================= ויתורים של המנוע =========================
 -- תוכן שהמשתמש הוריד מערוץ בשבוע מסוים (מחיקת פוסט, "בטל" על מילוי
 -- אוטומטי). המילוי האוטומטי רץ אחרי כל שינוי, ובלי הרשומה הזו הוא היה

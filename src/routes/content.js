@@ -27,6 +27,7 @@ import { contentBlocker, metaExtrasError, readyRejection } from '../publish/read
 import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
 import { openPostSql } from '../live.js';
 import { deriveTitle } from '../../public/js/core/title.js';
+import { resetChangedApprovals } from '../publish/approval.js';
 
 const r = Router();
 
@@ -161,8 +162,10 @@ r.put('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (re
   // שנשארו טיוטה כי התוכן לא מספיק לערוץ שלהן)
   const { downgraded } = await syncFrom(req.params.id,
     { statusChanged: (before?.status ?? null) !== status });
+  // סעיף 31: פוסט מאושר שהתוכן שלו השתנה (גם בעוקבות) חוזר לאישור
+  const approvalReset = await resetChangedApprovals([req.params.id]);
   const engine = await autoFill(b.week);
-  res.json({ variant: v, warn, downgraded, engine });
+  res.json({ variant: v, warn, downgraded, engine, approval_reset: approvalReset });
 }));
 
 r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async (req, res) => {
@@ -179,8 +182,9 @@ r.delete('/content/:id/variants/:channelId', requirePerm('content'), wrap(async 
           and ci.id = any($1::int[])`,
       [group.map((x) => x.id)]);
   }
+  const approvalReset = await resetChangedApprovals([req.params.id]);
   const engine = await autoFill(req.body?.week);
-  res.json({ ok: true, engine });
+  res.json({ ok: true, engine, approval_reset: approvalReset });
 }));
 
 /**
@@ -586,6 +590,8 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
     }
   }
   // משבצת מקושרת שיוצאת מהקמפיין מתנתקת קודם — עם עותק משלה של התוכן
+  // הקבוצה המקושרת לפני השינוי — עוקבת שמתנתקת כאן מקבלת עותק (קבצים חדשים)
+  const groupBefore = (await linkGroup(current.id)).map((x) => x.id);
   if (leavingSlot) {
     try { await releaseLinks(current.id); } catch (e) { return linkFail(res, e); }
   }
@@ -630,8 +636,11 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
     ? await one('select * from content_variants where content_id = $1 and channel_id = $2',
       [c.id, c.slot_channel_id])
     : null;
+  // סעיף 31: טקסט / מצב / meta של המשבצת השתנו — מאושרים חוזרים לאישור
+  const approvalReset = await resetChangedApprovals([c.id, ...groupBefore]);
   const engine = await fillFor(c, b.week);
-  res.json({ content: c, variant, warn, downgraded, kind_posts: kindPosts, engine });
+  res.json({ content: c, variant, warn, downgraded, kind_posts: kindPosts, engine,
+             approval_reset: approvalReset });
 }));
 
 /**
@@ -653,11 +662,14 @@ r.post('/content/:id/link', requirePerm('content'), wrap(async (req, res) => {
   if (apart && !(await lockEngineOr503(res))) return;
   let out;
   try { out = await linkSlots(req.params.id, req.body ?? {}); } catch (e) { return linkFail(res, e); }
+  // העוקבת יוצאת מעכשיו עם התוכן של המקור — מה שאושר בה חוזר לאישור
+  const approvalReset = await resetChangedApprovals([out.source.id, out.follower.id]);
   const shift = apart
     ? await revalidateCampaignPosts(scope.id, { rules: { linksApart: true }, contentIds: [out.follower.id] })
     : null;
   const engine = await fillFor(out.source, req.body?.week);
-  res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, shift, engine });
+  res.json({ content: out.source, follower: out.follower, downgraded: out.downgraded, shift, engine,
+             approval_reset: approvalReset });
 }));
 
 /**
@@ -705,12 +717,14 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
     try { await unlink(id); unlinked += 1; } catch (e) { if (!(e instanceof LinkError)) throw e; }
   }
   const out = await applyLinkPlan(plan);
+  // עוקבות שנותקו קיבלו עותק של הקבצים (מזהים חדשים) — סעיף 31
+  const approvalReset = await resetChangedApprovals([...followers, ...plan.map((x) => x.source_id)]);
   // מה שירד מהלוח משובץ מחדש על כל התקופה של הקמפיין, לא רק בשבוע שמוצג
   const shift = tighten ? await revalidateCampaignPosts(c.id, { rules: { linksApart: true } }) : null;
   const engine = shift?.rescheduled
     ? await autoFillCampaign(c.id, req.body?.week)
     : await autoFill(req.body?.week);
-  res.json({ rules: clean, ...out, unlinked, shift, engine });
+  res.json({ rules: clean, ...out, unlinked, shift, engine, approval_reset: approvalReset });
 }));
 
 /**
@@ -718,11 +732,14 @@ r.post('/campaigns/:id/link-rules', requirePerm('content'), wrap(async (req, res
  * כל משבצת נשארת עם עותק עצמאי של התוכן (הטקסט כבר אצלה, הקבצים מועתקים).
  */
 r.post('/content/:id/unlink', requirePerm('content'), wrap(async (req, res) => {
+  const groupBefore = (await linkGroup(req.params.id)).map((x) => x.id);
   let out;
   try { out = await unlink(req.params.id); } catch (e) { return linkFail(res, e); }
+  // כל משבצת יוצאת עכשיו עם עותק משלה (קבצים חדשים) — סעיף 31
+  const approvalReset = await resetChangedApprovals(groupBefore);
   const content = await one('select * from content_items where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
-  res.json({ content, ...out, engine });
+  res.json({ content, ...out, engine, approval_reset: approvalReset });
 }));
 
 const NEED_TITLE = 'צריך כותרת — או טקסט או קובץ שממנו היא תיגזר';
@@ -795,6 +812,8 @@ r.get('/content/:id/delete-impact', wrap(async (req, res) => {
 }));
 
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
+  const groupBefore = (await linkGroup(req.params.id)).map((x) => x.id)
+    .filter((id) => id !== Number(req.params.id));
   // מקור שנמחק לא משאיר עוקבות ריקות: כל אחת נשארת עם עותק משלה (הראשונה
   // יורשת את הקבצים עצמם). עוקבת שנמחקת פשוט יוצאת מהקבוצה.
   try {
@@ -806,8 +825,10 @@ r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   const gone = await one('delete from content_items where id = $1 returning campaign_id',
     [req.params.id]);
   if (gone?.campaign_id) await reopenIfEmpty(gone.campaign_id);
+  // עוקבות שנשארו עם עותק משלהן — סעיף 31
+  const approvalReset = await resetChangedApprovals(groupBefore);
   const engine = await autoFill(req.body?.week);
-  res.json({ ok: true, removed_posts: posts.length, engine });
+  res.json({ ok: true, removed_posts: posts.length, engine, approval_reset: approvalReset });
 }));
 
 /* ========================= קבצים מצורפים ========================= */
@@ -838,7 +859,8 @@ r.post('/content/:id/assets', requirePerm('content'), mediaUpload.array('files')
     // משבצת מקושרת: הקובץ נרשם על המקור, ומשם כל הקבוצה רואה אותו
     const owner = await mediaOwner(req.params.id);
     if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
-    res.status(201).json({ assets: await saveAssets(req.files, owner.contentId, null) });
+    const assets = await saveAssets(req.files, owner.contentId, null);
+    res.status(201).json({ assets, approval_reset: await resetChangedApprovals([owner.contentId]) });
   }));
 
 /**
@@ -867,7 +889,8 @@ r.post('/content/:id/copy-assets', requirePerm('content'), wrap(async (req, res)
   if (source === owner.contentId) return bad(res, 'הקבצים כבר משותפים לשני הפוסטים (מקושרים)');
   let copied;
   try { copied = await copyAssetsTo(source, owner.contentId); } catch (e) { return linkFail(res, e); }
-  res.json({ copied, warns: await readyWarns(owner.contentId) });
+  res.json({ copied, warns: await readyWarns(owner.contentId),
+             approval_reset: await resetChangedApprovals([owner.contentId]) });
 }));
 
 /** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
@@ -878,7 +901,8 @@ r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),
     const owner = await mediaOwner(req.params.id, req.params.channelId);
     if (!owner) return bad(res, 'לא נמצא תוכן כזה', 404);
     const v = await ensureVariant(owner.contentId, owner.channelId);
-    res.status(201).json({ assets: await saveAssets(req.files, v.content_id, v.id) });
+    const assets = await saveAssets(req.files, v.content_id, v.id);
+    res.status(201).json({ assets, approval_reset: await resetChangedApprovals([owner.contentId]) });
   }));
 
 async function saveAssets(files, contentId, variantId) {
@@ -991,7 +1015,8 @@ r.post('/content/:id/uploads/complete', requirePerm('content'), wrap(async (req,
   const asset = await insertR2Asset({ query }, {
     contentId: owner.contentId, variantId, key, filename, head: checked.head,
   });
-  res.status(201).json({ asset: assetView(asset) });
+  res.status(201).json({ asset: assetView(asset),
+                         approval_reset: await resetChangedApprovals([owner.contentId]) });
 }));
 
 
@@ -1042,7 +1067,8 @@ r.delete('/assets/:id', requirePerm('content'), wrap(async (req, res) => {
     [req.params.id, process.env.R2_PUBLIC_BUCKET ?? '', TRASH_DAYS]
   );
   // גרסה "מוכן" שאיבדה את המדיה שלה — התא מתעדכן ל"מוכן ⚠" בלי טעינה מחדש
-  res.json({ ok: true, warns: asset ? await readyWarns(asset.content_id) : [] });
+  res.json({ ok: true, warns: asset ? await readyWarns(asset.content_id) : [],
+             approval_reset: asset ? await resetChangedApprovals([asset.content_id]) : 0 });
 }));
 
 /**
