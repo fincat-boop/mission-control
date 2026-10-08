@@ -795,9 +795,9 @@ export async function openPostPreview(postId) {
           post.approved_by_name ? ` — אישר: ${esc(post.approved_by_name)}` : ''}.
           יתפרסם ב-${esc(when)}.</div>` : ''}
     ${post.status === 'approved' && previewFacts.autoReady && retryPending(post)
-      ? `<div class="pvauto">⚡ הניסיון הראשון נדחה זמנית${
-          post.publish_error ? ` (${esc(post.publish_error)})` : ''}.
-          ניסיון חוזר אחד ב-${esc(hhmm(post.publish_retry_at))} — אם גם הוא ייכשל, הפוסט יסומן "נכשל".</div>` : ''}
+      ? `<div class="pvauto">⚡ ${esc(post.platform === 'instagram' ? 'אינסטגרם' : 'פייסבוק')} דחתה זמנית את
+          הניסיון הראשון (עומס או הגבלת קצב אצלם), והפוסט לא עלה. ניסיון חוזר אחד
+          ב-${esc(hhmm(post.publish_retry_at))} — אם גם הוא ייכשל, הפוסט יסומן "נכשל".</div>` : ''}
     ${post.status === 'approved' && !previewFacts.autoReady
       ? `<div class="pvwarn"><b>מאושר, אבל לא יתפרסם לבד</b> — הפרסום האוטומטי כבוי לערוץ הזה.
           מפרסמים ידנית ומסמנים "פורסם", או מדליקים פרסום אוטומטי לערוץ בניהול ← ערוצי פרסום.</div>` : ''}
