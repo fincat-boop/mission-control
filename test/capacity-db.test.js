@@ -224,3 +224,31 @@ test('חלון ההתאמה — קמפיין שהתחיל בעבר נספר מה
   assert.equal(long.json.channels[0].capacity, 26);
   assert.ok(long.json.channels[0].later >= 25);
 });
+
+/* ========================= U1 — מרווח קפוא לקמפיינים קיימים ========================= */
+
+test('U1 — צעד חד-פעמי: קמפיין רץ בלי מרווח מקבל את הכללי; ריצה שנייה ונוצר אחר כך — לא נוגעים', { skip }, async () => {
+  await db.migrate();   // הטבלה app_migrations קיימת (ובמסד הזה הצעד אולי כבר רץ)
+  const ep = await endpoint('נקודת הקפאה');
+  const running = await campaign(ep, 'רץ', inDays(-10), inDays(20), []);
+  const ended = await campaign(ep, 'נגמר', inDays(-30), inDays(-1), []);
+  const own = await campaign(ep, 'מרווח משלו', inDays(-10), inDays(20), [], { gap: 3 });
+  const open = await campaign(ep, 'בלי סוף', inDays(-10), null, []);
+  await db.pool.query("delete from app_migrations where key = 'freeze_campaign_gap_v1'");
+
+  await db.migrate();
+  const gaps = async () => Object.fromEntries((await q(
+    'select id, min_gap_days from campaigns where endpoint_id = $1', [ep])).map((r) => [r.id, r.min_gap_days]));
+  const first = await gaps();
+  assert.equal(first[running], 7);   // engine_settings של הארגון — ברירת המחדל 7
+  assert.equal(first[open], 7);
+  assert.equal(first[ended], null);
+  assert.equal(first[own], 3);
+
+  // נוצר אחרי העלייה, ועוד ריצה של הסכימה — לא קופא, ושום דבר לא משתנה
+  const later = await campaign(ep, 'חדש', inDays(1), inDays(30), []);
+  await db.migrate();
+  const second = await gaps();
+  assert.equal(second[later], null);
+  assert.deepEqual({ ...second, [later]: undefined }, { ...first, [later]: undefined });
+});

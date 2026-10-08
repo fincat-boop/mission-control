@@ -812,3 +812,38 @@ do $$ begin
       for each row execute function stamp_disabled_at();
   end if;
 end $$;
+
+-- ========================= צעדים חד-פעמיים =========================
+-- נתונים שצריך לשנות פעם אחת בדיוק לכל מסד (לא בכל עלייה): כל צעד רושם את
+-- המפתח שלו כאן, ורץ רק כשהמפתח עוד לא רשום. insert ... on conflict do
+-- nothing — שתי עליות במקביל: רק אחת מריצה (השנייה מחכה לנעילה ומדלגת).
+create table if not exists app_migrations (
+  key     text primary key,
+  done_at timestamptz not null default now()
+);
+
+-- שיפורי התנהגות, שלב 2 (סעיף 5): ברירת המחדל של המרווח נגזרת עכשיו מהקצב
+-- של הערוץ, וקמפיינים שרצים היו מקבלים פתאום רשת גדולה יותר (ויותר התראות
+-- קצב / חסר תוכן). החלטת המשתמש: קמפיין שקיים ביום העלייה ועוד לא נגמר, ובלי
+-- מרווח משלו, מקבל את המרווח הכללי של הארגון שלו (engine_settings.min_gap_days,
+-- בלעדיו 7) כמרווח משלו — מתנהג כמו קודם. קמפיין שנוצר אחר כך — לא נוגעים.
+-- לכל ארגון בנפרד, עם app.current_org של אותו ארגון (RLS כפוי על campaigns).
+-- מרווח כללי 0 ("בלי מרווח") לא נכנס לעמודה (האילוץ 1–30) — נשאר ריק, כמו קודם.
+do $$
+declare o record;
+begin
+  insert into app_migrations (key) values ('freeze_campaign_gap_v1') on conflict do nothing;
+  if not found then return; end if;
+  for o in select id from orgs loop
+    perform set_config('app.current_org', o.id::text, true);
+    update campaigns c
+       set min_gap_days = g.gap
+      from (select coalesce((select s.min_gap_days from engine_settings s where s.org_id = o.id), 7)
+                     as gap) g
+     where c.org_id = o.id
+       and c.min_gap_days is null
+       and g.gap between 1 and 30
+       and (c.ends_on is null or c.ends_on >= (now() at time zone 'Asia/Jerusalem')::date);
+  end loop;
+  perform set_config('app.current_org', '', true);
+end $$;
