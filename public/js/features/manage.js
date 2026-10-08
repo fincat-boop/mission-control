@@ -460,24 +460,23 @@ const heldToast = (done, n) =>
      : `${done} — שום דבר לא נמחק.`);
 
 /**
- * שאלת ההפעלה מחדש — כמו החזרת קמפיין מהשהיה (releaseHeld בשרת): עתידיים שלא
- * אושרו נמחקים ומשובצים מחדש, מאושרים נשארים, מאושר שהמועד שלו עבר חוזר לאישור.
+ * שאלת ההפעלה מחדש (releaseHeld בשרת): שום דבר לא נמחק — הפוסטים העתידיים
+ * חוזרים ללוח במקומם, ומאושר שהמועד שלו עבר בזמן ההשבתה חוזר לאישור.
  */
-function enableQuestion(what, x, it) {
-  const cleared = (x.future_posts ?? 0) - (x.future_approved ?? 0);
+function enableQuestion(what, x, whose) {
+  const n = x.future_posts ?? 0;
+  const m = x.missed_approved ?? 0;
   return `להפעיל מחדש את ${what}?\n` +
-    (cleared
-      ? `${futurePosts(cleared)} שלא ${cleared === 1 ? 'אושר יימחק' : 'אושרו יימחקו'}, והמנוע ישבץ ${it} מחדש במקומות פנויים — בזמן ההשבתה המקום היה פנוי לאחרים.`
-      : `המנוע ישבץ ${it} מחדש במקומות פנויים.`) +
-    (x.future_approved ? `\n${x.future_approved === 1 ? 'פוסט אחד שאושר לפרסום אוטומטי נשאר'
-      : `${x.future_approved} פוסטים שאושרו לפרסום אוטומטי נשארים`} במקומם.` : '') +
-    (x.missed_approved ? `\n${x.missed_approved === 1 ? 'פוסט מאושר אחד שהמועד שלו עבר חוזר'
-      : `${x.missed_approved} פוסטים מאושרים שהמועד שלהם עבר חוזרים`} לאישור — לא יתפרסמו לבד.` : '');
+    (n ? `${futurePosts(n)} ${whose} ${n === 1 ? 'חוזר' : 'חוזרים'} ללוח, למקום ${n === 1 ? 'שלו' : 'שלהם'}.`
+       : `אין ${whose} פוסטים עתידיים מוחזקים.`) +
+    (m ? `\n${m === 1 ? 'פוסט מאושר אחד שהמועד שלו עבר חוזר'
+      : `${m} פוסטים מאושרים שהמועד שלהם עבר חוזרים`} לאישור — ${m === 1 ? 'לא יתפרסם' : 'לא יתפרסמו'} לבד.` : '') +
+    '\nשום דבר לא נמחק.';
 }
 
 const enabledToast = (done, res) =>
   `${done}.` +
-  (res.cleared ? ` ${res.cleared === 1 ? 'פוסט ישן אחד נוקה' : `${res.cleared} פוסטים ישנים נוקו`}.` : '') +
+  (res.back ? ` ${res.back === 1 ? 'פוסט אחד חזר' : `${res.back} פוסטים חזרו`} ללוח.` : '') +
   (res.approval_reset ? ` ${res.approval_reset === 1 ? 'מאושר אחד שהמועד שלו עבר חזר'
     : `${res.approval_reset} מאושרים שהמועד שלהם עבר חזרו`} לאישור.` : '');
 
@@ -776,8 +775,8 @@ function wireManage(ro, connections) {
     })));
 
   // השבתה = כמו השהיית קמפיין (סעיף 16): האישור אומר כמה פוסטים יוחזקו.
-  // הפעלה = כמו החזרת קמפיין מהשהיה (releaseHeld בשרת): האישור אומר מה יימחק
-  // וישובץ מחדש, מה נשאר, ומה חוזר לאישור
+  // הפעלה (releaseHeld בשרת): שום דבר לא נמחק — האישור אומר כמה פוסטים חוזרים
+  // ללוח וכמה מאושרים שהמועד שלהם עבר חוזרים לאישור
   $$('#manage [data-toggle-endpoint]').forEach((b) =>
     b.addEventListener('click', run(async () => {
       const id = b.dataset.toggleEndpoint;
@@ -786,9 +785,8 @@ function wireManage(ro, connections) {
       const held = x.future_posts;
       if (!(await confirmDialog(disabling
         ? disableQuestion(`נקודת הקצה "${x.name}"`, x, 'שלה', 'הקמפיינים שלה לא יקבלו שטח בזמן הזה. ', 'אותה')
-        : enableQuestion(`נקודת הקצה "${x.name}"`, x, 'אותה'),
-      { okLabel: disabling ? 'השבת נקודת קצה' : 'הפעל נקודת קצה',
-        danger: !disabling && x.future_posts > x.future_approved }))) return;
+        : enableQuestion(`נקודת הקצה "${x.name}"`, x, 'שלה'),
+      { okLabel: disabling ? 'השבת נקודת קצה' : 'הפעל נקודת קצה' }))) return;
       const res = await api(`/endpoints/${id}`,
         { method: 'PATCH', body: { active: !disabling, week: state.week } });
       if (disabling) {
@@ -806,9 +804,8 @@ function wireManage(ro, connections) {
       const held = x.future_posts;
       if (!(await confirmDialog(disabling
         ? disableQuestion(`הערוץ "${x.name}"`, x, 'בו', '', 'אותו')
-        : enableQuestion(`הערוץ "${x.name}"`, x, 'אותו'),
-      { okLabel: disabling ? 'השבת ערוץ' : 'הפעל ערוץ',
-        danger: !disabling && x.future_posts > x.future_approved }))) return;
+        : enableQuestion(`הערוץ "${x.name}"`, x, 'בו'),
+      { okLabel: disabling ? 'השבת ערוץ' : 'הפעל ערוץ' }))) return;
       const res = await api(`/channels/${id}`,
         { method: 'PATCH', body: { active: !disabling, week: state.week } });
       if (disabling) {

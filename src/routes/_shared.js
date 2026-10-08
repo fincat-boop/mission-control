@@ -235,22 +235,34 @@ export const HELD_SCOPE = {
 
 /**
  * חזרה מהחזקה — קמפיין שחזר מהשהיה, נקודה או ערוץ שהופעלו מחדש (סעיף 16).
- * כלל אחד לשלושתם:
- *   - מאושר שהמועד שלו עבר בזמן ההחזקה חוזר לאישור (resetMissedApprovals) —
- *     בלי פרץ פרסומים בטיק הבא.
- *   - המשבצות העתידיות קפאו, ובינתיים המנוע כבר יכול היה למלא את המקום
- *     במשהו אחר (המוחזקים לא תופסים מקום). במקום להחזיר אוטומטית לאותו מקום
- *     (וליצור התנגשות או חריגה מהמכסות), מנקים את מה שעוד לא יצא ולא אושר,
- *     והמנוע ממקם מחדש (refillCampaigns).
- *   - מאושר עתידי נשאר: מישהו בדק ואישר אותו במועד הזה. רק אם בזמן ההחזקה
- *     פוסט אחר (מחוץ להחזקה) תפס את אותה נקודה+ערוץ+יום — היו יוצאים שניים,
- *     בניגוד לכלל של הלוח, ולכן הוא מתפנה כמו השאר.
+ * לשלושתם: מאושר שהמועד שלו עבר בזמן ההחזקה חוזר לאישור (resetMissedApprovals)
+ * — בלי פרץ פרסומים בטיק הבא.
+ *
+ * נקודה / ערוץ (החלטת מוצר: "לא מאבדים עבודה" — נקודה יכולה לשאת הרבה
+ * פוסטים ששובצו ביד עם תוכן): שום דבר לא נמחק. הפוסטים חוזרים בדיוק למקום
+ * שלהם, והמילוי שאחרי (refillCampaigns) רק ממלא מקום פנוי. שבוע שעבר את
+ * התקרה בגלל מה שהמנוע מילא בזמן ההשבתה — אזהרות המכסות בלוח מראות אותו.
+ * back — כמה פוסטים עתידיים חזרו ללוח.
+ *
+ * קמפיין (כמו תמיד): המשבצות העתידיות קפאו, ובינתיים המנוע כבר יכול היה
+ * למלא את המקום במשהו אחר. במקום להחזיר לאותו מקום (התנגשות / חריגה),
+ * מנקים את מה שעוד לא יצא ולא אושר, והמנוע ממקם מחדש. מאושר עתידי נשאר —
+ * מישהו בדק ואישר אותו במועד הזה — אלא אם בזמן ההחזקה פוסט אחר (מחוץ
+ * להחזקה) תפס את אותה נקודה+ערוץ+יום: היו יוצאים שניים, ולכן הוא מתפנה.
  * kind — מפתח ב-HELD_SCOPE; id — המזהה שלו.
- * @returns {Promise<{reset:number, cleared:number}>}
+ * @returns {Promise<{reset:number, cleared:number, back:number}>}
  */
 export async function releaseHeld(kind, id) {
   const scope = HELD_SCOPE[kind];
   const reset = await resetMissedApprovals(scope('p'), [id]);
+  if (kind !== 'campaign') {
+    const { n } = await one(
+      `select count(*)::int as n from posts p
+        where ${scope('p')}
+          and p.status in ('scheduled','approved','failed','pending_approval','hole')
+          and p.scheduled_at >= now()`, [id]);
+    return { reset, cleared: 0, back: n };
+  }
   const cleared = await rows(
     `delete from posts p
       where ${scope('p')}
@@ -272,7 +284,7 @@ export async function releaseHeld(kind, id) {
       returning p.id`,
     [id]
   );
-  return { reset, cleared: cleared.length + clashed.length };
+  return { reset, cleared: cleared.length + clashed.length, back: 0 };
 }
 
 /**

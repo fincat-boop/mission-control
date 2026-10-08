@@ -33,11 +33,11 @@ r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
   const before = await one('select active from channels where id = $1', [req.params.id]);
   const c = await updateById('channels', CHANNEL_FIELDS, req.params.id, req.body);
   if (!c) return bad(res, 'לא נמצא ערוץ כזה', 404);
-  // הופעל מחדש — כמו קמפיין שחזר מהשהיה (releaseHeld, סעיף 16): מאושר שהמועד
-  // שלו עבר חוזר לאישור, עתידי שלא אושר נמחק והמנוע ממקם מחדש
+  // הופעל מחדש (releaseHeld, סעיף 16): שום דבר לא נמחק — הפוסטים חוזרים
+  // למקומם, מאושר שהמועד שלו עבר חוזר לאישור, והמילוי רק משלים מקום פנוי
   const reactivated = before && !before.active && c.active;
-  const { reset, cleared } = reactivated
-    ? await releaseHeld('channel', c.id) : { reset: 0, cleared: 0 };
+  const { reset, back } = reactivated
+    ? await releaseHeld('channel', c.id) : { reset: 0, back: 0 };
 
   // קודם מפנים מה שנעשה לא חוקי, ורק אז ממלאים — אחרת המילוי תופס את
   // הימים שהפוסטים המפונים אמורים לעבור אליהם.
@@ -51,7 +51,7 @@ r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
         and (ca.ends_on is null or ca.ends_on >= current_date)
       order by ca.id`, [c.id]) : [];
   const engine = await refillCampaigns(ids.map((x) => x.id), req.body?.week);
-  res.json({ channel: c, engine, relocated, approval_reset: reset, cleared });
+  res.json({ channel: c, engine, relocated, approval_reset: reset, back });
 }));
 
 /**

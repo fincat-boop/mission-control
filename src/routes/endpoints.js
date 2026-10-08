@@ -44,11 +44,11 @@ r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
   const before = await one('select active from endpoints where id = $1', [req.params.id]);
   const e = await updateById('endpoints', ENDPOINT_FIELDS, req.params.id, req.body);
   if (!e) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
-  // הופעלה מחדש — כמו קמפיין שחזר מהשהיה (releaseHeld, סעיף 16): מאושר
-  // שהמועד שלו עבר חוזר לאישור (בלי פרץ בטיק הבא), עתידי שלא אושר נמחק
-  // והמנוע ממקם מחדש את הקמפיינים שלה — בזמן ההשבתה המקום שלה היה פנוי לאחרים
+  // הופעלה מחדש (releaseHeld, סעיף 16): שום דבר לא נמחק — הפוסטים שלה חוזרים
+  // למקומם, מאושר שהמועד שלו עבר חוזר לאישור (בלי פרץ בטיק הבא), והמילוי של
+  // הקמפיינים שלה רק משלים מקום פנוי
   if (before && !before.active && e.active) {
-    const { reset, cleared } = await releaseHeld('endpoint', e.id);
+    const { reset, back } = await releaseHeld('endpoint', e.id);
     const ids = await rows(
       `select id from campaigns
         where endpoint_id = $1 and active and paused_at is null
@@ -56,11 +56,11 @@ r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
         order by id`, [e.id]);
     const engine = await refillCampaigns(ids.map((x) => x.id), req.body?.week);
     return res.json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine,
-                      approval_reset: reset, cleared });
+                      approval_reset: reset, back });
   }
   const engine = await autoFill(req.body?.week);
   res.json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine,
-             approval_reset: 0, cleared: 0 });
+             approval_reset: 0, back: 0 });
 }));
 
 /**

@@ -18,7 +18,7 @@
 export const channelLiveSql = (p = 'p') =>
   `exists (select 1 from channels lch where lch.id = ${p}.channel_id and lch.active)`;
 
-/** נקודת הקצה של הפוסט לא מושבתת (או שאין לו נקודה) */
+/** נקודת הקצה של הפוסט לא מושבתת (או שאין לו נקודה). עובד גם על content_items (endpoint_id) */
 export const endpointLiveSql = (p = 'p') =>
   `not exists (select 1 from endpoints lep where lep.id = ${p}.endpoint_id and not lep.active)`;
 

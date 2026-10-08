@@ -449,11 +449,12 @@ test('16 (יום חסום) — פוסט מוחזק על יום חסום לא ב�
   assert.ok(!ids.includes(b));
 });
 
-test('16 (הפעלה מחדש) — כמו החזרת קמפיין: עתידי שלא אושר נמחק ומשובץ מחדש, מאושר נשאר', { skip }, async () => {
+test('16 (הפעלה מחדש) — שום דבר לא נמחק: הפוסטים חוזרים למקומם, מאושר שעבר — לאישור', { skip }, async () => {
   const ep = await endpoint('חזרה');
   const ch = await freshChannel('חזרה');
-  const ci = await content(ep, [ch], { title: 'ישובץ מחדש' });
-  const stale = await post({ ep, channel: ch, contentId: ci, when: at(2), title: 'ישן' });
+  const ci = await content(ep, [ch], { title: 'שובץ ביד' });
+  const when = at(2);
+  const manual = await post({ ep, channel: ch, contentId: ci, when, title: 'ידני' });
   const kept = await post({ ep, channel: ch, when: at(4), status: 'approved', title: 'מאושר' });
   const missed = await post({ ep, channel: ch, when: minutes(-60), status: 'approved', title: 'פוספס' });
   const pub = await post({ ep, channel: ch, when: at(-2), status: 'published', publishedAt: at(-2) });
@@ -461,22 +462,40 @@ test('16 (הפעלה מחדש) — כמו החזרת קמפיין: עתידי ש
 
   const imp = await call('GET', `/endpoints/${ep}/delete-impact`);
   assert.equal(imp.json.impact.missed_approved, 1);
-  const r = await call('PATCH', `/endpoints/${ep}`, { active: true, week: at(2) });
+  assert.equal(imp.json.impact.future_posts, 2);
+  const r = await call('PATCH', `/endpoints/${ep}`, { active: true, week: when });
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.equal(r.json.cleared, 1);
+  assert.equal(r.json.back, 2);
   assert.equal(r.json.approval_reset, 1);
-  assert.equal(await statusOf(stale), null, 'עתידי שלא אושר נמחק');
+  const p = await q1('select status, scheduled_at, content_id from posts where id = $1', [manual]);
+  assert.equal(p.status, 'scheduled', 'פוסט שובץ ביד לא נמחק');
+  assert.equal(new Date(p.scheduled_at).toISOString(), when, 'ונשאר באותו מקום');
+  assert.equal(p.content_id, ci);
   assert.equal(await statusOf(kept), 'approved');
   assert.equal(await statusOf(missed), 'scheduled');
   assert.equal(await statusOf(pub), 'published');
 
   // ערוץ: אותו כלל
   const ch2 = await freshChannel('חזרה-ערוץ');
-  const s2 = await post({ ep, channel: ch2, when: at(5), title: 'ישן בערוץ' });
+  const s2 = await post({ ep, channel: ch2, when: at(5), title: 'בערוץ' });
   await call('PATCH', `/channels/${ch2}`, { active: false });
   const rc = await call('PATCH', `/channels/${ch2}`, { active: true });
-  assert.equal(rc.json.cleared, 1);
-  assert.equal(await statusOf(s2), null);
+  assert.equal(rc.json.back, 1);
+  assert.equal(await statusOf(s2), 'scheduled');
+});
+
+test('16 (שייך תוכן) — תוכן של נקודה מושבתת לא מוצע', { skip }, async () => {
+  const { contentCandidates } = await import('../src/engine.js');
+  const ch = await freshChannel('מועמדים');
+  const live = await endpoint('מועמדים-חיה');
+  const off = await endpoint('מועמדים-מושבתת');
+  const a = await content(live, [ch], { title: 'חי' });
+  const b = await content(off, [ch], { title: 'מוחזק' });
+  await q1('update endpoints set active = false where id = $1 returning id', [off]);
+  const list = (await inOrg(() => contentCandidates({ channelId: ch, date: at(2).slice(0, 10) })))
+    .map((c) => c.id);
+  assert.ok(list.includes(a));
+  assert.ok(!list.includes(b));
 });
 
 test('16 (קמפיין) — החזרה מהשהיה: מאושר שהמועד שלו עבר חוזר לאישור', { skip }, async () => {

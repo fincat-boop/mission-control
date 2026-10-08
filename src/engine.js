@@ -6,7 +6,7 @@ import { spreadDate } from '../public/js/core/period.js';
 import { averageShares, channelBudget, effectiveGap } from './capacity.js';
 import { isEmptyContent } from './publish/readiness.js';
 import { itemAssetsSql } from './links.js';
-import { postIsLiveSql } from './live.js';
+import { endpointLiveSql, postIsLiveSql } from './live.js';
 
 /**
  * מנוע השיבוץ.
@@ -525,6 +525,8 @@ export async function contentCandidates({ endpointId = null, channelId, date = n
        join endpoints e        on e.id = ci.endpoint_id
        left join campaigns ca  on ca.id = ci.campaign_id
       where ($1::int is null or ci.endpoint_id = $1)
+        -- תוכן של נקודה מושבתת מוחזק כמו הפוסטים שלה (סעיף 16) — לא מוצע
+        and ${endpointLiveSql('ci')}
         and ${candidateFilterSql({ channel: '$2::int', date: '$3::date' })}
       order by (v.status = 'ready') desc, used_on_channel, ci.created_at
       limit 100`,
