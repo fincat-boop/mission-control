@@ -14,6 +14,7 @@ import { tenantScope } from '../db.js';
 import { audit } from '../audit.js';
 import { protectedApi } from '../routes/api.js';
 import { authenticateApiKey } from './authenticate.js';
+import { agentGuards } from './guards.js';
 import { API_SCOPE_REGISTRY, writesContent } from './scopes.js';
 import { logRequest, lookupByPrefix, touchLastUsed } from './store.js';
 
@@ -83,6 +84,8 @@ r.get('/whoami', (req, res) => {
   });
 });
 
+// כללים שחלים רק על סוכן (guards.js) — אחרי tenantScope, לפני הנתיבים
+r.use(agentGuards);
 r.use(protectedApi);
 r.use((_req, res) => res.status(404).json({ error: 'לא נמצא' }));
 

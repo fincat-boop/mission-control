@@ -18,7 +18,8 @@ export async function renderManage() {
     can('settings') ? api('/backups') : Promise.resolve(null),
     api('/publish/status'),
     // מפתחות API — בעלים בלבד (כמו בשרת)
-    state.me?.is_owner ? api('/api-keys') : Promise.resolve(null),
+    // תקלה בה לא מפילה את כל הטאב
+    state.me?.is_owner ? api('/api-keys').catch(() => null) : Promise.resolve(null),
   ]);
   state.endpoints = endpoints;
   rebuildEpColors();

@@ -199,6 +199,44 @@ test('עריכת הרשאות חלה מיד', { skip }, async () => {
   assert.equal((await agent('GET', '/tasks', key.secret)).status, 200);
 });
 
+test('כללי סוכן: תוכן מאושר נעול, בלי העברה בין קמפיינים, בלי replace, בלי מחיקת תוצאות', { skip }, async () => {
+  const r = await ui('POST', '/api-keys', {
+    name: 'בוט מלא', scopes: ['content.write', 'content.schedule', 'results.write'] });
+  const k = r.json.secret;
+  const approved = await inOrg(org, async () => {
+    const c = (await db.one(
+      "insert into content_items (endpoint_id, kind, title) values ($1,'value','מאושר') returning id", [ids.ep])).id;
+    const p = (await db.one(
+      `insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at, status)
+       values ($1,$2,$3,'מאושר','value', now() + interval '3 days','approved') returning id`,
+      [ids.fb, ids.ep, c])).id;
+    return { c, p };
+  });
+
+  const edit = await agent('PATCH', `/content/${approved.c}`, k, { title: 'שונה אחרי אישור' });
+  assert.equal(edit.status, 409);
+  assert.equal((await agent('PUT', `/content/${approved.c}/variants/${ids.fb}`, k, { body: 'x' })).status, 409);
+  assert.equal((await agent('POST', `/content/${approved.c}/uploads/sign`, k, {})).status, 409);
+  const kept = await inOrg(org, () => db.one('select title from content_items where id = $1', [approved.c]));
+  assert.equal(kept.title, 'מאושר');
+
+  assert.equal((await agent('PATCH', `/content/${ids.content}`, k, { campaign_id: 999999 })).status, 403);
+  assert.equal((await agent('PATCH', `/content/${ids.content}`, k, { endpoint_id: String(ids.ep), title: 'שם חדש' })).status, 200);
+  assert.equal((await agent('POST', `/content/${ids.content}/link`, k, { replace: true })).status, 403);
+  // המסלול הישן להעלאה (multipart → המסד) והשמירה המרוכזת לא פתוחים לסוכן
+  assert.equal((await agent('POST', `/content/${ids.content}/assets`, k)).status, 404);
+  assert.equal((await agent('PUT', '/results', k, { rows: [] })).status, 404);
+
+  assert.equal((await agent('PUT', `/posts/${ids.post}/results`, k, { reach: 100 })).status, 200);
+  assert.equal((await agent('PUT', `/posts/${ids.post}/results`, k, { clicks: 5 })).status, 200);
+  const res = await inOrg(org, () => db.one('select reach, clicks from post_results where post_id = $1', [ids.post]));
+  assert.equal(Number(res.reach), 100);   // לא התאפס כשלא נשלח
+  assert.equal(Number(res.clicks), 5);
+  assert.equal((await agent('PUT', `/posts/${ids.post}/results`, k, { reach: null, clicks: null })).status, 400);
+  // הבדיקות הבאות נשענות על השם המקורי
+  await inOrg(org, () => db.query("update content_items set title = 'תוכן קיים' where id = $1", [ids.content]));
+});
+
 test('מפתח של ארגון אחר לא רואה ולא כותב כאן', { skip }, async () => {
   const other = await inOrg(otherOrg, async () => {
     const u = await db.one(

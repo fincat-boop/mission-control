@@ -11,6 +11,8 @@
  *  - מחוץ לרשימה בכוונה (החלטת המשתמש 8.10.26): מחיקה מכל סוג, אישור/דחייה
  *    של פוסטים, פרסום ושליחה, ניהול קמפיינים ומנוע השיבוץ, הגדרות, ערוצים,
  *    חיבורים ומשתמשים. מה שלא ברשימה — לא קיים ל-API.
+ *  - מעבר לרשימה, כללים שחלים רק על סוכן (guards.js): לא משנה תוכן של פוסט
+ *    מאושר, לא מעביר תוכן בין קמפיינים, לא מחליף/מוחק בקישור או בתוצאות.
  *  - implies גוזר רק קריאות שהכתיבה צריכה, אף פעם כתיבה. ההרחבה קורית
  *    באימות ולא בשמירה — במסד נשמר מה שאדם סימן.
  *  - הרשאות נשמרות במסד כטקסט; parseScopes מסנן כל מה שלא ברשימה — גם
@@ -40,7 +42,7 @@ export const API_SCOPE_REGISTRY = {
   },
   'content.write': {
     group: 'write', label: 'כתיבת תוכן',
-    description: 'יצירה ועריכה של תוכן, ניסוח לכל ערוץ והעלאת קבצים. בלי מחיקה',
+    description: 'יצירה ועריכה של תוכן, ניסוח לכל ערוץ והעלאת קבצים. בלי מחיקה, ולא תוכן של פוסט שכבר אושר',
     implies: ['content.read', 'campaigns.read'],
   },
   'content.schedule': {
@@ -95,9 +97,11 @@ export const ROUTES = [
   ['POST', '/content', 'content.write'],
   ['PATCH', '/content/:id', 'content.write'],
   ['PUT', '/content/:id/variants/:channelId', 'content.write'],
-  ['POST', '/content/:id/assets', 'content.write'],
   ['POST', '/content/:id/copy-assets', 'content.write'],
-  ['POST', '/content/:id/variants/:channelId/assets', 'content.write'],
+  // קבצים רק דרך R2 (sign → PUT ישיר → complete), שם סוג הקובץ נבדק מול רשימה
+  // (media.js isAllowedMime). לא המסלול הישן (multipart → המסד): הוא שומר כל
+  // סוג קובץ ומגיש אותו inline מהדומיין שלנו (XSS מול הבעלים), ובלי תקרה
+  // אמיתית ממלא את ה-volume. גם PUT /results המרוכז לא — הוא מוחק שורות.
   ['POST', '/content/:id/uploads/sign', 'content.write'],
   ['POST', '/content/:id/uploads/complete', 'content.write'],
 
@@ -109,7 +113,6 @@ export const ROUTES = [
   ['PATCH', '/tasks/:id', 'tasks.write'],
 
   ['PUT', '/posts/:id/results', 'results.write'],
-  ['PUT', '/results', 'results.write'],
 ];
 
 const COMPILED = ROUTES.map(([method, path, scope]) => ({
