@@ -43,12 +43,14 @@ const setAuto = (on) => inOrg(() => db.query('update engine_settings set autopub
 
 /** פוסט ישירות במסד. at — דקות מעכשיו (שלילי = עבר) */
 async function post({ channel = ids.fb, endpoint = ids.ep, content = ids.ready, title = 'פוסט',
-                      at = 60 * 24 * 3, status = 'scheduled', error = null } = {}) {
+                      at = 60 * 24 * 3, status = 'scheduled', error = null, urgent = false,
+                      externalId = null, hubAt = null } = {}) {
   return (await q1(
     `insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at, status,
-                        publish_error, approved_at)
-     values ($1,$2,$3,$4,'value',$5,$6,$7, case when $6 = 'approved' then now() end) returning id`,
-    [channel, endpoint, content, title, minutes(at), status, error])).id;
+                        publish_error, approved_at, urgent, external_id, hub_transferred_at)
+     values ($1,$2,$3,$4,'value',$5,$6,$7, case when $6 = 'approved' then now() end, $8, $9, $10)
+     returning id`,
+    [channel, endpoint, content, title, minutes(at), status, error, urgent, externalId, hubAt])).id;
 }
 const statusOf = async (id) => (await q1('select status from posts where id = $1', [id]))?.status ?? null;
 
@@ -293,30 +295,66 @@ test('ב — המתג כבוי: נכשל שמקבל מועד חדש חוזר ל�
 
 /* ========================= הצעדים החד-פעמיים ========================= */
 
-test('צעדים חד-פעמיים: orphan_posts_v1 ו-manual_only_v1', { skip }, async () => {
+test('orphan_posts_v1: יתום עם תוכן מקבל את הנקודה של התוכן; נמחק רק מה שבוודאות לא יצא', { skip }, async () => {
   const camp = (await q1(
     `insert into campaigns (endpoint_id, name, starts_on, ends_on)
      values ($1, 'קמפיין', current_date - 5, current_date + 30) returning id`, [ids.ep2])).id;
   const inCamp = (await q1(
     `insert into content_items (endpoint_id, campaign_id, kind, title) values ($1,$2,'value','בקמפיין')
      returning id`, [ids.ep2, camp])).id;
+  const orphan = (o) => post({ endpoint: null, content: null, ...o });
+  const day = 60 * 24;
 
   const p = {
-    // orphan_posts_v1
+    // נשארים, עם הנקודה של התוכן
     withCamp: await post({ endpoint: null, content: inCamp, title: 'יתום עם קמפיין' }),
-    noContent: await post({ endpoint: null, content: null, title: 'יתום בלי תוכן' }),
-    loose: await post({ endpoint: null, content: ids.ready, title: 'יתום עם תוכן שוטף' }),
-    published: await post({ endpoint: null, content: null, status: 'published', at: -60 * 24,
-                            title: 'פורסם בלי נקודה' }),
-    publishingOrphan: await post({ endpoint: null, content: null, status: 'publishing', at: -5,
-                                   title: 'בדרך בלי נקודה' }),
-    // manual_only_v1
+    loose: await post({ endpoint: null, content: ids.ready, at: -2 * day, title: 'יתום עם תוכן שוטף' }),
+    // נמחקים
+    futureBare: await orphan({ title: 'עתידי בלי תוכן', at: 3 * day }),
+    futureUrgent: await orphan({ title: 'דחוף עתידי', at: 3 * day, urgent: true }),
+    pastBare: await orphan({ title: 'עבר לא דחוף בלי תוכן', at: -3 * day }),
+    // נשארים כהיסטוריה (בלי נקודה)
+    pastUrgent: await orphan({ title: 'דחוף שעבר', at: -3 * day, urgent: true }),
+    pastResults: await orphan({ title: 'עבר עם תוצאות', at: -4 * day }),
+    pastLog: await orphan({ title: 'עבר עם יומן', at: -4 * day, status: 'failed', error: 'x' }),
+    published: await orphan({ title: 'פורסם בלי נקודה', status: 'published', at: -day }),
+    publishing: await orphan({ title: 'בדרך בלי נקודה', status: 'publishing', at: -5 }),
+  };
+  await q1('insert into post_results (post_id, reach) values ($1, 100) returning post_id', [p.pastResults]);
+  await q1(
+    `insert into publish_log (post_id, channel_id, platform, ok, error)
+     values ($1, $2, 'facebook', false, 'x') returning id`, [p.pastLog, ids.fb]);
+  const orphanTask = await q1(
+    "insert into tasks (title, kind, post_id) values ('לכתוב', 'write', $1) returning id", [p.futureBare]);
+
+  await db.pool.query("delete from app_migrations where key = 'orphan_posts_v1'");
+  await db.migrate();
+
+  const left = new Map((await qa(
+    'select id, status, endpoint_id from posts where id = any($1::int[])',
+    [Object.values(p)])).map((x) => [x.id, x]));
+  assert.equal(left.get(p.withCamp).endpoint_id, ids.ep2, 'תוכן של קמפיין — הנקודה של התוכן/הקמפיין');
+  assert.equal(left.get(p.loose).endpoint_id, ids.ep, 'תוכן שוטף בלי קמפיין — הנקודה של התוכן, לא נמחק');
+  for (const k of ['futureBare', 'futureUrgent', 'pastBare']) assert.equal(left.has(p[k]), false, k);
+  for (const k of ['pastUrgent', 'pastResults', 'pastLog', 'published', 'publishing']) {
+    assert.ok(left.has(p[k]), k);
+    assert.equal(left.get(p[k]).endpoint_id, null, k);
+  }
+  assert.equal(await q1('select id from tasks where id = $1', [orphanTask.id]), null,
+    'המשימות של היתום שנמחק נמחקו איתו');
+
+  // פעם אחת בלבד: עלייה נוספת לא מוחקת שוב
+  const again = await orphan({ title: 'יתום אחרי הצעד' });
+  await db.migrate();
+  assert.equal(await statusOf(again), 'scheduled');
+});
+
+test('manual_only_v1: מאושר ונכשל שבוודאות לא יצא חוזרים למתוכנן; ארגון עם מתג דלוק — לא', { skip }, async () => {
+  const p = {
     approved: await post({ status: 'approved', title: 'מאושר ישן' }),
     failed: await post({ status: 'failed', error: 'נכשל', at: -60, title: 'נכשל ישן' }),
     publishing: await post({ status: 'publishing', at: -3, title: 'בפרסום' }),
   };
-  const orphanTask = await q1(
-    "insert into tasks (title, kind, post_id) values ('לכתוב', 'write', $1) returning id", [p.noContent]);
   const failTask = await q1(
     "insert into tasks (title, kind, post_id, urgent) values ('נכשל', 'failed', $1, true) returning id",
     [p.failed]);
@@ -335,32 +373,19 @@ test('צעדים חד-פעמיים: orphan_posts_v1 ו-manual_only_v1', { skip }
   });
 
   await setAuto(false);
-  await db.pool.query("delete from app_migrations where key in ('orphan_posts_v1', 'manual_only_v1')");
+  await db.pool.query("delete from app_migrations where key = 'manual_only_v1'");
   await db.migrate();
 
-  const after1 = new Map((await qa(
-    'select id, status, endpoint_id, publish_error, approved_at from posts where id = any($1::int[])',
+  const left = new Map((await qa(
+    'select id, status, publish_error, approved_at from posts where id = any($1::int[])',
     [Object.values(p)])).map((x) => [x.id, x]));
-  assert.equal(after1.get(p.withCamp).endpoint_id, ids.ep2, 'יתום עם קמפיין מקבל את הנקודה של הקמפיין');
-  assert.equal(after1.has(p.noContent), false, 'יתום בלי תוכן נמחק');
-  assert.equal(after1.has(p.loose), false, 'יתום עם תוכן בלי קמפיין נמחק');
-  assert.equal(after1.get(p.published).endpoint_id, null, 'פורסם — לא נוגעים');
-  assert.equal(after1.get(p.publishingOrphan).status, 'publishing', 'בדרך — לא נוגעים');
-  assert.equal(await q1('select id from tasks where id = $1', [orphanTask.id]), null,
-    'המשימות של היתום נמחקו איתו');
-
-  assert.equal(after1.get(p.approved).status, 'scheduled');
-  assert.equal(after1.get(p.approved).approved_at, null);
-  assert.equal(after1.get(p.failed).status, 'scheduled');
-  assert.equal(after1.get(p.failed).publish_error, null);
-  assert.equal(after1.get(p.publishing).status, 'publishing');
+  assert.equal(left.get(p.approved).status, 'scheduled');
+  assert.equal(left.get(p.approved).approved_at, null);
+  assert.equal(left.get(p.failed).status, 'scheduled');
+  assert.equal(left.get(p.failed).publish_error, null);
+  assert.equal(left.get(p.publishing).status, 'publishing');
   assert.equal((await q1('select done from tasks where id = $1', [failTask.id])).done, true);
 
   const other = await db.withOrg(org2, () => db.one('select status from posts where id = $1', [kept]));
   assert.equal(other.status, 'approved', 'ארגון שהמתג שלו דלוק — לא נוגעים');
-
-  // פעם אחת בלבד: עלייה נוספת לא מוחקת שוב
-  const again = await post({ endpoint: null, content: null, title: 'יתום אחרי הצעד' });
-  await db.migrate();
-  assert.equal(await statusOf(again), 'scheduled');
 });

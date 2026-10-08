@@ -852,15 +852,22 @@ end $$;
 -- ופוסט בלי נקודה = פוסט בלי קמפיין, כרטיס אפור על הלוח. מעכשיו הנתיבים
 -- דוחים פוסט בלי נקודה (routes/board.js postEndpointError, urgent.js); הצעד
 -- הזה מנקה פעם אחת את מה שכבר קיים. לכל ארגון בנפרד, עם app.current_org
--- שלו (RLS כפוי על posts / content_items / campaigns). "פתוח" = כל סטטוס חוץ
--- מ-published ו-publishing:
---   1. פוסט פתוח בלי נקודה, שהתוכן שלו שייך לקמפיין — מקבל את הנקודה של
---      הקמפיין.
---   2. פוסט פתוח בלי נקודה, שאין לו תוכן או שהתוכן שלו בלי קמפיין — נמחק.
---      המשימות שלו (tasks.post_id), שורת התוצאות (post_results) ויומן
---      הפרסום (publish_log) נמחקים איתו ב-on delete cascade.
---   3. פוסטים שפורסמו (published) או בדרך (publishing) — לא נוגעים: הם
---      היסטוריה (נקודה שנמחקה משאירה אותם בלי נקודה — ה-FK נשאר set null).
+-- שלו (RLS כפוי על posts / content_items). "פתוח" = כל סטטוס חוץ מ-published
+-- ו-publishing. עד עכשיו "ללא נקודת קצה" היה ברירת המחדל ב"+ פוסט" ובמבצע
+-- דחוף, ולכן פוסט כזה שהמועד שלו עבר אולי יצא ביד ולא סומן (ה1,
+-- unconfirmed.js) — הוא היסטוריה, לא זבל:
+--   1. פוסט פתוח בלי נקודה עם תוכן — מקבל את הנקודה של התוכן
+--      (content_items.endpoint_id, NOT NULL; לתוכן של קמפיין היא הנקודה של
+--      הקמפיין). גם תוכן שוטף בלי קמפיין — לא נמחק.
+--   2. פוסט פתוח בלי נקודה נמחק רק כשכל אלה מתקיימים:
+--        א. אין לו תוכן (content_id ריק);
+--        ב. אין לו תוצאות (post_results) ואין לו יומן פרסום (publish_log);
+--        ג. published_at ריק;
+--        ד. המועד מהיום והלאה (תאריך ישראל), או שהוא לא דחוף — מבצע דחוף
+--           שהמועד שלו עבר הוא כותרת שאולי פורסמה ביד, ונשאר.
+--      המשימות שלו (tasks.post_id) נמחקות איתו ב-on delete cascade.
+--   3. כל השאר נשאר כמו שהוא (כולל פוסט בלי נקודה שלא עונה על 2):
+--      published / publishing, ומה שאולי יצא. ה-FK נשאר set null.
 do $$
 declare o record;
 begin
@@ -869,9 +876,8 @@ begin
   for o in select id from orgs loop
     perform set_config('app.current_org', o.id::text, true);
     update posts p
-       set endpoint_id = ca.endpoint_id
+       set endpoint_id = ci.endpoint_id
       from content_items ci
-      join campaigns ca on ca.id = ci.campaign_id
      where p.org_id = o.id
        and ci.id = p.content_id
        and p.endpoint_id is null
@@ -880,8 +886,13 @@ begin
      where p.org_id = o.id
        and p.endpoint_id is null
        and p.status not in ('published', 'publishing')
-       and not exists (select 1 from content_items ci
-                        where ci.id = p.content_id and ci.campaign_id is not null);
+       and p.content_id is null
+       and p.published_at is null
+       and not exists (select 1 from post_results r where r.post_id = p.id)
+       and not exists (select 1 from publish_log l where l.post_id = p.id)
+       and ((p.scheduled_at at time zone 'Asia/Jerusalem')::date
+              >= (now() at time zone 'Asia/Jerusalem')::date
+            or not p.urgent);
   end loop;
   perform set_config('app.current_org', '', true);
 end $$;
