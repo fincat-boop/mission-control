@@ -1261,6 +1261,8 @@ export function buildUsage(channels, existing, settings,
         promo: Number(w.promo.toFixed(1)),
         ratio_cap: promoCapOf(u) === Infinity ? null : promoCapOf(u),
         budget: u.budget,
+        // המספר שהמשתמש קבע לערוץ ("פוסטים בשבוע"), לא התקציב אחרי השמורה
+        max_per_week: Number(u.ch.max_per_week),
       };
     },
 

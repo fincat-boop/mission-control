@@ -196,7 +196,7 @@ test('סעיף 6 — קמפיין מכירתי בערוץ של 3 בשבוע: ~1 
   // ההודעה אומרת איזו מגבלה עצרה — לא "חסר תוכן ערך"
   assert.ok(fill.limit_notes.length > 0);
   assert.ok(fill.limit_notes.every((n) => !/חסר תוכן ערך/.test(n)), fill.limit_notes.join(' | '));
-  assert.match(fill.limit_notes.join(' '), /מכניס עד 2 מכירתיים ב-28 ימים/);
+  assert.match(fill.limit_notes.join(' '), /ערוץ של 3 פוסטים בשבוע מכניס עד 2 מכירתיים ב-28 ימים/);
 });
 
 /* ========================= חלון ההתאמה ========================= */

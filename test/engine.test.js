@@ -871,14 +871,15 @@ test('סעיף 6 — notPlacedNotes: כל הודעה אומרת את המגבל�
   const base = { channel_name: 'וואטסאפ', count: 2, kinds: { promo: 2, hybrid: 0, value: 0 } };
   const [ratio, cap, week, day, share, gap] = notPlacedNotes([
     { ...base, reason: 'ratio', ratio: 3, value: 4, promo: 1 },
-    { ...base, reason: 'ratio_cap', ratio: 3, budget: 2, ratio_cap: 2 },
+    { ...base, reason: 'ratio_cap', ratio: 3, budget: 2, max_per_week: 3, ratio_cap: 2 },
     { ...base, reason: 'promo_week', cap: 1 },
     { ...base, count: 1, kinds: { promo: 1 }, reason: 'promo_day', per_day: 1 },
     { ...base, reason: 'share', share_pct: 50, cap: 2 },
     { ...base, reason: 'gap', gap: 3 },
   ]);
   assert.match(ratio, /^2 פוסטים מכירתיים לא נכנסו לוואטסאפ: נדרשים 3 פוסטי ערך לכל מכירתי.*4 ערך מול 1 מכירתיים\. עוד תוכן ערך/);
-  assert.match(cap, /ערוץ של 2 פוסטים בשבוע מכניס עד 2 מכירתיים ב-28 ימים/);
+  // S3: המספר של המשתמש (3 בשבוע), לא התקציב אחרי השמורה
+  assert.match(cap, /ערוץ של 3 פוסטים בשבוע מכניס עד 2 מכירתיים ב-28 ימים/);
   assert.doesNotMatch(cap, /עוד תוכן ערך/);
   assert.match(week, /הערוץ מקבל עד 1 מכירתיים בשבוע \(בהגדרות הערוץ, תחת "מתקדם"\)/);
   assert.match(day, /^פוסט מכירתי אחד לא נכנס לוואטסאפ: מותר עד מכירתי אחד ביום בכל הערוצים/);
