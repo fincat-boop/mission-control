@@ -44,10 +44,23 @@ export const totalCapacity = (preview) =>
 export function gapReason(preview, rows) {
   const sib = Math.max(1, ...rows.map((r) => r.siblings ?? 1));
   const others = sib - 1;
-  return `המרווח בין פוסטים של אותה נקודת קצה באותו ערוץ הוא ${daysLabel(preview.gap_days)}` +
+  // המרווח של הערוצים החסרים (ברירת המחדל נגזרת מכל ערוץ — סעיף 5)
+  const gap = Math.max(...rows.map((r) => r.gap_days ?? preview.gap_days));
+  return `המרווח בין פוסטים של אותה נקודת קצה באותו ערוץ הוא ${daysLabel(gap)}` +
     (others > 0
       ? ` (מתחלק עם ${others === 1 ? 'עוד קמפיין אחד' : `עוד ${others} קמפיינים`} של אותה נקודה)`
       : '') + '.';
+}
+
+/**
+ * התווית של "ברירת המחדל" בחלון המרווח: מספר אחד כשהוא זהה בכל הערוצים,
+ * אחרת לכל ערוץ — ברירת המחדל נגזרת מהקצב של כל ערוץ (סעיף 5).
+ */
+export function defaultGapLabel(preview) {
+  const rows = (preview?.channels ?? []).filter((c) => c.gap_days != null);
+  const gaps = [...new Set(rows.map((c) => c.gap_days))];
+  if (gaps.length <= 1) return `ברירת המחדל (${daysLabel(gaps[0] ?? preview?.gap_days ?? 7)})`;
+  return `ברירת המחדל, לפי הקצב של כל ערוץ (${rows.map((c) => `${c.name} ${daysLabel(c.gap_days)}`).join(', ')})`;
 }
 
 /**
@@ -99,11 +112,44 @@ export function joinHe(list) {
  * לא מכיל את מה שנכתב — משפט אחד לכל תקרה, לא חזרה לכל ערוץ.
  */
 export function rateNoteText(rateNotes) {
-  const byCap = new Map();
-  for (const r of rateNotes) byCap.set(r.rate_cap, [...(byCap.get(r.rate_cap) ?? []), r.name]);
-  return [...byCap].map(([cap, names]) => (names.length === 1
-    ? `גם בדחיסה, ${names[0]} יכניס עד ${cap} — הקצב של הערוץ.`
-    : `גם בדחיסה, ${joinHe(names)} יכניסו עד ${cap} כל אחד — הקצב של הערוץ.`)).join(' ');
+  // לפי התקרה ולפי מה שקובע אותה: הקצב של הערוץ, או מגבלת המכירתיים (סעיף 6)
+  const groups = new Map();
+  for (const r of rateNotes) {
+    const key = `${r.rate_cap}|${r.rate_reason ?? 'rate'}`;
+    groups.set(key, [...(groups.get(key) ?? []), r.name]);
+  }
+  return [...groups].map(([key, names]) => {
+    const [cap, reason] = key.split('|');
+    const why = reason === 'promo' ? 'מגבלת המכירתיים בערוץ' : 'הקצב של הערוץ';
+    return names.length === 1
+      ? `גם בדחיסה, ${names[0]} יכניס עד ${cap} — ${why}.`
+      : `גם בדחיסה, ${joinHe(names)} יכניסו עד ${cap} כל אחד — ${why}.`;
+  }).join(' ');
+}
+
+/** "15.10" מתוך YYYY-MM-DD, בלי אזור זמן */
+const dayMonth = (s) => `${Number(String(s).slice(8, 10))}.${Number(String(s).slice(5, 7))}`;
+
+/**
+ * מה החלון סופר ומה לא (src/campaigns.js, capacityPreview): קמפיין שהתחיל
+ * בעבר — רק מהיום; ארוך מ-26 שבועות — השבועות שאחרי האופק מתמלאים כשמתקרבים,
+ * ולא נספרים כאילו ייכנסו עכשיו. שורה לכל אחד, או רשימה ריקה.
+ * @param preview התשובה של capacity-preview
+ * @param ids ערוצים להגביל אליהם את מספר ה"אחר כך" (ברירת מחדל — כולם)
+ */
+export function windowNotes(preview, ids = null) {
+  const out = [];
+  if (preview?.started_past && preview.starts_on && preview.from) {
+    out.push(`הקמפיין התחיל ב-${dayMonth(preview.starts_on)} — נספר רק מה שעוד אפשר לשבץ, מ-${dayMonth(preview.from)}.`);
+  }
+  if (preview?.later_from && preview.to) {
+    const rows = preview.fixed?.channels ?? preview.channels ?? [];
+    const n = rows.filter((c) => !ids || ids.includes(c.channel_id))
+      .reduce((sum, c) => sum + (c.later ?? 0), 0);
+    out.push(`השבועות שאחרי ${dayMonth(preview.to)} יתמלאו כשיתקרבו` +
+      (n ? ` (עוד ${postsLabel(n)} עד סוף הקמפיין).` : '.'));
+  }
+  return out;
 }
 
 /** ערך תקין למרווח של קמפיין: שלם 1–30 (אותו טווח כמו בשרת) */

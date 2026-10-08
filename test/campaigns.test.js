@@ -630,9 +630,11 @@ import { capacityPreview } from '../src/campaigns.js';
 const BF = { id: 7, endpoint_id: 4, share_pct: 40, active: true, endpoint_importance: 5,
              starts_on: '2026-11-20', ends_on: '2026-12-05' };
 const FB = { id: 6, name: 'פייסבוק', max_per_week: 5, urgent_reserve_pct: 20 };
+// "היום" קבוע לפני בלאק פריידי — החלון סופר רק מהיום (placeableWindow)
+const NOW = new Date('2026-10-01T09:00:00');
 
 test('capacityPreview — בלאק פריידי במרווח 7: המרווח מקצץ, ובמרווח 5 הכול נכנס', () => {
-  const p = capacityPreview(BF, [FB], [], { gapDays: 7 });
+  const p = capacityPreview(BF, [FB], [], { gapDays: 7, now: NOW });
   assert.equal(p.from, '2026-11-20');
   assert.equal(p.to, '2026-12-05');
   assert.equal(p.gap_days, 7);
@@ -644,7 +646,7 @@ test('capacityPreview — בלאק פריידי במרווח 7: המרווח מ�
   assert.equal(p.fixed, null);
 
   // הטיוטה עם מרווח 5 — כבר לא קצר
-  const tight = capacityPreview({ ...BF, min_gap_days: 5 }, [FB], [], { gapDays: 7 });
+  const tight = capacityPreview({ ...BF, min_gap_days: 5 }, [FB], [], { gapDays: 7, now: NOW });
   assert.equal(tight.gap_days, 5);
   assert.equal(tight.channels[0].capacity, 4);
   assert.equal(tight.channels[0].limited_by, 'rate');
@@ -653,7 +655,7 @@ test('capacityPreview — בלאק פריידי במרווח 7: המרווח מ�
 });
 
 test('capacityPreview — קמפיין מוכן: כמה נכתב, באיזה מרווח נכנס, ועד מתי להאריך', () => {
-  const p = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 3 } });
+  const p = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 3 }, now: NOW });
   const [f] = p.fixed.channels;
   assert.equal(f.written, 3);
   assert.equal(f.capacity, 3);
@@ -662,10 +664,10 @@ test('capacityPreview — קמפיין מוכן: כמה נכתב, באיזה מ�
   assert.equal(f.gap_to_fit, 7);              // 3 ב-16 יום: 20, 27.11, 4.12
   assert.equal(f.end_to_fit, '2026-12-04');   // אפשר אפילו לקצר ביום
   // בהקצאה לפי קצב BF חסר (3 מתוך 4), אבל בקמפיין מוכן הקצב לא קובע — short לא נדלק
-  assert.equal(capacityPreview(BF, [FB], [], { gapDays: 7 }).short, true);
+  assert.equal(capacityPreview(BF, [FB], [], { gapDays: 7, now: NOW }).short, true);
   assert.equal(p.short, false);
 
-  const more = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 5 } }).fixed.channels[0];
+  const more = capacityPreview(BF, [FB], [], { gapDays: 7, written: { 6: 5 }, now: NOW }).fixed.channels[0];
   // המרווח לבדו מכיל 5 במרווח 3 (20, 23, 26, 29.11, 2.12) — אבל הקצב (4) לא
   // מגיע ל-5, ולכן rate_short: דחיסה לבד לא תספיק, רק הארכה
   assert.equal(more.gap_to_fit, 3);
@@ -676,20 +678,90 @@ test('capacityPreview — קמפיין מוכן: כמה נכתב, באיזה מ�
 });
 
 test('capacityPreview — ערוץ בלי תוכן במצב מוכן, ובלי תאריכים אין ערוצים', () => {
-  const p = capacityPreview(BF, [FB], [], { gapDays: 7, written: {} });
+  const p = capacityPreview(BF, [FB], [], { gapDays: 7, written: {}, now: NOW });
   assert.deepEqual(p.fixed.channels[0], { channel_id: 6, written: 0, capacity: 3, rate_cap: 4,
                                           rate_short: false, gap_to_fit: null, end_to_fit: null });
-  const open = capacityPreview({ ...BF, ends_on: null }, [FB], [], { gapDays: 7 });
+  const open = capacityPreview({ ...BF, ends_on: null }, [FB], [], { gapDays: 7, now: NOW });
   assert.deepEqual(open.channels, []);
   assert.equal(open.short, false);
 });
 
 test('capacityPreview — אח באותה נקודה ובאותו ערוץ מחלק את המרווח', () => {
   const sib = { ...BF, id: 8, share_pct: 20, channel_ids: [6] };
-  const p = capacityPreview({ ...BF, min_gap_days: 3 }, [FB], [sib], { gapDays: 7 });
+  const p = capacityPreview({ ...BF, min_gap_days: 3 }, [FB], [sib], { gapDays: 7, now: NOW });
   const [c] = p.channels;
   assert.equal(c.siblings, 2);
   assert.equal(c.gap_cap, 3);                 // 6 ימים במרווח 3, חלקי 2
   assert.equal(c.limited_by, 'gap');
   assert.equal(c.gap_to_fit, 2);              // 8 ימים במרווח 2 → 4 לכל אח
+});
+
+/* ========================= חלון ההתאמה — רק מה שנכנס עכשיו ========================= */
+
+import { placeableWindow } from '../src/capacity.js';
+
+test('placeableWindow — מהיום (או ממחר אחרי 22:00), ועד 26 שבועות', () => {
+  const c = { starts_on: '2026-09-01', ends_on: '2026-10-31' };
+  assert.deepEqual(placeableWindow(c, new Date('2026-10-08T12:00:00')),
+    { from: '2026-10-08', to: '2026-10-31', later: null, started_past: true });
+  assert.equal(placeableWindow(c, new Date('2026-10-08T22:30:00')).from, '2026-10-09');
+  // שנה: עד סוף השבוע ה-26 מהשבוע של ההתחלה (ראשון 11.10.26 → שבת 10.4.27)
+  const long = placeableWindow({ starts_on: '2026-10-11', ends_on: '2027-10-10' },
+    new Date('2026-10-01T09:00:00'));
+  assert.equal(long.to, '2027-04-10');
+  assert.deepEqual(long.later, { from: '2027-04-11', to: '2027-10-10' });
+  assert.equal(long.started_past, false);
+  assert.equal(placeableWindow({ starts_on: '2026-10-11' }), null);
+});
+
+test('capacityPreview — קמפיין שהתחיל בעבר: נספר רק מהיום', () => {
+  // התחיל 1.10, מסתיים 28.10; "היום" 15.10 — 14 ימים נשארו מתוך 28
+  const camp = { id: 7, endpoint_id: 4, active: true, endpoint_importance: 5, min_gap_days: 1,
+                 starts_on: '2026-10-01', ends_on: '2026-10-28' };
+  const ch = { id: 6, name: 'פייסבוק', max_per_week: 7, urgent_reserve_pct: 0 };
+  const p = capacityPreview(camp, [ch], [], { gapDays: 7, now: new Date('2026-10-15T09:00:00') });
+  assert.equal(p.from, '2026-10-15');
+  assert.equal(p.started_past, true);
+  assert.equal(p.channels[0].capacity, 14);   // לא 28
+  // קמפיין מוכן: מה שכבר על הלוח לפני היום נספר כנכנס
+  const f = capacityPreview(camp, [ch], [],
+    { gapDays: 7, now: new Date('2026-10-15T09:00:00'), written: { 6: 20 }, placed: { 6: 10 } })
+    .fixed.channels[0];
+  assert.equal(f.capacity, 24);   // 10 שכבר על הלוח + 14 מהיום
+  assert.equal(f.placed, 10);
+  assert.equal(f.rate_short, false);
+});
+
+test('capacityPreview — ארוך מ-26 שבועות: מה שאחרי האופק נספר בנפרד (later)', () => {
+  const camp = { id: 7, endpoint_id: 4, active: true, endpoint_importance: 5, min_gap_days: 7,
+                 starts_on: '2026-10-11', ends_on: '2027-10-10' };
+  const ch = { id: 6, name: 'פייסבוק', max_per_week: 7, urgent_reserve_pct: 0 };
+  const p = capacityPreview(camp, [ch], [], { gapDays: 7, now: new Date('2026-10-01T09:00:00') });
+  assert.equal(p.to, '2027-04-10');
+  assert.equal(p.later_from, '2027-04-11');
+  assert.equal(p.channels[0].capacity, 26);   // פוסט בשבוע × 26
+  assert.ok(p.channels[0].later >= 25, String(p.channels[0].later));
+  // קמפיין מוכן: מה שאחרי האופק נכנס (מאוחר יותר) — לא "לא ייכנס"
+  const f = capacityPreview(camp, [ch], [],
+    { gapDays: 7, now: new Date('2026-10-01T09:00:00'), written: { 6: 40 } }).fixed.channels[0];
+  assert.equal(f.capacity, 26 + f.later);
+  assert.ok(f.capacity >= 40);
+});
+
+test('capacityPreview — קמפיין מכירתי: הרשת וחלון ההתאמה לפי היחס (סעיף 6)', () => {
+  const camp = { id: 7, endpoint_id: 4, active: true, endpoint_importance: 5, min_gap_days: 1,
+                 starts_on: '2026-11-01', ends_on: '2026-11-28' };
+  const ch = { id: 6, name: 'וואטסאפ', max_per_week: 3, urgent_reserve_pct: 20 };   // תקציב 2
+  const settings = { min_value_per_promo: 3, max_promo_per_day: 1, hybrid_weight: 0.5 };
+  const p = capacityPreview(camp, [ch], [], { gapDays: 7, now: NOW, settings,
+    mix: new Map([[6, { promo: 8 }]]) });
+  // 8 פוסטים ב-4 שבועות, יחס 3 → 2 מכירתיים, לא 8
+  assert.equal(p.channels[0].capacity, 2);
+  assert.equal(p.channels[0].limited_by, 'ratio');
+  assert.equal(p.short, false);   // לא המרווח — דחיסה לא תעזור
+  const f = capacityPreview(camp, [ch], [], { gapDays: 7, now: NOW, settings,
+    mix: new Map([[6, { promo: 8 }]]), written: { 6: 8 } }).fixed.channels[0];
+  assert.equal(f.capacity, 2);
+  assert.equal(f.rate_short, true);
+  assert.equal(f.rate_reason, 'promo');
 });

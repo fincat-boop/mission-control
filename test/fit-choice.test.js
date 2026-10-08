@@ -109,3 +109,37 @@ test('rateNoteText — משפט אחד לכל תקרה, עם חיבור שמות
     'גם בדחיסה, וואטסאפ יכניס עד 2 — הקצב של הערוץ.');
   assert.equal(rateNoteText([]), '');
 });
+
+/* ========================= חלון ההתאמה — מה נספר ========================= */
+
+import { defaultGapLabel, windowNotes } from '../public/js/core/fitChoice.js';
+
+test('windowNotes — התחלה בעבר: רק מהיום; ארוך מ-26 שבועות: השבועות שאחרי יתמלאו כשיתקרבו', () => {
+  assert.deepEqual(windowNotes({ channels: [] }), []);
+  const past = windowNotes({ started_past: true, starts_on: '2026-09-01', from: '2026-10-08',
+                             channels: [] });
+  assert.deepEqual(past, ['הקמפיין התחיל ב-1.9 — נספר רק מה שעוד אפשר לשבץ, מ-8.10.']);
+  const long = windowNotes({ to: '2027-04-10', later_from: '2027-04-11',
+    channels: [{ channel_id: 1, later: 20 }, { channel_id: 2, later: 6 }] }, [1]);
+  assert.deepEqual(long, ['השבועות שאחרי 10.4 יתמלאו כשיתקרבו (עוד 20 פוסטים עד סוף הקמפיין).']);
+  // קמפיין מוכן — לפי fixed
+  const fixed = windowNotes({ to: '2027-04-10', later_from: '2027-04-11', channels: [],
+    fixed: { channels: [{ channel_id: 1, later: 1 }] } });
+  assert.match(fixed[0], /עוד פוסט אחד עד סוף הקמפיין/);
+});
+
+test('rateNoteText — מגבלת המכירתיים ולא "הקצב" כשהיא שמגבילה', () => {
+  assert.equal(rateNoteText([{ name: 'וואטסאפ', rate_cap: 2, rate_reason: 'promo' }]),
+    'גם בדחיסה, וואטסאפ יכניס עד 2 — מגבלת המכירתיים בערוץ.');
+  assert.equal(rateNoteText([{ name: 'פייסבוק', rate_cap: 4 }]),
+    'גם בדחיסה, פייסבוק יכניס עד 4 — הקצב של הערוץ.');
+});
+
+test('defaultGapLabel / gapReason — ברירת מחדל לכל ערוץ (סעיף 5)', () => {
+  assert.equal(defaultGapLabel({ gap_days: 1, channels: [{ name: 'א', gap_days: 1 }] }),
+    'ברירת המחדל (יום אחד)');
+  assert.equal(defaultGapLabel({ gap_days: 3, channels: [{ name: 'א', gap_days: 1 },
+                                                        { name: 'ב', gap_days: 3 }] }),
+    'ברירת המחדל, לפי הקצב של כל ערוץ (א יום אחד, ב 3 ימים)');
+  assert.match(gapReason({ gap_days: 7 }, [{ gap_days: 3, siblings: 1 }]), /הוא 3 ימים\.$/);
+});

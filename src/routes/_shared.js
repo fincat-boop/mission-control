@@ -3,6 +3,7 @@ import { currentOrg, one, query, rows } from '../db.js';
 import { applyWeek, lockEngine, notPlacedNotes, withEngineLock } from '../engine.js';
 import { weekMeta, ymd } from '../board.js';
 import { relocateBlocked } from '../respace.js';
+import { FILL_HORIZON_WEEKS } from '../capacity.js';
 
 /**
  * עזרים שכל קובצי הנתיבים נשענים עליהם.
@@ -81,8 +82,8 @@ async function guardedFill(label, run) {
   }
 }
 
-/** כמה שבועות לכל היותר ממלאים בשמירת קמפיין — חצי שנה */
-export const CAMPAIGN_FILL_MAX_WEEKS = 26;
+/** כמה שבועות לכל היותר ממלאים בשמירת קמפיין — חצי שנה (capacity.js, מקור אחד) */
+export const CAMPAIGN_FILL_MAX_WEEKS = FILL_HORIZON_WEEKS;
 
 /**
  * השבועות (תחילת שבוע, YYYY-MM-DD) שמילוי של קמפיין עובר עליהם: כל שבוע

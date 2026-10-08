@@ -648,6 +648,45 @@ export function weekGapLimit({ from, to, channel, endpoints, settings }) {
   return total;
 }
 
+/**
+ * כמה שבועות לכל היותר המילוי של קמפיין עובר עליהם בשמירה (campaignFillWeeks
+ * ב-routes/_shared.js) — חצי שנה. מה שאחריהם מתמלא כשהשבועות מתקרבים.
+ */
+export const FILL_HORIZON_WEEKS = 26;
+
+/** השעה האחרונה שבה המנוע עוד משבץ היום (planWeek: עד 22:00) */
+const LAST_ENGINE_HOUR = 22;
+
+/**
+ * החלון שבו אפשר באמת לשבץ לקמפיין עכשיו — לחלון ההתאמה (סעיף "חלון
+ * ההתאמה מבטיח יותר מדי"):
+ *   from  — לא לפני היום: קמפיין שהתחיל בעבר נספר מהיום (והיום — רק אם
+ *           נשארה שעה שהמנוע משבץ בה, אחרת ממחר)
+ *   to    — לא אחרי סוף השבוע ה-26 מהשבוע של from (FILL_HORIZON_WEEKS) —
+ *           עד שם המילוי של השמירה מגיע
+ *   later — מה שאחרי האופק: {from, to}, או null. מתמלא כשמתקרבים, לא עכשיו
+ *   started_past — הקמפיין התחיל לפני from
+ * null — בלי תאריכים. from > to — הקמפיין כבר נגמר (אין חלון).
+ * @param now Date — "עכשיו" (בדיקות)
+ */
+export function placeableWindow(campaign, now = new Date()) {
+  const s = ymdOf(campaign?.starts_on);
+  const e = ymdOf(campaign?.ends_on);
+  if (!s || !e) return null;
+  let first = ymdOf(now);
+  if (now.getHours() + 1 > LAST_ENGINE_HOUR) first = addDays(first, 1);
+  const from = s > first ? s : first;
+  // סוף השבוע ה-26: השבועות מתחילים בראשון, כמו weekMeta
+  const dow = new Date(utc(from)).getUTCDay();
+  const horizonEnd = addDays(from, FILL_HORIZON_WEEKS * 7 - 1 - dow);
+  const to = e < horizonEnd ? e : horizonEnd;
+  return {
+    from, to,
+    later: e > horizonEnd ? { from: addDays(horizonEnd, 1), to: e } : null,
+    started_past: s < from,
+  };
+}
+
 /** התקרה של מרווח לקמפיין — כמו האילוץ campaigns_min_gap_days_range */
 export const MAX_GAP_DAYS = 30;
 

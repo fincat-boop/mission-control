@@ -12,7 +12,8 @@ import {
 } from '../core/upload.js';
 import { inferPeriod } from '../core/period.js';
 import {
-  completeFit, compressGap, daysLabel, fitsText, gapReason, postsLabel, rateNoteText,
+  completeFit, compressGap, daysLabel, defaultGapLabel, fitsText, gapReason, postsLabel,
+  rateNoteText, windowNotes,
   sameShortage, shortChannels, totalCapacity, validGap,
 } from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
@@ -539,6 +540,8 @@ async function askFit(body, { editId = null, okLabel = 'שמור' } = {}) {
   const html = `<h3>לא כל הפוסטים נכנסים בזמן</h3>
     ${fitRowsHtml(rows.map((r) => [r.name, `הקצב מבקש ${r.rate_cap}`, `נכנסים ${r.capacity}`]))}
     <p class="fhint fitwhy">${esc(gapReason(draft, rows))}</p>
+    ${windowNotes(draft, rows.map((r) => r.channel_id))
+      .map((n) => `<p class="fhint">${esc(n)}</p>`).join('')}
     ${fitOptionsHtml(opts)}`;
   const choice = await confirmDialog('', { okLabel, html, read: readFit });
   if (!choice) return null;
@@ -590,7 +593,7 @@ async function openGapForm(campaign, reload) {
     title: `מרווח בין פוסטים — ${campaign.name}`,
     fields: [
       { name: 'gap_mode', label: 'ימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ', type: 'radio',
-        options: [['default', `ברירת המחדל (${daysLabel(base.gap_days)})`],
+        options: [['default', defaultGapLabel(base)],
           ['own', 'מרווח משלו לקמפיין הזה']],
         value: own ? 'own' : 'default' },
       { name: 'min_gap_days', label: 'ימים', type: 'number',
@@ -1890,6 +1893,8 @@ function completeFitHtml(fit, cap) {
   ].filter(Boolean);
   return `<p class="fitlead">לא כל מה שנכתב נכנס בתקופה, במרווח של ${daysLabel(cap.gap_days)}:</p>
     ${fitRowsHtml(fit.rows.map((r) => [r.name, `נכתבו ${r.written}`, `נכנסים ${r.capacity}`]))}
+    ${windowNotes(cap, fit.rows.map((r) => r.channel_id))
+      .map((n) => `<p class="fhint">${esc(n)}</p>`).join('')}
     ${fitOptionsHtml(opts)}`;
 }
 
