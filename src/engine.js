@@ -167,9 +167,9 @@ export async function planWeek(anchorDate, {
 
   const debts = await computeDebts(endpoints, settings, perf, week, now);
 
-  // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון. שבוע מרוסן — שער יחס
-  // לפי תקרה צפויה (ראו buildUsage). שער היחס נמדד על 28 יום לכל ערוץ:
-  // שלושת השבועות שלפני השבוע (prior) והשבוע עצמו
+  // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון. שער היחס — אחד בכל מילוי
+  // (חדר מכירתי, ראו buildUsage), נמדד על 28 יום לכל ערוץ: שלושת השבועות
+  // שלפני השבוע (prior) והשבוע עצמו
   const prior = await priorKinds(from);
   const usage = buildUsage(channels, existing, settings, { prior });
 
@@ -401,8 +401,8 @@ export async function applyWeek(anchorDate, {
 } = {}) {
   const fresh = await planWeek(anchorDate, { holes: withHoles, onlyCampaignId, now: at });
   const { plan, skipped: stale } = selectPlanItems(fresh, selected);
-  // בחירה חלקית: מכירתי שעבר את שער היחס בזכות פריטי ערך שהמשתמש הוריד
-  // מהסימון כבר לא מאוזן — יורד, ונאמר למה
+  // בחירה חלקית: כל מכירתי / משולב שנבחר נבדק שוב מול החדר של היחס
+  // (recheckSelection) — רשת ביטחון; מה שלא נכנס יורד, ונאמר למה
   let dropped = [];
   if (Array.isArray(selected)) {
     ({ placements: plan.placements, dropped } = recheckSelection(plan, fresh.ctx));
@@ -1309,8 +1309,8 @@ export function buildUsage(channels, existing, settings, { prior = new Map() } =
 
     if (kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return 'promo_day';
     if (kind === 'promo' || kind === 'hybrid') {
-      // שער היחס: מכירתי / משולב נוסף מותר רק אם יש מספיק ערך בחלון שיאזן
-      // אותו (או, בשבוע מרוסן, רק עד התקרה הצפויה)
+      // שער היחס: מכירתי / משולב נוסף מותר רק כשהמשקל שלו נכנס בחדר
+      // המכירתי של 28 הימים ושל השבוע (promoRoomAllows)
       const why = ratioReason(u, u.win, u.byKind, kind);
       if (why) { block(channelId, contentId); return why; }
     }

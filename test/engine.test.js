@@ -1016,3 +1016,13 @@ test('F2 — "בטל": ההודעה אומרת לאיזה שבוע הוויתו�
   assert.equal(undoWeeksPhrase(['2026-11-01'], now), 'לשבוע של 1.11');
   assert.equal(undoWeeksPhrase(['2026-10-04', '2026-10-11', '2026-10-18'], now), 'לשבועות האלה');
 });
+
+test('contentOrder — D1: כשקמפיין רץ לנקודה, משולב לפני מכירתי (ואז ערך); בלי קמפיין — ערך קודם', () => {
+  const r = (id, kind, campaign_id = 5) => ({ id, kind, campaign_id, sort_order: id,
+                                              ready_channel_ids: [1] });
+  const list = [r(1, 'promo'), r(2, 'value'), r(3, 'hybrid')];
+  const order = (inCampaign) =>
+    [...list].sort(contentOrder({ channelId: 1, inCampaign })).map((c) => c.kind);
+  assert.deepEqual(order(true), ['hybrid', 'promo', 'value']);
+  assert.deepEqual(order(false), ['value', 'hybrid', 'promo']);
+});
