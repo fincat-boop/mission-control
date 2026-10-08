@@ -5,7 +5,7 @@ import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel
 import { spreadDate } from '../public/js/core/period.js';
 import {
   averageSharesByChannel, channelBudget, effectiveGap, gapOn, kindWeights, RATIO_WINDOW_DAYS,
-  ratioAllowsPromo, ratioPromoCap, weeklyPromoCap, windowRatio,
+  ratioAllowsPromo, ratioPromoCap, ratioWindowStart, weeklyPromoCap, windowRatio,
 } from './capacity.js';
 import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
@@ -791,12 +791,6 @@ export function chooseHoleFills({
 
 /* ========================= חוב אוויר ========================= */
 
-/** YYYY-MM-DD + n ימים, בלי מעבר שעון */
-function addDaysKey(dateKey, n) {
-  const [y, m, d] = dateKey.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-}
-
 /** הסטטוסים של פוסט שתופס שטח — אותם שהמנוע סופר כקיימים על הלוח */
 const LIVE_STATUSES = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
 
@@ -825,9 +819,10 @@ const UPCOMING_STATUSES = ['scheduled', 'approved', 'publishing', 'pending_appro
  *
  * היעד של נקודה בערוץ = סכום הנתחים של הקמפיינים שלה שחופפים לשבוע ויושבים
  * בערוץ, כל אחד ממוצע הנתח היומי שלו בשבוע באותו ערוץ (averageSharesByChannel
- * — אותו חשבון כמו הרשת, סעיף 4). החלון שבו נמדד "בפועל" מתחיל ב-starts_on
- * המוקדם של אותם קמפיינים, ובלי תאריך כזה — 90 יום לפני השבוע; ונגמר בסוף
- * השבוע המתוכנן.
+ * — אותו חשבון כמו הרשת, סעיף 4). החלון שבו נמדד "בפועל" — 28 הימים של חלון
+ * היחס (ratioWindowStart: שלושת השבועות שלפני השבוע המתוכנן והשבוע עצמו,
+ * סעיף 9). קודם הוא התחיל ב-starts_on המוקדם של הקמפיינים בשבוע, וקמפיין
+ * שהתחיל מאוחר יותר "פיגר" לתמיד מול ותיק שצבר פוסטים מתחילתו.
  *
  * @param campaigns שורות CAMPAIGNS_WEIGHTED_SQL (עם endpoint_importance ו-channel_ids)
  * @param week {days:[{date}]} — weekMeta
@@ -842,18 +837,15 @@ export function strategyTargets(campaigns, week, { channelIds = null } = {}) {
   const shares = averageSharesByChannel(campaigns, { from: weekFrom, to: weekTo, channelIds });
 
   const targetPct = new Map();
-  const starts = new Set();
   for (const [ch, byCampaign] of shares) {
     const t = new Map();
     for (const c of campaigns) {
       if (!byCampaign.has(c.id)) continue;
       t.set(c.endpoint_id, (t.get(c.endpoint_id) ?? 0) + byCampaign.get(c.id) * 100);
-      if (c.starts_on) starts.add(String(c.starts_on).slice(0, 10));
     }
     if (t.size) targetPct.set(ch, t);
   }
-  const from = [...starts].sort()[0] ?? addDaysKey(weekFrom, -90);
-  return { targetPct, from, to: weekTo, shares };
+  return { targetPct, from: ratioWindowStart(weekFrom), to: weekTo, shares };
 }
 
 /**

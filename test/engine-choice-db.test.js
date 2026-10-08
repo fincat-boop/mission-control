@@ -179,3 +179,43 @@ test('סעיף 8 — נקודה טרייה בוואטסאפ אבל ותיקה ב
   assert.ok(parts.bWa.staleness >= 2, String(parts.bWa.staleness));
   await wipe();
 });
+
+/* ========================= 9. חלון הפער מול הנתח ========================= */
+
+test('סעיף 9 — קמפיין שהתחיל מאוחר לא זוכה כמעט בכל משבצת אחרי 8 פוסטים לכל אחד', { skip }, async () => {
+  await wipe();
+  const week = weekMeta(inDays(7));
+  const start = new Date(`${week.days[0].date}T10:00:00`);
+  const ch = await channel('פייסבוק', 7);
+  const a = await endpoint('ותיק');
+  const b = await endpoint('חדש');
+  const ends = inDays(60);
+  // א רץ כבר 10 שבועות (24 פוסטים), ב התחיל לפני 3 שבועות (8 פוסטים). בחודש
+  // האחרון — 7 מול 8. קודם החלון התחיל ב-starts_on של א, ו-ב "פיגר" 8 מול 32
+  const ca = await campaign(a.id, ch.id, { name: 'ותיק', starts: ymd(daysAgo(70, start)), ends });
+  const cb = await campaign(b.id, ch.id, { name: 'חדש', starts: ymd(daysAgo(21, start)), ends });
+  const ia = await items(a.id, ch.id, 34, { campaignId: ca.id, prefix: 'א' });
+  const ib = await items(b.id, ch.id, 18, { campaignId: cb.id, prefix: 'ב' });
+  for (let i = 0; i < 24; i += 1) {
+    await post(ch.id, a.id, daysAgo(70 - i * 3 - 1, start), { contentId: ia[i] });
+  }
+  for (let i = 0; i < 8; i += 1) {
+    await post(ch.id, b.id, daysAgo(21 - Math.round(i * 2.6) - 1, start), { contentId: ib[i] });
+  }
+
+  const parts = await inOrg(async () => {
+    const eps = await db.rows('select * from endpoints order by id');
+    const settings = await db.one('select * from engine_settings limit 1');
+    const debts = await engine.computeDebts(eps, settings, null, week);
+    return { a: debts.parts(a.id, ch.id), b: debts.parts(b.id, ch.id) };
+  });
+  assert.ok(parts.b.deficit < 0.06, `ב מפגר ${parts.b.deficit}`);
+  assert.ok(parts.a.deficit < 0.06, `א מפגר ${parts.a.deficit}`);
+
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const by = (id) => plan.placements.filter((p) => p.endpoint_id === id).length;
+  assert.ok(plan.placements.length >= 6, String(plan.placements.length));
+  assert.ok(Math.abs(by(a.id) - by(b.id)) <= 1,
+    `א ${by(a.id)} / ב ${by(b.id)}: ${plan.placements.map((p) => p.endpoint_name).join(', ')}`);
+  await wipe();
+});

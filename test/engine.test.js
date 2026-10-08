@@ -555,7 +555,8 @@ test('strategyTargets — קמפיין עתידי מושך את הנקודה ש�
   const targetPct = byCh.get(1);
   assert.equal(targetPct.get(2), 40);
   assert.equal(Math.round(targetPct.get(1)), 60);          // היתרה לאוטומטי
-  assert.equal(from, '2026-10-01');                       // starts_on המוקדם בשבוע
+  // סעיף 9: החלון של "בפועל" = 28 יום (כמו שער היחס), לא מתחילת הקמפיין הוותיק
+  assert.equal(from, '2026-11-01');                       // 22.11 − 21
   assert.equal(to, bfWeek.days[6].date);
 
   // עד עכשיו לנקודה 1 יש 10 פוסטים חיים בחלון, ולנקודה 2 אף אחד
@@ -572,11 +573,11 @@ test('strategyTargets — בשבוע של היום בלאק פריידי עוד 
   assert.equal(strategyDeficits(targetPct, [{ endpoint_id: 1, n: 3 }]).get(2), undefined);
 });
 
-test('strategyTargets — בלי קמפיינים בשבוע: החלון 90 יום אחורה, בלי יעדים', () => {
+test('strategyTargets — בלי קמפיינים בשבוע: אותו חלון של 28 יום, בלי יעדים', () => {
   const w = weekMeta('2027-03-10');
   const { targetPct, from } = strategyTargets([routine, blackFriday], w);
   assert.equal(targetPct.size, 0);
-  assert.equal(from, '2026-12-07');                       // 7.3.2027 − 90
+  assert.equal(from, '2027-02-14');                       // 7.3.2027 − 21 (סעיף 9)
 });
 
 test('strategyTargets — מושהה לא מושך; מפורשים מעל 100% מוקטנים', () => {

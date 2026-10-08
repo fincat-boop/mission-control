@@ -441,6 +441,17 @@ export function kindWeights({ promo = 0, value = 0, hybrid = 0 }, hybridWeight) 
 export const RATIO_WINDOW_DAYS = 28;
 
 /**
+ * היום הראשון (YYYY-MM-DD) של החלון המתגלגל שמסתיים בשבוע weekStart: 28
+ * הימים של RATIO_WINDOW_DAYS — שלושת השבועות שלפני השבוע המתוכנן והשבוע
+ * עצמו. אותו חלון בשער היחס (priorKinds במנוע) ובפער מהנתח (strategyTargets,
+ * סעיף 9) — קמפיין ותיק לא נמדד מתחילתו, אלא מהחודש האחרון כמו כולם.
+ * @param weekStart תחילת השבוע המתוכנן, YYYY-MM-DD
+ */
+export function ratioWindowStart(weekStart) {
+  return addDays(ymdOf(weekStart), -(RATIO_WINDOW_DAYS - 7));
+}
+
+/**
  * כמה פוסטי ערך נדרשים לכל מכירתי בערוץ בפועל: min_value_per_promo (0 = השער
  * כבוי), אבל לא יותר ממה שהערוץ מכיל ב-28 יום פחות המכירתי עצמו. ערוץ של
  * פוסט אחד בשבוע (4 בחלון) ביחס 5 היה חוסם מכירתי לתמיד — כאן הוא מקבל
