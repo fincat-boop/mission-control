@@ -167,7 +167,7 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
 
   // buildSlots כבר מסנן ימים חסומים בערוץ; כאן מסננים גם ימים שעברו
   const pending = new Set(
-    buildSlots(week, channels, null).filter((s) => s.dateKey >= today)
+    buildSlots(week, channels).filter((s) => s.dateKey >= today)
   );
 
   while (pending.size && [...queues.values()].some((q) => q.length)) {

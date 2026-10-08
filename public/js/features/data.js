@@ -458,21 +458,24 @@ function effRows(list, labelKey) {
 }
 
 /**
- * האם הציונים האלה מזיזים את הלוח — המתג use_performance בניהול. בלי
- * השורה הזו אין דרך לדעת מכאן אם המספרים רק מוצגים או גם משבצים.
+ * מה מהציונים האלה מזיז את הלוח (סעיף 33): רק נקודות קצה, מ-5 תוצאות, עד ±15%
+ * מהחשיבות — לפי החלון של המנוע (p.engine, 180 יום), לא התקופה שנבחרה.
  */
 function engineLine(p) {
-  const on = p.use_performance;
+  const e = p.engine;
+  const on = e.endpoints.filter((x) => x.nudge !== 1);
+  const pct = (x) => `${x.nudge > 1 ? '+' : ''}${Math.round((x.nudge - 1) * 100)}%`;
   return `<div class="engline">
-    <span class="engstate ${on ? 'on' : 'off'}"><i></i>השפעה על השיבוץ: ${on ? 'פעילה' : 'כבויה'}</span>
-    <span class="enghint">${on
-      ? 'המנוע מעדיף נקודות, ערוצים, ימים ושעות עם ציון גבוה.'
-      : 'הציונים רק מוצגים כאן ולא משנים את הלוח.'}</span>
-    <button class="btn small" data-goto-perf>לשינוי בניהול</button>
+    <span class="engstate ${on.length ? 'on' : 'off'}"><i></i>השפעה על השיבוץ: ${on.length
+      ? on.map((x) => `${esc(x.name)} ${pct(x)}`).join(' · ') : 'עוד אין'}</span>
+    <span class="enghint">רק נקודות קצה עם ${e.min_results} תוצאות ומעלה ב-${e.window_days} הימים
+      האחרונים, עד ±${e.band_pct}% מהחשיבות. הטבלאות למטה — לתקופה שנבחרה; ערוצים, ימים ושעות
+      רק מוצגים ולא משנים את השיבוץ.</span>
+    <button class="btn small" data-goto-perf>לכלל בניהול</button>
   </div>`;
 }
 
-/** מעבר להגדרה עצמה: טאב ניהול, פתיחת "מתקדם — כללי המנוע" וגלילה אל המתג */
+/** מעבר לכלל עצמו: טאב ניהול, פתיחת "מתקדם — כללי המנוע" וגלילה אל השורה */
 async function goToPerfSetting() {
   if (!(await confirmDiscard())) return;
   await goToTab('manage');

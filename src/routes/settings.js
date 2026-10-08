@@ -17,9 +17,9 @@ r.get('/settings', wrap(async (_req, res) => {
 
 r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
   // שורת engine_settings אחת לכל ארגון, ו-RLS כבר מסנן אליה — אין צורך ב-where.
+  // use_performance לא כאן מאז סעיף 33: הביצועים משפיעים לבד (performance.js)
   const allowed = ['min_gap_days', 'max_promo_per_day', 'hybrid_weight',
-    'content_alert_hours', 'min_value_per_promo', 'use_performance',
-    'autopublish_enabled'];
+    'content_alert_hours', 'min_value_per_promo', 'autopublish_enabled'];
   const entries = Object.entries(req.body ?? {}).filter(([k]) => allowed.includes(k));
   let s;
   if (entries.length === 0) {

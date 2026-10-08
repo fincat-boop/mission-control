@@ -1,4 +1,4 @@
-import { one, rows } from './db.js';
+import { rows } from './db.js';
 import { POST_AT, inLocalDays, periodOf } from './stats.js';
 import { presetRange } from '../public/js/core/dataPeriod.js';
 
@@ -194,16 +194,54 @@ async function loadResults(period) {
   );
 }
 
+/** כמה ימים אחורה המנוע לומד (endpointNudges) — וגם השורה "מה המנוע לומד" במסך הנתונים */
+export const ENGINE_WINDOW_DAYS = 180;
+
+/** מכמה תוצאות מדודות לנקודה הביצועים שלה משפיעים על השיבוץ (סעיף 33) */
+export const PERF_MIN_RESULTS = 5;
+
+/** עד כמה הביצועים מזיזים את החשיבות — ±15% */
+export const PERF_BAND = 0.15;
+
+/**
+ * המכפיל על החשיבות של נקודה לפי הביצועים שלה (סעיף 33): הציון המכווץ
+ * (shrink), חסום ל-±15%, ורק מ-5 תוצאות מדודות בחלון של המנוע. פחות מזה —
+ * בדיוק 1.0: נקודה לא "מרוויחה" או "מפסידה" מקום על סמך פוסט או שניים.
+ * רק הממד של נקודת הקצה נכנס למנוע; ערוץ / יום / שעה מוצגים בלבד.
+ * @param agg {score, n} — aggregateBy לנקודה, או null כשאין לה תוצאות
+ */
+export function importanceNudge(agg) {
+  if (!agg || !(agg.n >= PERF_MIN_RESULTS) || !Number.isFinite(agg.score)) return NEUTRAL;
+  return Math.min(NEUTRAL + PERF_BAND, Math.max(NEUTRAL - PERF_BAND, agg.score));
+}
+
+/**
+ * הציון של כל נקודה בחלון של המנוע, והמכפיל שהוא נותן לחשיבות.
+ * פונקציה טהורה מעל scoreAll — לבדיקות ולמסך הנתונים.
+ * @returns {Map<number, {score:number, n:number, nudge:number}>}
+ */
+export function nudgesFrom(results) {
+  const { scored } = scoreAll(results);
+  const out = new Map();
+  for (const [id, agg] of aggregateBy(scored, (s) => s.endpoint_id)) {
+    out.set(id, { score: agg.score, n: agg.n, nudge: importanceNudge(agg) });
+  }
+  return out;
+}
+
+/** החלון של המנוע: ENGINE_WINDOW_DAYS הימים האחרונים כולל היום */
+const engineRange = (days = ENGINE_WINDOW_DAYS) => presetRange(String(days + 1));
+
 /**
  * טבלאות היעילות לתקופה. מחזיר לכל ממד מפה של ערך -> {score, n}.
- * צרכנים: מסך "נתונים", והמנוע (כשהמתג use_performance דלוק).
+ * צרכנים: מסך "נתונים". הטבלאות — לתקופה שנבחרה; engine — מה שהמנוע
+ * באמת משתמש בו: נקודות הקצה בחלון של ENGINE_WINDOW_DAYS ימים.
  */
 export async function buildPerformance(from, to) {
   const period = periodOf(from, to);
   const results = await loadResults(period);
   const endpoints = await rows('select id, name from endpoints order by id');
   const channels = await rows('select id, name from channels order by sort_order, id');
-  const settings = await one('select use_performance from engine_settings limit 1');
 
   const { scored } = scoreAll(results);
 
@@ -239,12 +277,25 @@ export async function buildPerformance(from, to) {
 
   // רשימת "ממתינים להזנה" שהייתה כאן עברה ל-GET /results (src/results.js)
 
+  // מה המנוע לומד: אותו חלון ואותו כלל כמו planWeek (endpointNudges)
+  const range = engineRange();
+  const nudges = nudgesFrom(await loadResults(range));
+
   return {
     period: { from: period.from, to: period.to, days: period.days },
     measured: scored.length,
     shrink_k: SHRINK_K,
-    // האם הציונים האלה מזיזים בפועל את השיבוץ (מתג בניהול → מתקדם)
-    use_performance: !!settings?.use_performance,
+    engine: {
+      window_days: ENGINE_WINDOW_DAYS,
+      from: range.from,
+      to: range.to,
+      min_results: PERF_MIN_RESULTS,
+      band_pct: Math.round(PERF_BAND * 100),
+      endpoints: endpoints.map((e) => {
+        const x = nudges.get(e.id);
+        return { id: e.id, name: e.name, n: x?.n ?? 0, nudge: x?.nudge ?? NEUTRAL };
+      }),
+    },
     endpoints: named(byEndpoint, endpoints),
     channels: named(byChannel, channels),
     days: [...byDow].map(([dow, v]) => ({ dow, label: HE_DAYS[dow], ...v }))
@@ -259,22 +310,15 @@ export async function buildPerformance(from, to) {
 }
 
 /**
- * המפות שהמנוע צריך. תקופה ארוכה יותר מהתצוגה בכוונה — לשיבוץ עדיף
- * בסיס רחב ויציב על פני החודש האחרון בלבד.
- * @returns {Promise<{endpoint: Map<number,number>, channel: Map<number,number>,
- *                    dow: Map<number,number>, bucket: Map<string,number>}>}
+ * המכפיל על החשיבות של כל נקודה, למנוע (סעיף 33) — ENGINE_WINDOW_DAYS ימים
+ * אחורה: לשיבוץ עדיף בסיס רחב ויציב על פני התקופה שמוצגת במסך. נקודה
+ * בלי 5 תוצאות לא במפה (= 1.0). אין מתג: זה נדלק לבד לכל נקודה שצברה.
+ * @returns {Promise<Map<number, number>>} נקודה → מכפיל (0.85..1.15)
  */
-export async function performanceMultipliers(days = 180) {
-  const results = await loadResults(presetRange(String(days + 1)));
-
-  const { scored } = scoreAll(results);
-  const flat = (map) => new Map([...map].map(([key, v]) => [key, v.score]));
-
-  return {
-    endpoint: flat(aggregateBy(scored, (s) => s.endpoint_id)),
-    channel: flat(aggregateBy(scored, (s) => s.channel_id)),
-    dow: flat(aggregateBy(scored, (s) => s.dow)),
-    bucket: flat(aggregateBy(scored, (s) => s.bucket)),
-    measured: scored.length,
-  };
+export async function endpointNudges(days = ENGINE_WINDOW_DAYS) {
+  const out = new Map();
+  for (const [id, x] of nudgesFrom(await loadResults(engineRange(days)))) {
+    if (x.nudge !== NEUTRAL) out.set(id, x.nudge);
+  }
+  return out;
 }

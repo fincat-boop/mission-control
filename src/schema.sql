@@ -408,9 +408,10 @@ create table if not exists engine_settings (
 alter table engine_settings
   add column if not exists min_value_per_promo numeric(3,1) not null default 3;
 
--- האם היעילות הנמדדת (post_results) משפיעה בפועל על השיבוץ.
--- כבוי כברירת מחדל: קודם אוספים נתונים ורואים שהם הגיוניים, ורק אז
--- נותנים להם להזיז את הלוח.
+-- (לא נקרא מאז סעיף 33 בשיפורי ההתנהגות, 8.10.26.) היה מתג "הביצועים משפיעים
+-- על השיבוץ". היום אין מתג: הביצועים של נקודה מזיזים את החשיבות שלה עד ±15%
+-- לבד, מ-5 תוצאות מדודות (importanceNudge ב-performance.js). העמודה נשארת —
+-- אין מי שקורא או כותב אותה.
 alter table engine_settings
   add column if not exists use_performance boolean not null default false;
 

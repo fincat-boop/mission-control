@@ -1,6 +1,6 @@
 import { currentOrg, one, rows, query } from './db.js';
 import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
-import { performanceMultipliers, hourBucket } from './performance.js';
+import { endpointNudges } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
 import {
@@ -29,10 +29,10 @@ import {
 // יותר STALENESS = "אף אחד לא נשכח", יותר STRATEGY = "נצמדים לנתחים של הקמפיינים".
 const W_STALENESS = 1.0;  // כמה זמן עבר מאז שהנקודה פורסמה, ביחס לקצב שהוגדר לה
 const W_STRATEGY  = 0.8;  // כמה היא מפגרת אחרי הנתח של הקמפיינים שלה (strategyTargets)
-const W_IMPORTANCE = 0.5; // החשיבות הידנית שהוגדרה לה
-// יעילות שנמדדה בפועל. פועל רק כשהמתג use_performance דלוק, ובכוונה
-// נמוך מהוותק — מה שעבד טוב מקבל דחיפה, אבל נקודה חלשה לא נעלמת מהלוח.
-const W_PERFORMANCE = 0.6;
+const W_IMPORTANCE = 0.5; // החשיבות שהוגדרה לה, כפול המכפיל של הביצועים (סעיף 33)
+// הביצועים הנמדדים לא רכיב נפרד בחוב (קודם 0.6 × (ציון − 1): שתי תוצאות
+// הזיזו ~3 נקודות חשיבות). היום הם רק מכפיל חסום על החשיבות — ±15%, מ-5
+// תוצאות לנקודה (importanceNudge ב-performance.js)
 
 /** שעת השיבוץ כשלערוץ אין שעה משלו (channels.default_hour) */
 export const DEFAULT_HOUR = 10;
@@ -161,11 +161,11 @@ export async function planWeek(anchorDate, {
       : 'אין תוכן מוכן לשיבוץ.');
   }
 
-  // יעילות נמדדת מתוצאות אמיתיות. נטענת רק כשהמתג דלוק — כשהוא כבוי
-  // אין אפילו שאילתה, והמנוע מתנהג בדיוק כמו לפני הפיצ'ר.
-  const perf = settings?.use_performance ? await performanceMultipliers() : null;
+  // הביצועים של כל נקודה כמכפיל חסום על החשיבות (סעיף 33). אין מתג: נקודה
+  // בלי 5 תוצאות מדודות לא במפה — 1.0, כמו לפני הפיצ'ר
+  const nudges = await endpointNudges();
 
-  const debts = await computeDebts(endpoints, settings, perf, week, now);
+  const debts = await computeDebts(endpoints, settings, nudges, week, now);
 
   // מצב מתגלגל של הקיבולת. מתעדכן תוך כדי התכנון. שער היחס — אחד בכל מילוי
   // (חדר מכירתי, ראו buildUsage), נמדד על 28 יום לכל ערוץ: שלושת השבועות
@@ -252,7 +252,7 @@ export async function planWeek(anchorDate, {
 
   // כל שילוב (ערוץ, יום) אפשרי. הסדר נקבע תוך כדי, לא מראש — ראו nextSlot.
   // ימים שעברו לא נכנסים בכלל — קודם תכנון השבוע של 6.9 הציע פוסטים ל-6–12.9
-  const pending = new Set(buildSlots(week, channels, perf, { today }));
+  const pending = new Set(buildSlots(week, channels, { today }));
 
   while (pending.size) {
     const slot = nextSlot(pending, usage, week);
@@ -993,8 +993,24 @@ export function stalenessOf(lastAt, reference, endpoint, cap = 3) {
   return { daysSince: null, staleness: age === null ? 2 : Math.max(2, Math.min(age / cadence, cap)) };
 }
 
-/** חוב האוויר של כל נקודה לשבוע המתוכנן. מיוצא לבדיקות. */
-export async function computeDebts(endpoints, settings, perf = null, week = weekMeta(new Date()), now = new Date()) {
+/**
+ * הציון של נקודה למשבצת — הסכום המשוקלל של המרכיבים. מיוצא לבדיקות.
+ * importance — החשיבות כפול המכפיל של הביצועים, חלקי 10 (computeDebts);
+ * already — כמה כבר הוצע לה בריצה הזו (פיזור).
+ */
+export function debtScore({ staleness, importance }, deficit = 0, already = 0) {
+  return W_STALENESS * staleness
+       + W_STRATEGY * deficit
+       + W_IMPORTANCE * importance
+       - already * 0.6;
+}
+
+/**
+ * חוב האוויר של כל נקודה לשבוע המתוכנן. מיוצא לבדיקות.
+ * nudges — Map נקודה → מכפיל על החשיבות מהביצועים (endpointNudges, סעיף 33);
+ * נקודה שלא במפה / null — 1.0
+ */
+export async function computeDebts(endpoints, settings, nudges = null, week = weekMeta(new Date()), now = new Date()) {
   // הפוסט האחרון של כל נקודה לפני נקודת הייחוס, משלושה סוגים:
   //  - מה שפורסם (מתי שפורסם), בכל זמן לפני הייחוס;
   //  - מה שעוד עתיד לצאת (מתוכנן/מאושר/ממתין/בפרסום, scheduled_at >= עכשיו)
@@ -1122,13 +1138,13 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
   for (const e of endpoints) {
     const { daysSince, staleness } = stalenessOf(lastMap.get(e.id) ?? null, reference, e, neverCap);
 
-    // המכפיל מרוכז סביב 1.0 (ניטרלי). מחסרים 1 כדי שנקודה בלי נתונים
-    // תתרום בדיוק 0 לציון, נקודה מוצלחת תוסיף, וחלשה תוריד מעט.
-    const perfMult = perf?.endpoint.get(e.id) ?? 1;
+    // המכפיל של הביצועים (0.85..1.15) — רק על החשיבות; בלי מספיק תוצאות 1.0.
+    // הקצב (60/חשיבות) והנתח נשארים לפי החשיבות שהוגדרה — כמו בטופס
+    const nudge = nudges?.get(e.id) ?? 1;
 
     parts.set(e.id, {
-      staleness, importance: e.importance / 10, daysSince,
-      performance: perf ? perfMult : null,
+      staleness, importance: (e.importance * nudge) / 10, daysSince,
+      performance: nudge === 1 ? null : nudge,
     });
   }
 
@@ -1150,11 +1166,7 @@ export async function computeDebts(endpoints, settings, perf = null, week = week
       if (!p) return 0;
       // כל שיבוץ שכבר הוצע בריצה הזו מקטין את החוב, כדי שהמנוע יתפזר
       const already = scheduledBoost.get(endpointId) ?? 0;
-      return W_STALENESS * p.staleness
-           + W_STRATEGY * deficitOf(endpointId, channelId)
-           + W_IMPORTANCE * p.importance
-           + (p.performance == null ? 0 : W_PERFORMANCE * (p.performance - 1))
-           - already * 0.6;
+      return debtScore(p, deficitOf(endpointId, channelId), already);
     },
     /**
      * המרכיבים של נקודה. עם ערוץ — הוותק (staleness, daysSince) והפיגור
@@ -1436,27 +1448,19 @@ export function buildUsage(channels, existing, settings, { prior = new Map() } =
  * ימים שהערוץ חסם לגמרי לא נכנסים בכלל, כדי שחישוב המרווח לא יתייחס אליהם
  * כמקום פנוי אפשרי.
  *
- * efficiency = איכות המשבצת: יעילות שנמדדה בפועל (ערוץ × יום × חלון שעות)
- * כשהמתג דלוק ויש מספיק דגימות; אחרת דירוג ידני channels.efficiency.
+ * efficiency = איכות המשבצת: הדירוג הידני channels.efficiency (ריק — 5).
+ * הביצועים הנמדדים לא נוגעים בה (סעיף 33) — הם משפיעים רק על הנקודה.
  *
  * today (YYYY-MM-DD, לא חובה) — ימים לפניו לא נכנסים: המנוע לא מציע פוסט
  * לתאריך שכבר עבר. בלי today — כל השבוע (בדיקות של הלולאה על שבוע קבוע).
  */
-export function buildSlots(week, channels, perf = null, { today = null } = {}) {
+export function buildSlots(week, channels, { today = null } = {}) {
   const slots = [];
   for (const ch of channels) {
     week.days.forEach((day, index) => {
       if (today && day.date < today) return;
       const date = new Date(`${day.date}T00:00:00`);
       if ((ch.blocked_days ?? []).includes(date.getDay())) return;
-
-      // הנמדד מנורמל סביב 1.0 והידני הוא 1–10 — מיישרים אותו לאותו סולם
-      // כדי ששני המקורות יהיו בני-השוואה במיון אחד.
-      const measured = perf
-        ? (perf.channel.get(ch.id) ?? 1)
-            * (perf.dow.get(date.getDay()) ?? 1)
-            * (perf.bucket.get(hourBucket(channelHour(ch))) ?? 1)
-        : null;
 
       slots.push({
         channel_id: ch.id,
@@ -1466,7 +1470,7 @@ export function buildSlots(week, channels, perf = null, { today = null } = {}) {
         dateKey: day.date,
         index,
         label: day.label,
-        efficiency: measured != null ? measured * 5 : (ch.efficiency ?? 5),
+        efficiency: ch.efficiency ?? 5,
       });
     });
   }
@@ -1883,11 +1887,10 @@ export function chooseForSlot(ctx) {
   if (p.deficit > 0.05) bits.push(`מפגרת ${Math.round(p.deficit * 100)} נק' אחרי הנתח שלה`);
   if (best.inCampaign) bits.push('קמפיין רץ');
   if (best.draft) bits.push('התוכן עוד בטיוטה — צריך לכתוב את הניסוח הסופי');
-  // רק כשהיעילות הנמדדת באמת הזיזה משהו — 1.0 הוא ניטרלי ולא מעניין
-  if (p.performance != null && Math.abs(p.performance - 1) >= 0.08) {
-    bits.push(p.performance > 1
-      ? `ביצועים גבוהים (${p.performance.toFixed(2)})`
-      : `ביצועים נמוכים (${p.performance.toFixed(2)})`);
+  // הביצועים הזיזו את החשיבות (5 תוצאות ומעלה, עד ±15%)
+  if (p.performance != null && Math.abs(p.performance - 1) >= 0.01) {
+    const pct = Math.round((p.performance - 1) * 100);
+    bits.push(`ביצועים ${pct > 0 ? `+${pct}` : pct}% לחשיבות`);
   }
   bits.push(`חשיבות ${best.endpoint.importance}`);
 

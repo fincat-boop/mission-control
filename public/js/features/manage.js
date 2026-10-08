@@ -271,7 +271,7 @@ function channelItem(c, ro, conn, hubReady) {
           ${num('עדיפות ערוץ (1–10)', 'efficiency', c.efficiency, '', 10)}
           <div class="fhint">
             עדיפות ריקה = ניטרלי. היא מכריעה רק בין שני מועדים שקולים בשבוע — לא קובעת כמה
-            מתפרסם. כשהביצועים הנמדדים משפיעים על השיבוץ (כללי המנוע), המדידה מחליפה אותה.
+            מתפרסם. הביצועים הנמדדים לא משנים אותה.
           </div>
           <div class="prow">
             <label for="chf-default_hour-${c.id}">שעת פרסום רגילה</label>
@@ -384,15 +384,10 @@ function systemGroup(users, settings, backupsRes, ro, apiKeysRes) {
           ${eng('כמה פוסט "משולב" נחשב מכירתי (0–1)', 'hybrid_weight', s.hybrid_weight, '0.1')}
           <div class="fhint enghint-row">1 = נספר כמו מכירתי מלא, 0.5 = חצי מכירתי וחצי ערך, 0 = נספר כערך.</div>
           ${eng('התראה על פוסט חסר תוכן — כמה שעות לפני המועד', 'content_alert_hours', s.content_alert_hours)}
-          <div class="prow">
-            <label class="cbline">
-              <input type="checkbox" id="engUsePerf" ${s.use_performance ? 'checked' : ''} ${dis}>
-              לתת לביצועים הנמדדים להשפיע על השיבוץ
-            </label>
-          </div>
-          <div class="fhint enghint-row">
-            דולק = ערוצים, ימים ונקודות קצה שהתוצאות שלהם טובות יותר מקבלים עדיפות בשיבוץ הבא.
-            כבוי = התוצאות רק מוצגות בטאב "נתונים". כדאי להדליק אחרי שיש מספיק מדידות.
+          <!-- סעיף 33: אין מתג — הביצועים משפיעים לבד. id נשאר ל"לכלל בניהול" בטאב נתונים -->
+          <div class="fhint enghint-row" id="engUsePerf" tabindex="-1">
+            ביצועים משפיעים על נקודת קצה מ-5 תוצאות ומעלה, עד ±15% מהחשיבות שלה — לפי 180 הימים
+            האחרונים. ערוצים, ימים ושעות רק מוצגים בטאב "נתונים" ולא משנים את השיבוץ.
           </div>
         </div>
       </details>
@@ -766,15 +761,6 @@ function wireManage(ro, connections, apiKeysRes, pubStatus) {
       engineToast(res, 'נשמר.');
       await refreshBoard();
     })));
-
-  $('#engUsePerf')?.addEventListener('change', run(async (e) => {
-    const on = e.target.checked;
-    const res = await api('/settings',
-      { method: 'PATCH', body: { use_performance: on, week: state.week } });
-    engineToast(res, on ? 'נשמר — הביצועים הנמדדים משפיעים עכשיו על השיבוץ.'
-                        : 'נשמר — הביצועים רק נמדדים, בלי להשפיע על הלוח.');
-    await refreshBoard();
-  }));
 
   // יחס ערך/מכירתי אופציונלי — 0 אומר למנוע לא לאכוף אותו בכלל
   $('#engRatioOn')?.addEventListener('change', run(async (e) => {

@@ -21,7 +21,7 @@ function channel(over = {}) {
 function fill(channels, existing = [], anchor = '2026-08-12') {
   const week = weekMeta(anchor);
   const usage = buildUsage(channels, existing, SETTINGS);
-  const pending = new Set(buildSlots(week, channels, null));
+  const pending = new Set(buildSlots(week, channels));
   const picked = [];
 
   while (pending.size) {
@@ -70,7 +70,7 @@ test('תקציב מלא ממלא כל יום פעם אחת', () => {
 test('ימים חסומים לא נכנסים למשבצות בכלל', () => {
   const week = weekMeta('2026-08-12');
   // 0 = ראשון, 6 = שבת
-  const slots = buildSlots(week, [channel({ blocked_days: [5, 6] })], null);
+  const slots = buildSlots(week, [channel({ blocked_days: [5, 6] })]);
   const dows = slots.map((s) => s.date.getDay());
   assert.equal(slots.length, 5);
   assert.ok(!dows.includes(5) && !dows.includes(6));
@@ -102,7 +102,7 @@ function pickAcrossWeek(content, anchor = '2026-11-11') {
   const ch = channel({ max_per_week: 7 });
   const settings = { ...SETTINGS, min_gap_days: 0 };
   const out = new Map();
-  for (const slot of buildSlots(week, [ch], null)) {
+  for (const slot of buildSlots(week, [ch])) {
     const pick = chooseForSlot({
       slot,
       endpoints: [{ id: 1, name: 'נקודה', importance: 5 }],
@@ -447,7 +447,7 @@ function runWeeks(content, anchors, chOver = {}) {
     const week = weekMeta(anchor);
     const usage = buildUsage([ch], [], settings);
     const usedContent = new Set();
-    const pending = new Set(buildSlots(week, [ch], null));
+    const pending = new Set(buildSlots(week, [ch]));
     const history = new Map([...placedAt].map(([id, date]) =>
       [id, { datesByChannel: new Map([[1, [date]]]) }]));
     while (pending.size) {
@@ -727,12 +727,12 @@ test('chooseHoleFills — תוכן של קמפיין שהמרווח שלו לא 
 
 test('buildSlots עם today: ימים לפני היום לא נכנסים; היום עצמו כן', () => {
   const week = weekMeta('2026-08-12'); // 9–15.8
-  const slots = buildSlots(week, [channel()], null, { today: '2026-08-12' });
+  const slots = buildSlots(week, [channel()], { today: '2026-08-12' });
   assert.deepEqual(slots.map((s) => s.dateKey),
     ['2026-08-12', '2026-08-13', '2026-08-14', '2026-08-15']);
   // שבוע שכולו עבר — אין משבצות בכלל; בלי today — כל השבוע, כמו קודם
-  assert.equal(buildSlots(week, [channel()], null, { today: '2026-09-01' }).length, 0);
-  assert.equal(buildSlots(week, [channel()], null).length, 7);
+  assert.equal(buildSlots(week, [channel()], { today: '2026-09-01' }).length, 0);
+  assert.equal(buildSlots(week, [channel()]).length, 7);
 });
 
 /* ========================= ותק ביחס לשבוע המתוכנן ========================= */
@@ -988,7 +988,7 @@ test('channelHour — שעת הערוץ, בלעדיה 10:00; לא אחרי 22:00
   assert.equal(channelHour({ default_hour: 0 }), 0);
   assert.equal(channelHour({ default_hour: 23 }), 22);
   const week = weekMeta('2026-11-10');
-  assert.ok(buildSlots(week, [channel({ default_hour: 18 })], null).every((s) => s.hour === 18));
+  assert.ok(buildSlots(week, [channel({ default_hour: 18 })]).every((s) => s.hour === 18));
 });
 
 /* ---------- סעיף 13: מתי המילוי היומי רץ ---------- */
