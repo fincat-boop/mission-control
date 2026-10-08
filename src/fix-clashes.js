@@ -8,6 +8,8 @@ import {
   removeGroupDay, takesRoom,
 } from './engine.js';
 import { windowAllows } from './respace.js';
+import { gapOn } from './capacity.js';
+import { loadGapContext } from './capacity-db.js';
 
 /**
  * מאתר ומתקן מצבים שבהם אותה נקודת קצה מקבלת שני פוסטים באותה מדיה באותו יום.
@@ -43,7 +45,7 @@ const LOOKAHEAD_DAYS = 14;
  *            moves:{post:object, to:Date}[], stuck:object[]}[], moves:{id:number, at:Date}[]}}
  */
 export function planClashFixes(posts, { channels = [], settings = null, now = new Date(),
-                                         today = ymd(now) } = {}) {
+                                         today = ymd(now), gapCtx = null } = {}) {
   const blocked = new Map(channels.map((c) => [c.id, (c.blocked_days ?? []).map(Number)]));
   const dayOf = (p) => ymd(new Date(p.scheduled_at));
   // נכשל שהמועד שלו עבר לא עלה לאוויר — לא תופס יום, מרווח, שעה או מכירתי
@@ -97,7 +99,7 @@ export function planClashFixes(posts, { channels = [], settings = null, now = ne
       hours.delete(`${p.channel_id}:${dayOf(p)}:${hourOf(p)}`);
       if (p.kind === 'promo') addPromo(dayOf(p), -1);
       if (linked(p)) removeGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
-      const gap = contentGap(p, settings);
+      const gap = contentGap(p, settings, gapOn(gapCtx, p.channel_id));
       let to = null;
       for (let d = 1; d <= LOOKAHEAD_DAYS && !to; d += 1) {
         const at = new Date(p.scheduled_at);
@@ -155,7 +157,11 @@ async function loadClashData() {
       order by p.scheduled_at, p.id`,
     [ON_BOARD]
   );
-  return { settings, channels, posts };
+  // ברירת המחדל של המרווח בכל ערוץ (סעיף 5) — סביב החודש שנבדק ושבועיים קדימה
+  const from = new Date(Date.now() - 31 * 86400000);
+  const to = new Date(Date.now() + 21 * 86400000);
+  const gapCtx = await loadGapContext(ymd(from), ymd(to), { settings });
+  return { settings, channels, posts, gapCtx };
 }
 
 const runAsCli = process.argv[1]
@@ -175,8 +181,8 @@ if (runAsCli) {
  * @returns {Promise<{groups:object[], moves:object[]}>}
  */
 export async function runFixClashes({ apply = false, orgId = null, log = console.log } = {}) {
-  const { settings, channels, posts } = await loadClashData();
-  const plan = planClashFixes(posts, { channels, settings });
+  const { settings, channels, posts, gapCtx } = await loadClashData();
+  const plan = planClashFixes(posts, { channels, settings, gapCtx });
   const { groups, moves } = plan;
   if (groups.length === 0) { log(`ארגון ${orgId}: אין התנגשויות.`); return plan; }
 

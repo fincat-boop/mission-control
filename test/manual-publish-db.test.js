@@ -495,10 +495,12 @@ test('קבלה — שבוע ידני רגיל (25 פוסטים, רובם לא ס
   await freshOrg('manual-week-test');
   const runner = await import('../src/publish/runner.js');
   const { buildAlerts } = await import('../src/alerts.js');
-  // קמפיין שרץ (התחיל לפני שבוע, נגמר בעוד שלושה) על שני הערוצים, וכל פוסט עם תוכן משלו
+  // קמפיין שרץ (התחיל לפני שבוע, נגמר בעוד שלושה) על שני הערוצים, וכל פוסט עם תוכן משלו.
+  // מרווח 7 על הקמפיין — הקצב שהשבוע הידני הזה בנוי עליו (פוסט בשבוע לנקודה×ערוץ);
+  // ברירת המחדל נגזרת עכשיו מהערוץ (סעיף 5) ודורשת יותר פוסטים מהשבוע הזה
   const camp = (await q1(
-    `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure)
-     values ($1, 'השקה', current_date - 7, current_date + 21, 'general') returning id`, [ids.ep])).id;
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure, min_gap_days)
+     values ($1, 'השקה', current_date - 7, current_date + 21, 'general', 7) returning id`, [ids.ep])).id;
   await inOrg(async () => {
     for (const ch of [ids.fb, ids.wa]) {
       await db.query('insert into campaign_channels (campaign_id, channel_id) values ($1,$2)', [camp, ch]);

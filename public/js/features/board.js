@@ -83,6 +83,9 @@ export async function renderBoard() {
       <td class="chan">
         <div class="cname">${esc(ch.name)}</div>
         <div class="cap${full ? ' full' : ''}">${ch.used} מתוך ${ch.max_per_week} השבוע</div>
+        ${ch.limited_by === 'gap' ? `<div class="cap" title="${esc(
+          `המרווח בין פוסטים של אותה נקודת קצה מאפשר עד ${ch.gap_limit} פוסטים בשבוע בערוץ הזה`)}">
+          מוגבל במרווח בין פוסטים</div>` : ''}
       </td>${days}</tr>`;
   }).join('');
 

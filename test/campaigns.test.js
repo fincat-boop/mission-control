@@ -637,7 +637,7 @@ test('capacityPreview — בלאק פריידי במרווח 7: המרווח מ�
   assert.equal(p.gap_days, 7);
   assert.deepEqual(p.channels, [{
     channel_id: 6, name: 'פייסבוק', wanted: 5, rate_cap: 4, capacity: 3, gap_cap: 3,
-    siblings: 1, limited_by: 'gap', gap_to_fit: 5,
+    siblings: 1, limited_by: 'gap', gap_days: 7, gap_to_fit: 5,
   }]);
   assert.equal(p.short, true);
   assert.equal(p.fixed, null);

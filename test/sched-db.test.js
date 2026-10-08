@@ -154,14 +154,20 @@ test('נתיבים: יצירה, עדכון ושכפול שומרים את המר
 
 test('תצוגה מקדימה: עריכה (id) ויצירה (בלי id) — אותם מספרים כמו הרשת', { skip }, async () => {
   const ep = await freshEndpoint('תצוגה מקדימה');
-  const c = (await call('POST', '/campaigns', BF_BODY(ep))).json.campaign;
+  // סעיף 5: ברירת המחדל נגזרת מהערוץ (נקודה אחת, תקציב 4 → מרווח 1) — לא
+  // מקצץ כלום. כדי לבדוק את החלון כשהמרווח מקצץ, לקמפיין מרווח משלו של 7
+  const byDefault = await call('POST', '/campaigns/capacity-preview', BF_BODY(ep));
+  assert.equal(byDefault.json.gap_days, 1);
+  assert.equal(byDefault.json.channels[0].capacity, 4);
+  assert.equal(byDefault.json.short, false);
+  const c = (await call('POST', '/campaigns', { ...BF_BODY(ep), min_gap_days: 7 })).json.campaign;
 
   const edit = await call('POST', '/campaigns/capacity-preview', { id: c.id });
   assert.equal(edit.status, 200, JSON.stringify(edit.json));
   assert.equal(edit.json.gap_days, 7);
   assert.deepEqual(edit.json.channels, [{
     channel_id: ids.fb, name: 'פייסבוק', wanted: 5, rate_cap: 4, capacity: 3, gap_cap: 3,
-    siblings: 1, limited_by: 'gap', gap_to_fit: 5,
+    siblings: 1, limited_by: 'gap', gap_days: 7, gap_to_fit: 5,
   }]);
   assert.equal(edit.json.short, true);
   assert.equal(edit.json.fixed, null);
@@ -207,7 +213,7 @@ test('תצוגה מקדימה: עריכה (id) ויצירה (בלי id) — או
 
   // שום דבר לא נכתב
   assert.equal((await q1('select min_gap_days from campaigns where id = $1', [c.id])).min_gap_days,
-    null);
+    7);
 
   // קמפיין מוכן: כמה נכתב לכל ערוץ
   await inOrg(async () => {
@@ -269,12 +275,16 @@ test('gapWarning — המרווח של הקמפיין של התוכן, ובלי 
     const at = (d) => `2030-11-${d}T10:00:00+02:00`;
     const base = { endpointId: ids.endpoint, channelId: ids.fb };
 
-    // 4 ימים אחרי: מרווח 3 של הקמפיין — בסדר; הכללי (7) — אזהרה
+    // 4 ימים אחרי: מרווח 3 של הקמפיין — בסדר. בלי קמפיין — ברירת המחדל של
+    // הערוץ: סעיף 5, נקודה אחת בערוץ של 5 בשבוע (תקציב 4) → מרווח 1, בסדר.
+    // הכללי (7) חל רק בלי ערוץ
     assert.equal(await gapWarning({ ...base, when: at(14), contentId: it.id }), null);
     assert.equal(await gapWarning({ ...base, when: at(14), campaignId: camp.id }), null);
-    const general = await gapWarning({ ...base, when: at(14) });
-    assert.equal(general.min, 7);
-    assert.equal(general.days, 4);
+    assert.equal(await gapWarning({ ...base, when: at(14) }), null);
+    const { gapFor } = await import('../src/gap.js');
+    assert.deepEqual(await gapFor({ channelId: ids.fb, when: at(14) }),
+      { min: 1, campaign: null, derived: true });
+    assert.equal((await gapFor({})).min, 7);
     // יומיים לפני (שכן עתידי) — גם במרווח 3 זו אזהרה, עם שם הקמפיין
     const near = await gapWarning({ ...base, when: at('08'), contentId: it.id });
     assert.equal(near.min, 3);
@@ -312,7 +322,9 @@ test('המנוע: לא משבץ בתוך המרווח של הקמפיין מול
       return { camp: camp.id, items };
     };
     const tight = await mk('מרווח 3', 3);
-    const loose = await mk('ברירת מחדל', null);
+    // סעיף 5: ברירת המחדל כאן נגזרת מהערוץ (נקודה אחת, 7 בשבוע → 1), ולכן
+    // הקמפיין "הרחב" מקבל מרווח משלו של 7 — הבדיקה היא על מרווח לכל מועמד
+    const loose = await mk('מרווח 7', 7);
     // שכנים: 15.11 (לפני השבוע) ו-25.11 (אחריו). שבוע 17–23.11.
     for (const d of ['2030-11-15', '2030-11-25']) {
       await db.query(

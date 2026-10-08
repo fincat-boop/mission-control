@@ -5,15 +5,25 @@ import { assetOwnerId } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
 import { inferPeriod, parsePeriod, periodEnd, spreadDate } from '../public/js/core/period.js';
 import {
-  averageSharesByChannel, blendByChannel, channelCapacity, channelSharesOf, effectiveGap, endToFit,
-  gapToFit, normalizeSharesByChannel, shareOf, siblingsOf,
+  averageSharesByChannel, blendByChannel, channelCapacity, channelEndpoints, channelSharesOf,
+  effectiveGap, endToFit, gapOn, gapToFit, normalizeSharesByChannel, shareKey, shareOf, siblingsOf,
 } from './capacity.js';
 import { loadGapDays } from './gap.js';
-import { CAMPAIGNS_WEIGHTED_SQL, CHANNEL_IDS_SQL } from './capacity-db.js';
+import { CAMPAIGNS_WEIGHTED_SQL, CHANNEL_IDS_SQL, loadStandalone } from './capacity-db.js';
 
 // הטעינה של ברירת המחדל יושבת ב-gap.js (מקום אחד); כאן רק מייצאים הלאה
 // לקוראים הקיימים (routes/content.js)
 export { loadGapDays };
+
+/**
+ * מה שחשבון הקיבולת של קמפיין צריך מהמסד, פעם אחת לבקשה: ברירת המחדל של
+ * המרווח (loadGapDays) והנקודות עם תוכן שוטף בכל ערוץ (loadStandalone — למרווח
+ * שנגזר מהערוץ, סעיף 5). עובר כמו שהוא ל-channelCapacities / channelNeeds /
+ * gridFor / unplacedOf / capacityPreview.
+ */
+export async function loadCapacityOptions() {
+  return { gapDays: await loadGapDays(), standalone: await loadStandalone() };
+}
 
 /**
  * קמפיין = זוויות × מדיות.
@@ -65,26 +75,49 @@ export function gapDaysError(b) {
 }
 
 /**
+ * ההקשר של המרווח שנגזר מהערוץ (gapOn) בחלון של הקמפיין: מי מתחרה בכל ערוץ
+ * — הקמפיינים החופפים, הקמפיין עצמו (כאילו רץ, על הערוצים שלו) והתוכן
+ * השוטף. null — בלי standalone: ברירת המחדל הכללית בלבד.
+ */
+function gapContextFor(campaign, channels, concurrent, standalone) {
+  if (!standalone) return null;
+  const key = shareKey(campaign);
+  const self = { ...campaign, active: true, paused_at: null, endpoint_active: true,
+                 channel_ids: channels.map((ch) => Number(ch.id)) };
+  return {
+    channels: new Map(channels.map((ch) => [Number(ch.id), ch])),
+    endpoints: channelEndpoints([...concurrent.filter((x) => shareKey(x) !== key), self],
+      standalone, { from: campaign.starts_on, to: campaign.ends_on }),
+  };
+}
+
+/**
  * הקיבולת של הקמפיין בכל אחת מהמדיות שלו, עם הפירוט: כמה הקצב רוצה
  * (wanted), כמה נכנס (capacity), ומה מגביל (limitedBy). הנתח נמדד על חלון
  * הקמפיין בכל ערוץ מול הקמפיינים החופפים שיושבים באותו ערוץ (channelSharesOf, סעיף 4).
  *
- * המרווח: של הקמפיין (min_gap_days), ובלעדיו הכללי — effectiveGap, אותו
- * מרווח שהמנוע אוכף על התוכן שלו. המרווח הוא לנקודה × ערוץ, ולכן קמפיינים
- * חופפים של אותה נקודה באותו ערוץ חולקים אותו (siblings — siblingsOf).
+ * המרווח: של הקמפיין (min_gap_days), ובלעדיו ברירת המחדל — effectiveGap,
+ * אותו מרווח שהמנוע אוכף על התוכן שלו: הכללי, ובערוץ — הקטן מבינו לבין מה
+ * שנגזר מהקצב של הערוץ ומכמה נקודות מתחרות בו בחלון הקמפיין (סעיף 5,
+ * channelEndpoints; רק כשנשלח opts.standalone — בלעדיו הכללי, כמו קודם).
+ * המרווח הוא לנקודה × ערוץ, ולכן קמפיינים חופפים של אותה נקודה באותו ערוץ
+ * חולקים אותו (siblings — siblingsOf).
  * @param concurrent שורות מ-CAMPAIGNS_WEIGHTED_SQL (כולל channel_ids)
  * @param opts.gapDays ברירת המחדל הכללית — engine_settings.min_gap_days (loadGapDays)
+ * @param opts.standalone loadStandalone() — נקודות עם תוכן שוטף בכל ערוץ
  * @returns {Map<number, {wanted, capacity, rateCap, gapCap, siblings, availableDays,
  *                        limitedBy, share, gapDays}>}
  */
-export function channelCapacities(campaign, channels, concurrent = [], { gapDays = 7 } = {}) {
+export function channelCapacities(campaign, channels, concurrent = [],
+                                  { gapDays = 7, standalone = null } = {}) {
   const out = new Map();
   if (!campaign.starts_on || !campaign.ends_on) return out;
   // הנתח בכל ערוץ — רק מול הקמפיינים שיושבים באותו ערוץ (סעיף 4)
   const shares = channelSharesOf(campaign, concurrent, channels.map((ch) => ch.id));
-  const gap = effectiveGap(campaign, { min_gap_days: gapDays });
+  const gaps = gapContextFor(campaign, channels, concurrent, standalone);
   for (const ch of channels) {
     const share = shares.get(Number(ch.id)) ?? 0;
+    const gap = effectiveGap(campaign, { min_gap_days: gapDays }, gapOn(gaps, ch.id));
     const sib = siblingsOf(campaign, concurrent, ch.id);
     out.set(ch.id, {
       ...channelCapacity({ from: campaign.starts_on, to: campaign.ends_on, channel: ch,
@@ -120,12 +153,18 @@ export function channelCapacities(campaign, channels, concurrent = [], { gapDays
  * @param channels שורות channels של הערוצים שנבחרו
  * @param concurrent CAMPAIGNS_WEIGHTED_SQL — בלי השורה השמורה של draft
  * @param opts.gapDays ברירת המחדל הכללית (loadGapDays)
+ * @param opts.standalone loadStandalone() — למרווח שנגזר מהערוץ (channelCapacities)
  * @param opts.written null, או {channel_id: כמה נכתב} בקמפיין מוכן
+ *
+ * gap_days — המרווח של הקמפיין, ובלעדיו הגדול מבין ברירות המחדל של הערוצים
+ * (סעיף 5: ברירת המחדל לכל ערוץ — gap_days בשורה של הערוץ).
  */
 export function capacityPreview(draft, channels, concurrent = [],
-                                { gapDays = 7, written = null } = {}) {
-  const gap = effectiveGap(draft, { min_gap_days: gapDays });
-  const caps = channelCapacities(draft, channels, concurrent, { gapDays });
+                                { gapDays = 7, written = null, standalone = null } = {}) {
+  const caps = channelCapacities(draft, channels, concurrent, { gapDays, standalone });
+  const perChannel = [...caps.values()].map((c) => c.gapDays);
+  const gap = draft.min_gap_days != null || !perChannel.length
+    ? effectiveGap(draft, { min_gap_days: gapDays }) : Math.max(...perChannel);
   const params = (ch, c) => ({ from: draft.starts_on, to: draft.ends_on, channel: ch,
                                share: c.share, siblings: c.siblings,
                                siblingRank: c.siblingRank });
@@ -137,6 +176,7 @@ export function capacityPreview(draft, channels, concurrent = [],
     list.push({
       channel_id: ch.id, name: ch.name, wanted: c.wanted, rate_cap: c.rateCap,
       capacity: c.capacity, gap_cap: c.gapCap, siblings: c.siblings, limited_by: c.limitedBy,
+      gap_days: c.gapDays,
       gap_to_fit: c.limitedBy === 'gap' ? gapToFit(params(ch, c), c.rateCap) : null,
     });
   }
@@ -153,7 +193,7 @@ export function capacityPreview(draft, channels, concurrent = [],
           const sib = siblingsOf(d, concurrent, ch.id);
           const share = channelSharesOf(d, concurrent, channels.map((x) => x.id)).get(Number(ch.id));
           return channelCapacity({ from: draft.starts_on, to, channel: ch,
-                                   share: share ?? 0, gapDays: gap,
+                                   share: share ?? 0, gapDays: c?.gapDays ?? gap,
                                    siblings: sib.count, siblingRank: sib.rank }).capacity;
         };
         return {
@@ -186,7 +226,7 @@ export async function loadCapacityPreview(draft, channelIds) {
   const ep = await one('select importance from endpoints where id = $1', [draft.endpoint_id]);
   const self = draft.id != null ? Number(draft.id) : null;
   const concurrent = (await rows(CAMPAIGNS_WEIGHTED_SQL)).filter((x) => x.id !== self);
-  const gapDays = await loadGapDays();
+  const opts = await loadCapacityOptions();
 
   let written = null;
   if (self != null && draft.content_complete_at) {
@@ -205,7 +245,7 @@ export async function loadCapacityPreview(draft, channelIds) {
     }
   }
   return capacityPreview({ ...draft, endpoint_importance: ep?.importance ?? 5 },
-    channels, concurrent, { gapDays, written });
+    channels, concurrent, { ...opts, written });
 }
 
 /**
@@ -550,11 +590,11 @@ export async function freeAngleSlots(campaignId, count) {
     `select ch.* from campaign_channels cc join channels ch on ch.id = cc.channel_id
       where cc.campaign_id = $1 order by ch.sort_order, ch.id`, [campaignId]);
   const concurrent = await rows(CAMPAIGNS_WEIGHTED_SQL);
-  const gapDays = await loadGapDays();
+  const opts = await loadCapacityOptions();
   const existing = await rows(
     'select sort_order from content_items where campaign_id = $1', [campaignId]);
   const need = campaign.content_complete_at
-    ? null : angleCount(campaign, channelNeeds(campaign, channels, concurrent, { gapDays }));
+    ? null : angleCount(campaign, channelNeeds(campaign, channels, concurrent, opts));
   return { slots: nextSlots(need, existing.map((x) => x.sort_order), count), need };
 }
 
@@ -711,7 +751,8 @@ const variantFor = (it, ch, statuses) => {
  *            {without:number, free:number, unplaced:number}>}}
  */
 export function unplacedOf(c, items, myChannels, myPosts, concurrent = [],
-                           { gapDays = 7, now = new Date(), today = ymd(now) } = {}) {
+                           { gapDays = 7, standalone = null, now = new Date(),
+                             today = ymd(now) } = {}) {
   const out = { unplaced: 0, waiting: 0, by_channel: {} };
   if (!c.starts_on || !c.ends_on) return out;
   const from = c.starts_on > today ? c.starts_on : today;
@@ -720,7 +761,8 @@ export function unplacedOf(c, items, myChannels, myPosts, concurrent = [],
   const posted = new Set(myPosts.filter((p) => HAS_POST.includes(p.status))
     .map((p) => `${p.content_id}:${p.channel_id}`));
   // החלון שנשאר: הנתח והאחים נמדדים עליו, לא על כל הקמפיין
-  const caps = channelCapacities({ ...c, starts_on: from }, myChannels, concurrent, { gapDays });
+  const caps = channelCapacities({ ...c, starts_on: from }, myChannels, concurrent,
+    { gapDays, standalone });
 
   for (const ch of myChannels) {
     const without = items.filter((it) => variantFor(it, ch, ['ready', 'draft']) &&
@@ -772,7 +814,7 @@ export async function campaignsWithHealth() {
   const variants = await rows('select * from content_variants order by content_id, channel_id');
   const channels = await rows('select * from channels order by sort_order, id');
   const links = await rows('select * from campaign_channels');
-  const gapDays = await loadGapDays();
+  const opts = await loadCapacityOptions();
 
   const today = ymd(new Date());
   const channelById = new Map(channels.map((c) => [c.id, c]));
@@ -811,8 +853,8 @@ export async function campaignsWithHealth() {
     // בקמפיין כללי אין זוויות — הרשת היא רשימת משבצות לכל מדיה.
     const general = c.structure === 'general';
     const grid = general
-      ? { ...generalGridFor(c, shaped, myChannels, today, list, { gapDays }), angles: [] }
-      : gridFor(c, shaped, myChannels, today, list, { gapDays });
+      ? { ...generalGridFor(c, shaped, myChannels, today, list, opts), angles: [] }
+      : gridFor(c, shaped, myChannels, today, list, opts);
 
     const scheduled = myPosts.filter(
       (p) => ['scheduled', 'approved', 'publishing', 'failed', 'pending_approval'].includes(p.status)).length;
@@ -824,9 +866,9 @@ export async function campaignsWithHealth() {
     const autoShare = Math.round(shareOf({ ...c, share_pct: null }, list, myChannels) * 100);
     // קמפיין שאין לו מקום באף ערוץ — מצב משלו, לא "מלא — 0/0"
     const noRoom = grid.complete
-      ? null : noRoomReason(c, channelCapacities(c, myChannels, list, { gapDays }));
+      ? null : noRoomReason(c, channelCapacities(c, myChannels, list, opts));
     const autoAngles = angleCount({ ...c, target_posts: null },
-      channelNeeds(c, myChannels, list, { gapDays }));
+      channelNeeds(c, myChannels, list, opts));
 
     // מה עוד חסר מהיום והלאה — רק בקמפיין שרץ או מתוכנן (מושהה/הסתיים: 0)
     const phase = phaseOf(c, today);
@@ -840,7 +882,7 @@ export async function campaignsWithHealth() {
     // תוכן בלי פוסט מול המקום שנשאר עד הסוף (רץ / מתוכנן), ובקמפיין שהסתיים —
     // מה שמוכן ולא יצא
     const room = live
-      ? unplacedOf(c, shaped, myChannels, myPosts, list, { gapDays, today })
+      ? unplacedOf(c, shaped, myChannels, myPosts, list, { ...opts, today })
       : { unplaced: 0, waiting: 0, by_channel: {} };
     const leftover = phase === 'ended' ? unpublishedReady(shaped, myChannels, myPosts) : 0;
 

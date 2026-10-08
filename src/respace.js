@@ -9,7 +9,8 @@ import {
   linkDayTaken, nearestDays, nextSlot, outsideCampaignWindow, takesRoom, takesRoomSql,
   withEngineLock,
 } from './engine.js';
-import { effectiveGap } from './capacity.js';
+import { effectiveGap, gapOn } from './capacity.js';
+import { loadGapContext } from './capacity-db.js';
 import { postIsLiveSql } from './live.js';
 
 /**
@@ -85,7 +86,10 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
   // המרווח הגדול ביותר שאפשר (30 = התקרה של מרווח קמפיין, או הכללי)
   const neighbours = await neighbourDays(from, to, Math.max(30, effectiveGap(null, settings)));
 
-  return respaceMoves({ week, channels, posts, settings, neighbours, onlyIllegal,
+  // ברירת המחדל של המרווח בכל ערוץ — נגזרת מהקצב שלו (effectiveGap, סעיף 5)
+  const gapCtx = await loadGapContext(week.start, week.end, { settings });
+
+  return respaceMoves({ week, channels, posts, settings, neighbours, onlyIllegal, gapCtx,
                         now: new Date() });
 }
 
@@ -105,7 +109,8 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
  * המשבצת לא נלקחת והפוסט מחכה למשבצת הבאה.
  */
 export function respaceMoves({ week, channels, posts, settings, neighbours = new Map(),
-                               onlyIllegal = false, now = new Date(), today = ymd(now) }) {
+                               onlyIllegal = false, now = new Date(), today = ymd(now),
+                               gapCtx = null }) {
   const byId = new Map(channels.map((c) => [c.id, c]));
   const illegal = (p) => onBlockedDay(p, byId.get(p.channel_id));
   const dayOf = (p) => ymd(new Date(p.scheduled_at));
@@ -219,7 +224,8 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
 
       // המרווח של הקמפיין של הפוסט שזז; השכן הקרוב לפני או אחרי
       const others = near.get(`${post.endpoint_id}:${post.channel_id}`);
-      if (nearestDays(others, dateKey) < contentGap(post, settings)) return false;
+      if (nearestDays(others, dateKey) <
+          contentGap(post, settings, gapOn(gapCtx, post.channel_id))) return false;
     }
     if (post.kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
     if (post.content_id && post.campaign_links_apart !== false &&

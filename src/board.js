@@ -3,6 +3,8 @@ import { contentHints } from './candidates.js';
 import { itemAssetsSql } from './links.js';
 import { contentState } from './publish/readiness.js';
 import { endpointLiveSql, openPostSql, postIsLiveSql } from './live.js';
+import { channelBudget, weekGapLimit } from './capacity.js';
+import { loadGapContext } from './capacity-db.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const HE_MONTHS = [
@@ -133,13 +135,25 @@ export async function buildBoard(anchorDate) {
 
   const hybridWeight = Number(settings?.hybrid_weight ?? 0.5);
 
+  // מי מתחרה בכל ערוץ השבוע — למגבלת המרווח בשורת הערוץ (סעיף 5)
+  const gapCtx = await loadGapContext(week.start, week.end, { settings });
+
   // שיבוצים לפי ערוץ ולפי יום
   const byChannel = channels.map((ch) => {
     const mine = posts.filter((p) => p.channel_id === ch.id);
     const real = mine.filter((p) => p.status !== 'hole');
+    // "1 מתוך 5" בלי סיבה: כשהמרווח בין פוסטים של אותה נקודה לא מאפשר למלא
+    // את התקציב השבועי של הערוץ (weekGapLimit — אותו חשבון כמו הרשת), השורה
+    // אומרת שזה המגביל. רק כשהשבוע באמת מתחת למספר של הערוץ.
+    const gapLimit = weekGapLimit({ from: week.start, to: week.end, channel: ch,
+                                    endpoints: gapCtx.endpoints.get(ch.id), settings });
+    const gapBound = real.length < Number(ch.max_per_week ?? 0) &&
+      gapLimit != null && gapLimit < channelBudget(ch);
     return {
       ...ch,
       used: real.length,
+      limited_by: gapBound ? 'gap' : null,
+      gap_limit: gapBound ? gapLimit : null,
       days: week.days.map((day) => ({
         date: day.date,
         posts: mine

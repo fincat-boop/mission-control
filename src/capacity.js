@@ -16,22 +16,85 @@ const DAY = 86400000;
 export const DEFAULT_GAP_DAYS = 7;
 
 /**
+ * המרווח שנגזר מהקצב של הערוץ (סעיף 5): כמה ימים בין פוסטים של נקודה אחת
+ * כדי שכל הנקודות שמתחרות בערוץ ימלאו יחד את התקציב השבועי שלו —
+ * floor(7 × נקודות / תקציב), בין 1 ל-7. נקודה אחת בערוץ של 5 בשבוע (תקציב 4
+ * אחרי השמורה) → 1: כל יום מותר. שלוש נקודות בערוץ של 4 (בלי שמורה) → 5.
+ * תקציב 0 — 7 (אין מה למלא, אין סיבה לקצר).
+ * @param channel שורת channels (max_per_week, urgent_reserve_pct)
+ * @param endpoints כמה נקודות מתחרות בערוץ (לפחות 1) — channelEndpoints
+ */
+export function derivedGap(channel, endpoints = 1) {
+  const budget = channelBudget(channel);
+  if (budget <= 0) return DEFAULT_GAP_DAYS;
+  const n = Math.max(1, Math.floor(Number(endpoints) || 1));
+  return Math.min(DEFAULT_GAP_DAYS, Math.max(1, Math.floor((7 * n) / budget)));
+}
+
+/**
  * המרווח בימים בין שני פוסטים של אותה נקודת קצה באותו ערוץ, כשהתוכן שנכנס
- * שייך לקמפיין campaign: המרווח של הקמפיין (min_gap_days), ובלעדיו ברירת
- * המחדל הכללית (engine_settings.min_gap_days), ובלעדיה 7.
+ * שייך לקמפיין campaign: המרווח של הקמפיין (min_gap_days) גובר תמיד.
+ * בלעדיו — ברירת המחדל: ההגדרה הכללית (engine_settings.min_gap_days, ובלעדיה
+ * 7), ובערוץ ידוע — הקטן מבינה לבין המרווח שנגזר מהקצב של הערוץ (derivedGap,
+ * סעיף 5). קודם 7 קבוע = פוסט אחד בשבוע לנקודה×ערוץ: ארגון עם נקודה אחת
+ * וערוץ של 5 בשבוע קיבל 1.
  *
- * מקור אחד לשאלה "כמה ימים בין פוסטים" — המנוע, אזהרות הלוח, ההזזה מחדש
- * וחשבון הקיבולת קוראים לכאן, כדי שהרשת לא תדרוש מה שהמנוע לא ישבץ. תוכן
- * בלי קמפיין (שוטף, מבצע דחוף) — campaign = null, ומקבל את הכללי.
+ * מקור אחד לשאלה "כמה ימים בין פוסטים" — המנוע, אזהרות הלוח, ההזזה מחדש,
+ * הדחוף וחשבון הקיבולת קוראים לכאן, כדי שהרשת לא תדרוש מה שהמנוע לא ישבץ. תוכן
+ * בלי קמפיין (שוטף, מבצע דחוף, פוסט חסר תוכן) — campaign = null.
  * 0 בהגדרה הכללית = בלי מרווח (רק אותו יום אסור, בכלל נפרד).
+ * בלי ערוץ (on.channel) — ההגדרה הכללית בלבד: שימוש חוזר בתוכן evergreen
+ * (reusable במנוע) ואופק השאילתות, שאינם "מרווח בערוץ".
  * @param {{min_gap_days?:number|null}|null} campaign
  * @param {{min_gap_days?:number|null}|null} settings שורת engine_settings
+ * @param {{channel?:object|null, endpoints?:number}} [on] הערוץ וכמה נקודות מתחרות בו (gapOn)
  */
-export function effectiveGap(campaign, settings) {
+export function effectiveGap(campaign, settings, { channel = null, endpoints = 1 } = {}) {
   const own = campaign?.min_gap_days;
   if (own != null) return Number(own);
-  const global = settings?.min_gap_days;
-  return global != null ? Number(global) : DEFAULT_GAP_DAYS;
+  const global = settings?.min_gap_days != null ? Number(settings.min_gap_days) : DEFAULT_GAP_DAYS;
+  if (!channel) return global;
+  return Math.min(global, derivedGap(channel, endpoints));
+}
+
+/**
+ * מי מתחרה על כל ערוץ בטווח [from, to] — לנקודות שהמרווח נגזר מהן
+ * (derivedGap) ולמגבלת המרווח בלוח (weekGapLimit). נקודה מתחרה בערוץ כשיש
+ * לה שם קמפיין חי (פעיל, לא מושהה, נקודה פעילה, חופף לטווח, יושב בערוץ) או
+ * תוכן שוטף שעוד יכול לצאת בו (standalone).
+ * @param campaigns שורות CAMPAIGNS_WEIGHTED_SQL (channel_ids, min_gap_days, endpoint_active)
+ * @param standalone Map<channelId, Iterable<endpointId>> — STANDALONE_SQL (capacity-db.js)
+ * @returns {Map<number, Map<number, (number|null)[]>>} ערוץ → (נקודה → המרווחים של
+ *          המקורות שלה בערוץ: min_gap_days של קמפיין, או null = ברירת המחדל)
+ */
+export function channelEndpoints(campaigns, standalone = new Map(), { from = null, to = null } = {}) {
+  const f = ymdOf(from);
+  const t = ymdOf(to);
+  const out = new Map();
+  const add = (ch, ep, gap) => {
+    const k = Number(ch);
+    if (!out.has(k)) out.set(k, new Map());
+    const m = out.get(k);
+    if (!m.has(Number(ep))) m.set(Number(ep), []);
+    m.get(Number(ep)).push(gap == null ? null : Number(gap));
+  };
+  for (const c of campaigns) {
+    if (!c.active || c.paused_at || c.endpoint_active === false || !overlaps(c, f, t)) continue;
+    for (const ch of c.channel_ids ?? []) add(ch, c.endpoint_id, c.min_gap_days);
+  }
+  for (const [ch, eps] of standalone) for (const ep of eps) add(ch, ep, null);
+  return out;
+}
+
+/**
+ * הערוץ וכמה נקודות מתחרות בו, בצורה ש-effectiveGap מקבל. ctx — {channels:
+ * Map<id, שורה>, endpoints: channelEndpoints(...)} (loadGapContext); בלי ctx
+ * — {} (ההגדרה הכללית בלבד). לפחות נקודה אחת: מי ששואל על הערוץ מתחרה בו.
+ */
+export function gapOn(ctx, channelId) {
+  const channel = ctx?.channels?.get(Number(channelId));
+  if (!channel) return {};
+  return { channel, endpoints: Math.max(1, ctx.endpoints?.get(Number(channelId))?.size ?? 0) };
 }
 
 /**
@@ -444,6 +507,26 @@ export function channelCapacity({ from, to, channel, share, gapDays = DEFAULT_GA
 
   return { wanted, capacity, rateCap, gapCap, siblings: k, availableDays: available.length,
            limitedBy };
+}
+
+/**
+ * כמה פוסטים בטווח [from, to] המרווח מאפשר בערוץ לכל הנקודות שמתחרות בו
+ * יחד — לשורת הערוץ בלוח ("מוגבל במרווח בין פוסטים", סעיף 5). לכל נקודה
+ * המרווח המקל מבין המקורות שלה (קמפיין עם מרווח משלו, או ברירת המחדל
+ * — effectiveGap עם הערוץ), וכמה ימים פנויים אפשר לבחור בו (channelCapacity
+ * .gapCap). אותו חשבון כמו הרשת, בלי נוסחה שנייה.
+ * @param endpoints channelEndpoints(...).get(channelId) — נקודה → מרווחים
+ * @returns {number|null} null — אין אף נקודה בערוץ (אין מה למדוד)
+ */
+export function weekGapLimit({ from, to, channel, endpoints, settings }) {
+  if (!endpoints?.size) return null;
+  const on = { channel, endpoints: endpoints.size };
+  let total = 0;
+  for (const gaps of endpoints.values()) {
+    const g = Math.min(...gaps.map((x) => (x == null ? effectiveGap(null, settings, on) : x)));
+    total += channelCapacity({ from, to, channel, share: 1, gapDays: g }).gapCap;
+  }
+  return total;
 }
 
 /** התקרה של מרווח לקמפיין — כמו האילוץ campaigns_min_gap_days_range */

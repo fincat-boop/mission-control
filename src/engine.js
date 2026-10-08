@@ -3,8 +3,8 @@ import { weekMeta, ymd, effectiveCadenceDays } from './board.js';
 import { performanceMultipliers, hourBucket } from './performance.js';
 import { candidateColumnsSql, candidateFilterSql, candidateFits, fitsSlotChannel } from './candidates.js';
 import { spreadDate } from '../public/js/core/period.js';
-import { averageSharesByChannel, channelBudget, effectiveGap } from './capacity.js';
-import { CAMPAIGNS_WEIGHTED_SQL } from './capacity-db.js';
+import { averageSharesByChannel, channelBudget, effectiveGap, gapOn } from './capacity.js';
+import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
 import { itemAssetsSql } from './links.js';
 import { endpointLiveSql, postIsLiveSql } from './live.js';
@@ -160,6 +160,10 @@ export async function planWeek(anchorDate, {
   // פוסט מקושר לא יוצא באותו יום כשהקמפיין מבקש (links_apart)
   const groupDays = await linkGroupDays(from, to);
 
+  // המרווח בכל ערוץ כשלתוכן אין מרווח משלו — נגזר מהקצב של הערוץ ומכמה
+  // נקודות מתחרות בו בשבוע הזה (effectiveGap + gapOn, סעיף 5)
+  const gapCtx = await loadGapContext(week.start, week.end, { settings });
+
   // המועמדים לשיבוץ ולשיוך — כל התוכן, או רק של הקמפיין (onlyCampaignId)
   const candidates = onlyCampaignId == null
     ? content
@@ -171,7 +175,7 @@ export async function planWeek(anchorDate, {
     // מילוי שקט (holes:false) משייך רק לפוסטים שהמנוע עצמו יצר כחסרי תוכן;
     // החלון הידני מציע לכל פוסט חסר תוכן — שם המשתמש רואה ובוחר
     holes: openHoles(existing, channels, endpoints, now, { autoOnly: !withHoles }),
-    content: candidates, usedContent, history, settings, usage, pairDates, groupDays,
+    content: candidates, usedContent, history, settings, usage, pairDates, groupDays, gapCtx,
   }).map((a) => ({
     ...a,
     channel_name: channels.find((ch) => ch.id === a.channel_id)?.name ?? '',
@@ -221,7 +225,7 @@ export async function planWeek(anchorDate, {
 
     const pick = chooseForSlot({
       slot, endpoints, content: candidates, campaigns, debts, usage,
-      usedContent, pairDates, settings, placements, history, sameDay, groupDays,
+      usedContent, pairDates, settings, placements, history, sameDay, groupDays, gapCtx,
     });
     if (!pick) continue;
 
@@ -264,7 +268,7 @@ export async function planWeek(anchorDate, {
 
   const holes = withHoles
     ? findHoles({ endpoints, content, debts, channels, usage, week, existing, now,
-                  pairDates, sameDay, settings })
+                  pairDates, sameDay, settings, gapCtx })
         .map((h) => ({ ...h, key: planItemKey('hole', h) }))
     : [];
 
@@ -650,10 +654,11 @@ export function openHoles(existing, channels, endpoints, now = new Date(), { aut
  */
 export function chooseHoleFills({
   holes, content, usedContent, history = new Map(), settings = null, usage = null,
-  pairDates = new Map(), groupDays = new Map(),
+  pairDates = new Map(), groupDays = new Map(), gapCtx = null,
 }) {
   const out = [];
   for (const h of holes) {
+    const on = gapOn(gapCtx, h.channel_id);
     const at = new Date(h.scheduled_at);
     const dateKey = ymd(at);
     const slot = { channel_id: h.channel_id, dateKey };
@@ -667,7 +672,7 @@ export function chooseHoleFills({
       fitsSlotChannel(c, h.channel_id) &&
       !usedContent.has(`${h.channel_id}:${c.id}`) &&
       !outsideCampaignWindow(c, dateKey) &&
-      nearest >= contentGap(c, settings) &&
+      nearest >= contentGap(c, settings, on) &&
       !linkedSameDay(c, groupDays, dateKey) &&
       reusable(c, slot, history, settings)
     );
@@ -1290,10 +1295,12 @@ export function outsideCampaignWindow(c, dateKey) {
 
 /**
  * המרווח שהתוכן הזה דורש בינו לבין פוסט אחר של אותה נקודה באותו ערוץ: של
- * הקמפיין שלו (campaign_min_gap_days), ותוכן בלי קמפיין — הכללי.
+ * הקמפיין שלו (campaign_min_gap_days), ובלעדיו ברירת המחדל — בערוץ ידוע
+ * (on = gapOn(...)) נגזרת מהקצב שלו (effectiveGap, סעיף 5).
  */
-export function contentGap(c, settings) {
-  return effectiveGap(c?.campaign_id ? { min_gap_days: c.campaign_min_gap_days } : null, settings);
+export function contentGap(c, settings, on = {}) {
+  return effectiveGap(c?.campaign_id ? { min_gap_days: c.campaign_min_gap_days } : null,
+    settings, on);
 }
 
 /**
@@ -1395,7 +1402,8 @@ export async function linkGroupDays(from, to) {
 export function chooseForSlot(ctx) {
   const { slot, endpoints, content, campaigns, debts, usage,
           usedContent, pairDates = new Map(), settings, history, sameDay,
-          groupDays = new Map() } = ctx;
+          groupDays = new Map(), gapCtx = null } = ctx;
+  const on = gapOn(gapCtx, slot.channel_id);
 
   const candidates = [];
 
@@ -1414,7 +1422,7 @@ export function chooseForSlot(ctx) {
       (c.eligible_channel_ids ?? []).includes(slot.channel_id) &&
       fitsSlotChannel(c, slot.channel_id) &&
       !outsideCampaignWindow(c, slot.dateKey) &&
-      nearest >= contentGap(c, settings) &&
+      nearest >= contentGap(c, settings, on) &&
       !linkedSameDay(c, groupDays, slot.dateKey) &&
       !usedContent.has(`${slot.channel_id}:${c.id}`) &&
       reusable(c, slot, history, settings) &&
@@ -1479,15 +1487,16 @@ const HOLE_HOUR = 12;
  * (קודם הוא עקף את כולם): usage.allows לסוג 'value' — הסוג שבו הוא נפתח —
  * כלומר תקציב, יום חסום ותקרת ערך שבועית (מכירתי ליום ושער היחס לא חלים על
  * ערך); לא באותו יום כמו פוסט אחר של הנקודה באותו ערוץ (sameDay); ומרווח
- * מהשכן הקרוב לשני הכיוונים (pairDates) — המרווח הכללי, כי אין תוכן ולכן
- * אין קמפיין. הערוצים נבדקים מהפנוי ביותר; ערוץ בלי יום חוקי — עוברים לבא.
+ * מהשכן הקרוב לשני הכיוונים (pairDates) — ברירת המחדל של הערוץ (effectiveGap
+ * עם gapCtx), כי אין תוכן ולכן אין קמפיין. הערוצים נבדקים מהפנוי ביותר; ערוץ בלי יום חוקי — עוברים לבא.
  * אחרי היצירה הפוסט נכנס ל-sameDay ול-pairDates, כמו שיבוץ.
  */
 export function findHoles({ endpoints, content, debts, channels, usage, week, existing,
                             now = new Date(), pairDates = new Map(), sameDay = new Set(),
-                            settings = null }) {
+                            settings = null, gapCtx = null }) {
   const holes = [];
-  const gap = effectiveGap(null, settings);
+  // המרווח הכללי של הערוץ — אין תוכן, ולכן אין קמפיין (effectiveGap, סעיף 5)
+  const gapIn = (ch) => effectiveGap(null, settings, gapOn(gapCtx, ch.id));
   const at = (date, hour) => new Date(`${date}T${String(hour).padStart(2, '0')}:00:00`);
 
   for (const e of endpoints) {
@@ -1504,7 +1513,7 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
       at(dateKey, HOLE_HOUR) > now &&
       usage.allows(ch.id, dateKey, 'value') &&
       !sameDay.has(`${e.id}:${ch.id}:${dateKey}`) &&
-      nearestDays(pairDates.get(`${e.id}:${ch.id}`), dateKey) >= gap;
+      nearestDays(pairDates.get(`${e.id}:${ch.id}`), dateKey) >= gapIn(ch);
     let target = null;
     let day = null;
     for (const ch of channels.filter((x) => usage.remaining(x.id) > 0)

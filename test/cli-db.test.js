@@ -61,7 +61,9 @@ test('fix-clashes — מתקן רק בארגון שבו הוא רץ', { skip }, 
   const plan = await db.withOrg(a.org, () => runFixClashes({ apply: true, log: () => {} }));
   assert.equal(plan.moves.length, 1);
   assert.equal(await dayOf(a.org, a.posts[0]), '2030-03-05');
-  assert.equal(await dayOf(a.org, a.posts[1]), '2030-03-12');   // מרווח 7
+  // סעיף 5: אין קמפיין — ברירת המחדל של הערוץ, נקודה אחת בערוץ של 5 בשבוע →
+  // מרווח 1 (קודם 7 הכללי, ואז 12.3)
+  assert.equal(await dayOf(a.org, a.posts[1]), '2030-03-06');
   // הארגון השני לא נגע
   assert.equal(await dayOf(b.org, b.posts[0]), '2030-03-05');
   assert.equal(await dayOf(b.org, b.posts[1]), '2030-03-05');

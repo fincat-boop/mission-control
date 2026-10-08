@@ -4,7 +4,8 @@ import {
   addGroupDay, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES, linkDayTaken,
   nearestDays, outsideCampaignWindow, takesRoomSql,
 } from './engine.js';
-import { effectiveGap } from './capacity.js';
+import { effectiveGap, gapOn } from './capacity.js';
+import { loadGapContext } from './capacity-db.js';
 import { postIsLiveSql } from './live.js';
 
 /**
@@ -75,7 +76,7 @@ const LAST_HOUR = 22;
  * @returns {{moves:{post:object, at:Date}[], drops:object[]}}
  */
 export function planCampaignShift({
-  moving, fixed, channels, settings, days, now = new Date(), rules = null,
+  moving, fixed, channels, settings, days, now = new Date(), rules = null, gapCtx = null,
 }) {
   const today = ymd(now);
   const dayOf = (p) => ymd(new Date(p.scheduled_at));
@@ -139,7 +140,7 @@ export function planCampaignShift({
       // יום חסום, תקציב שבועי של הערוץ, תקרה לסוג, מכירתי ליום — רק בהזזה
       (!all || usage.allows(p.channel_id, key, p.kind)) &&
       // אותה נקודה, אותו ערוץ, אותו יום — ומרווח מהשכן הקרוב לשני הכיוונים
-      !(check.gap && (list.includes(key) || nearestDays(list, key) < contentGap(p, settings)));
+      !(check.gap && (list.includes(key) || nearestDays(list, key) < contentGap(p, settings, gapOn(gapCtx, p.channel_id))));
     if (!fits) { drops.push(p); continue; }
 
     if (all) {
@@ -248,8 +249,10 @@ async function reschedule(campaignId, days, now, { rules = null, contentIds = nu
         and p.scheduled_at <= $4::timestamptz + make_interval(days => $5)`,
     [ON_BOARD, moving.map((p) => p.id), from, to, horizon, now]);
 
+  // ברירת המחדל של המרווח בכל ערוץ (סעיף 5), סביב המועדים החדשים
+  const gapCtx = await loadGapContext(ymd(from), ymd(to), { settings });
   const { moves, drops } =
-    planCampaignShift({ moving, fixed, channels, settings, days, now, rules });
+    planCampaignShift({ moving, fixed, channels, settings, days, now, rules, gapCtx });
   for (const m of moves) {
     // בבדיקה בלי הזזה רוב הפוסטים נשארים בדיוק במקום — אין מה לכתוב
     if (+m.at === +new Date(m.post.scheduled_at)) continue;

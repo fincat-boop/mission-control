@@ -45,11 +45,12 @@ before(async () => {
       `insert into channels (name, platform, max_per_week, urgent_reserve_pct)
        values ('פייסבוק', 'facebook', 5, 20) returning id`)).id;
 
-    // קמפיין שרץ: שבועיים, מרווח 7 → מקום ל-2; 4 משבצות מוכנות → 2 לא ייכנסו
+    // קמפיין שרץ: שבועיים, מרווח 7 → מקום ל-2; 4 משבצות מוכנות → 2 לא ייכנסו.
+    // המרווח על הקמפיין עצמו: ברירת המחדל נגזרת מהערוץ (סעיף 5 — כאן 1)
     const campaign = async (name, from, to, items) => {
       const c = (await db.one(
-        `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure)
-         values ($1, $2, $3, $4, 'general') returning id`, [ep, name, from, to])).id;
+        `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure, min_gap_days)
+         values ($1, $2, $3, $4, 'general', 7) returning id`, [ep, name, from, to])).id;
       await db.query('insert into campaign_channels (campaign_id, channel_id) values ($1, $2)', [c, ch]);
       for (let i = 1; i <= items; i += 1) {
         const it = (await db.one(

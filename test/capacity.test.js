@@ -375,3 +375,75 @@ test('סעיף 4 — channelCapacities: קמפיין לבד בוואטסאפ מ�
   // הנרמול הישן היה נותן 50% → 2
   void fb;
 });
+
+/* ========================= סעיף 5 — מרווח שנגזר מהערוץ ========================= */
+
+import { channelEndpoints, derivedGap, gapOn, weekGapLimit } from '../src/capacity.js';
+
+test('סעיף 5 — טבלת המרווח הנגזר: floor(7 × נקודות / תקציב), בין 1 ל-7', () => {
+  // נקודה אחת × 5 בשבוע (תקציב 4 אחרי שמורה של 1) → 1
+  assert.equal(derivedGap({ max_per_week: 5 }, 1), 1);
+  // 3 נקודות × 4 בשבוע בלי שמורה → floor(21/4) = 5
+  assert.equal(derivedGap({ max_per_week: 4, urgent_reserve_pct: 0 }, 3), 5);
+  // הרבה נקודות — לא יותר מ-7; ערוץ גדול — לא פחות מ-1
+  assert.equal(derivedGap({ max_per_week: 2, urgent_reserve_pct: 0 }, 10), 7);
+  assert.equal(derivedGap({ max_per_week: 30, urgent_reserve_pct: 0 }, 1), 1);
+  // תקציב 0 — 7; בלי מספר נקודות — 1
+  assert.equal(derivedGap({ max_per_week: 0 }, 1), 7);
+  assert.equal(derivedGap({ max_per_week: 7, urgent_reserve_pct: 0 }), 1);
+});
+
+test('סעיף 5 — effectiveGap: של הקמפיין גובר; הכללי הקטן גובר; בלי ערוץ — הכללי', () => {
+  const ch5 = { max_per_week: 5 };
+  // ברירת מחדל = min(כללי 7, נגזר 1)
+  assert.equal(effectiveGap(null, { min_gap_days: 7 }, { channel: ch5, endpoints: 1 }), 1);
+  // מרווח של הקמפיין גובר גם כשהנגזר קטן ממנו
+  assert.equal(effectiveGap({ min_gap_days: 4 }, { min_gap_days: 7 },
+    { channel: ch5, endpoints: 1 }), 4);
+  // הכללי קטן מהנגזר — הכללי
+  const ch4 = { max_per_week: 4, urgent_reserve_pct: 0 };
+  assert.equal(effectiveGap(null, { min_gap_days: 2 }, { channel: ch4, endpoints: 3 }), 2);
+  assert.equal(effectiveGap(null, { min_gap_days: 7 }, { channel: ch4, endpoints: 3 }), 5);
+  // 0 בכללי = בלי מרווח, גם בערוץ
+  assert.equal(effectiveGap(null, { min_gap_days: 0 }, { channel: ch5, endpoints: 1 }), 0);
+  // בלי ערוץ — כמו קודם
+  assert.equal(effectiveGap(null, { min_gap_days: 7 }), 7);
+  assert.equal(effectiveGap(null, { min_gap_days: 7 }, {}), 7);
+});
+
+test('סעיף 5 — channelEndpoints / gapOn: קמפיינים חיים ותוכן שוטף, לפחות 1', () => {
+  const live = { active: true, starts_on: '2026-08-01', ends_on: '2026-08-31' };
+  const list = [
+    { ...live, id: 1, endpoint_id: 1, channel_ids: [1, 2], min_gap_days: null },
+    { ...live, id: 2, endpoint_id: 2, channel_ids: [1], min_gap_days: 3 },
+    { ...live, id: 3, endpoint_id: 3, channel_ids: [1], paused_at: '2026-08-02' },
+    { ...live, id: 4, endpoint_id: 4, channel_ids: [1], endpoint_active: false },
+    { ...live, id: 5, endpoint_id: 5, channel_ids: [1], starts_on: '2026-10-01', ends_on: null },
+  ];
+  const standalone = new Map([[2, new Set([9])], [3, new Set([1])]]);
+  const eps = channelEndpoints(list, standalone, { from: '2026-08-02', to: '2026-08-08' });
+  assert.deepEqual([...eps.get(1).keys()].sort(), [1, 2]);
+  assert.deepEqual(eps.get(1).get(2), [3]);
+  assert.deepEqual([...eps.get(2).keys()].sort(), [1, 9]);
+  const channels = new Map([[1, { id: 1, max_per_week: 5 }], [3, { id: 3, max_per_week: 5 }]]);
+  assert.equal(gapOn({ channels, endpoints: eps }, 1).endpoints, 2);
+  assert.equal(gapOn({ channels, endpoints: eps }, 3).endpoints, 1);
+  // ערוץ לא ידוע / בלי הקשר — {} (הכללי)
+  assert.deepEqual(gapOn({ channels, endpoints: eps }, 7), {});
+  assert.deepEqual(gapOn(null, 1), {});
+});
+
+test('סעיף 5 — weekGapLimit: מרווח של קמפיין שמגביל את הערוץ מתחת למספר שלו', () => {
+  const ch = { max_per_week: 5 };   // תקציב 4
+  const week = { from: '2026-08-02', to: '2026-08-08' };
+  // נקודה אחת, ברירת המחדל (נגזר 1) — 7 ימים, לא מגביל
+  assert.equal(weekGapLimit({ ...week, channel: ch, endpoints: new Map([[1, [null]]]),
+                              settings: { min_gap_days: 7 } }), 7);
+  // נקודה אחת בקמפיין עם מרווח 7 — פוסט אחד בשבוע: מגביל (1 < 4)
+  assert.equal(weekGapLimit({ ...week, channel: ch, endpoints: new Map([[1, [7]]]),
+                              settings: { min_gap_days: 7 } }), 1);
+  // אותה נקודה עם תוכן שוטף — המרווח המקל שלה
+  assert.equal(weekGapLimit({ ...week, channel: ch, endpoints: new Map([[1, [7, null]]]),
+                              settings: { min_gap_days: 7 } }), 7);
+  assert.equal(weekGapLimit({ ...week, channel: ch, endpoints: new Map(), settings: null }), null);
+});

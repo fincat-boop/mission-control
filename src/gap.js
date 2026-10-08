@@ -11,7 +11,8 @@
 
 import { one } from './db.js';
 import { weekMeta, ymd } from './board.js';
-import { effectiveGap } from './capacity.js';
+import { effectiveGap, gapOn } from './capacity.js';
+import { loadGapContext } from './capacity-db.js';
 import { LINK_LIVE_STATUSES, takesRoom, takesRoomSql } from './engine.js';
 import { postIsLiveSql } from './live.js';
 
@@ -34,12 +35,15 @@ export async function loadGapDays() {
 
 /**
  * המרווח שחל על פוסט: של הקמפיין שהתוכן שלו שייך אליו (campaignId, או
- * contentId → הקמפיין של התוכן), ובלעדיו ברירת המחדל הכללית. פוסט בלי
- * קמפיין (מבצע דחוף, פוסט ידני בלי תוכן) — הכללי.
- * @returns {Promise<{min:number, campaign:{id:number,name:string}|null}>}
- *          campaign — רק כשהמרווח בא ממנו
+ * contentId → הקמפיין של התוכן), ובלעדיו ברירת המחדל — בערוץ ידוע
+ * (channelId + when) נגזרת מהקצב של הערוץ בשבוע של המועד (effectiveGap,
+ * סעיף 5), אחרת הכללית. פוסט בלי קמפיין (מבצע דחוף, פוסט ידני בלי תוכן) —
+ * ברירת המחדל.
+ * @returns {Promise<{min:number, campaign:{id:number,name:string}|null, derived:boolean}>}
+ *          campaign — רק כשהמרווח בא ממנו; derived — ברירת המחדל קוצרה לפי הערוץ
  */
-export async function gapFor({ campaignId = null, contentId = null } = {}) {
+export async function gapFor({ campaignId = null, contentId = null, channelId = null,
+                               when = null } = {}) {
   let c = null;
   if (campaignId) {
     c = await one('select id, name, min_gap_days from campaigns where id = $1', [campaignId]);
@@ -50,9 +54,15 @@ export async function gapFor({ campaignId = null, contentId = null } = {}) {
         where ci.id = $1`, [contentId]);
   }
   if (c?.min_gap_days != null) {
-    return { min: effectiveGap(c, null), campaign: { id: c.id, name: c.name } };
+    return { min: effectiveGap(c, null), campaign: { id: c.id, name: c.name }, derived: false };
   }
-  return { min: await loadGapDays(), campaign: null };
+  const settings = await one('select * from engine_settings limit 1');
+  const global = effectiveGap(null, settings);
+  if (!channelId || !when) return { min: global, campaign: null, derived: false };
+  const week = weekMeta(when);
+  const ctx = await loadGapContext(week.start, week.end, { settings });
+  const min = effectiveGap(null, settings, gapOn(ctx, channelId));
+  return { min, campaign: null, derived: min < global };
 }
 
 /**
@@ -65,7 +75,7 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
                                    campaignId = null, contentId = null }) {
   if (!endpointId || !channelId || !when) return null;
 
-  const { min, campaign } = await gapFor({ campaignId, contentId });
+  const { min, campaign, derived } = await gapFor({ campaignId, contentId, channelId, when });
   if (min <= 0) return null;
 
   // השכן הקרוב ביותר בזמן, לפני או אחרי — מרווח נמדד לשני הכיוונים.
@@ -94,7 +104,9 @@ export async function gapWarning({ endpointId, channelId, when, excludePostId = 
   const days = Number(near.days);
   const rule = campaign
     ? `המרווח שהוגדר לקמפיין "${campaign.name}" הוא ${min} ימים.`
-    : `המרווח שהוגדר הוא ${min} ימים.`;
+    : derived
+      ? `המרווח שהוגדר בערוץ הזה הוא ${min} ימים (נגזר מכמה פוסטים בשבוע הערוץ מפרסם).`
+      : `המרווח שהוגדר הוא ${min} ימים.`;
   return {
     days,
     min,

@@ -343,7 +343,9 @@ test('הלוח: פוסט מקושר באותו יום — הזזה ושיוך ת
     assert.equal(back.status, 409, JSON.stringify(back.json));
     assert.match(back.json.error, /פוסט מקושר/);
 
-    // שתי אזהרות יחד (קישור + מרווח מול פוסט של הנקודה ב-B ב-17.11): הודעה אחת, אישור אחד
+    // שתי אזהרות יחד (קישור + מרווח מול פוסט של הנקודה ב-B ב-17.11): הודעה אחת, אישור אחד.
+    // מרווח 3 על הקמפיין: ברירת המחדל כאן נגזרת מהערוץ (סעיף 5 — נקודה אחת, 7 בשבוע → 1)
+    await inOrg(() => db.query('update campaigns set min_gap_days = 3 where id = $1', [s.camp]));
     await insertPost({ channel: s.b, ep: s.ep, title: 'שכן', at: at(17) });
     const both = await call('PATCH', `/posts/${hole}`, { scheduled_at: at(18, 12) });
     assert.equal(both.status, 409);
