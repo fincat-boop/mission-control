@@ -320,6 +320,12 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
     [req.params.id]
   );
   if (!p) return bad(res, 'לא נמצא שיבוץ כזה', 404);
+  // סעיף 23: פוסט עם תוכן מוצג בכותרת העדכנית של התוכן (כמו כרטיס הלוח);
+  // הכותרת שהועתקה בשיבוץ נשארת ב-post_title
+  if (p.content_title) {
+    p.post_title = p.title;
+    p.title = p.content_title;
+  }
 
   // ערוץ המייל: ה"חיבור" שלו הוא משתני HUB_API_* בשרת, לא channel_connection
   if (p.platform === 'newsletter') {
@@ -349,7 +355,8 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
 
   // ניוזלטר שהועבר ל-HUB: האם השתנה משהו בלוח מאז (השינוי לא יגיע לשם)
   if (p.platform === 'newsletter') {
-    p.hub_stale = hubStale({ post: p, variant });
+    // הטביעה בהעברה חושבה מ-posts.title (מה שה-runner שולח), לא מכותרת התוכן שמוצגת
+    p.hub_stale = hubStale({ post: { ...p, title: p.post_title ?? p.title }, variant });
     p.hub_unverified = hubUnverified(p);
   }
 

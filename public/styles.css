@@ -534,6 +534,7 @@ dialog h3 { font-size: 15px; margin-bottom: 14px; }
 /* מתג (טיוטה ↔ מוכן לפרסום): checkbox עם role=switch, הטקסט אומר את המצב הנוכחי */
 .tswitch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px;
   color: var(--ink-2); user-select: none; white-space: nowrap; }
+.tswitch[hidden] { display: none; }
 .tswitch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .tswitch .tr { position: relative; width: 32px; height: 18px; border-radius: 9px; flex: none;
   background: var(--border); transition: background .15s; }
@@ -1200,6 +1201,7 @@ button.btn.tdanger { color: var(--st-crit); }
 .autopub { margin-bottom: 10px; }
 .autopub .fhint { margin-top: 2px; }
 .cbline { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.cbline[hidden] { display: none; }
 
 /* פרטי ערוץ: שלושה בלוקים — קיבולת / חיבור ופרסום / ימים חסומים */
 .chblock { padding: 14px 0 6px; border-bottom: 1px solid var(--border); }
@@ -1407,7 +1409,6 @@ button.btn.primary.dirty { box-shadow: 0 0 0 2px var(--st-warn); }
 .vmail { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--ink-2); }
 .vmail b { color: var(--ink-1); }
 .vacts { margin-inline-end: auto; display: flex; gap: 8px; flex-wrap: wrap; }
-.vacts #markReady { color: var(--st-good); }
 
 /* מה שנוסף לפוסט לפי הפלטפורמה (ui/variantExtras.js): כל אזור שורה מקופלת
    עם סיכום, סגורה כברירת מחדל */

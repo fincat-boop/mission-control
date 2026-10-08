@@ -93,6 +93,8 @@ export async function buildBoard(anchorDate) {
     rows(
       `select p.*, u.name as assignee_name, e.name as endpoint_name, v.status as variant_status,
               v.body as variant_body, v.meta as variant_meta, chn.platform,
+              -- סעיף 23: הכותרת העדכנית של התוכן (posts.title הוא העתק מרגע השיבוץ)
+              ci.title as content_title,
               pr.post_id is not null as has_results
          from posts p
          left join channels chn     on chn.id = p.channel_id
@@ -258,7 +260,8 @@ export function shapePost(p) {
     // סעיפים 20–21: תוכן משויך בלי טקסט ובלי מדיה; "מוכן" שלא יעבור פרסום
     content_empty: !!p.content_empty,
     ready_warn: p.ready_warn ?? null,
-    title: p.title,
+    // פוסט עם תוכן מציג את כותרת התוכן העדכנית (סעיף 23); בלי תוכן — את שלו
+    title: p.content_title ?? p.title,
     kind: p.kind,
     status: p.status,
     urgent: p.urgent,

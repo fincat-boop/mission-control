@@ -365,6 +365,9 @@ function fillEditForm(post) {
   fillSelect($('#peAssignee'), state.users, 'name', 'ללא אחראי');
   $('#peAssignee').value = post.assignee_id ? String(post.assignee_id) : '';
   $('#peTitle').value = post.title;
+  // סעיף 23: פוסט עם תוכן מציג את כותרת התוכן — היא נערכת בתוכן, לא כאן
+  $('#peTitle').readOnly = !!post.content_id;
+  $('#peTitleHint').hidden = !post.content_id;
   $('#peNote').value = post.note ?? '';
   $('#peHint').textContent = post.status === 'approved'
     ? 'הפוסט מאושר לפרסום אוטומטי. שינוי מועד משאיר את האישור; מעבר לערוץ אחר מבטל אותו.'
@@ -466,6 +469,8 @@ export function wirePostDialog() {
   });
   $$('#pTabs [data-ptab]').forEach((b) => b.addEventListener('click', run(() => switchTab(b.dataset.ptab))));
   $('#peSave').addEventListener('click', run(saveEdit));
+  // "ערוך בתוכן" ליד הכותרת — אותו עורך כמו "פתח בתוכן" (סעיף 17)
+  $('#peTitleEdit').addEventListener('click', run(() => runAction('openContent')));
 
   $('#pMoreBtn').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -718,7 +723,7 @@ export async function openPostPreview(postId) {
     ? `<div class="pvmeta" style="margin-top:10px">✉️ נושא: <b>${esc(vMeta.subject)}</b></div>` : '';
   // ניוזלטר: התצוגה מה-HUB במקום הטקסט הגולמי, ושורות המצב מול ה-HUB
   const nlInput = post.platform === 'newsletter' && variant
-    ? previewInput({ subject: vMeta.subject, body: variant.body, title: post.title,
+    ? previewInput({ subject: vMeta.subject, body: variant.body, title: post.post_title ?? post.title,
         scheduledAt: post.scheduled_at, templateId: vMeta.template_id, fieldValues: vMeta.field_values })
     : null;
   const nlNotes = newsletterPostNotes(post);

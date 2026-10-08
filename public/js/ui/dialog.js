@@ -303,7 +303,8 @@ function fieldHtml(f) {
     </div>`;
   }
   return `<div class="frow"><label for="${id}">${esc(f.label)}</label>
-    <input id="${id}" type="${f.type}" value="${esc(f.value ?? '')}"${f.max ? ` maxlength="${f.max}"` : ''}>
+    <input id="${id}" type="${f.type}" value="${esc(f.value ?? '')}"${f.max ? ` maxlength="${f.max}"` : ''}${
+      f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ''}>
     ${f.hint ? `<div class="fhint">${esc(f.hint)}</div>` : ''}</div>`;
 }
 

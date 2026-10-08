@@ -23,6 +23,8 @@ import { goToSetupTarget } from '../ui/setup.js';
 import {
   copySources, nextEmptySlot, postCampaign, rowPrefill, slotForPost,
 } from '../core/slotRow.js';
+import { deriveTitle, isDerivedTitle, slotTitle } from '../core/title.js';
+import { createAutosave } from '../core/autosave.js';
 
 /* ========================= ניוזלטר ========================= */
 
@@ -278,10 +280,11 @@ function wirePlan(campaign, endpointId, content) {
   $('#addBackground')?.addEventListener('click', () =>
     openAngleForm({ background: { endpoint_id: endpointId } }, reload));
 
+  // פריט קיים — אותו עורך כמו התאים (סעיף 24: כותרת, סוג וטקסט בחלון אחד)
   $$('#plan [data-bg-angle]').forEach((b) =>
     b.addEventListener('click', () => {
       const item = content.find((x) => x.id === Number(b.dataset.bgAngle));
-      openAngleForm({ item, background: { endpoint_id: endpointId } }, reload);
+      openItemEditor({ item, background: { endpoint_id: endpointId } }, reload);
     }));
 
   $$('#plan [data-bg-cell]').forEach((b) =>
@@ -1144,24 +1147,39 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
   /* ---------- שמירה אוטומטית (כל ערוץ חוץ מניוזלטר) ----------
      כל שינוי נשמר לבד: הקלדה — אחרי הפסקה קצרה, בחירה (סוג, מצב, קבצים) —
      מיד. שמירה אחת בכל רגע; שינוי שהגיע באמצע נשמר מיד אחריה. פוסט חדש
-     נוצר כשיש לו כותרת. "מוכן" שהשרת דוחה — הטקסט נשמר כטיוטה, והסיבה
-     מוצגת. */
+     נוצר בהקשה הראשונה בטקסט (או עם קובץ / כותרת) — הכותרת נגזרת (סעיף 23).
+     "מוכן" שהשרת דוחה — הטקסט נשמר כטיוטה, והסיבה מוצגת. */
   let readyNow = v?.status === 'ready'; // המצב השמור
-  let timer = null;
-  let saving = null;
-  let again = false;
-  let unsaved = false;
+  // המנגנון (תזמון, שמירה אחת בכל רגע, סבב נוסף) — core/autosave.js, משותף
+  // עם עורך הגרסאות (סעיף 24)
+  const auto = createAutosave(saveOnce,
+    { onError: (e) => genState(`לא נשמר — ${e.message}`, 'err') });
   let stale = false; // גרסה שהשתנתה בינתיים ולא נטענה — לא שומרים מעליה
   let note = '';
   // המאזינים על #genBody (שנשאר בין פתיחות) — מוסרים בסגירה
   const ac = new AbortController();
   const readyEl = () => $('#slotReady');
+  const pickedFiles = () => [...($('#gen___files')?.files ?? [])];
+  /* סעיף 23: הכותרת לא חוסמת שמירה. שדה ריק = הכותרת נגזרת מהתוכן (שורה
+     ראשונה של הטקסט, שם קובץ, "<ערוץ> · פוסט N") ומוצגת כ-placeholder;
+     כותרת שהמשתמש הקליד לא נדרסת. כותרת שמורה שהיא בדיוק הנגזרת — השדה
+     נפתח ריק וממשיך לגזור (core/title.js). */
+  const derivedTitle = () => deriveTitle({
+    body: $('#gen_body')?.value ?? '', channelName: channel?.name, index,
+    files: [...slotAssets.map((a) => a.filename), ...pickedFiles().map((f) => f.name)] });
+  const autoTitle = !!item && isDerivedTitle(item.title, {
+    body: v?.body ?? item.body, channelName: channel?.name, index,
+    files: slotAssets.map((a) => a.filename) });
+  const paintTitleHint = () => {
+    const el = $('#gen_title');
+    if (el) el.placeholder = derivedTitle() || 'נגזרת מהשורה הראשונה של הטקסט';
+  };
   const values = () => {
     const val = genValues();
-    return { title: (val.title ?? '').trim(), kind: val.kind, body: val.body ?? '',
-      status: readyEl()?.checked ? 'ready' : 'draft' };
+    // אין ממה לגזור (הטקסט נמחק) — פוסט שמור שומר על הכותרת שלו
+    return { title: (val.title ?? '').trim() || derivedTitle() || (saved?.title ?? ''),
+      kind: val.kind, body: val.body ?? '', status: readyEl()?.checked ? 'ready' : 'draft' };
   };
-  const pickedFiles = () => [...($('#gen___files')?.files ?? [])];
   const keyOf = (p) => JSON.stringify([p, extrasKey(extras)]);
   // משבצת חדשה: נקודת ההשוואה היא מה שהטופס נפתח איתו (גם כותרת וסוג
   // שהגיעו מהשורה) — בלי שינוי לא נוצר פוסט ריק, גם לא ב"הבא ›"
@@ -1193,21 +1211,22 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
 
   async function saveOnce() {
     if (stale) {
-      unsaved = true;
+      auto.unsaved = true;
       genState('לא נשמר — הפוסט השתנה מאז שנפתח. סגור ופתח מחדש.', 'err');
       return;
     }
     const p = values();
     const picked = pickedFiles();
     if (!p.title) {
-      unsaved = !!(p.body || picked.length || saved);
-      genState(saved ? 'לא נשמר — צריך כותרת' : 'יישמר כשתהיה כותרת', 'warn');
+      // אין כותרת ואין ממה לגזור — אין טקסט ואין קבצים: פוסט ריק לא נוצר
+      auto.unsaved = false;
+      genState('');
       return;
     }
     const key = keyOf(p);
     if (key === lastKey && !picked.length) {
       // אין מה לשלוח (למשל אחרי "מוכן" שנדחה וחזר לטיוטה השמורה)
-      unsaved = false;
+      auto.unsaved = false;
       if (note) genState(`נשמר. ${note}`, 'warn');
       else if ($('#genState').textContent === 'שומר…') genState('נשמר');
       note = '';
@@ -1247,7 +1266,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
           lastKey = keyOf(values());
         });
         stale = !loaded;
-        unsaved = stale;
+        auto.unsaved = stale;
         genState(loaded ? 'הגרסה השמורה נטענה — הטקסט שלך מוצג למעלה להעתקה'
           : 'לא נשמר — הפוסט השתנה מאז שנפתח. סגור ופתח מחדש.', loaded ? 'warn' : 'err');
         return;
@@ -1256,10 +1275,10 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
       if (e.status === 400 && wantReady && !readyNow) {
         readyEl().checked = false;
         note = `נשאר טיוטה — ${e.message}`;
-        again = true;
+        auto.again();
         return;
       }
-      unsaved = true;
+      auto.unsaved = true;
       genState(`לא נשמר — ${e.message}`, 'err');
       return;
     }
@@ -1283,7 +1302,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
         if (wantReady) {
           readyEl().checked = false;
         }
-        unsaved = true;
+        auto.unsaved = true;
         genState(`לא נשמר — ${e.message}`, 'err');
         await reload();
         repaintFiles();
@@ -1296,7 +1315,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
       readyEl().checked = readyNow;
     }
     lastKey = keyOf({ ...p, status: readyNow ? 'ready' : 'draft' });
-    unsaved = keyOf(values()) !== lastKey || pickedFiles().length > 0;
+    auto.unsaved = keyOf(values()) !== lastKey || pickedFiles().length > 0;
     const extra = `${warnNote(last.warn)}${downgradeNote(fills.flatMap((f) => f.downgraded ?? []))}`.trim();
     const msg = [note, extra].filter(Boolean).join(' ');
     note = '';
@@ -1309,34 +1328,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
     markGenericClean();
   }
 
-  /** שומר עכשיו (ומה שהשתנה בינתיים — מיד אחרי) */
-  function saveNow() {
-    clearTimeout(timer);
-    timer = null;
-    if (saving) {
-      again = true;
-      return saving;
-    }
-    saving = (async () => {
-      try {
-        do {
-          again = false;
-          await saveOnce();
-        } while (again);
-      } catch (e) {
-        unsaved = true;
-        genState(`לא נשמר — ${e.message}`, 'err');
-      } finally {
-        saving = null;
-      }
-    })();
-    return saving;
-  }
-  const schedule = (ms) => {
-    unsaved = true;
-    clearTimeout(timer);
-    timer = setTimeout(saveNow, ms);
-  };
+  const saveNow = () => auto.saveNow();
+  const schedule = (ms) => auto.schedule(ms);
 
   /**
    * "העתק לכאן": הטקסט של הפוסט שנבחר נכנס לתיבה (שאלה לפני שמחליפים טקסט
@@ -1352,12 +1345,14 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
       `להחליף את הטקסט של ${channel?.name ?? 'הפוסט'} בטקסט של ${sourceLabel(src)}?`,
       { okLabel: 'החלף' }))) return;
     if (src.body.trim()) $('#gen_body').value = src.body;
-    if (!$('#gen_title').value.trim() && src.title) $('#gen_title').value = src.title;
+    // רק קבצים בלי טקסט — הכותרת של המקור, כדי שהפוסט ייווצר לפני ההעתקה
+    else if (!$('#gen_title').value.trim() && src.title) $('#gen_title').value = src.title;
     paintNote();
+    paintTitleHint();
     await saveNow();
     if (!withFiles) return;
     if (!saved) {
-      toast('צריך כותרת לפני שמעתיקים קבצים — כותבים כותרת ומעתיקים שוב.', true);
+      toast('צריך טקסט או כותרת לפני שמעתיקים קבצים — כותבים ומעתיקים שוב.', true);
       return;
     }
     const r = await api(`/content/${saved.id}/copy-assets`, { method: 'POST', body: { from: src.id } });
@@ -1372,7 +1367,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
   /** "הבא ›": שומר, ופותח את המשבצת הריקה הבאה (מהנתונים הטריים שאחרי השמירה) */
   async function goNext() {
     await saveNow();
-    if (unsaved) return; // השמירה נכשלה — ההודעה כבר בשורת המצב
+    if (auto.unsaved) return; // השמירה נכשלה — ההודעה כבר בשורת המצב
     const fresh = state.campaigns.find((c) => c.id === campaign.id) ?? campaign;
     const to = nextEmptySlot(fresh.slots ?? [], { channelId, index });
     if (!to) {
@@ -1384,21 +1379,20 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
   }
 
   openGeneric({
-    guardDirty: mail ? true : () => unsaved,
+    guardDirty: mail ? true : () => auto.unsaved,
     autosave: !mail,
     head: mail ? '' : `<label class="tswitch" data-tt="כבוי = טיוטה">
       <input type="checkbox" role="switch" id="slotReady"${readyNow ? ' checked' : ''}>
       <span class="tr" aria-hidden="true"></span><span class="tl">מוכן לפרסום</span></label>`,
-    beforeClose: mail ? undefined : async () => {
-      if (timer || saving || unsaved) await saveNow();
-    },
+    beforeClose: mail ? undefined : () => auto.flush(),
     title: `${channel?.name ?? ''} · פוסט ${index}${item ? '' : ' — חדש'}`,
     saveLabel: mail ? 'שמור והמשך לעריכת המייל' : undefined,
     fields: [
       ...(partners.length ? [{ name: '__link', type: 'html', html: linkInfo(item, partners) }] : []),
       // משבצת חדשה: הכותרת והסוג מפוסט אחר באותה שורה (סעיף 18)
       { name: 'title', label: mail ? 'כותרת (פנימית — הנושא נכתב בעורך המייל)' : 'כותרת',
-        type: 'text', value: item?.title ?? prefill?.title },
+        type: 'text', value: autoTitle ? '' : (item?.title ?? prefill?.title),
+        placeholder: mail ? slotTitle(channel?.name, index) : 'נגזרת מהשורה הראשונה של הטקסט' },
       { name: 'kind', label: 'סוג', type: 'select',
         options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']],
         value: item?.kind ?? prefill?.kind },
@@ -1432,8 +1426,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
         title="שומר ופותח את המשבצת הריקה הבאה">הבא ›</button>` : ''),
     // ניוזלטר בלבד — בשאר הערוצים אין כפתור שמירה, הכול נשמר לבד
     onSave: async (val) => {
-      if (!val.title) throw new Error('צריך כותרת');
-      const body = { title: val.title, kind: val.kind, week: state.week };
+      // ניוזלטר: אין כאן טקסט לגזור ממנו — "<ערוץ> · פוסט N" (סעיף 23)
+      const body = { title: val.title || slotTitle(channel?.name, index), kind: val.kind, week: state.week };
       const res = saved
         ? await api(`/content/${saved.id}`, { method: 'PATCH', body })
         : await api('/content', { method: 'POST', body: {
@@ -1455,7 +1449,7 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
       return false;
     },
     onClose: () => {
-      clearTimeout(timer);
+      auto.cancel();
       ac.abort();
       if (filesChanged) reload();
     },
@@ -1473,8 +1467,10 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
             schedule(800);
           },
         });
-        $('#gen_body').addEventListener('input', paintNote);
+        $('#gen_body').addEventListener('input', () => { paintNote(); paintTitleHint(); });
+        $('#gen___files').addEventListener('change', paintTitleHint);
         paintNote();
+        paintTitleHint();
         // הקלדה — אחרי הפסקה; בחירה (סוג, קבצים) — מיד
         $('#genBody').addEventListener('input', (e) => {
           if (e.target.matches('#gen_title, #gen_body')) schedule(800);
@@ -1494,8 +1490,8 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
             ? `למחוק את הפוסט הזה? רק המשבצת הזו נמחקת — התוכן נשאר ב${names}.`
             : `למחוק את הפוסט הזה? המשבצות המקושרות (${names}) יישארו עם עותק משלהן של התוכן.`;
         if (!(await confirmDialog(question, { okLabel: 'מחק פוסט', danger: true }))) return;
-        clearTimeout(timer);
-        await saving;
+        auto.cancel();
+        await auto.idle();
         const res = await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         await closeGeneric({ force: true });
         engineToast(res, 'הפוסט נמחק.');
@@ -1722,7 +1718,7 @@ function wireCampaignGrid(selected, reload) {
   $$('#plan [data-angle]').forEach((b) =>
     b.addEventListener('click', () => {
       const idx = Number(b.dataset.angle);
-      openAngleForm({ item: itemOf(b), campaign: selected, slot: idx }, reload);
+      openItemEditor({ item: itemOf(b), campaign: selected, slot: idx }, reload);
     }));
 
   // לחיצה על תא — הניסוח של הזווית הזו למדיה הזו
@@ -1742,7 +1738,8 @@ function wireCampaignGrid(selected, reload) {
 
 /** תפריט שלוש הנקודות בכותרת הקמפיין — כל הפעולות על הקמפיין עצמו */
 function campaignMenu(c) {
-  // ייבוא מטבלה — רק בזוויות. העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
+  // ייבוא מטבלה ומסמך — בשני המבנים (סעיף 19: בכללי שורה N = פוסט N בכל ערוץ).
+  // העלאה מרוכזת בשניהם (בכללי — לעמודה שנבחרת בחלון)
   const angles = c.structure !== 'general';
   const items = [
     // "סיימתי לכתוב" ראשון: רק כשיש מה להשאיר ועל מה לפרוס (סעיף 25 — "מוכן"
@@ -1757,7 +1754,7 @@ function campaignMenu(c) {
     can('settings') && '<button type="button" data-act="gap">מרווח בין פוסטים</button>',
     can('content') && '<button type="button" data-act="bulk">העלאה מרוכזת</button>',
     canLinkIn(c) && '<button type="button" data-act="link">קשר תוכן</button>',
-    angles && can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
+    can('content') && '<button type="button" data-act="import">ייבוא מטבלה</button>',
     // קמפיין חדש תמיד כללי; קמפיין ישן לפי זוויות עובר בהמרה (כל ניסוח = פוסט)
     angles && can('settings') && '<button type="button" data-act="to-general">המר לקמפיין כללי</button>',
     // תבנית ל"שבץ מחדש" בלוח האסטרטגיה
@@ -1967,7 +1964,22 @@ function openBulkUpload(campaign, reload) {
   });
 }
 
-/** הזווית: המסר עצמו, הסוג, הקבצים המשותפים */
+/**
+ * לחיצה על שורת זווית / תוכן שוטף: פריט קיים — עורך הגרסאות, על הערוץ הראשון
+ * (סעיף 24: כותרת, סוג, Evergreen והטקסט באותו חלון, שנשמר לבד). פריט חדש —
+ * קודם הכותרת (openAngleForm), ואחרי היצירה ישר לעורך.
+ */
+function openItemEditor({ item, campaign, slot, background }, reload) {
+  const chans = angleChannels(campaign);
+  if (!item || !chans.length) return openAngleForm({ item, campaign, slot, background }, reload);
+  const first = chans.find((ch) => ch.platform !== 'newsletter') ?? chans[0];
+  return openVersionEditor({ item, channelId: first.id, campaign }, reload);
+}
+
+/**
+ * הזווית: המסר עצמו, הקמפיין / נקודת הקצה, הסוג, הקבצים המשותפים. יצירה של
+ * פריט חדש, ו"הגדרות נוספות" מעורך הגרסאות (סעיף 24) — שם נערכים הטקסטים.
+ */
 function openAngleForm({ item, campaign, slot, background }, reload) {
   // קמפיין כללי לא מקבל זוויות — אין להן מקום ברשימות שלו
   const campaignOptions = [['', 'ללא קמפיין — תוכן שוטף'],
@@ -2031,6 +2043,7 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
         : await api('/content', { method: 'POST', body });
       // מכאן הטופס עורך את מה שנשמר: "שמור" שוב (אחרי קבצים שנכשלו) לא
       // נתקל ב"המשבצת תפוסה" ולא יוצר זווית כפולה
+      const created = !saved && !item;
       if (!saved) $('#genTitle').textContent = `זווית ${res.content.sort_order}`;
       saved = res.content;
 
@@ -2041,6 +2054,14 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
       }
       engineToast(res, 'נשמר.');
       await reload();
+      if (created) {
+        // פריט חדש — ישר לכתיבת הטקסטים, בעורך שנשמר לבד (סעיף 24). אחרי
+        // שהחלון הזה נסגר: שניהם משתמשים באותו דיאלוג
+        const camp = state.campaigns.find((c) => c.id === saved.campaign_id) ?? null;
+        const fresh = camp?.content?.find((x) => x.id === saved.id)
+          ?? (await api('/content')).content.find((x) => x.id === saved.id);
+        if (fresh) setTimeout(() => openItemEditor({ item: fresh, campaign: camp ?? undefined }, reload));
+      }
       return false;
     },
     onClose: () => { if (filesChanged) reload(); },
@@ -2120,12 +2141,15 @@ document.addEventListener('click', () => {
 });
 
 /**
- * עורך אחד לכל הערוצים של זווית. הערוץ שבעריכה בשורה מקופלת, וממנה נפתחת
- * רשימת כל הערוצים עם המצב של כל אחד (לצידה סיכום המצבים); מעבר בין
- * לשוניות שומר את מה שנכתב (לא נשמר עדיין — מסומן בנקודה); "העתק מ־"
- * ממלא את הלשונית מטקסט של ערוץ אחר; "הבא ›" שומר את הלשונית ועובר לבאה;
- * "שמור" שומר את כל הלשוניות ששונו. אחרי שמירה מתעדכן רק התא ברשת.
- * ניוזלטר: לשונית עם המצב ומעבר לעורך המייל.
+ * עורך אחד לכל הערוצים של זווית / תוכן שוטף — באותה התנהגות כמו חלון
+ * המשבצת (סעיף 24): הכול נשמר לבד (core/autosave.js — אותו מנגנון), "מוכן
+ * לפרסום" כמתג בכותרת, ו"לא רלוונטי" כפעולה קטנה נפרדת (קיים רק כאן). הכותרת,
+ * הסוג ו-Evergreen של הפריט נערכים באותו חלון; כותרת ריקה נגזרת מהטקסט
+ * (סעיף 23). הערוץ שבעריכה בשורה מקופלת, וממנה נפתחת רשימת כל הערוצים עם
+ * המצב של כל אחד (לצידה סיכום המצבים); מעבר בין ערוצים שומר את מה שנכתב;
+ * "העתק מ־" ממלא מטקסט של ערוץ אחר; "הבא ›" עובר לערוץ הבא. אחרי שמירה
+ * מתעדכן רק התא ברשת. ניוזלטר: לשונית עם המצב ומעבר לעורך המייל. קמפיין,
+ * נקודה, קבצים משותפים ומחיקה — "הגדרות נוספות" (openAngleForm).
  */
 function openVersionEditor({ item, channelId, campaign }, reload) {
   const chans = angleChannels(campaign);
@@ -2138,7 +2162,7 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     const v = item.variants.find((x) => x.channel_id === ch.id) ?? null;
     return { ch, mail: ch.platform === 'newsletter', v, body: v?.body ?? '',
              status: v?.status ?? 'draft', files: [], base: v?.updated_at ?? null,
-             extras: pickExtras(v?.meta) };
+             extras: pickExtras(v?.meta), stale: false };
   });
   let cur = tabs.find((t) => t.ch.id === channelId) ?? tabs[0];
   // האזורים המקופלים (סוג פרסום, תגובה ראשונה...) — רק בערוץ עם פלטפורמה
@@ -2146,14 +2170,35 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
   const extrasDirty = (t) => extrasKey(t.extras) !== extrasKey(t.v?.meta);
   const dirty = (t) => !t.mail && (t.body !== (t.v?.body ?? '') ||
     t.status !== (t.v?.status ?? 'draft') || t.files.length > 0 || extrasDirty(t));
-  const statusOptions = [['draft', 'טיוטה'], ['ready', 'מוכן לפרסום'],
-                  ['not_relevant', 'לא רלוונטי לערוץ הזה']];
 
-  /** מה שבטופס → הלשונית הנוכחית */
+  /* ---------- הפריט: כותרת (נגזרת כשריקה), סוג, Evergreen ---------- */
+  const titleSrc = () => ({
+    body: tabs.find((t) => !t.mail && t.body.trim())?.body ?? item.body ?? '',
+    files: [...(item.assets ?? []), ...(item.variant_assets ?? [])].map((a) => a.filename) });
+  const derivedTitle = () => deriveTitle(titleSrc());
+  // כותרת שמורה שהיא בדיוק הנגזרת — השדה נפתח ריק וממשיך לגזור
+  const autoTitle = isDerivedTitle(item.title, titleSrc());
+  let itemBase = { title: item.title, kind: item.kind, evergreen: !!item.evergreen };
+  const itemValues = () => ({
+    // אין ממה לגזור — הכותרת השמורה נשארת
+    title: ($('#gen_title')?.value ?? '').trim() || derivedTitle() || itemBase.title,
+    kind: $('#gen_kind')?.value ?? itemBase.kind,
+    evergreen: $('#gen_evergreen') ? $('#gen_evergreen').checked : itemBase.evergreen,
+  });
+  const itemDirty = () => {
+    const v = itemValues();
+    return v.title !== itemBase.title || v.kind !== itemBase.kind || v.evergreen !== itemBase.evergreen;
+  };
+  const paintTitleHint = () => {
+    const el = $('#gen_title');
+    if (el) el.placeholder = derivedTitle() || 'נגזרת מהשורה הראשונה של הטקסט';
+  };
+  const paintHead = () => { $('#genTitle').textContent = `${itemBase.title} — ${cur.ch.name}`; };
+
+  /** מה שבטופס → הלשונית הנוכחית (המצב נקבע במתג ובכפתור, לא כאן) */
   const sync = () => {
     if (cur.mail) return;
     cur.body = $('#gen_body').value;
-    cur.status = $('#gen_status').value;
     cur.files = [...($('#gen___files')?.files ?? [])];
     // ערכים שנשמרו ואין להם שדה כרגע (שער כשאין סרטון) נשארים
     if (hasExtras(cur)) cur.extras = pickExtras({ ...cur.extras, ...readExtras($('#vextras')) });
@@ -2193,13 +2238,21 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
     $('#vtabsPop').hidden = !open;
     $('#vtabsBtn').setAttribute('aria-expanded', String(open));
   };
+  /** המתג "מוכן לפרסום" ו"לא רלוונטי" — לפי הלשונית הנוכחית (ניוזלטר: במייל) */
+  const paintReady = () => {
+    $('#verReadyWrap').hidden = cur.mail;
+    $('#verReady').checked = cur.status === 'ready';
+    $('#vNotRel').hidden = cur.mail;
+    $('#vNotRel').textContent = cur.status === 'not_relevant'
+      ? `החזר ל${cur.ch.name}` : 'לא רלוונטי לערוץ הזה';
+  };
 
   /** הלשונית t → הטופס */
   const load = (t) => {
     cur = t;
-    $('#genTitle').textContent = `${item.title} — ${t.ch.name}`;
+    paintHead();
     $('#genBody .stalebox')?.remove();
-    for (const f of ['body', 'status', '__files', '__copy', '__note']) {
+    for (const f of ['body', '__files', '__copy', '__note']) {
       $(`#genBody [data-field="${f}"]`).hidden = t.mail;
     }
     $('#genBody [data-field="__extras"]').hidden = !hasExtras(t);
@@ -2217,7 +2270,6 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         ? extrasHtml({ platform: t.ch.platform, meta: t.extras, files: assets }) : '';
       paintNote();
       $('#gen_body').value = t.body;
-      $('#gen_status').value = t.status;
       $('#genBody label[for="gen___files"]').textContent = `תמונות וסרטונים ל${t.ch.name}`;
       $('#vfiles').innerHTML = versionFiles(item, t.v?.id);
       wireFiles();
@@ -2229,13 +2281,16 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         : '<option value="">אין עדיין טקסט בערוץ אחר</option>';
       $('#vcopyBtn').disabled = !sources.length;
     }
-    const i = tabs.indexOf(t);
-    $('#vnext').disabled = i === tabs.length - 1;
-    $('#markReady').hidden = t.mail || t.status === 'ready';
+    $('#vnext').disabled = tabs.indexOf(t) === tabs.length - 1;
+    paintReady();
     paintTabs();
   };
 
-  /** שמירת לשונית אחת: קבצים קודם ("מוכן" נבדק מול המדיה שכבר עלתה), ואז הגרסה */
+  /**
+   * שמירת לשונית אחת: קבצים קודם ("מוכן" נבדק מול המדיה שכבר עלתה), ואז
+   * הגרסה. שגיאה עוברת לקורא כמו שהיא (409 / 400 — saveOnce מחליט).
+   * מה שהמשתמש שינה בזמן הבקשה לא נדרס בתשובה.
+   */
   const saveTab = async (t) => {
     if (t.files.length) {
       const { saved, failed } = await uploadEach(item.id, t.files, {
@@ -2247,60 +2302,115 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         if (a.variant_id) item.variant_assets = [...(item.variant_assets ?? []), a];
       }
       t.files = failed.map((f) => f.file);
-      if (failed.length) {
-        if (t === cur) setPickedFiles($('#gen___files'), t.files);
-        throw new Error(`${t.ch.name}: ${uploadFailedMessage(failed)}`);
-      }
+      if (t === cur) setPickedFiles($('#gen___files'), t.files);
+      if (saved.length && t === cur) $('#vfiles').innerHTML = versionFiles(item, t.v?.id);
+      if (failed.length) throw new Error(uploadFailedMessage(failed));
     }
-    let res;
-    try {
-      res = await api(`/content/${item.id}/variants/${t.ch.id}`, { method: 'PUT', body: {
-        body: t.body, status: t.status, base_updated_at: t.base, week: state.week,
-        // meta נשלח רק כשהאזורים השתנו — שאר ה-meta (של אחרים) נשמר כמו שהוא
-        ...(extrasDirty(t) ? { meta: mergeExtras(t.v?.meta, t.extras) } : {}) } });
-    } catch (e) {
-      if (e.status !== 409 || !e.payload?.stale) throw new Error(`${t.ch.name}: ${e.message}`);
-      // מישהו אחר שמר את הגרסה הזו — מציעים לטעון אותה; הטקסט שלך נשאר להעתקה
-      if (t !== cur) load(t);
-      const mine = t.body;
-      const ok = await confirmDialog(`${t.ch.name}: ${e.message}.\nהטקסט שלך יישאר מוצג בחלון, להעתקה.`,
-        { okLabel: 'טען את הגרסה השמורה' });
-      if (!ok) throw new Error(`${t.ch.name}: לא נשמר — הגרסה השתנתה מאז שנפתחה.`);
-      const cur0 = e.payload.current;
-      Object.assign(t, { v: cur0, body: cur0?.body ?? '', status: cur0?.status ?? 'draft',
-                         base: cur0?.updated_at ?? null, extras: pickExtras(cur0?.meta) });
-      load(t);
-      showMine(mine);
-      throw new Error(`${t.ch.name}: הגרסה השמורה נטענה — הטקסט שלך מוצג למעלה להעתקה.`);
-    }
+    const sent = { body: t.body, status: t.status, extras: t.extras };
+    const res = await api(`/content/${item.id}/variants/${t.ch.id}`, { method: 'PUT', body: {
+      body: sent.body, status: sent.status, base_updated_at: t.base, week: state.week,
+      // meta נשלח רק כשהאזורים השתנו — שאר ה-meta (של אחרים) נשמר כמו שהוא
+      ...(extrasDirty(t) ? { meta: mergeExtras(t.v?.meta, t.extras) } : {}) } });
     const v = res.variant;
-    Object.assign(t, { v, body: v.body, status: v.status, base: v.updated_at,
-                       extras: pickExtras(v.meta) });
+    Object.assign(t, { v, base: v.updated_at });
+    if (t.body === sent.body) t.body = v.body;
+    if (t.status === sent.status) t.status = v.status;
+    if (t.extras === sent.extras) t.extras = pickExtras(v.meta);
     item.variants = [...item.variants.filter((x) => x.channel_id !== t.ch.id), v];
+    // תא חדש — הקבצים שלו נתלו על הגרסה שנוצרה עכשיו
+    if (t === cur && !t.files.length) $('#vfiles').innerHTML = versionFiles(item, v.id);
     paintCellInPlace(campaign, item, t.ch.id, v.status, res.warn);
     return res;
   };
 
-  /** שמירת כל הלשוניות ששונו; נעצרת בראשונה שנכשלה ועוברת אליה */
-  const saveAll = async () => {
+  /** הלוח וההתראות — המילוי האוטומטי יכול היה לשבץ משהו */
+  const refreshAround = () => { refreshBoard(); refreshAlerts(); };
+
+  /* ---------- שמירה אוטומטית — אותו מנגנון כמו חלון המשבצת ---------- */
+  let note = '';          // "מוכן" שנדחה — נאמר אחרי שהטקסט נשמר כטיוטה
+  let itemChanged = false; // כותרת/סוג השתנו — הרשת מצוירת מחדש בסגירה
+  const auto = createAutosave(saveOnce,
+    { onError: (e) => genState(`לא נשמר — ${e.message}`, 'err') });
+
+  async function saveOnce(ctl) {
     sync();
     const results = [];
-    for (const t of tabs.filter(dirty)) {
+    const done = () => {
+      ctl.unsaved = tabs.some(dirty) || itemDirty();
+      paintTabs();
+      if (!results.length) return;
+      const merged = mergeFills(results);
+      if (merged.engine?.placed || merged.engine?.attached) engineToast(merged, 'נשמר.');
+      refreshAround();
+    };
+
+    if (itemDirty()) {
+      genState('שומר…');
+      try {
+        const res = await api(`/content/${item.id}`, { method: 'PATCH',
+          body: { ...itemValues(), week: state.week } });
+        itemBase = { title: res.content.title, kind: res.content.kind, evergreen: !!res.content.evergreen };
+        Object.assign(item, itemBase);
+        itemChanged = true;
+        paintHead();
+        results.push(res);
+      } catch (e) {
+        genState(`לא נשמר — ${e.message}`, 'err');
+        done();
+        return;
+      }
+    }
+
+    for (const t of tabs.filter((x) => dirty(x) && !x.stale)) {
+      const wantReady = t.status === 'ready' && t.v?.status !== 'ready';
+      genState('שומר…');
       try {
         results.push(await saveTab(t));
       } catch (e) {
+        if (e.status === 409 && e.payload?.stale) {
+          // מישהו אחר שמר את הגרסה הזו — מציעים לטעון אותה; הטקסט שלך נשאר להעתקה
+          if (t !== cur) load(t);
+          let loaded = false;
+          await staleReload(e, t.body, (fresh) => {
+            loaded = true;
+            Object.assign(t, { v: fresh, body: fresh?.body ?? '', status: fresh?.status ?? 'draft',
+                               base: fresh?.updated_at ?? null, extras: pickExtras(fresh?.meta) });
+            load(t);
+          });
+          t.stale = !loaded;
+          genState(loaded ? `${t.ch.name}: הגרסה השמורה נטענה — הטקסט שלך מוצג למעלה להעתקה`
+            : `${t.ch.name}: לא נשמר — הגרסה השתנתה מאז שנפתחה. סגור ופתח מחדש.`,
+          loaded ? 'warn' : 'err');
+          done();
+          return;
+        }
+        // "מוכן" שנדחה (חסר משהו לערוץ) — חוזרים לטיוטה ושומרים את השאר
+        if (e.status === 400 && wantReady) {
+          t.status = 'draft';
+          if (t === cur) paintReady();
+          note = `${t.ch.name} נשאר טיוטה — ${e.message}`;
+          ctl.again();
+          done();
+          return;
+        }
         if (t !== cur) load(t);
-        else paintTabs();
-        if (results.length) engineToast(mergeFills(results));
-        refreshAround();
-        throw e;
+        genState(`לא נשמר — ${t.ch.name}: ${e.message}`, 'err');
+        done();
+        return;
       }
     }
-    return results;
-  };
 
-  /** הלוח וההתראות — המילוי האוטומטי יכול היה לשבץ משהו */
-  const refreshAround = () => { refreshBoard(); refreshAlerts(); };
+    const stale = tabs.find((t) => t.stale);
+    const extra = results.map((r) => warnNote(r.warn)).join('').trim();
+    const msg = [note, extra].filter(Boolean).join(' ');
+    note = '';
+    if (stale) {
+      genState(`${stale.ch.name}: לא נשמר — הגרסה השתנתה מאז שנפתחה. סגור ופתח מחדש.`, 'err');
+    } else if (results.length || msg || $('#genState').textContent === 'שומר…') {
+      genState(msg ? `נשמר. ${msg}` : 'נשמר', msg ? 'warn' : '');
+    }
+    done();
+  }
 
   let filesChanged = false;
   const wireFiles = () => {
@@ -2313,14 +2423,35 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         item.variant_assets = (item.variant_assets ?? []).filter((a) => a.id !== id);
         paintWarns(campaign, res.warns);
         filesChanged = true;
+        paintTitleHint();
       })));
+  };
+
+  /** שינוי בטופס: הלשונית מתעדכנת, ושמירה אחרי ms */
+  const changed = (ms) => {
+    sync();
+    paintTabs();
+    paintNote();
+    paintTitleHint();
+    auto.schedule(ms);
   };
 
   openGeneric({
     title: `${item.title} — ${cur.ch.name}`,
-    // שינוי שלא נשמר בכל אחת מהלשוניות — לא רק בזו שמוצגת
-    guardDirty: () => { sync(); return tabs.some(dirty); },
+    autosave: true,
+    // שינוי שלא נשמר (או ששמירתו נכשלה) בכל אחת מהלשוניות — לא רק בזו שמוצגת
+    guardDirty: () => { sync(); return auto.unsaved || tabs.some(dirty) || itemDirty(); },
+    beforeClose: () => auto.flush(),
+    head: `<label class="tswitch" id="verReadyWrap" data-tt="כבוי = טיוטה">
+      <input type="checkbox" role="switch" id="verReady">
+      <span class="tr" aria-hidden="true"></span><span class="tl">מוכן לפרסום</span></label>`,
     fields: [
+      { name: 'title', label: 'כותרת', type: 'text', value: autoTitle ? '' : item.title,
+        placeholder: 'נגזרת מהשורה הראשונה של הטקסט' },
+      { name: 'kind', label: 'סוג', type: 'select',
+        options: [['value', 'ערך'], ['hybrid', 'משולב'], ['promo', 'מכירתי']], value: item.kind },
+      { name: 'evergreen', label: 'Evergreen — אפשר לפרסם שוב ושוב', type: 'checkbox',
+        value: !!item.evergreen },
       { name: '__tabs', type: 'html',
         html: `<div class="vtabs" id="vtabs">
           <div class="msel vpick">
@@ -2341,7 +2472,6 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         </div>` },
       { name: 'body', label: '', type: 'textarea', value: '' },
       { name: '__note', type: 'html', html: '<div class="vnote" id="vnote" aria-live="polite" hidden></div>' },
-      { name: 'status', label: 'מצב', type: 'select', value: 'draft', options: statusOptions },
       { name: '__files', label: '', type: 'files', existing: '<div id="vfiles"></div>' },
       { name: '__extras', type: 'html', html: '<div class="vextras" id="vextras"></div>' },
       { name: '__mail', type: 'html', html: `<div class="vmail">
@@ -2349,24 +2479,19 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
           <button type="button" class="btn" id="vmailOpen">שמור ועבור לעורך המייל</button>
         </div>` },
     ],
-    saveLabel: 'שמור',
     extraActions: `<span class="vacts">
-        <button type="button" class="btn small" id="markReady">⚡ מוכן לפרסום</button>
-        <button type="button" class="btn" id="vnext" title="שומר את הערוץ הזה ועובר לבא">הבא ›</button>
+        ${can('content') ? `<button type="button" class="btn small" id="vMore"
+          title="קמפיין, נקודת קצה, קבצים משותפים ומחיקה">הגדרות נוספות</button>` : ''}
+        <button type="button" class="btn small" id="vNotRel">לא רלוונטי לערוץ הזה</button>
+        <button type="button" class="btn" id="vnext" title="עובר לערוץ הבא (מה שנכתב נשמר)">הבא ›</button>
       </span>`,
-    onSave: async () => {
-      const results = await saveAll();
-      if (results.length) {
-        const warns = results.map((r) => warnNote(r.warn)).join('');
-        engineToast(mergeFills(results),
-          (results.length === 1 ? 'נשמר.' : `נשמרו ${results.length} ערוצים.`) + warns);
-        refreshAround();
-      }
-      return false;
-    },
+    // אין "שמור" (autosave) — onSave לא נקרא
+    onSave: async () => false,
     onClose: () => {
-      // קובץ שהוסר — המספר 📎 ברשת מתעדכן
-      if (filesChanged) paintAngleInPlace(item);
+      auto.cancel();
+      // קובץ שהוסר — המספר 📎 ברשת מתעדכן; כותרת/סוג — הרשת כולה
+      if (itemChanged) reload();
+      else if (filesChanged) paintAngleInPlace(item);
     },
     onOpen: () => {
       paintTabs();
@@ -2400,17 +2525,28 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         }
       });
 
-      // נקודת "לא נשמר" על הלשונית מתעדכנת תוך כדי
-      ['#gen_body', '#gen_status', '#gen___files'].forEach((sel) =>
-        $(sel).addEventListener(sel === '#gen_body' ? 'input' : 'change', () => {
-          sync(); paintTabs(); paintNote();
-        }));
+      // הקלדה — שמירה אחרי הפסקה; בחירה (סוג, קבצים, מצב) — מיד
+      $('#gen_body').addEventListener('input', () => changed(800));
+      $('#gen_title').addEventListener('input', () => changed(800));
+      $('#gen_kind').addEventListener('change', () => changed(0));
+      $('#gen_evergreen').addEventListener('change', () => changed(0));
+      $('#gen___files').addEventListener('change', () => changed(0));
       // האזורים מצוירים מחדש בכל מעבר לשונית; המאזין על המעטפת — פעם אחת
       wireExtras($('#vextras'), {
         files: () => versionAssets(item, cur.v?.id),
         keep: () => cur.extras,
         platform: () => cur.ch.platform,
-        onChange: () => { sync(); paintTabs(); paintNote(); },
+        onChange: () => changed(800),
+      });
+      $('#verReady').addEventListener('change', () => {
+        cur.status = $('#verReady').checked ? 'ready' : 'draft';
+        paintReady();
+        changed(0);
+      });
+      $('#vNotRel').addEventListener('click', () => {
+        cur.status = cur.status === 'not_relevant' ? 'draft' : 'not_relevant';
+        paintReady();
+        changed(0);
       });
       $('#vcopyBtn').addEventListener('click', run(async () => {
         sync();
@@ -2419,47 +2555,28 @@ function openVersionEditor({ item, channelId, campaign }, reload) {
         if (cur.body.trim() && cur.body !== src.body && !(await confirmDialog(
           `להחליף את הטקסט של ${cur.ch.name} בטקסט של ${src.ch.name}?`, { okLabel: 'החלף' }))) return;
         $('#gen_body').value = src.body;
-        sync();
-        paintTabs();
+        changed(0);
       }));
-      $('#vnext').addEventListener('click', run(async () => {
+      $('#vnext').addEventListener('click', () => {
         sync();
-        if (dirty(cur)) {
-          const res = await saveTab(cur);
-          engineToast(res, `${cur.ch.name} נשמר.${warnNote(res.warn)}`);
-          refreshAround();
-        }
         const next = tabs[tabs.indexOf(cur) + 1];
         if (next) load(next);
-      }));
-      $('#markReady').addEventListener('click', run(async () => {
-        const prev = $('#gen_status').value;
-        $('#gen_status').value = 'ready';
-        sync();
-        let res;
-        try {
-          res = await saveTab(cur);
-        } catch (e) {
-          // נדחה (למשל אינסטגרם בלי מדיה) — המצב חוזר למה שהיה, הטקסט נשאר
-          if (cur.status === 'ready' && !cur.mail) {
-            $('#gen_status').value = prev;
-            sync();
-            paintTabs();
-          }
-          throw e;
-        }
-        engineToast(res, `${cur.ch.name} סומן מוכן לפרסום.`);
-        refreshAround();
-        load(cur);
+        if (tabs.some(dirty)) auto.schedule(0);
+      });
+      $('#vMore')?.addEventListener('click', run(async () => {
+        if (!(await closeGeneric())) return;
+        openAngleForm({ item, campaign, background: campaign ? undefined
+          : { endpoint_id: item.endpoint_id } }, reload);
       }));
       $('#vmailOpen').addEventListener('click', run(async () => {
-        const results = await saveAll();
-        if (results.length) engineToast(mergeFills(results));
+        await auto.saveNow();
+        if (auto.unsaved) return; // השמירה נכשלה — ההודעה בשורת המצב
         const mailTab = cur;
         await closeGeneric({ force: true });
         openMailVariant({ item, channelId: mailTab.ch.id }, reload);
       }));
       load(cur);
+      paintTitleHint();
     },
   });
 }
