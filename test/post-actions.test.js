@@ -137,6 +137,10 @@ test('defaultUrgentTime — 10:00, או השעה העגולה הבאה כשכב�
   assert.equal(t('2026-10-05T09:50:00'), '11:00');
   assert.equal(t('2026-10-05T15:20:00'), '16:00');
   assert.equal(t('2026-10-05T21:30:00'), '10:00'); // מאוחר מדי — מחר
+  // סעיף 12: שעת הפרסום הרגילה של הערוץ במקום 10:00
+  assert.equal(defaultUrgentTime(new Date('2026-10-05T06:20:00'), 8), '08:00');
+  assert.equal(defaultUrgentTime(new Date('2026-10-05T08:50:00'), 8), '10:00');
+  assert.equal(defaultUrgentTime(new Date('2026-10-05T21:30:00'), 18), '18:00');
 });
 
 test('nextFreeSlot — השעה העגולה הפנויה הבאה בערוץ', async () => {

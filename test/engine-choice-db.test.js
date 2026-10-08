@@ -340,3 +340,42 @@ test('סעיף 11 — מרווח: פוסט מכבד גם את המרווח הג�
   assert.equal(plan.notes.filter((n) => /מרווח/.test(n)).length, 0);
   await wipe();
 });
+
+/* ========================= 12. שעת פרסום לכל ערוץ ========================= */
+
+test('סעיף 12 — המנוע משבץ בשעת הערוץ; בלי שעה — 10:00; חור שעתיים אחרי; דחוף בלי שעה — לפי הערוץ', { skip }, async () => {
+  await wipe();
+  const week = weekMeta(inDays(7));
+  const morning = await channel('בוקר', 7);
+  const plain = await channel('רגיל', 7);
+  await q('update channels set default_hour = 8 where id = $1', [morning.id]);
+  const ep = await endpoint('נקודה');
+  await items(ep.id, [morning.id, plain.id], 3);
+  const plan = await inOrg(() => engine.planWeek(week.days[3].date, { holes: false }));
+  const at = (ch) => plan.placements.filter((p) => p.channel_id === ch).map((p) => p.time);
+  assert.ok(at(morning.id).length >= 1 && at(morning.id).every((t) => t === '08:00'),
+    JSON.stringify(at(morning.id)));
+  assert.ok(at(plain.id).length >= 1 && at(plain.id).every((t) => t === '10:00'),
+    JSON.stringify(at(plain.id)));
+
+  // פוסט חסר תוכן (חלון "מלא את השבוע") לנקודה בלי תוכן — שעתיים אחרי שעת הערוץ
+  await q('delete from content_items');
+  await q('delete from channels where id = $1', [plain.id]);
+  await q("update endpoints set created_at = now() - interval '200 days'");
+  const withHoles = await inOrg(() => engine.planWeek(week.days[3].date, { holes: true }));
+  assert.ok(withHoles.holes.length >= 1, JSON.stringify(withHoles.notes));
+  assert.ok(withHoles.holes.every((h) => new Date(h.scheduled_at).getHours() === 10),
+    JSON.stringify(withHoles.holes.map((h) => h.scheduled_at)));
+
+  // מבצע דחוף בלי שעה — כל ערוץ בשעה שלו; עם שעה — השעה שנבחרה
+  const { planUrgent } = await import('../src/urgent.js');
+  const other = await channel('ערב', 7);
+  await q('update channels set default_hour = 19 where id = $1', [other.id]);
+  const now = new Date(`${week.days[0].date}T06:00:00`);
+  const u = await inOrg(() => planUrgent({ title: 'מבצע', channel_ids: [morning.id, other.id] }, { now }));
+  assert.deepEqual(u.placements.map((p) => p.time).sort(), ['08:00', '19:00']);
+  const fixed = await inOrg(() => planUrgent(
+    { title: 'מבצע', channel_ids: [morning.id], time: '12:30' }, { now }));
+  assert.equal(fixed.placements[0].time, '12:30');
+  await wipe();
+});

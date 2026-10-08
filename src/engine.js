@@ -34,7 +34,22 @@ const W_IMPORTANCE = 0.5; // החשיבות הידנית שהוגדרה לה
 // נמוך מהוותק — מה שעבד טוב מקבל דחיפה, אבל נקודה חלשה לא נעלמת מהלוח.
 const W_PERFORMANCE = 0.6;
 
-const DEFAULT_HOUR = 10;
+/** שעת השיבוץ כשלערוץ אין שעה משלו (channels.default_hour) */
+export const DEFAULT_HOUR = 10;
+/** השעה האחרונה ביום שבה המנוע עוד משבץ */
+const LAST_HOUR = 22;
+
+/**
+ * שעת הפרסום הרגילה של ערוץ (סעיף 12): channels.default_hour, ובלעדיה 10:00.
+ * המנוע משבץ בה, ומשם — השעה הפנויה הבאה באותו יום; היום אחרי השעה —
+ * השעה העגולה הבאה. אותה ברירת מחדל במבצע דחוף וב"הוסף פוסט".
+ */
+export function channelHour(ch) {
+  const h = ch?.default_hour;
+  return h == null || Number.isNaN(Number(h)) ? DEFAULT_HOUR
+    : Math.min(LAST_HOUR, Math.max(0, Math.round(Number(h))));
+}
+
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
 /**
@@ -247,12 +262,13 @@ export async function planWeek(anchorDate, {
     if (!pick) continue;
 
     const at = new Date(slot.date);
-    // היום, אחרי שעת ברירת המחדל — השעה העגולה הבאה, לא ויתור על כל היום
-    let hour = slot.dateKey === today ? Math.max(DEFAULT_HOUR, now.getHours() + 1) : DEFAULT_HOUR;
+    // שעת הפרסום הרגילה של הערוץ (סעיף 12). היום, אחרי השעה — השעה העגולה
+    // הבאה, לא ויתור על כל היום
+    let hour = slot.dateKey === today ? Math.max(slot.hour, now.getHours() + 1) : slot.hour;
     // התנגשות שעה באותו ערוץ באותו יום — מזיזים שעה קדימה
-    while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < 22) hour += 1;
+    while (usage.hourTaken(slot.channel_id, slot.dateKey, hour) && hour < LAST_HOUR) hour += 1;
     // היום כבר נגמר, או שגם 22:00 תפוסה (הלולאה נעצרת עליה — קודם שובץ שם שני)
-    if (hour > 22 || usage.hourTaken(slot.channel_id, slot.dateKey, hour)) continue;
+    if (hour > LAST_HOUR || usage.hourTaken(slot.channel_id, slot.dateKey, hour)) continue;
     at.setHours(hour, 0, 0, 0);
     if (at <= now) continue;
 
@@ -1395,12 +1411,13 @@ export function buildSlots(week, channels, perf = null, { today = null } = {}) {
       const measured = perf
         ? (perf.channel.get(ch.id) ?? 1)
             * (perf.dow.get(date.getDay()) ?? 1)
-            * (perf.bucket.get(hourBucket(DEFAULT_HOUR)) ?? 1)
+            * (perf.bucket.get(hourBucket(channelHour(ch))) ?? 1)
         : null;
 
       slots.push({
         channel_id: ch.id,
         channel_name: ch.name,
+        hour: channelHour(ch),
         date,
         dateKey: day.date,
         index,
@@ -1831,8 +1848,12 @@ export function chooseForSlot(ctx) {
 
 /* ========================= חורים ========================= */
 
-/** השעה של פוסט חסר תוכן (באותו ערוץ ויום תפוסים — השעה הפנויה הבאה) */
-const HOLE_HOUR = 12;
+/**
+ * השעה של פוסט חסר תוכן: שעתיים אחרי שעת הפרסום הרגילה של הערוץ (null —
+ * 12:00, כמו תמיד), כדי שלא יתנגש בשיבוץ הרגיל באותו יום; עד 22:00. באותו
+ * ערוץ ויום תפוסים — השעה הפנויה הבאה.
+ */
+const holeHour = (ch) => Math.min(LAST_HOUR, channelHour(ch) + 2);
 
 /**
  * נקודה שהחוב שלה גבוה אבל אין לה תוכן מוכן — הלוח צריך להראות
@@ -1865,7 +1886,7 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
     // הערוץ הכי פנוי שיש בו יום חוקי — שם נשבץ בלי תוכן. גם טיוטה כבר
     // נבדקה ונפסלה למעלה בלולאת ה-slots הרגילה, אז אם הגענו לכאן — באמת אין כלום.
     const legal = (ch) => (dateKey) =>
-      at(dateKey, HOLE_HOUR) > now &&
+      at(dateKey, holeHour(ch)) > now &&
       usage.allows(ch.id, dateKey, 'value') &&
       !sameDay.has(`${e.id}:${ch.id}:${dateKey}`) &&
       gapViolation(gapIn(ch), pairDates.get(`${e.id}:${ch.id}`), dateKey,
@@ -1881,8 +1902,8 @@ export function findHoles({ endpoints, content, debts, channels, usage, week, ex
     }
     if (!target) continue; // אין ערוץ עם יום עתידי שמותר לשים בו פוסט לנקודה
 
-    let hour = HOLE_HOUR;
-    while (usage.hourTaken(target.id, day.date, hour) && hour < 22) hour += 1;
+    let hour = holeHour(target);
+    while (usage.hourTaken(target.id, day.date, hour) && hour < LAST_HOUR) hour += 1;
     if (usage.hourTaken(target.id, day.date, hour)) continue; // עד 22:00 הכול תפוס
     // תופסים בפועל את המקום כדי ששיבוץ נוסף באותה ריצה לא יחשוב שהמשבצת פנויה.
     usage.take(target.id, day.date, 'value', hour);

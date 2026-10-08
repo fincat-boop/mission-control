@@ -1,11 +1,10 @@
 import { one, rows } from './db.js';
 import { weekMeta, weekStart, ymd } from './board.js';
 import { gapWarning } from './gap.js';
-import { takesRoomSql } from './engine.js';
+import { channelHour, takesRoomSql } from './engine.js';
 import { urgentReserve } from '../public/js/core/reserve.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
-const DEFAULT_TIME = '10:00';
 // השעה האחרונה ביום שבה עוד משבצים "היום" — מאוחר מזה עוברים למחר
 export const LAST_URGENT_HOUR = 21;
 
@@ -54,8 +53,9 @@ export async function planUrgent(input, { now = new Date() } = {}) {
 
   const until = input.until ? new Date(input.until) : null;
   if (until && Number.isNaN(until.getTime())) errors.push('תאריך "רלוונטי עד" לא תקין');
-  const hm = parseTime(input.time || DEFAULT_TIME);
-  if (!hm) errors.push('שעה לא תקינה');
+  // בלי שעה — שעת הפרסום הרגילה של כל ערוץ (channelHour, סעיף 12)
+  const hm = input.time ? parseTime(input.time) : null;
+  if (input.time && !hm) errors.push('שעה לא תקינה');
   if (errors.length) return { ok: false, errors, placements: [], warnings: [], displaced: [] };
 
   const today = new Date(now);
@@ -129,7 +129,7 @@ export async function planUrgent(input, { now = new Date() } = {}) {
       if (endpointId && sameDay.has(`${ch.id}:${dayKey}`)) { skip('same_day'); continue; }
 
       // היום, כשהשעה כבר עברה — השעה העגולה הבאה; מאוחר מדי — מחר
-      const at = urgentSlotTime(day, hm, now);
+      const at = urgentSlotTime(day, hm ?? [channelHour(ch), 0], now);
       if (!at) { skip('time'); continue; }
 
       // יום שהוגדר כחסום למדיה הזו — גם דחוף לא נכנס אליו

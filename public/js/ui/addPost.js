@@ -5,6 +5,7 @@ import { postWithGapCheck } from '../core/api.js';
 import { refreshAfterPostChange } from '../ui/refresh.js';
 import { openEngine } from '../ui/engineDialog.js';
 import { candidateMeta, loadCandidates, variantLabel } from '../ui/contentPicker.js';
+import { channelHour } from '../core/postActions.js';
 
 /* ========================= הוספת פוסט ידנית ========================= */
 
@@ -20,6 +21,7 @@ export function wireAddPostDialog() {
   $('#apContent').addEventListener('change', syncContentHint);
   $('#apChannel').addEventListener('change', run(async () => {
     addSlotCtx.channelId = Number($('#apChannel').value);
+    setAddPostTime();
     await refreshContentOptions();
   }));
 }
@@ -43,14 +45,22 @@ export function openAddPost(channelId, date, channelName) {
   $('#apContext').textContent = pickChannel ? fmtDate(date) : `${channelName} · ${fmtDate(date)}`;
   $('#apTitle').value = '';
   $('#apKind').value = 'value';
-  // היום אחרי 10:00 — השעה העגולה הבאה (שרת דוחה מועד שעבר)
-  const now = new Date();
-  const isToday = date === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const h = isToday ? Math.min(23, Math.max(10, now.getHours() + 1)) : 10;
-  $('#apTime').value = `${String(h).padStart(2, '0')}:00`;
+  setAddPostTime();
   $('#addPostDlg').showModal();
   $('#apTitle').focus();
   run(refreshContentOptions)();
+}
+
+/**
+ * השעה בחלון "הוסף פוסט": שעת הפרסום הרגילה של הערוץ (channelHour, סעיף 12);
+ * היום אחרי השעה — השעה העגולה הבאה (השרת דוחה מועד שעבר)
+ */
+function setAddPostTime() {
+  const base = channelHour(state.channels.find((c) => c.id === addSlotCtx.channelId));
+  const now = new Date();
+  const isToday = addSlotCtx.date === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const h = isToday ? Math.min(23, Math.max(base, now.getHours() + 1)) : base;
+  $('#apTime').value = `${String(h).padStart(2, '0')}:00`;
 }
 
 /**

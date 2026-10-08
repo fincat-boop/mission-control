@@ -230,6 +230,7 @@ function advSummary(c) {
     // 20% היא ברירת המחדל — מוצגת רק כשמישהו שינה אותה
     c.urgent_reserve_pct != null && Number(c.urgent_reserve_pct) !== 20 && `${c.urgent_reserve_pct}% לדחופים`,
     c.efficiency != null && `עדיפות ${c.efficiency}`,
+    c.default_hour != null && `בשעה ${String(c.default_hour).padStart(2, '0')}:00`,
   ].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
@@ -265,6 +266,21 @@ function channelItem(c, ro, conn, hubReady) {
           <div class="fhint">
             עדיפות ריקה = ניטרלי. היא מכריעה רק בין שני מועדים שקולים בשבוע — לא קובעת כמה
             מתפרסם. כשהביצועים הנמדדים משפיעים על השיבוץ (כללי המנוע), המדידה מחליפה אותה.
+          </div>
+          <div class="prow">
+            <label for="chf-default_hour-${c.id}">שעת פרסום רגילה</label>
+            <select id="chf-default_hour-${c.id}" data-ch-field="default_hour" data-id="${c.id}"
+                    ${ro ? 'disabled' : ''}>
+              <option value="">10:00 (ברירת מחדל)</option>
+              ${[...new Set([...(c.default_hour != null && c.default_hour < 6 ? [Number(c.default_hour)] : []),
+                ...Array.from({ length: 17 }, (_, i) => i + 6)])].map((h) =>
+                `<option value="${h}" ${Number(c.default_hour) === h && c.default_hour != null
+                  ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}
+            </select>
+          </div>
+          <div class="fhint">
+            השעה שבה המנוע משבץ פוסטים בערוץ, וברירת המחדל בהוספת פוסט ובמבצע דחוף. כשהשעה תפוסה
+            באותו יום — השעה הפנויה הבאה.
           </div>
         </details>
       </section>

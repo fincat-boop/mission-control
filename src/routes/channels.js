@@ -17,7 +17,12 @@ r.get('/channels', wrap(async (_req, res) => {
 // בסכימה (שורות ישנות), אבל אף אחד כבר לא קורא או כותב אותה.
 const CHANNEL_FIELDS = ['name', 'max_per_week', 'max_promo_per_week',
                         'max_hybrid_per_week', 'max_value_per_week', 'urgent_reserve_pct',
-                        'blocked_days', 'active', 'sort_order', 'efficiency', 'platform'];
+                        'blocked_days', 'active', 'sort_order', 'efficiency', 'platform',
+                        'default_hour'];
+
+/** שעת הפרסום הרגילה (סעיף 12): שעה שלמה 0–22, או null (= 10:00) */
+const badHour = (v) => v != null && !(Number.isInteger(Number(v)) && v !== '' &&
+  Number(v) >= 0 && Number(v) <= 22);
 
 r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
   if (!req.body?.name) return bad(res, 'צריך שם לערוץ');
@@ -30,6 +35,7 @@ r.post('/channels', requirePerm('settings'), wrap(async (req, res) => {
 }));
 
 r.patch('/channels/:id', requirePerm('settings'), wrap(async (req, res) => {
+  if (badHour(req.body?.default_hour)) return bad(res, 'שעת הפרסום צריכה להיות שעה שלמה בין 0 ל-22');
   const before = await one('select active, disabled_at from channels where id = $1', [req.params.id]);
   const c = await updateById('channels', CHANNEL_FIELDS, req.params.id, req.body);
   if (!c) return bad(res, 'לא נמצא ערוץ כזה', 404);

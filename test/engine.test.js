@@ -960,3 +960,17 @@ test('gapViolation — הגדול מבין המרווח של הפוסט לבין
   assert.equal(gapViolation(2, ['2026-11-05'], '2026-11-07', null, s), null);
   assert.equal(gapViolation(2, ['2026-11-05'], '2026-11-06', null, s), 2);
 });
+
+/* ---------- סעיף 12: שעת פרסום לכל ערוץ ---------- */
+
+import { channelHour } from '../src/engine.js';
+
+test('channelHour — שעת הערוץ, בלעדיה 10:00; לא אחרי 22:00', () => {
+  assert.equal(channelHour({ default_hour: null }), 10);
+  assert.equal(channelHour({}), 10);
+  assert.equal(channelHour({ default_hour: 8 }), 8);
+  assert.equal(channelHour({ default_hour: 0 }), 0);
+  assert.equal(channelHour({ default_hour: 23 }), 22);
+  const week = weekMeta('2026-11-10');
+  assert.ok(buildSlots(week, [channel({ default_hour: 18 })], null).every((s) => s.hour === 18));
+});

@@ -140,15 +140,19 @@ export function nextFullHour(now = new Date()) {
 }
 
 /**
- * ברירת המחדל לשעה בחלון "מבצע דחוף": 10:00, או — כשזה כבר מאוחר מזה
- * היום — השעה העגולה הבאה (עד 21:00; אחר כך שוב 10:00, למחר).
+ * ברירת המחדל לשעה בחלון "מבצע דחוף": שעת הפרסום הרגילה של הערוץ (base,
+ * channels.default_hour — בלעדיה 10:00, סעיף 12), או — כשזה כבר מאוחר מזה
+ * היום — השעה העגולה הבאה (עד 21:00; אחר כך שוב השעה הרגילה, למחר).
  */
-export function defaultUrgentTime(now = new Date()) {
+export function defaultUrgentTime(now = new Date(), base = 10) {
   const next = nextFullHour(now);
   const sameDay = next.getDate() === now.getDate();
   const h = next.getHours();
-  return sameDay && h > 10 && h <= 21 ? `${String(h).padStart(2, '0')}:00` : '10:00';
+  return `${String(sameDay && h > base && h <= 21 ? h : base).padStart(2, '0')}:00`;
 }
+
+/** שעת הפרסום הרגילה של ערוץ בלקוח — כמו channelHour בשרת (סעיף 12) */
+export const channelHour = (ch) => (ch?.default_hour == null ? 10 : Number(ch.default_hour));
 
 const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 const hourKey = (d) => `${dayKey(d)} ${d.getHours()}`;

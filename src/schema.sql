@@ -74,6 +74,15 @@ alter table channels
 alter table channels
   add column if not exists efficiency int check (efficiency between 1 and 10);
 
+-- שעת הפרסום הרגילה של הערוץ (סעיף 12): השעה שבה המנוע משבץ פוסט חדש,
+-- ברירת המחדל של מבצע דחוף ושל "הוסף פוסט". null = 10:00. עד 22:00 — המנוע
+-- לא משבץ אחריה (channelHour ב-engine.js). פוסט חסר תוכן — שעתיים אחריה.
+alter table channels add column if not exists default_hour smallint;
+do $$ begin
+  alter table channels add constraint channels_default_hour_range
+    check (default_hour between 0 and 22);
+exception when duplicate_object then null; end $$;
+
 -- קמפיין הוא היחידה המרכזית: הוא נושא את התאריכים, החשיבות, הקצב והנתח.
 -- הוא ירש את התפקיד של strategy_allocations, שנמחקה.
 create table if not exists campaigns (

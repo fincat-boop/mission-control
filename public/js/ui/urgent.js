@@ -3,7 +3,7 @@ import { can, state } from '../core/state.js';
 import { numOrNull, ymd } from '../core/format.js';
 import { api } from '../core/api.js';
 import { refreshAfterPostChange } from '../ui/refresh.js';
-import { defaultUrgentTime } from '../core/postActions.js';
+import { channelHour, defaultUrgentTime } from '../core/postActions.js';
 import { multiSelectHtml, wireMultiSelects } from './multiSelect.js';
 
 /* ========================= מבצע דחוף ========================= */
@@ -24,6 +24,23 @@ export function wireUrgentDialog() {
     $(id).addEventListener('input', resetPlan);
     $(id).addEventListener('change', resetPlan);
   }
+  // השעה עוקבת אחרי הערוצים שנבחרו עד שמישהו משנה אותה ביד (סעיף 12)
+  $('#uTime').addEventListener('input', () => { timeTouched = true; });
+  $('#uChannels').addEventListener('change', syncUrgentTime);
+}
+
+let timeTouched = false;
+
+/**
+ * השעה בחלון לפי שעת הפרסום הרגילה של הערוצים שנבחרו: כולם באותה שעה —
+ * היא (או השעה העגולה הבאה כשכבר מאוחר היום); שעות שונות — ריק, והשרת
+ * משבץ כל ערוץ בשעה שלו.
+ */
+function syncUrgentTime() {
+  if (timeTouched) return;
+  const ids = new Set($$('#uChannels input:checked').map((i) => Number(i.value)));
+  const hours = new Set(state.channels.filter((c) => ids.has(c.id)).map(channelHour));
+  $('#uTime').value = hours.size > 1 ? '' : defaultUrgentTime(new Date(), [...hours][0] ?? 10);
 }
 
 let planReq = 0; // תשובת "בדוק" ישנה לא נכנסת אחרי שהפרטים השתנו
@@ -50,6 +67,7 @@ export function openUrgent() {
   const inTwoDays = new Date(Date.now() + 2 * 86400000);
   $('#uUntil').value = ymd(inTwoDays);
   $('#uTitle').value = '';
+  timeTouched = false;
   $('#uTime').value = defaultUrgentTime();
   $('#uWhatIf').dataset.state = '';
   $('#uWhatIf').innerHTML = '<b>מה יקרה:</b> מלאו את הפרטים ולחצו "בדוק".';
