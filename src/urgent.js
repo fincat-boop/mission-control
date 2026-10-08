@@ -86,7 +86,7 @@ export async function planUrgent(input, { now = new Date() } = {}) {
   const countTo = new Date(weekMeta(lastDay).endDate);
   countTo.setHours(23, 59, 59, 999);
   const existing = await rows(
-    `select id, channel_id, endpoint_id, kind, scheduled_at
+    `select id, channel_id, endpoint_id, kind, scheduled_at, urgent
        from posts p
       where status in ('scheduled','approved','publishing','failed','published','pending_approval')
         and ${takesRoomSql('p', '$3::timestamptz')}
@@ -130,7 +130,7 @@ export async function planUrgent(input, { now = new Date() } = {}) {
 
       // היום, כשהשעה כבר עברה — השעה העגולה הבאה; מאוחר מדי — מחר
       const at = urgentSlotTime(day, hm, now);
-      if (!at) continue;
+      if (!at) { skip('time'); continue; }
 
       // יום שהוגדר כחסום למדיה הזו — גם דחוף לא נכנס אליו
       if ((ch.blocked_days ?? []).includes(day.getDay())) { skip('blocked_day'); continue; }
@@ -139,7 +139,12 @@ export async function planUrgent(input, { now = new Date() } = {}) {
       const inSameWeek = (p) =>
         p.channel_id === ch.id && ymd(weekStart(new Date(p.scheduled_at))) === wkKey;
       const usedThisWeek = countIn(inSameWeek);
-      if (usedThisWeek >= ch.max_per_week) { skip('full'); continue; }
+      if (usedThisWeek >= ch.max_per_week) {
+        // השמורה "בשימוש" רק כשיש באותו שבוע מבצע דחוף שתופס אותה
+        skip(existing.some((p) => inSameWeek(p) && p.urgent) || planned.some(inSameWeek)
+          ? 'full_urgent' : 'full');
+        continue;
+      }
 
       if (ch.max_promo_per_week != null) {
         const promoThisWeek = countIn((p) => inSameWeek(p) && p.kind === 'promo');
@@ -203,12 +208,13 @@ export async function planUrgent(input, { now = new Date() } = {}) {
 
 /**
  * למה מבצע דחוף לא נכנס לערוץ עד lastDay — הסיבה ששללה הכי הרבה ימים
- * (why: סיבה → כמה ימים). מלא = גם השמורה לדחופים (urgentReserve, סעיף 7)
- * כבר בשימוש השבוע: המנוע לא נוגע בה, ולכן היא נגמרה רק בדחופים / פוסטים
- * ידניים — ואומרים איפה מגדילים אותה.
+ * (why: סיבה → כמה ימים). full_urgent = הערוץ מלא ויש באותו שבוע מבצע דחוף —
+ * השמורה לדחופים (urgentReserve, סעיף 7) כבר בשימוש, ואומרים איפה מגדילים
+ * אותה; full = מלא בלי דחוף (פוסטים ידניים תפסו גם את השמורה); time = השעה
+ * שנבחרה כבר עברה בכל הימים שנשארו.
  */
 export function urgentFullReason(ch, lastDay, why, maxPromoPerDay = 1) {
-  const top = [...why].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'full';
+  const top = [...why].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'full_urgent';
   const head = `אין שטח פנוי ב${ch.name} עד ${lastDay}`;
   switch (top) {
     case 'promo_week':
@@ -221,6 +227,19 @@ export function urgentFullReason(ch, lastDay, why, maxPromoPerDay = 1) {
       return `${head} — בכל יום פנוי כבר יש פוסט לאותה נקודת קצה בערוץ`;
     case 'blocked_day':
       return `${head} — הימים שנשארו חסומים בערוץ`;
+    case 'time':
+      return `${head} — השעה שנבחרה כבר עברה, ואחרי ${LAST_URGENT_HOUR}:00 לא משבצים להיום. ` +
+        'אפשר לבחור תאריך מאוחר יותר';
+    case 'full': {
+      const n = urgentReserve(ch.max_per_week, ch.urgent_reserve_pct);
+      if (n === 0) {
+        return `${head} — הערוץ מלא, ואין בו שטח שמור לדחופים. אפשר להגדיר אותו ` +
+          'בהגדרות הערוץ, תחת "מתקדם"';
+      }
+      return `${head} — הערוץ מלא: כבר ${ch.max_per_week} מתוך ${ch.max_per_week} פוסטים בשבוע, ` +
+        'כולל השטח ששמור לדחופים (תפוס בפוסטים רגילים). אפשר להגדיל את "פוסטים בשבוע" ' +
+        'או את השמורה בהגדרות הערוץ';
+    }
     default: {
       const n = urgentReserve(ch.max_per_week, ch.urgent_reserve_pct);
       if (n === 0) {

@@ -47,7 +47,7 @@ test('urgentSlotTime — היום מאוחר מדי: אין מועד היום (�
 test('סעיף 7 — urgentFullReason: השמורה בשימוש, עם המספר ואיפה מגדילים', async () => {
   const { urgentFullReason } = await import('../src/urgent.js');
   const ch = { name: 'וואטסאפ', max_per_week: 3, urgent_reserve_pct: 20, max_promo_per_week: 1 };
-  const full = urgentFullReason(ch, '2026-10-14', new Map([['full', 7]]));
+  const full = urgentFullReason(ch, '2026-10-14', new Map([['full_urgent', 7]]));
   assert.match(full, /הערוץ מלא, והשמורה לדחופים \(פוסט אחד בשבוע\) כבר בשימוש השבוע/);
   assert.match(full, /תחת "מתקדם"/);
   // שמורה 0 — לא "בשימוש", אלא שאין
@@ -58,4 +58,10 @@ test('סעיף 7 — urgentFullReason: השמורה בשימוש, עם המספ�
     /עד 1 מכירתיים בשבוע/);
   assert.match(urgentFullReason(ch, '2026-10-14', new Map([['promo_day', 3]]), 1),
     /בכל יום כבר יש מכירתי/);
+  // S4: מלא בלי שום דחוף באותו שבוע — לא "השמורה בשימוש"
+  const plain = urgentFullReason(ch, '2026-10-14', new Map([['full', 7]]));
+  assert.doesNotMatch(plain, /כבר בשימוש/);
+  assert.match(plain, /כבר 3 מתוך 3 פוסטים בשבוע, כולל השטח ששמור לדחופים/);
+  // כל הימים נפסלו כי השעה עברה
+  assert.match(urgentFullReason(ch, '2026-10-14', new Map([['time', 1]])), /השעה שנבחרה כבר עברה/);
 });
