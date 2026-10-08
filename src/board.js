@@ -3,7 +3,7 @@ import { contentHints } from './candidates.js';
 import { itemAssetsSql } from './links.js';
 import { contentState } from './publish/readiness.js';
 import { endpointLiveSql, openPostSql, postIsLiveSql } from './live.js';
-import { channelBudget, weekGapLimit } from './capacity.js';
+import { channelBudget, promoRoomStatus, weekGapLimit } from './capacity.js';
 import { loadGapContext } from './capacity-db.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -215,6 +215,15 @@ export async function buildBoard(anchorDate) {
   const promoWeight = promo + hybrid * hybridWeight;
   const valueWeight = value + hybrid * (1 - hybridWeight);
 
+  // החדר המכירתי של כל ערוץ ב-28 הימים שמסתיימים בשבוע — אותו כלל כמו שער
+  // היחס של המנוע (promoRoomStatus), כדי ש-⚠ בכרטיס יופיע רק כשהמנוע עצמו
+  // לא היה מכניס את זה
+  const { windowKinds } = await import('./engine.js');
+  const win = await windowKinds(from, to);
+  const promoRoom = channels.map((ch) => ({
+    channel_id: ch.id, name: ch.name, ...promoRoomStatus(ch, win.get(ch.id), settings),
+  }));
+
   // מה מוסתר בגלל השהיה — כדי שהלוח לא ייראה ריק בלי הסבר
   const held = await rows(
     `select ca.name, count(*)::int as n
@@ -260,8 +269,10 @@ export async function buildBoard(anchorDate) {
       value,
       hybrid,
       value_per_promo: promoWeight > 0 ? Number((valueWeight / promoWeight).toFixed(1)) : null,
-      // הלקוח משווה מול הערך הזה במקום מול מספר קבוע — 0 אומר "בלי דרישה"
+      // 0 אומר "בלי דרישה"
       min_value_per_promo: Number(settings?.min_value_per_promo ?? 3),
+      // לכל ערוץ: המשקל המכירתי ב-28 יום מול החדר, והשבוע מול התקרה השבועית
+      promo_room: promoRoom,
     },
   };
 }

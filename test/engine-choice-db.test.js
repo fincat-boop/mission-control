@@ -609,3 +609,24 @@ test('F3 — פאנל "מי מקבל במה": הערוץ הוותיק נספר �
   assert.equal(o.stalest_channel.days_since, 20);
   await wipe();
 });
+
+test('כרטיס היחס בלוח — אותו חדר כמו המנוע: שבוע מלא במשולבים לפי החדר בלי ⚠', { skip }, async () => {
+  await wipe();
+  const { buildBoard } = await import('../src/board.js');
+  const ch = await channel('ערוץ 3', 3);
+  const ep = await endpoint('נקודה');
+  const w = weekMeta(inDays(21));
+  // שבוע אחד: 2 משולבים = 1.0 — בדיוק התקרה השבועית; בלי ערך בכלל
+  for (const d of [1, 3]) {
+    await post(ch.id, ep.id, new Date(`${w.days[d].date}T10:00:00`), { status: 'scheduled', kind: 'hybrid' });
+  }
+  let b = await inOrg(() => buildBoard(w.days[2].date));
+  let r = b.summary.promo_room.find((x) => x.channel_id === ch.id);
+  assert.deepEqual([r.weight, r.room, r.week_cap, r.over], [1, 3, 1, false]);
+  // מכירתי נוסף באותו שבוע — מעבר לתקרה השבועית
+  await post(ch.id, ep.id, new Date(`${w.days[5].date}T10:00:00`), { status: 'scheduled', kind: 'promo' });
+  b = await inOrg(() => buildBoard(w.days[2].date));
+  r = b.summary.promo_room.find((x) => x.channel_id === ch.id);
+  assert.equal(r.over, true);
+  await wipe();
+});

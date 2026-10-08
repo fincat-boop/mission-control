@@ -608,3 +608,16 @@ test('R3 — קמפיין מכירתי קצר: רבע מהתקרה של 28 יו�
   assert.equal(week.capacity, 2);   // קודם 7 — כל התקרה של 28 יום בשבוע אחד
   assert.equal(week.limitedBy, 'ratio');
 });
+
+test('promoRoomStatus — כרטיס היחס בלוח: ⚠ רק מעבר לחדר של 28 יום או לתקרה השבועית', async () => {
+  const { promoRoomStatus } = await import('../src/capacity.js');
+  const ch = { max_per_week: 3, urgent_reserve_pct: 0 };   // יחס 3: 3 ב-28 יום, 1 בשבוע
+  const ok = promoRoomStatus(ch, { all: { hybrid: 6 }, week: { hybrid: 2 } }, RULES);
+  assert.deepEqual(ok, { weight: 3, room: 3, week_weight: 1, week_cap: 1, over: false });
+  assert.equal(promoRoomStatus(ch, { all: { promo: 2 }, week: { promo: 2 } }, RULES).over, true);
+  assert.equal(promoRoomStatus(ch, { all: { promo: 4 }, week: { promo: 1 } }, RULES).over, true);
+  const off = promoRoomStatus(ch, { all: { promo: 9 }, week: { promo: 9 } },
+    { ...RULES, min_value_per_promo: 0 });
+  assert.equal(off.room, null);
+  assert.equal(off.over, false);
+});

@@ -94,14 +94,17 @@ export async function renderBoard() {
   }).join('');
 
   const s = b.summary;
-  // min_value_per_promo=0 פירושו שהמשתמש כיבה את הדרישה במפורש — לא
-  // משווים כלפיה בכלל, כדי שלא יופיע ⚠ על יחס שהוא בחר לא לאכוף
-  const ratio = s.value_per_promo === null
-    ? 'אין עדיין פוסטים מכירתיים השבוע'
-    : s.min_value_per_promo > 0
-      ? `על כל מכירתי יש <b>${s.value_per_promo} פוסטי ערך</b> ${
-          s.value_per_promo >= s.min_value_per_promo ? '✓' : '⚠'}`
-      : `על כל מכירתי יש <b>${s.value_per_promo} פוסטי ערך</b>`;
+  // החדר המכירתי של היחס — אותו כלל כמו המנוע, מחושב בשרת (promoRoomStatus):
+  // ⚠ רק כשערוץ עבר את החדר ב-28 יום או את התקרה השבועית. יחס 0 — בלי סימון
+  const rooms = s.promo_room ?? [];
+  const used = Number(rooms.reduce((t, r) => t + r.weight, 0).toFixed(1));
+  const limited = rooms.filter((r) => r.room != null);
+  const over = rooms.filter((r) => r.over);
+  const ratio = limited.length
+    ? `<span title="${esc(over.length ? `מעבר לחדר: ${over.map((r) => r.name).join(', ')}` : '')}">
+        מכירתיים: <b>${used}</b> מתוך עד ${limited.reduce((t, r) => t + r.room, 0)} ב-28 יום ${
+        over.length ? '⚠' : '✓'}</span>`
+    : `מכירתיים: <b>${used}</b> ב-28 יום`;
 
   // בלי ערוצים פעילים אין שורות בלוח — כפתור למקום שבו מוסיפים/מפעילים, לא טקסט
   const chStep = setup?.steps.find((x) => x.id === 'channel');

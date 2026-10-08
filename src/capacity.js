@@ -511,6 +511,31 @@ export function weeklyPromoCap(budget, minRatio) {
 }
 
 /**
+ * מצב החדר המכירתי של ערוץ בחלון של 28 יום שמסתיים בשבוע מסוים — אותו כלל
+ * כמו שער היחס של המנוע (promoRoomAllows): המשקל המכירתי בחלון מול
+ * ratioPromoLimit, והשבוע עצמו מול weeklyPromoCap. לכרטיס היחס בלוח — ⚠ רק
+ * כשהמנוע לא היה מכניס את זה (over). יחס 0 — room/week_cap null, אף פעם לא over.
+ * @param kinds {all:{promo,value,hybrid}, week:{promo,value,hybrid}} — הפוסטים בחלון ובשבוע
+ */
+export function promoRoomStatus(channel, { all = {}, week = {} } = {}, settings = null) {
+  const hw = Number(settings?.hybrid_weight ?? 0.5);
+  const minRatio = settings?.min_value_per_promo ?? 3;
+  const budget = channelBudget(channel);
+  const room = ratioPromoLimit(budget, RATIO_WINDOW_DAYS, RATIO_WINDOW_DAYS / 7, minRatio);
+  const weekCap = weeklyPromoCap(budget, minRatio);
+  const weight = kindWeights(all, hw).promo;
+  const weekWeight = kindWeights(week, hw).promo;
+  const off = room === Infinity;
+  return {
+    weight: Number(weight.toFixed(1)),
+    room: off ? null : room,
+    week_weight: Number(weekWeight.toFixed(1)),
+    week_cap: off ? null : weekCap,
+    over: !off && (weight > room + 1e-9 || weekWeight > weekCap + 1e-9),
+  };
+}
+
+/**
  * כמה מכירתיים (במשקל) נכנסים לקמפיין בערוץ בטווח של days ימים שנוגע
  * ב-weeksTouched שבועות בלוח: הקטן מבין התקרה של היחס על הטווח
  * (ratioPromoCap) לבין weeklyPromoCap × השבועות — אותו כלל כמו המילוי המרוסן

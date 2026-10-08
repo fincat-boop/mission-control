@@ -2088,6 +2088,40 @@ async function priorKinds(weekStart) {
 }
 
 /**
+ * כמה פוסטים מכל סוג יש בכל ערוץ ב-28 הימים שמסתיימים בשבוע [weekStart,
+ * weekEnd] (all) ובשבוע עצמו (week) — אותם פוסטים ששער היחס של המנוע סופר
+ * (priorKinds + מה שעל הלוח): חיים או שפורסמו, בלי נכשל שהמועד שלו עבר.
+ * לכרטיס היחס בלוח (promoRoomStatus).
+ * @returns {Promise<Map<number, {all:object, week:object}>>}
+ */
+export async function windowKinds(weekStart, weekEnd) {
+  const r = await rows(
+    `select p.channel_id, p.kind, p.scheduled_at >= $1::timestamptz as in_week, count(*)::int as n
+       from posts p
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.scheduled_at >= $1::timestamptz - make_interval(days => $3)
+        and p.scheduled_at <= $2::timestamptz
+        and p.status = any($4::text[])
+        and ${takesRoomSql('p')}
+        and (p.status = 'published' or ${postIsLiveSql('p')})
+      group by 1, 2, 3`,
+    [weekStart, weekEnd, RATIO_WINDOW_DAYS - 7, LIVE_STATUSES]
+  );
+  const out = new Map();
+  for (const x of r) {
+    if (!out.has(x.channel_id)) {
+      out.set(x.channel_id, { all: { promo: 0, value: 0, hybrid: 0 },
+                              week: { promo: 0, value: 0, hybrid: 0 } });
+    }
+    const m = out.get(x.channel_id);
+    m.all[x.kind] += x.n;
+    if (x.in_week) m.week[x.kind] += x.n;
+  }
+  return out;
+}
+
+/**
  * כל התאריכים שבהם לנקודת קצה יש פוסט חי בערוץ, סביב השבוע המתוכנן —
  * מפה `${endpoint_id}:${channel_id}` → YYYY-MM-DD ממוינים. המרווח נבדק מול
  * השכן הקרוב לשני הכיוונים (nearestDays), ולכן צריך את כולם ולא רק את
