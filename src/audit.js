@@ -44,12 +44,13 @@ const ENTITY_HE = {
   urgent: 'מבצע דחוף',
   auth: 'התחברות',
   results: 'תוצאות',
+  'api-keys': 'מפתח API',
 };
 
 /** שם הישות מתוך גוף התשובה — כך היומן מציג שם ולא רק מזהה */
 function nameOf(payload) {
   if (!payload || typeof payload !== 'object') return null;
-  for (const key of ['campaign', 'content', 'endpoint', 'channel', 'task', 'user', 'post', 'milestone']) {
+  for (const key of ['campaign', 'content', 'endpoint', 'channel', 'task', 'user', 'post', 'milestone', 'key']) {
     const v = payload[key];
     if (v && typeof v === 'object') return v.name ?? v.title ?? null;
   }
@@ -92,6 +93,8 @@ function describe(req, payload, deletedName) {
     'urgent/commit':      ['create',  `שיבץ מבצע דחוף ${label}`],
     'auth/login':         ['login',   'התחבר למערכת'],
     'auth/logout':        ['logout',  'התנתק'],
+    'api-keys/revoke':    ['revoke',  `ביטל את מפתח ה-API ${label}`],
+    'api-keys/renew':     ['update',  `הנפיק סוד חדש למפתח ה-API ${label}`],
   };
 
   const key = sub ? `${entity}/${sub}` : id && !/^\d+$/.test(id) ? `${entity}/${id}` : null;
@@ -168,6 +171,7 @@ const DELETE_SOURCE = {
   tasks: ['tasks', 'title'],
   users: ['users', 'name'],
   assets: ['content_assets', 'filename'],
+  'api-keys': ['api_keys', 'name'],
 };
 
 async function nameBeforeDelete(req) {
@@ -202,13 +206,14 @@ export async function audit(req, res, next) {
     if (!user) return;
 
     const { action, entity, entity_id, summary } = describe(req, payload, deletedName);
-    const via = req.get(VIA_HEADER) === 'assistant' ? 'assistant' : 'ui';
+    // סוכן חיצוני מזוהה לפי המפתח שאומת (agent-api), לא לפי כותרת שהוא שולח
+    const via = req.apiKey ? 'api' : req.get(VIA_HEADER) === 'assistant' ? 'assistant' : 'ui';
+    const meta = req.apiKey ? { ...slimBody(req.body), api_key: req.apiKey.prefix } : slimBody(req.body);
 
     query(
       `insert into activity_log (user_id, user_name, via, action, entity, entity_id, summary, meta)
        values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [user.id, user.name ?? 'לא ידוע', via, action, entity, entity_id ?? null, summary,
-       slimBody(req.body)]
+      [user.id, user.name ?? 'לא ידוע', via, action, entity, entity_id ?? null, summary, meta]
     ).catch((e) => console.error('כתיבה ליומן הפעולות נכשלה:', e.message));
   });
 

@@ -9,14 +9,18 @@ import { multiSelectHtml, wireMultiSelects } from '../ui/multiSelect.js';
 import { engineToast } from '../ui/engineDialog.js';
 import { resetSetupStatus } from '../ui/setup.js';
 import { urgentReserve } from '../core/reserve.js';
+import { apiKeysItem, wireApiKeys } from '../ui/apiKeys.js';
 
 /* ========================= ניהול ========================= */
 
 export async function renderManage() {
-  const [{ endpoints }, { channels }, { settings }, { users }, backupsRes, pub] = await Promise.all([
+  const [{ endpoints }, { channels }, { settings }, { users }, backupsRes, pub, apiKeysRes] = await Promise.all([
     api('/endpoints'), api('/channels'), api('/settings'), api('/users'),
     can('settings') ? api('/backups') : Promise.resolve(null),
     api('/publish/status'),
+    // מפתחות API — בעלים בלבד (כמו בשרת)
+    // תקלה בה לא מפילה את כל הטאב
+    state.me?.is_owner ? api('/api-keys').catch(() => null) : Promise.resolve(null),
   ]);
   state.endpoints = endpoints;
   rebuildEpColors();
@@ -56,10 +60,10 @@ export async function renderManage() {
       ${ro ? '' : '<div class="setadd"><button class="btn" id="addChannel">＋ הוסף ערוץ</button></div>'}
     </div>
 
-    ${systemGroup(users, settings, backupsRes, ro)}`;
+    ${systemGroup(users, settings, backupsRes, ro, apiKeysRes)}`;
 
   restorePlace();
-  wireManage(ro, pub.connections);
+  wireManage(ro, pub.connections, apiKeysRes);
 }
 
 /**
@@ -299,7 +303,7 @@ const APPROVE_HINT = 'אישור פוסטים לפרסום אוטומטי ופר
  * משתמשים ← users; כללי המנוע גלויים לכולם וניתנים לעריכה רק עם settings
  * (PATCH /settings), כמו ערוצים ונקודות קצה; גיבויים ← settings (GET /backups).
  */
-function systemGroup(users, settings, backupsRes, ro) {
+function systemGroup(users, settings, backupsRes, ro, apiKeysRes) {
   const backups = backupsRes?.backups ?? null;
   const rows = users.map((u) => {
     const cell = (perm) => u.is_owner
@@ -335,6 +339,7 @@ function systemGroup(users, settings, backupsRes, ro) {
           <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
         </div>
       </details>` : ''}
+      ${apiKeysRes ? apiKeysItem(apiKeysRes) : ''}
       <details class="item" data-open-id="engine">
         <summary><b>מתקדם — כללי המנוע</b><span class="info">נוגעים בזה לעיתים רחוקות</span></summary>
         <div class="ibody">
@@ -521,9 +526,10 @@ async function teammateAdded(u) {
   toast(`ההוראות הועתקו — אפשר להדביק ל${u.name}.`);
 }
 
-function wireManage(ro, connections) {
+function wireManage(ro, connections, apiKeysRes) {
   wireMultiSelects($('#manage'));
   const reload = run(async () => { await renderManage(); await refreshBoard(); });
+  if (apiKeysRes) wireApiKeys(apiKeysRes, run(renderManage));
 
   // חסימת יום מפנה את מי שכבר יושב עליו. מי שלא נמצא לו יום חוקי נשאר על
   // היום החסום — וזה חייב להיאמר כאן ולא רק בהתראות.
