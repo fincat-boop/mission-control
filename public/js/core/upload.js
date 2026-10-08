@@ -32,8 +32,10 @@ function precheck(files) {
   const max = maxMb() * 1048576;
   for (const f of files) {
     if (f.size > max) throw new Error(`"${f.name}" גדול מדי — ${fileLimitLabel()}`);
-    // הרשימה מגיעה מהשרת (/api/me) — מקור אחד לשני הצדדים
-    if (mediaOn() && !(state.media.allowed_mimes ?? []).includes((f.type || '').toLowerCase())) {
+    // הרשימה מגיעה מהשרת (/api/me) — מקור אחד לשני הצדדים. נאכפת בשני
+    // המסלולים (גם הישן, multipart) — השרת דוחה ב-415 בכל מקרה
+    const allowed = state.media?.allowed_mimes;
+    if (allowed?.length && !allowed.includes((f.type || '').toLowerCase())) {
       throw new Error(`"${f.name}" — סוג קובץ לא נתמך (תמונות, סרטונים, אודיו, PDF ומסמכי Office)`);
     }
   }

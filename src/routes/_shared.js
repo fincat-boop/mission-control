@@ -6,6 +6,7 @@ import {
 import { weekMeta, ymd } from '../board.js';
 import { relocateBlocked } from '../respace.js';
 import { FILL_HORIZON_WEEKS } from '../capacity.js';
+import { TYPE_ERROR, isAllowedMime } from '../media.js';
 
 /**
  * עזרים שכל קובצי הנתיבים נשענים עליהם.
@@ -348,6 +349,23 @@ export const MAX_FILE_MB = 50;
 export const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 20 },
+});
+
+/**
+ * העלאת מדיה במסלול הישן — אותה רשימת סוגים כמו ב-R2 (media.js). בלעדיה
+ * נשמר כל סוג שהדפדפן הצהיר (text/html, JS) והוגש מהדומיין שלנו: מי שיש
+ * לו הרשאת תוכן יכול היה להריץ קוד בשם הבעלים שפותח את הקובץ. קובץ פסול
+ * אחד עוצר את כל הבקשה (415 — server.js). `upload` הרגיל נשאר לייבוא
+ * טבלאות (CSV/Excel), שאינו מדיה ולא מוגש.
+ */
+export function mediaFileFilter(_req, file, cb) {
+  if (isAllowedMime(file.mimetype)) return cb(null, true);
+  return cb(Object.assign(new Error(`"${file.originalname}": ${TYPE_ERROR}`), { code: 'UNSUPPORTED_MEDIA_TYPE' }));
+}
+export const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 20 },
+  fileFilter: mediaFileFilter,
 });
 
 /** שם קובץ בלי הסיומת — משמש ככותרת ברירת מחדל בהעלאה מרוכזת */

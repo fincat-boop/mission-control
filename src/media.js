@@ -80,7 +80,16 @@ const ALLOWED_SET = new Set(ALLOWED_MIMES);
 /** בדיקה מדויקת (case-insensitive), בלי פרמטרים — "image/png; x=1" נדחה */
 export const isAllowedMime = (m) => typeof m === 'string' && ALLOWED_SET.has(m.toLowerCase());
 
-const TYPE_ERROR = 'סוג קובץ לא נתמך — רק תמונות, סרטונים, אודיו, PDF ומסמכי Office';
+export const TYPE_ERROR = 'סוג קובץ לא נתמך — רק תמונות, סרטונים, אודיו, PDF ומסמכי Office';
+
+/**
+ * סוגים שמותר להגיש inline מהדומיין שלנו (GET /api/assets/:id, קובץ ישן
+ * במסד): תמונה/וידאו/אודיו מהרשימה, ו-PDF. כל השאר — כולל text/html, JS
+ * ו-SVG שנשמרו לפני שהרשימה נאכפה במסלול הישן — יורד כקובץ ולא נפתח בדף:
+ * דף שנפתח מהדומיין שלנו רץ עם הקוקי של מי שפתח אותו.
+ */
+export const isInlineSafeMime = (m) => isAllowedMime(m) &&
+  /^(image|video|audio)\/|^application\/pdf$/i.test(m);
 
 /**
  * שם קובץ בטוח למפתח וגם ל-URL: בלי נתיב, בלי תווי בקרה ותווים מיוחדים,
