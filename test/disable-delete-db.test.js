@@ -494,3 +494,34 @@ test('16 (קמפיין) — החזרה מהשהיה: מאושר שהמועד ש�
   assert.equal(r.json.approval_reset, 1);
   assert.equal(await statusOf(missed), 'scheduled');
 });
+
+test('ייבוא חוזר שמשנה סוג — הסוג עובר לפוסטים העתידיים של הפריט', { skip }, async () => {
+  const ep = await endpoint('ייבוא-סוג');
+  const ch = await freshChannel('ייבוא-סוג');
+  const camp = (await q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on, structure, period, min_gap_days)
+     values ($1, 'כללי', $2, $3, 'general', 'custom', 1) returning id`,
+    [ep, at(1).slice(0, 10), at(28).slice(0, 10)])).id;
+  await q1('insert into campaign_channels values ($1, $2) returning campaign_id', [camp, ch]);
+  const chName = (await q1('select name from channels where id = $1', [ch])).name;
+
+  const first = await call('POST', `/campaigns/${camp}/import`, { text: `סוג\t${chName}\nערך\tטקסט` });
+  assert.equal(first.status, 201, JSON.stringify(first.json));
+  const item = (await q1('select id from content_items where campaign_id = $1', [camp])).id;
+  const future = await post({ ep, channel: ch, contentId: item, when: at(5) });
+  const past = await post({ ep, channel: ch, contentId: item, when: minutes(-120) });
+
+  const again = await call('POST', `/campaigns/${camp}/import`,
+    { text: `סוג\t${chName}\nמכירתי\tטקסט מתוקן`, existing: 'update' });
+  assert.equal(again.status, 201, JSON.stringify(again.json));
+  assert.equal(again.json.updated, 1);
+  // הפוסט שלנו, ואולי גם מה שהמילוי אחרי הייבוא הראשון שיבץ לפריט
+  assert.ok(again.json.kind_posts >= 1, JSON.stringify(again.json));
+  const kinds = await qa('select id, kind from posts where id = any($1)', [[future, past]]);
+  assert.equal(kinds.find((p) => p.id === future).kind, 'promo');
+  const stale = await qa(
+    `select id from posts where content_id = $1 and kind <> 'promo'
+        and status in ('scheduled','approved','failed','pending_approval') and scheduled_at > now()`, [item]);
+  assert.deepEqual(stale, [], 'כל הפוסטים העתידיים של הפריט עברו לסוג החדש');
+  assert.equal(kinds.find((p) => p.id === past).kind, 'value', 'מה שהמועד שלו עבר — לא נוגעים');
+});

@@ -25,6 +25,25 @@ import { effectiveGap } from './capacity.js';
 /** מה זז עם הקמפיין: מה שעוד לא יצא. פורסם / בפרסום — לעולם לא זזים */
 export const SHIFT_STATUSES = ['scheduled', 'approved', 'failed', 'pending_approval'];
 
+/**
+ * הסוג של פוסט = הסוג של התוכן שלו (attachToPost). אחרי שינוי סוג בתוכן
+ * (עריכה ב-PATCH /content, ייבוא חוזר שמעדכן פריט) הסוג עובר לפוסטים
+ * העתידיים שעוד לא יצאו — של הפריט ושל כל הקבוצה המקושרת שלו. בלי זה
+ * המנוע, אזהרת המכסות והיחס בלוח המשיכו לספור את הסוג הישן. פורסם / בפרסום
+ * — היסטוריה, לא נוגעים. q — query (ברירת מחדל) או client.query בטרנזקציה.
+ * @returns {Promise<number>} כמה פוסטים עודכנו
+ */
+export async function propagateKind(contentId, q = query) {
+  return (await q(
+    `update posts p set kind = ci.kind
+       from content_items ci, content_items me
+      where me.id = $1 and ci.id = p.content_id
+        and coalesce(ci.linked_to_id, ci.id) = coalesce(me.linked_to_id, me.id)
+        and p.kind <> ci.kind
+        and p.status = any($2) and p.scheduled_at > now()`,
+    [contentId, SHIFT_STATUSES])).rowCount;
+}
+
 /** הסטטוסים שתופסים מקום על הלוח — אותם שהמנוע סופר (existing ב-planWeek) */
 const ON_BOARD = ['scheduled', 'approved', 'publishing', 'failed', 'published', 'pending_approval'];
 

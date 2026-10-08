@@ -4,7 +4,7 @@ import {
   autoFill, autoFillCampaign, bad, lockEngineOr503, parseIdList, releaseHeld, titleFromFilename,
   updateById, upload, wrap,
 } from './_shared.js';
-import { revalidateCampaignPosts, SHIFT_STATUSES } from '../campaign-shift.js';
+import { propagateKind, revalidateCampaignPosts } from '../campaign-shift.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
   MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
@@ -618,21 +618,9 @@ r.patch('/content/:id', requirePerm('content'), wrap(async (req, res) => {
       statusChanged: ['ready', 'draft'].includes(b.status) && b.status !== statusBefore,
     }));
   }
-  // הסוג של פוסט = הסוג של התוכן שלו (attachToPost). שינוי סוג (ערך /
-  // מכירתי) עובר לפוסטים העתידיים שעוד לא יצאו — של הפריט ושל כל הקבוצה
-  // המקושרת (syncFrom העביר אליה את הסוג). בלי זה המנוע, אזהרת המכסות
-  // והיחס בלוח המשיכו לספור את הסוג הישן. פורסם / בפרסום — היסטוריה, לא נוגעים
-  let kindPosts = 0;
-  if (b.kind !== undefined) {
-    kindPosts = (await query(
-      `update posts p set kind = ci.kind
-         from content_items ci, content_items me
-        where me.id = $1 and ci.id = p.content_id
-          and coalesce(ci.linked_to_id, ci.id) = coalesce(me.linked_to_id, me.id)
-          and p.kind <> ci.kind
-          and p.status = any($2) and p.scheduled_at > now()`,
-      [c.id, SHIFT_STATUSES])).rowCount;
-  }
+  // שינוי סוג (ערך / מכירתי) עובר לפוסטים העתידיים שעוד לא יצאו — של הפריט
+  // ושל כל הקבוצה המקושרת (syncFrom העביר אליה את הסוג) — propagateKind
+  const kindPosts = b.kind !== undefined ? await propagateKind(c.id) : 0;
   // משבצת: הגרסה היחידה שלה — לנעילה האופטימית של השמירה הבאה מאותו טופס
   const variant = c.slot_channel_id
     ? await one('select * from content_variants where content_id = $1 and channel_id = $2',

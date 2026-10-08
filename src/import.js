@@ -30,6 +30,7 @@ import { one, rows, tx } from './db.js';
 import { freeAngleSlots } from './campaigns.js';
 import { autoLinkNew, normalizeLinkRules } from './links.js';
 import { contentBlocker } from './publish/readiness.js';
+import { propagateKind } from './campaign-shift.js';
 import { deriveTitle } from '../public/js/core/title.js';
 
 /**
@@ -552,6 +553,7 @@ async function runGeneral(campaignId, plan) {
   const batch = randomUUID();
   const created = [];
   let updated = 0;
+  let kindPosts = 0;
 
   await tx(async (client) => {
     for (const item of plan.items) {
@@ -575,6 +577,8 @@ async function runGeneral(campaignId, plan) {
                     reuse_after_days = $6, imported_at = now()
               where id = $1`,
             [v.content_id, v.title, item.kind, v.body, item.evergreen, item.reuse_after_days]);
+          // סוג שהשתנה עובר לפוסטים העתידיים שלו — כמו בעריכה (PATCH /content)
+          kindPosts += await propagateKind(v.content_id, (sql, params) => client.query(sql, params));
           await client.query(
             `insert into content_variants (content_id, channel_id, body, status)
              values ($1,$2,$3,$4)
@@ -593,7 +597,7 @@ async function runGeneral(campaignId, plan) {
     if (linkFrom.has(c.channel_id)) copied += (await autoLinkNew(c.id)).linked;
   }
 
-  return { structure: 'general', created: created.length, updated, copied,
+  return { structure: 'general', created: created.length, updated, copied, kind_posts: kindPosts,
            variants: plan.totals.variants, ready: plan.totals.ready,
            skipped: plan.skipped, batch };
 }
