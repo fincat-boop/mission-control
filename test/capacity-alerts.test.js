@@ -73,6 +73,8 @@ test('paceDone — פורסם, מתוכנן עד היום ולא אושר שיצ
     { status: 'pending_approval', channel_id: 1, scheduled_at: ago(60 * 24) },
   ];
   assert.equal(paceDone(posts, channels, { now, today }), 6);
+  // פרסום אוטומטי כבוי (8.10.26): גם הניוזלטר שעבר נשלח ביד — נספר כמו UNCONFIRMED_SQL
+  assert.equal(paceDone(posts, channels, { now, today, manualNewsletter: true }), 7);
 });
 
 test('paceOf / התראת קצב — רק מפיגור של 2 ולפחות 20% מהצפוי (סעיף 29)', () => {
