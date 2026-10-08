@@ -5,6 +5,7 @@ import {
   nearestDays, outsideCampaignWindow, takesRoomSql,
 } from './engine.js';
 import { effectiveGap } from './capacity.js';
+import { postIsLiveSql } from './live.js';
 
 /**
  * הזזת קמפיין בזמן (שינוי תאריך היעד לפוסט הראשון בעריכה) גוררת איתה את
@@ -230,8 +231,9 @@ async function reschedule(campaignId, days, now, { rules = null, contentIds = nu
   });
   const from = new Date(Math.min(...shifted));
   const to = new Date(Math.max(...shifted));
-  // שיבוץ של קמפיין מושהה לא תופס מקום (אלא אם פורסם) — כמו existing במנוע;
-  // וגם לא פוסט שנכשל ושהמועד שלו עבר (takesRoom)
+  // שיבוץ מוחזק (קמפיין מושהה, ערוץ / נקודה מושבתים — postIsLiveSql) לא תופס
+  // מקום (אלא אם פורסם) — כמו existing במנוע; וגם לא פוסט שנכשל ושהמועד שלו
+  // עבר (takesRoom)
   const fixed = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.status, p.scheduled_at,
             ci.linked_to_id
@@ -240,7 +242,7 @@ async function reschedule(campaignId, days, now, { rules = null, contentIds = nu
        left join campaigns ca on ca.id = ci.campaign_id
       where p.status = any($1)
         and not (p.id = any($2::int[]))
-        and (ca.paused_at is null or p.status = 'published')
+        and (p.status = 'published' or ${postIsLiveSql('p')})
         and ${takesRoomSql('p', '$6::timestamptz')}
         and p.scheduled_at >= $3::timestamptz - make_interval(days => $5)
         and p.scheduled_at <= $4::timestamptz + make_interval(days => $5)`,

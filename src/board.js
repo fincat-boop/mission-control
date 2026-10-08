@@ -2,7 +2,7 @@ import { one, rows } from './db.js';
 import { contentHints } from './candidates.js';
 import { itemAssetsSql } from './links.js';
 import { contentState } from './publish/readiness.js';
-import { postIsLiveSql } from './live.js';
+import { endpointLiveSql, openPostSql, postIsLiveSql } from './live.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const HE_MONTHS = [
@@ -193,7 +193,9 @@ export async function buildBoard(anchorDate) {
        from posts p
        join content_items ci on ci.id = p.content_id
        join campaigns ca     on ca.id = ci.campaign_id
-      where ca.paused_at is not null and p.status <> 'published'
+      where ca.paused_at is not null and ${openPostSql('p')}
+        -- נקודה מושבתת — נספר פעם אחת, בשורה של הנקודה (heldEndpoints)
+        and ${endpointLiveSql('p')}
         and p.scheduled_at >= $1 and p.scheduled_at <= $2
       group by ca.name order by ca.name`,
     [from, to]
@@ -205,7 +207,7 @@ export async function buildBoard(anchorDate) {
        from posts p
        join endpoints e on e.id = p.endpoint_id and not e.active
        join channels c  on c.id = p.channel_id and c.active
-      where p.status <> 'published'
+      where ${openPostSql('p')}
         and p.scheduled_at >= $1 and p.scheduled_at <= $2
       group by e.id, e.name order by e.name`,
     [from, to]
