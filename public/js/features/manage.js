@@ -299,10 +299,14 @@ function channelItem(c, ro, conn, hubReady) {
   </details>`;
 }
 
-// מה הרשאת approve פותחת בפועל: אישור לפרסום אוטומטי (גם מרוכז לשבוע),
+// מה הרשאת approve פותחת בפועל: אישור לפרסום אוטומטי (גם מרוכז לשבוע) —
+// רק כשהמתג דלוק,
 // פרסום מיידי, ומבצע דחוף שנכנס ללוח בלי להמתין לאישור (routes/publish.js,
 // routes/board.js, routes/engine.js)
-const APPROVE_HINT = 'אישור פוסטים לפרסום אוטומטי ופרסום מיידי לרשתות, וגם מבצע דחוף בלי המתנה לאישור';
+// פרסום אוטומטי כבוי (state.autopublish) — אין מה לאשר לפרסום, רק מבצע דחוף
+const approveHint = () => (state.autopublish
+  ? 'אישור פוסטים לפרסום אוטומטי ופרסום מיידי לרשתות, וגם מבצע דחוף בלי המתנה לאישור'
+  : 'מבצע דחוף שנכנס ללוח בלי המתנה לאישור (הפרסום האוטומטי כבוי — כל הפרסום ידני)');
 
 /**
  * קבוצת "מערכת" — כל חלק לפי ההרשאה שהשרת דורש בפועל:
@@ -339,7 +343,7 @@ function systemGroup(users, settings, backupsRes, ro, apiKeysRes) {
         <div class="ibody">
           <div class="tablewrap"><table class="utable">
             <thead><tr><th>משתמש</th><th>תוכן ושיבוץ</th><th>הגדרות</th>
-              <th title="${esc(APPROVE_HINT)}">אישור פרסום</th><th>ניהול משתמשים</th><th></th></tr></thead>
+              <th title="${esc(approveHint())}">אישור פרסום</th><th>ניהול משתמשים</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
           </table></div>
           <div style="margin-top:10px"><button class="btn small primary" id="addUser">＋ הוסף משתמש</button></div>
@@ -919,7 +923,7 @@ function wireManage(ro, connections, apiKeysRes, pubStatus) {
       { name: 'email', label: 'אימייל (חשבון Google — איתו הוא נכנס)', type: 'email' },
       { name: 'perm_content', label: 'תוכן ושיבוץ', type: 'checkbox', value: true },
       { name: 'perm_settings', label: 'הגדרות', type: 'checkbox' },
-      { name: 'perm_approve', label: `אישור פרסום — ${APPROVE_HINT}`, type: 'checkbox' },
+      { name: 'perm_approve', label: `אישור פרסום — ${approveHint()}`, type: 'checkbox' },
       { name: 'perm_users', label: 'ניהול משתמשים', type: 'checkbox' },
     ],
     onSave: async (v) => {
