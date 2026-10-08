@@ -882,3 +882,20 @@ test('סעיף 6 — notPlacedNotes: כל הודעה אומרת את המגבל�
   assert.match(share, /הנתח של הקמפיין בערוץ הוא 50% — עד 2 פוסטים בשבוע/);
   assert.match(gap, /המרווח בין פוסטים של אותה נקודת קצה בערוץ הוא 3 ימים/);
 });
+
+test('R4 — mergeLimits: תוכן שנכנס בשבוע אחר יורד; אותו תוכן בכמה שבועות נספר פעם אחת', async () => {
+  const { mergeLimits } = await import('../src/engine.js');
+  const g = (reason, ids, extra = {}) => ({ reason, channel_id: 1, channel_name: 'וואטסאפ', ...extra,
+    count: ids.length, kinds: { promo: ids.length }, items: ids.map((id) => ({ id, kind: 'promo' })) });
+  const week1 = [g('ratio_cap', [10, 11, 12], { ratio_cap: 2 })];
+  const week2 = [g('ratio_cap', [11, 12, 13]), g('share', [14])];
+  // 10 נכנס בשבוע 2; 14 נכנס בשבוע 1
+  const merged = mergeLimits([week1, week2], ['1:10', '1:14']);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].count, 3);   // 11, 12, 13 — לא 6
+  assert.deepEqual(merged[0].items.map((x) => x.id).sort(), [11, 12, 13]);
+  assert.equal(merged[0].ratio_cap, 2);
+  // אותו תוכן בשתי סיבות — הסיבה הראשונה לפי הסדר
+  const both = mergeLimits([[g('share', [20])], [g('ratio', [20])]]);
+  assert.deepEqual(both.map((x) => x.reason), ['ratio']);
+});

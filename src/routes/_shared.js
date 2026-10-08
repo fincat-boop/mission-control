@@ -1,6 +1,8 @@
 import multer from 'multer';
 import { currentOrg, one, query, rows } from '../db.js';
-import { applyWeek, lockEngine, notPlacedNotes, withEngineLock } from '../engine.js';
+import {
+  applyWeek, lockEngine, mergeLimits, notPlacedNotes, promoBlockedOf, withEngineLock,
+} from '../engine.js';
 import { weekMeta, ymd } from '../board.js';
 import { relocateBlocked } from '../respace.js';
 import { FILL_HORIZON_WEEKS } from '../capacity.js';
@@ -110,25 +112,18 @@ export function campaignFillWeeks(c, today = ymd(new Date())) {
 /**
  * מאחד תוצאות applyWeek של כמה שבועות לתשובה אחת באותה צורה, כדי שההודעה
  * ו"בטל" של הלקוח יכסו את כולם. weeks — בכמה שבועות נכתב משהו;
- * promo_blocked — מכירתיים שלא שובצו בגלל מגבלה לפי סוג, בכל השבועות;
- * limits — אותה מגבלה באותו ערוץ מתאחדת (המספרים מהשבוע הראשון שבו עצרה),
- * ו-limit_notes נבנה מחדש מהמאוחד (notPlacedNotes).
+ * limits — mergeLimits: לכל תוכן×ערוץ פעם אחת, ובלי מה שנכנס באחד השבועות
+ * (placed_pairs); promo_blocked ו-limit_notes נבנים מחדש מהמאוחד.
  */
 export function mergeFillResults(list) {
   const sum = (k) => list.reduce((s, r) => s + (r[k] ?? 0), 0);
   const cat = (k) => list.flatMap((r) => r[k] ?? []);
-  const limits = new Map();
-  for (const x of cat('limits')) {
-    const key = `${x.reason}:${x.channel_id}`;
-    const e = limits.get(key);
-    if (!e) { limits.set(key, { ...x, kinds: { ...x.kinds } }); continue; }
-    e.count += x.count;
-    for (const [k, n] of Object.entries(x.kinds ?? {})) e.kinds[k] = (e.kinds[k] ?? 0) + n;
-  }
+  // לפי התוכן, לא לפי שבוע: תוכן שנכנס בשבוע אחר לא "לא נכנס" (mergeLimits)
+  const limits = mergeLimits(list.map((r) => r.limits), cat('placed_pairs'));
   return {
     placed: sum('placed'), attached: sum('attached'), holes: sum('holes'),
-    skipped: sum('skipped'), dropped: cat('dropped'), promo_blocked: sum('promo_blocked'),
-    limits: [...limits.values()], limit_notes: notPlacedNotes([...limits.values()]),
+    skipped: sum('skipped'), dropped: cat('dropped'), promo_blocked: promoBlockedOf(limits),
+    limits, limit_notes: notPlacedNotes(limits), placed_pairs: cat('placed_pairs'),
     created_ids: cat('created_ids'), created_items: cat('created_items'),
     attached_items: cat('attached_items'), summary: cat('summary'),
     weeks: list.filter((r) => r.placed || r.attached || r.holes).length,
@@ -191,6 +186,7 @@ function viewedWeekStart(week) {
 /** תשובת מילוי ריקה — אותה צורה כמו applyWeek, כדי שהלקוח לא יצטרך לבדוק */
 export const EMPTY_FILL = Object.freeze({
   placed: 0, attached: 0, holes: 0, skipped: 0, dropped: [], limits: [], limit_notes: [],
+  placed_pairs: [],
   created_ids: [], created_items: [], attached_items: [], summary: [],
 });
 

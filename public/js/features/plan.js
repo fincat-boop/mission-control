@@ -17,6 +17,7 @@ import {
   sameShortage, shortChannels, totalCapacity, validGap,
 } from '../core/fitChoice.js';
 import { engineToast } from '../ui/engineDialog.js';
+import { mergeLimits, notPlacedNotes } from '../core/limitNotes.js';
 import { changedCampaignFields, shiftNote, tidyCampaignDates } from '../core/campaignEdit.js';
 import { extrasHtml, paintCaptionNote, readExtras, wireExtras } from '../ui/variantExtras.js';
 import { extrasFor, extrasKey, mergeExtras, pickExtras } from '../core/socialRules.js';
@@ -2166,11 +2167,14 @@ function mergeFills(list) {
   if (!fills.length) return {};
   const sum = (k) => fills.reduce((s, f) => s + (f[k] ?? 0), 0);
   const cat = (k) => fills.flatMap((f) => f[k] ?? []);
+  // לפי ערוץ וסיבה ולפי התוכן, לא לפי הטקסט (mergeLimits)
+  const limits = mergeLimits(fills.map((f) => f.limits), cat('placed_pairs'));
   return { engine: {
     placed: sum('placed'), attached: sum('attached'), holes: sum('holes'),
     created_items: cat('created_items'), attached_items: cat('attached_items'),
-    summary: cat('summary'), promo_blocked: sum('promo_blocked'),
-    limit_notes: [...new Set(cat('limit_notes'))],
+    summary: cat('summary'),
+    promo_blocked: limits.reduce((n, x) => n + (x.kinds.promo ?? 0) + (x.kinds.hybrid ?? 0), 0),
+    limit_notes: notPlacedNotes(limits),
     weeks: Math.max(0, ...fills.map((f) => f.weeks ?? 0)),
     covered_weeks: [...new Set(cat('covered_weeks'))],
   } };

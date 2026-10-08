@@ -11,6 +11,9 @@ import { CAMPAIGNS_WEIGHTED_SQL, loadGapContext } from './capacity-db.js';
 import { isEmptyContent } from './publish/readiness.js';
 import { itemAssetsSql } from './links.js';
 import { endpointLiveSql, postIsLiveSql } from './live.js';
+import {
+  KIND_LIMITS, LIMIT_ORDER, kindLimits, mergeLimits, notPlacedNotes,
+} from '../public/js/core/limitNotes.js';
 
 /**
  * מנוע השיבוץ.
@@ -446,8 +449,12 @@ export async function applyWeek(anchorDate, {
     // מכירתיים / משולבים; שם ישן, כמו קודם
     limits: kindLimits(fresh.limits),
     limit_notes: notPlacedNotes(kindLimits(fresh.limits)),
-    promo_blocked: kindLimits(fresh.limits)
-      .reduce((sum, x) => sum + x.kinds.promo + x.kinds.hybrid, 0),
+    promo_blocked: promoBlockedOf(kindLimits(fresh.limits)),
+    // מה נכנס בריצה — `${channel}:${content}`; איחוד של כמה שבועות (mergeLimits)
+    // מוריד ממה שלא נכנס תוכן שנכנס בשבוע אחר
+    placed_pairs: [...plan.placements,
+      ...plan.attachments.filter((a) => attached.some((x) => x.post_id === a.post_id))]
+      .map((x) => `${x.channel_id}:${x.content_id}`),
     // השבועות שהמילוי עבר עליהם — "בטל" רושם ויתור לכל אחד (recordDismissals)
     covered_weeks: [fresh.week.start],
     skipped,
@@ -567,17 +574,13 @@ export async function contentCandidates({ endpointId = null, channelId, date = n
 
 /* ========================= מה לא נכנס ולמה ========================= */
 
-/**
- * הסדר שבו נבחרת הסיבה של תוכן שלא נכנס, כשנחסם בכמה משבצות מסיבות שונות:
- * קודם המגבלות לפי סוג (סעיף 6), אחר כך הנתח (שבוע מרוסן) והמרווח.
- */
-export const LIMIT_ORDER = ['ratio_cap', 'ratio', 'promo_week', 'hybrid_week', 'value_week',
-                            'promo_day', 'share', 'gap'];
-/** המגבלות לפי סוג — מה שההודעה אחרי שמירה (engineToast) אומרת */
-export const KIND_LIMITS = new Set(['ratio_cap', 'ratio', 'promo_week', 'hybrid_week',
-                                    'value_week', 'promo_day']);
-/** רק המגבלות לפי סוג */
-export const kindLimits = (limits) => (limits ?? []).filter((x) => KIND_LIMITS.has(x.reason));
+// הסדר, הסוגים, האיחוד וההודעות — ב-public/js/core/limitNotes.js (גם הלקוח
+// מאחד מילויים של כמה בקשות); מיוצאים מכאן לקוראים הקיימים
+export { KIND_LIMITS, LIMIT_ORDER, kindLimits, mergeLimits, notPlacedNotes };
+
+/** כמה מכירתיים / משולבים לא נכנסו בגלל מגבלה לפי סוג (שם ישן: promo_blocked) */
+export const promoBlockedOf = (limits) =>
+  (limits ?? []).reduce((sum, x) => sum + (x.kinds?.promo ?? 0) + (x.kinds?.hybrid ?? 0), 0);
 
 /**
  * התוכן שהתאים לערוץ ולא נכנס אליו בריצה, מקובץ לפי (סיבה, ערוץ). סיבה —
@@ -585,7 +588,9 @@ export const kindLimits = (limits) => (limits ?? []).filter((x) => KIND_LIMITS.h
  * הנתח (share) כשהקמפיין הגיע לתקרה שלו בערוץ. תוכן ערך — רק כשתקרת הערך
  * של הערוץ עצרה אותו: ערך שמחכה למקום (מרווח, נתח) הוא המצב הרגיל.
  * open(c, ch) — האם התוכן בכלל יכול לצאת בערוץ השבוע (חלון קמפיין, חד-פעמי).
- * @returns {{reason, channel_id, channel_name, count, kinds, ...מספרים}[]}
+ * items — התוכן עצמו ({id, kind}), כדי שאיחוד של כמה שבועות (mergeLimits) לא
+ * יספור פעמיים, ולא יספור תוכן שנכנס בשבוע אחר.
+ * @returns {{reason, channel_id, channel_name, count, kinds, items, ...מספרים}[]}
  */
 export function notPlacedLimits({ content, channels, misses, landed, skip = new Set(),
                                   open = () => true, share = () => null }) {
@@ -603,62 +608,16 @@ export function notPlacedLimits({ content, channels, misses, landed, skip = new 
       const key = `${why}:${ch.id}`;
       if (!out.has(key)) {
         out.set(key, { ...reasons.get(why), reason: why, channel_id: ch.id,
-                       channel_name: ch.name, count: 0, kinds: { promo: 0, hybrid: 0, value: 0 } });
+                       channel_name: ch.name, count: 0, kinds: { promo: 0, hybrid: 0, value: 0 },
+                       items: [] });
       }
       const e = out.get(key);
       e.count += 1;
       e.kinds[c.kind] = (e.kinds[c.kind] ?? 0) + 1;
+      e.items.push({ id: c.id, kind: c.kind });
     }
   }
   return [...out.values()];
-}
-
-const KIND_PLURAL = { promo: 'מכירתיים', hybrid: 'משולבים', value: 'פוסטי ערך' };
-
-/** "פוסט מכירתי אחד" / "3 פוסטים מכירתיים" / "2 פוסטים" — לפי הסוגים בקבוצה */
-function postsOf(n, kinds = {}) {
-  const only = ['promo', 'hybrid', 'value'].find((k) => (kinds[k] ?? 0) === n);
-  const one = { promo: 'פוסט מכירתי אחד', hybrid: 'פוסט משולב אחד', value: 'פוסט ערך אחד' };
-  const many = { promo: 'פוסטים מכירתיים', hybrid: 'פוסטים משולבים', value: 'פוסטי ערך' };
-  if (n === 1) return only ? one[only] : 'פוסט אחד';
-  return `${n} ${only ? many[only] : 'פוסטים'}`;
-}
-
-/**
- * המשפט לכל קבוצה של notPlacedLimits — המגבלה שעצרה בפועל, עם המספרים.
- * בלי "צריך עוד תוכן ערך" כשזה לא יעזור: רק בשער היחס הרגיל (ratio), שבו
- * עוד ערך בערוץ באמת מפנה מקום. גם ל-mergeFillResults (כמה שבועות).
- */
-export function notPlacedNotes(limits) {
-  return (limits ?? []).map((x) => {
-    const head = `${postsOf(x.count, x.kinds)} ${x.count === 1 ? 'לא נכנס' : 'לא נכנסו'} ל${x.channel_name}`;
-    const days = (n) => (n === 1 ? 'יום אחד' : `${n} ימים`);
-    switch (x.reason) {
-      case 'ratio':
-        return `${head}: נדרשים ${x.ratio} פוסטי ערך לכל מכירתי, וכשהמנוע בדק היו בערוץ ` +
-          `ב-28 הימים ${x.value} ערך מול ${x.promo} מכירתיים. עוד תוכן ערך לערוץ הזה יפנה להם מקום.`;
-      case 'ratio_cap':
-        return `${head}: ביחס של ${x.ratio} ערך לכל מכירתי, ערוץ של ${x.budget} פוסטים בשבוע ` +
-          `מכניס עד ${x.ratio_cap} מכירתיים ב-28 ימים, ולא יותר מרבע מהם בשבוע אחד.`;
-      case 'promo_week':
-      case 'hybrid_week':
-      case 'value_week': {
-        const kind = x.reason.replace('_week', '');
-        return `${head}: הערוץ מקבל עד ${x.cap} ${KIND_PLURAL[kind]} בשבוע ` +
-          '(בהגדרות הערוץ, תחת "מתקדם").';
-      }
-      case 'promo_day':
-        return `${head}: מותר עד ${x.per_day === 1 ? 'מכירתי אחד' : `${x.per_day} מכירתיים`} ` +
-          'ביום בכל הערוצים יחד (כללי המנוע), והימים הפנויים כבר תפוסים.';
-      case 'share':
-        return `${head} השבוע: הנתח של הקמפיין בערוץ הוא ${x.share_pct}% — ` +
-          `עד ${x.cap} פוסטים בשבוע.`;
-      case 'gap':
-        return `${head}: המרווח בין פוסטים של אותה נקודת קצה בערוץ הוא ${days(x.gap)}.`;
-      default:
-        return `${head}.`;
-    }
-  });
 }
 
 /* ========================= בחירה מתוך ההצעה ========================= */
