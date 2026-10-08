@@ -7,6 +7,7 @@ import { COVERING_TASK_KINDS, suppressTaskedAlerts } from './task-lifecycle.js';
 import { backupAlerts, readBackupLayers } from './backup-status.js';
 import { mediaReady } from './media.js';
 import { UNCONFIRMED_SQL, unconfirmedAlert, unconfirmedPosts } from './unconfirmed.js';
+import { tickHeartbeat, tickStallAlert } from './publish/heartbeat.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -188,6 +189,11 @@ export async function buildAlerts(user = null) {
   if (storage) alerts.push(storage);
 
   if (platformSignals) alerts.push(...backupAlerts(backupLayers));
+
+  // טיק הפרסום לא הסתיים 10 דקות (publish/heartbeat.js) — הטיק אחד לכל
+  // הארגונים, וכל ארגון מושפע; כמו "פרסום נכשל" — לכל משתמש, בלי הרשאה
+  const stalled = tickStallAlert(tickHeartbeat());
+  if (stalled) alerts.push(stalled);
 
   const order = { crit: 0, warn: 1, info: 2 };
   // סימן אחד לכל פוסט: משימה פתוחה היא ה-to-do, ההתראה המקבילה מתייתרת
