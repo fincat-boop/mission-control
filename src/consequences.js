@@ -1,6 +1,6 @@
 import {
   averageSharesByChannel, blendShares, channelBudget, channelEndpoints, effectiveGap, gapOn,
-  ratioPromoLimit, RATIO_WINDOW_DAYS, weeklyPromoCap,
+  MAX_GAP_DAYS, ratioPromoLimit, RATIO_WINDOW_DAYS, weeklyPromoCap,
 } from './capacity.js';
 import { effectiveCadenceDays } from './board.js';
 import { urgentReserve } from '../public/js/core/reserve.js';
@@ -18,8 +18,75 @@ import { urgentReserve } from '../public/js/core/reserve.js';
  * @param base {campaigns (CAMPAIGNS_WEIGHTED_SQL), channels, endpoints, standalone
  *              (loadStandalone), settings (engine_settings), week ({from, to} — השבוע הנוכחי)}
  */
-export function settingConsequences(base, draft = {}) {
-  const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? undefined : Number(v));
+/**
+ * הטווחים של השדות — כמו האילוצים במסד (importance 1–10, מרווח עד MAX_GAP_DAYS,
+ * יחס numeric(3,1)) והשדות בניהול. ערך מחוץ לטווח נחתך אליו (תצוגה בלבד —
+ * השמירה עצמה עוברת בנתיבים הרגילים).
+ */
+export const DRAFT_RANGES = {
+  importance: [1, 10],
+  max_per_week: [0, 50],
+  urgent_reserve_pct: [0, 100],
+  min_gap_days: [0, MAX_GAP_DAYS],
+  min_value_per_promo: [0, 10],
+};
+
+/** שגיאת קלט — הנתיב מחזיר 400 */
+export class DraftError extends Error {}
+
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * הטיוטה מהבקשה, מנורמלת: אובייקטים בצורה הנכונה, מספרים בטווח. ריק / null —
+ * "לא נגעו" (ב-urgent_reserve_pct: null = ברירת המחדל 20). לא מספר — DraftError.
+ */
+export function parseDraft(body) {
+  if (body == null) return {};
+  if (!isObj(body)) throw new DraftError('הגוף צריך להיות אובייקט');
+  const numIn = (field, v) => {
+    if (v === '' || v == null) return undefined;
+    const n = Number(v);
+    if (typeof v === 'boolean' || !Number.isFinite(n)) throw new DraftError(`${field}: צריך מספר`);
+    const [lo, hi] = DRAFT_RANGES[field];
+    return Math.min(hi, Math.max(lo, n));
+  };
+  const section = (name) => {
+    const v = body[name];
+    if (v == null) return {};
+    if (!isObj(v)) throw new DraftError(`${name} צריך להיות אובייקט`);
+    return v;
+  };
+  const id = (k) => {
+    if (!/^\d+$/.test(k)) throw new DraftError(`מזהה לא תקין: ${k}`);
+    return Number(k);
+  };
+
+  const endpoints = {};
+  for (const [k, v] of Object.entries(section('endpoints'))) {
+    const n = numIn('importance', v);
+    if (n !== undefined) endpoints[id(k)] = n;
+  }
+  const channels = {};
+  for (const [k, v] of Object.entries(section('channels'))) {
+    if (!isObj(v)) throw new DraftError('כל ערוץ צריך להיות אובייקט');
+    const out = {};
+    const max = numIn('max_per_week', v.max_per_week);
+    if (max !== undefined) out.max_per_week = max;
+    if ('urgent_reserve_pct' in v) out.urgent_reserve_pct = numIn('urgent_reserve_pct', v.urgent_reserve_pct) ?? null;
+    channels[id(k)] = out;
+  }
+  const settings = {};
+  const st = section('settings');
+  for (const f of ['min_gap_days', 'min_value_per_promo']) {
+    const n = numIn(f, st[f]);
+    if (n !== undefined) settings[f] = n;
+  }
+  return { endpoints, channels, settings };
+}
+
+export function settingConsequences(base, rawDraft = {}) {
+  const draft = parseDraft(rawDraft);
+  const num = (v) => (v == null ? undefined : Number(v));
 
   const epImportance = new Map(base.endpoints.map((e) => [e.id, e.importance]));
   for (const [id, v] of Object.entries(draft.endpoints ?? {})) {

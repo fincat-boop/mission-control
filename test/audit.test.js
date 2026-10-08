@@ -19,6 +19,16 @@ test('audit — התצוגה המקדימה של קיבולת לא נרשמת ב
   assert.deepEqual(r, { listening: false, wrapped: false });
 });
 
+test('audit — שורות ההשלכה בניהול לא נרשמות ביומן (סעיף 35)', async () => {
+  const r = await run('POST', '/settings/consequences');
+  assert.deepEqual(r, { listening: false, wrapped: false });
+});
+
+test('audit — שמירת כללי המנוע כן נרשמת', async () => {
+  const r = await run('PATCH', '/settings');
+  assert.deepEqual(r, { listening: true, wrapped: true });
+});
+
 test('audit — יצירת קמפיין כן נרשמת', async () => {
   const r = await run('POST', '/campaigns');
   assert.deepEqual(r, { listening: true, wrapped: true });

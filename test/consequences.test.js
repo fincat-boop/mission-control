@@ -1,7 +1,7 @@
 import './_env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { settingConsequences } from '../src/consequences.js';
+import { DraftError, parseDraft, settingConsequences } from '../src/consequences.js';
 import {
   averageSharesByChannel, blendShares, channelBudget, channelEndpoints, effectiveGap, gapOn,
   ratioPromoLimit, weeklyPromoCap,
@@ -92,8 +92,22 @@ test('סעיף 35 — טיוטה לפני שמירה: חשיבות, פוסטים
   assert.equal(row.gap_days, 1, 'min(2, floor(14/8))');
   assert.equal(c.ratio_on, false);
   assert.equal(row.promo_28, null);
-  // ערך ריק / לא מספר — נשאר מה שבמסד
-  const same = settingConsequences(b, { endpoints: { 1: '' }, channels: { 1: { max_per_week: 'x' } } });
+  // ערך ריק — נשאר מה שבמסד
+  const same = settingConsequences(b, { endpoints: { 1: '' }, channels: { 1: { max_per_week: '' } } });
   assert.equal(same.endpoints.find((e) => e.id === 1).importance, 7);
   assert.equal(same.channels.find((x) => x.id === 1).budget, 4);
+});
+
+test('סעיף 35 — טיוטה: מחוץ לטווח נחתך; צורה או ערך לא תקינים — DraftError (400)', () => {
+  const d = parseDraft({ endpoints: { 1: 40 }, channels: { 2: { max_per_week: 900, urgent_reserve_pct: -5 } },
+                         settings: { min_gap_days: 99, min_value_per_promo: 50 } });
+  assert.deepEqual(d, { endpoints: { 1: 10 }, channels: { 2: { max_per_week: 50, urgent_reserve_pct: 0 } },
+                        settings: { min_gap_days: 30, min_value_per_promo: 10 } });
+  assert.deepEqual(parseDraft({ endpoints: { 1: 0 } }).endpoints, { 1: 1 });
+  for (const bad of [[], 'x', { endpoints: [] }, { channels: { 1: 5 } }, { channels: { 1: null } },
+                     { endpoints: { 1: 'abc' } }, { endpoints: { x: 3 } }, { settings: 7 },
+                     { settings: { min_gap_days: true } }]) {
+    assert.throws(() => parseDraft(bad), DraftError, JSON.stringify(bad));
+  }
+  assert.deepEqual(parseDraft(null), {});
 });

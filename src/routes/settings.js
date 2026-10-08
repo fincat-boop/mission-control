@@ -7,7 +7,7 @@ import { isPlatformOrg } from '../platform.js';
 import { setupSteps } from '../setup.js';
 import { resetToManual } from '../publish/runner.js';
 import { CAMPAIGNS_WEIGHTED_SQL, loadStandalone } from '../capacity-db.js';
-import { settingConsequences } from '../consequences.js';
+import { DraftError, parseDraft, settingConsequences } from '../consequences.js';
 import { weekMeta } from '../board.js';
 
 const r = Router();
@@ -44,6 +44,11 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
  * לכל משתמש מחובר, כמו המסך עצמו.
  */
 r.post('/settings/consequences', wrap(async (req, res) => {
+  // קלט לא תקין — 400 לפני שטוענים משהו
+  try { parseDraft(req.body); } catch (e) {
+    if (e instanceof DraftError) return bad(res, e.message);
+    throw e;
+  }
   const week = weekMeta(new Date());
   const base = {
     campaigns: await rows(CAMPAIGNS_WEIGHTED_SQL),

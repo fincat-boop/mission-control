@@ -24,6 +24,8 @@ const SKIP = [
   // תצוגה מקדימה של קיבולת בטופס הקמפיין — לא כותבת כלום. בלעדיה כל שינוי
   // בטופס היה נרשם כ"יצר קמפיין"
   /^\/campaigns\/capacity-preview$/,
+  // שורות ההשלכה בניהול (סעיף 35) — נקראות בכל הקלדה, לא כותבות כלום
+  /^\/settings\/consequences$/,
   // חתימה להעלאה ל-R2 — לא כותבת כלום; הקובץ נרשם ב-complete / bulk/media
   /^\/content\/\d+\/uploads\/sign$/,
   /^\/campaigns\/\d+\/bulk\/sign$/,
