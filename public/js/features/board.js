@@ -48,7 +48,8 @@ export async function renderBoard() {
     // הערוץ שבו הנקודה הכי ותיקה, כשהוא שונה מהפרסום האחרון בכלל (סעיף 8)
     const sc = o.stalest_channel;
     const where = sc
-      ? ` · ב${sc.name} ${sc.days_since === null ? 'עוד לא' : `${sc.days_since} ימים`}` : '';
+      ? ` · ב${sc.name} ${sc.days_since === null ? 'עוד לא'
+        : sc.days_since === 0 ? 'היום' : sc.days_since === 1 ? 'אתמול' : `לפני ${sc.days_since} ימים`}` : '';
     const plan = o.scheduled_this_week === 1 ? 'פעם אחת השבוע' : `${o.scheduled_this_week} פעמים השבוע`;
     const bg = epColor(o.endpoint_id);
     return `<li class="oxyitem" title="${esc(`${o.name} · ${plan} · ${when}${where}`)}"
