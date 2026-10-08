@@ -149,6 +149,20 @@ test('א — PATCH /posts: אי אפשר לאפס נקודה או להחליף �
   assert.equal(both.status, 200, JSON.stringify(both.json));
   assert.equal(both.json.post.endpoint_id, ids.ep2);
 
+  // שארית פתוחה בלי נקודה: הזזה (מועד או ערוץ) נדחית, אלא אם נשלחת נקודה; כותרת וסימון — כן
+  const rest = await post({ endpoint: null, content: null, title: 'שארית', at: -60 * 24 * 2 });
+  const move = await call('PATCH', `/posts/${rest}`, { scheduled_at: days(14) });
+  assert.equal(move.status, 400);
+  assert.match(move.json.error, /אין פוסט בלי נקודת קצה/);
+  assert.equal((await call('PATCH', `/posts/${rest}`, { channel_id: ids.nl })).status, 400);
+  assert.equal((await call('PATCH', `/posts/${rest}`, { title: 'שארית — כותרת' })).status, 200);
+  const withEp = await call('PATCH', `/posts/${rest}`,
+    { scheduled_at: days(15), endpoint_id: ids.ep, confirm_warnings: true });
+  assert.equal(withEp.status, 200, JSON.stringify(withEp.json));
+  assert.equal(withEp.json.post.endpoint_id, ids.ep);
+  const rest2 = await post({ endpoint: null, content: null, title: 'שארית לסימון', at: -60 * 24 * 2 });
+  assert.equal((await call('POST', `/posts/${rest2}/publish`)).status, 200);
+
   // פוסט שפורסם לפני הכלל ונשאר בלי נקודה (הנקודה נמחקה) — עדיין נערך בכותרת
   const legacy = await post({ endpoint: null, content: null, status: 'published', at: -60 * 24 * 30 });
   const titled = await call('PATCH', `/posts/${legacy}`, { title: 'כותרת חדשה' });

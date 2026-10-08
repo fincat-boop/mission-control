@@ -208,6 +208,11 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   // אין פוסט בלי נקודת קצה: אי אפשר לאפס אותה, ותוכן חדש / נקודה חדשה — רק
   // כשהם תואמים (postEndpointError). פוסט ישן בלי נקודה (פורסם לפני הכלל)
   // עדיין נערך בכותרת / בהערה — נבדק רק מה שהבקשה משנה.
+  // שארית ישנה בלי נקודה: הזזה (מועד או ערוץ) מחזירה אותה לתכנון, ולכן רק
+  // עם נקודה באותה בקשה. כותרת, הערה וסימון "פורסם" — בלי
+  if (current.endpoint_id == null && isMove(current, b) && !idOrNull(b.endpoint_id)) {
+    return bad(res, ENDPOINT_REQUIRED);
+  }
   if (changed('endpoint_id') || contentChanged) {
     const epErr = await postEndpointError({
       endpointId: 'endpoint_id' in b ? b.endpoint_id : current.endpoint_id,
