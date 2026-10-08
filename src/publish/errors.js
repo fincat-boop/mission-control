@@ -50,6 +50,22 @@ export function friendlyPublishError(err, { platform } = {}) {
   const where = PLATFORM_HE[platform] ?? 'הרשת';
   const meta = platform === 'facebook' || platform === 'instagram' ? where : 'מטא';
 
+  // מטא לא ענתה בזמן (הגבלת הזמן של graph ב-meta.js). maybeLive — זו הייתה
+  // הקריאה שמעלה את הפוסט: ייתכן שהוא עלה ורק התשובה לא חזרה, ולכן לא
+  // מפרסמים שוב לפני שבודקים בעמוד (כמו פרסום שנקטע באמצע)
+  if (err?.kind === 'graph_timeout') {
+    return err.maybeLive
+      ? {
+        who: 'owner',
+        message: `${where} לא ענתה בזמן אחרי ששלחנו את הפוסט, וייתכן שהוא עלה בכל זאת. ` +
+          'בודקים בעמוד לפני שמפרסמים שוב: אם הוא שם מסמנים "פורסם", ורק אם לא — מפרסמים שוב.',
+      }
+      : {
+        who: 'owner',
+        message: `${where} לא ענתה בזמן, והפוסט לא עלה. מפרסמים שוב בעוד כמה דקות — "פרסם עכשיו" בחלון הפוסט.`,
+      };
+  }
+
   // הגדרה חסרה בשרת — רק המפתח יכול לתקן
   if (ENV_VAR.test(raw)) {
     return {

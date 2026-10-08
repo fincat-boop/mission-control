@@ -10,11 +10,29 @@
 const GRAPH = 'https://graph.facebook.com/v23.0';
 
 /**
+ * הגבלת זמן לכל קריאה. בלי הגבלה, fetch מחכה עד ~5 דקות לכל קריאה (ברירת
+ * המחדל של undici), וקריאה איטית אחת עוצרת את טיק הפרסום של כל הארגונים
+ * (טיק אחד בכל רגע — server.js). העלאה (multipart, או וידאו שפייסבוק מושך
+ * מקישור בזמן הבקשה) — יותר זמן. waitForContainer שומר על התקציב שלו.
+ */
+export const GRAPH_TIMEOUT_MS = 60000;
+export const GRAPH_UPLOAD_TIMEOUT_MS = 180000;
+
+const isAbort = (e) => e?.name === 'TimeoutError' || e?.name === 'AbortError';
+
+/**
  * קריאת Graph. זורק Error עם ההודעה של Meta כשהתשובה היא שגיאה, ועם
  * code/subcode/type/status שלה — friendlyPublishError (errors.js) מתרגם
  * לפיהם להודעה בעברית; הטקסט הגולמי נשמר ב-publish_log.
+ *
+ * קריאה שלא ענתה בזמן — שגיאה עם kind: 'graph_timeout'. live=true — הקריאה
+ * שמעלה את הפוסט לאוויר (feed, photos, videos, media_publish): הבקשה אולי
+ * הגיעה ומטא פרסמה, ורק התשובה לא חזרה — maybeLive, וההודעה אומרת לבדוק
+ * בעמוד לפני שמפרסמים שוב (errors.js). כשל לא חוזר לפרסום לבד בכל מקרה.
  */
-async function graph(path, { method = 'GET', token, params = {}, form = null, signal } = {}) {
+async function graph(path, {
+  method = 'GET', token, params = {}, form = null, signal, live = false, upload = false,
+} = {}) {
   const url = new URL(`${GRAPH}/${path}`);
   let body;
 
@@ -38,8 +56,20 @@ async function graph(path, { method = 'GET', token, params = {}, form = null, si
     }
   }
 
-  const res = await fetch(url, { method, body, signal });
-  const data = await res.json().catch(() => ({}));
+  const timeoutMs = upload || form ? GRAPH_UPLOAD_TIMEOUT_MS : GRAPH_TIMEOUT_MS;
+  let res, data;
+  try {
+    res = await fetch(url, { method, body, signal: signal ?? AbortSignal.timeout(timeoutMs) });
+    // גוף שנקטע באמצע הקריאה (הזמן נגמר) — לא "תשובה ריקה": בלי זה פרסום
+    // שהצליח היה חוזר בלי מזהה
+    data = await res.json().catch((e) => { if (isAbort(e)) throw e; return {}; });
+  } catch (e) {
+    if (!isAbort(e)) throw e;
+    // רק הנתיב, בלי פרמטרים — בשאילתת GET יש את הטוקן
+    throw Object.assign(
+      new Error(`Graph API timeout (${method} ${path})`),
+      { kind: 'graph_timeout', maybeLive: live, cause: e });
+  }
   if (!res.ok || data.error) {
     const e = data.error ?? {};
     throw Object.assign(new Error(e.error_user_msg ?? e.message ?? `Graph API ${res.status}`), {
@@ -96,6 +126,11 @@ export async function postFirstComment(objectId, token, message) {
     });
     return null;
   } catch (e) {
+    // לא ענתה בזמן — ייתכן שהתגובה נכתבה. הודעה משלנו בעברית (עוברת כמו
+    // שהיא ב-errors.js), כי ההודעה הכללית של graph_timeout מדברת על הפוסט
+    if (e.kind === 'graph_timeout') {
+      return new Error('מטא לא ענתה בזמן, וייתכן שהתגובה נכתבה בכל זאת — בודקים בפוסט לפני שמוסיפים אותה');
+    }
     return e;
   }
 }
@@ -126,14 +161,15 @@ export async function publishFacebook({
 
   if (video) {
     const r = await graph(`${pageId}/videos`, {
-      method: 'POST', token, ...mediaArgs(video, { description: text }, 'file_url'),
+      method: 'POST', token, live: true, upload: true,
+      ...mediaArgs(video, { description: text }, 'file_url'),
     });
     return done(r.id, `https://www.facebook.com/${pageId}/videos/${r.id}`);
   }
 
   if (images.length === 1) {
     const r = await graph(`${pageId}/photos`, {
-      method: 'POST', token,
+      method: 'POST', token, live: true,
       ...mediaArgs(images[0], { caption: text, alt_text_custom: altText || null }, 'url'),
     });
     const id = r.post_id ?? r.id;
@@ -151,12 +187,13 @@ export async function publishFacebook({
     }
     const params = { message: text };
     ids.forEach((id, i) => { params[`attached_media[${i}]`] = JSON.stringify({ media_fbid: id }); });
-    const r = await graph(`${pageId}/feed`, { method: 'POST', token, params });
+    const r = await graph(`${pageId}/feed`, { method: 'POST', token, params, live: true });
     return done(r.id, `https://www.facebook.com/${r.id}`);
   }
 
   const r = await graph(`${pageId}/feed`, {
-    method: 'POST', token, params: { message: text, link: String(link ?? '').trim() || null },
+    method: 'POST', token, live: true,
+    params: { message: text, link: String(link ?? '').trim() || null },
   });
   return done(r.id, `https://www.facebook.com/${r.id}`);
 }
@@ -239,7 +276,7 @@ export async function publishInstagram({
 
   await waitForContainer(creationId, token);
   const pub = await graph(`${igUserId}/media_publish`, {
-    method: 'POST', token, params: { creation_id: creationId },
+    method: 'POST', token, live: true, params: { creation_id: creationId },
   });
 
   const info = await graph(pub.id, { token, params: { fields: 'permalink' } })
