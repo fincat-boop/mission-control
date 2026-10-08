@@ -403,27 +403,48 @@ test('סעיף 13 — שינוי ערוץ כשמוצג שבוע +5 ממלא את
   await wipe();
 });
 
-test('סעיף 13 — המילוי היומי ממלא את השבוע והבא פעם אחת; ריצה חוזרת לא מוסיפה', { skip }, async () => {
+test('סעיף 13 — המילוי היומי: ריצה חוזרת באותו יום לא מוסיפה; למחרת — רק לימים שנשארו, עד התקציב', { skip }, async () => {
   await wipe();
   const { nearWeeks } = await import('../src/routes/_shared.js');
   const { dailyFillOrg } = await import('../src/maintenance.js');
-  const ch = await channel('פייסבוק', 3);
-  const ep = await endpoint('נקודה');
-  await items(ep.id, ch.id, 12, { prefix: 'שוטף' });
-  const first = await inOrg(() => dailyFillOrg());
-  assert.ok(first.placed >= 3, JSON.stringify(first.summary));
-  const posts = await q('select scheduled_at from posts where channel_id = $1', [ch.id]);
-  const near = nearWeeks();
-  assert.ok(posts.every((p) => near.includes(weekOf(p.scheduled_at))));
-  assert.ok(posts.some((p) => weekOf(p.scheduled_at) === near[1]));
-  const second = await inOrg(() => dailyFillOrg());
-  assert.equal(second.placed, 0);
-  assert.equal((await q('select id from posts')).length, posts.length);
+  const fb = await channel('פייסבוק', 3);
+  const wa = await channel('וואטסאפ', 4);
+  const a = await endpoint('א');
+  const b = await endpoint('ב');
+  await items(a.id, [fb.id, wa.id], 12, { prefix: 'א' });
+  await items(b.id, [fb.id, wa.id], 12, { prefix: 'ב' });
+  // "עכשיו" = רביעי 05:30 של שבוע עתידי (אמצע שבוע — ראשון–שלישי כבר עברו)
+  const w = weekMeta(inDays(21));
+  const wed = new Date(`${w.days[3].date}T05:30:00`);
+  const thu = new Date(`${w.days[4].date}T05:30:00`);
+  const near = nearWeeks(wed);
+
+  const first = await inOrg(() => dailyFillOrg({ now: wed }));
+  assert.ok(first.placed >= 4, JSON.stringify(first.summary));
+  const after1 = await q('select channel_id, scheduled_at from posts');
+  assert.ok(after1.every((p) => near.includes(weekOf(p.scheduled_at)) && new Date(p.scheduled_at) > wed));
+  assert.ok(after1.some((p) => weekOf(p.scheduled_at) === near[1]), 'השבוע הבא התמלא');
+  // אותו יום — אותן משבצות כבר תפוסות
+  const again = await inOrg(() => dailyFillOrg({ now: wed }));
+  assert.equal(again.placed, 0);
   // ביומן הפעולות — פעם אחת, כמערכת
   const log = await q("select via, summary from activity_log where entity = 'engine'");
   assert.equal(log.length, 1);
   assert.equal(log[0].via, 'system');
   assert.match(log[0].summary, /מילוי יומי/);
+
+  // למחרת: יכול להוסיף לימים שנשארו — אבל לא מעבר לתקציב של אף ערוץ בשום שבוע
+  await inOrg(() => dailyFillOrg({ now: thu }));
+  const all = await q('select channel_id, scheduled_at from posts');
+  const per = new Map();
+  for (const p of all) {
+    const k = `${p.channel_id}:${weekOf(p.scheduled_at)}`;
+    per.set(k, (per.get(k) ?? 0) + 1);
+  }
+  for (const [k, n] of per) {
+    const budget = Number(k.split(':')[0]) === fb.id ? 3 : 4;
+    assert.ok(n <= budget, `${k}: ${n} > ${budget}`);
+  }
   await wipe();
 });
 

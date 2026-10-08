@@ -391,15 +391,15 @@ export function withEngineLock(fn) {
  * מופיע בהצעה הטרייה. מה שנבחר ונעלם בינתיים נספר ב-skipped.
  *
  * @param {string|Date} [anchorDate]
- * @param {{holes?:boolean, selected?:string[]|null, onlyCampaignId?:number|null}} [opts]
- *   onlyCampaignId — ראו planWeek
+ * @param {{holes?:boolean, selected?:string[]|null, onlyCampaignId?:number|null, now?:Date}} [opts]
+ *   onlyCampaignId — ראו planWeek; now — "עכשיו" של התכנון (בדיקות)
  * @returns {Promise<{placed:number, attached:number, holes:number, skipped:number,
  *   created_ids:number[], created_items:object[], attached_items:object[], summary:object[]}>}
  */
 export async function applyWeek(anchorDate, {
-  holes: withHoles = true, selected = null, onlyCampaignId = null,
+  holes: withHoles = true, selected = null, onlyCampaignId = null, now: at = new Date(),
 } = {}) {
-  const fresh = await planWeek(anchorDate, { holes: withHoles, onlyCampaignId });
+  const fresh = await planWeek(anchorDate, { holes: withHoles, onlyCampaignId, now: at });
   const { plan, skipped: stale } = selectPlanItems(fresh, selected);
   // בחירה חלקית: מכירתי שעבר את שער היחס בזכות פריטי ערך שהמשתמש הוריד
   // מהסימון כבר לא מאוזן — יורד, ונאמר למה

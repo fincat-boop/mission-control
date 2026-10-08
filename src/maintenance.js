@@ -379,13 +379,15 @@ export const DAILY_FILL_AT = { hour: 5, minute: 30 };
 /**
  * המילוי היומי של הארגון הנוכחי (בתוך withOrg): השבוע הנוכחי והבא דרך
  * dailyFill — אותו מילוי מרוסן של כל שינוי, תחת נעילת המנוע של הארגון.
- * ריצה חוזרת לא מוסיפה כלום (המנוע ממלא רק מקום פנוי). כשנכנס משהו — שורה
- * ביומן הפעולות (via='system'); בלי "בטל" — אלה פוסטים רגילים של המנוע.
+ * ריצה חוזרת באותו יום לא מוסיפה כלום (המנוע ממלא רק מקום פנוי); ביום אחר
+ * היא יכולה להוסיף לימים שנשארו בשבוע, עד התקציב של כל ערוץ. כשנכנס משהו —
+ * שורה ביומן הפעולות (via='system'); בלי "בטל" — אלה פוסטים רגילים של המנוע.
+ * now — לבדיקות.
  * @returns {Promise<object>} תוצאת המילוי (mergeFillResults)
  */
-export async function dailyFillOrg() {
+export async function dailyFillOrg({ now = new Date() } = {}) {
   const { dailyFill } = await import('./routes/_shared.js');
-  const out = await dailyFill();
+  const out = await dailyFill({ now });
   const n = (out.placed ?? 0) + (out.attached ?? 0);
   if (n) {
     const bits = [

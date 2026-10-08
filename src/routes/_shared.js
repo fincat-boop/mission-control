@@ -34,9 +34,11 @@ export function nearWeeks(now = new Date()) {
 }
 
 /** מילוי מלא (לא מרוסן לקמפיין) של השבוע הנוכחי והבא, בתוך נעילת המנוע של הקורא */
-async function fillNearWeeks() {
+async function fillNearWeeks(now = new Date()) {
   const results = [];
-  for (const w of nearWeeks()) results.push(await applyWeek(`${w}T12:00:00`, { holes: false }));
+  for (const w of nearWeeks(now)) {
+    results.push(await applyWeek(`${w}T12:00:00`, { holes: false, now }));
+  }
   return mergeFillResults(results);
 }
 
@@ -59,7 +61,7 @@ async function fillNearWeeks() {
  * אחורה בשקט — כולל השינוי שהמשתמש ביקש. ה-savepoint תוחם את הנזק למילוי.
  */
 export function autoFill(week) {
-  return guardedFill('autoFill', () => withEngineLock(fillNearWeeks));
+  return guardedFill('autoFill', () => withEngineLock(() => fillNearWeeks()));
 }
 
 /**
@@ -182,7 +184,7 @@ export function autoFillCampaign(campaignId, viewedWeek) {
         [campaignId])
       : null;
     const weeks = campaignFillWeeks(c);
-    if (!weeks) return withEngineLock(fillNearWeeks);
+    if (!weeks) return withEngineLock(() => fillNearWeeks());
     const near = nearWeeks();
     const all = [...new Set([...weeks, ...near])].sort();
     return withEngineLock(async () => {
@@ -199,11 +201,14 @@ export function autoFillCampaign(campaignId, viewedWeek) {
 /**
  * המילוי היומי (סעיף 13): השבוע הנוכחי והבא של הארגון הנוכחי, כך שהשבועות
  * הקרובים מתמלאים גם כשאף אחד לא פותח אותם. אותו מסלול כמו autoFill (savepoint,
- * נעילת המנוע, מרוסן — רק תוכן קיים), ולכן ריצה חוזרת לא מוסיפה כלום. בלי
- * "בטל": הפוסטים שלו הם פוסטים רגילים של המנוע. רץ בתוך withOrg (forEachOrg).
+ * נעילת המנוע, מרוסן — רק תוכן קיים). המנוע ממלא רק מקום פנוי: ריצה חוזרת
+ * באותו יום לא מוסיפה כלום, אבל ריצה ביום אחר באמצע השבוע יכולה להוסיף
+ * לימים שנשארו (לכל היותר פוסט לנקודה×ערוץ ביום, ועד התקציב השבועי של
+ * הערוץ) — למשל תוכן שנכתב מאז. בלי "בטל": הפוסטים שלו הם פוסטים רגילים של
+ * המנוע. רץ בתוך withOrg (forEachOrg). now — לבדיקות.
  */
-export function dailyFill() {
-  return guardedFill('dailyFill', () => withEngineLock(fillNearWeeks));
+export function dailyFill({ now = new Date() } = {}) {
+  return guardedFill('dailyFill', () => withEngineLock(() => fillNearWeeks(now)));
 }
 
 /** תשובת מילוי ריקה — אותה צורה כמו applyWeek, כדי שהלקוח לא יצטרך לבדוק */
