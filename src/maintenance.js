@@ -9,6 +9,7 @@ import {
   TRASH_DAYS, legacyMediaKey, legacyUploadMime, mediaReady, mediaStore, mediaSweepEnabled,
   orgMediaPrefix, pickOrphans,
 } from './media.js';
+import { postIsLiveSql } from './live.js';
 
 /**
  * מריץ fn פעם אחת לכל ארגון, בתוך הקשר הטננט שלו. עבודות רקע לא נובעות
@@ -141,6 +142,8 @@ export async function suggestContentSwaps() {
       where p.status = 'scheduled' and p.content_id is null
         -- מבצע דחוף — כותרת בלבד בכוונה; אין מה "להחליף" בו
         and not p.urgent
+        -- פוסט מוחזק (ערוץ / נקודה מושבתים, קמפיין מושהה) — לא על הלוח
+        and ${postIsLiveSql('p')}
         and p.scheduled_at between now() and now() + ($1 || ' hours')::interval
         and not exists (
           select 1 from tasks t

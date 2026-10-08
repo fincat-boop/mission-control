@@ -1,8 +1,12 @@
 import { Router } from 'express';
-import { autoFill, bad, updateById, wrap } from './_shared.js';
+import { autoFill, bad, resetMissedApprovals, updateById, wrap } from './_shared.js';
 import { one, query, rows } from '../db.js';
 import { effectiveCadenceDays } from '../board.js';
 import { requirePerm } from '../auth.js';
+import { openPostSql } from '../live.js';
+
+/** פוסט עתידי שלא פורסם (לא כולל 'publishing' — פרסום באמצע לא נעצר) */
+const FUTURE_OPEN = `${openPostSql('p')} and p.scheduled_at >= now()`;
 
 const r = Router();
 
@@ -37,22 +41,41 @@ r.post('/endpoints', requirePerm('settings'), wrap(async (req, res) => {
 }));
 
 r.patch('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
+  const before = await one('select active from endpoints where id = $1', [req.params.id]);
   const e = await updateById('endpoints', ENDPOINT_FIELDS, req.params.id, req.body);
   if (!e) return bad(res, 'לא נמצאה נקודת קצה כזו', 404);
+  // הופעלה מחדש: מאושר שהמועד שלו עבר בזמן ההשבתה חוזר לאישור, ולא יוצא
+  // בפרץ בטיק הבא (סעיף 16)
+  const reset = before && !before.active && e.active
+    ? await resetMissedApprovals('p.endpoint_id = $1', [e.id]) : 0;
   const engine = await autoFill(req.body?.week);
-  res.json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine });
+  res.json({ endpoint: { ...e, effective_min_days: effectiveCadenceDays(e) }, engine,
+             approval_reset: reset });
 }));
 
 /**
- * מה נמחק עם הנקודה: הקמפיינים והתוכן שלה (cascade). הפוסטים שלה נשארים
- * על הלוח, אבל בלי נקודת קצה ובלי תוכן (set null).
+ * מה השבתה ומחיקה של הנקודה נוגעות בו — לחלון האישור לפניהן:
+ *   campaigns / content — נמחקים איתה (cascade).
+ *   future_posts — פוסטים עתידיים שלא פורסמו: בהשבתה מוחזקים (יורדים מהלוח
+ *     ולא יוצאים), במחיקה נמחקים. future_approved — כמה מהם אושרו לפרסום.
+ *   past_open — המועד עבר ולא סומנו (אולי יצאו): נשארים גם במחיקה, בלי נקודה ובלי תוכן.
+ *   published — נשארים בהיסטוריה תמיד (בלי נקודה ובלי תוכן אחרי מחיקה).
+ *   posts — הכול (לשאלה אם יש בכלל מה לאבד).
  */
 async function endpointImpact(id) {
   return one(
     `select e.id, e.name, e.active,
             (select count(*)::int from campaigns c     where c.endpoint_id = e.id)  as campaigns,
             (select count(*)::int from content_items ci where ci.endpoint_id = e.id) as content,
-            (select count(*)::int from posts p          where p.endpoint_id = e.id)  as posts
+            (select count(*)::int from posts p          where p.endpoint_id = e.id)  as posts,
+            (select count(*)::int from posts p where p.endpoint_id = e.id
+                and ${FUTURE_OPEN}) as future_posts,
+            (select count(*)::int from posts p where p.endpoint_id = e.id
+                and ${FUTURE_OPEN} and p.status = 'approved') as future_approved,
+            (select count(*)::int from posts p where p.endpoint_id = e.id
+                and ${openPostSql('p')} and p.scheduled_at < now()) as past_open,
+            (select count(*)::int from posts p where p.endpoint_id = e.id
+                and p.status = 'published') as published
        from endpoints e where e.id = $1`,
     [id]
   );
@@ -74,9 +97,15 @@ r.delete('/endpoints/:id', requirePerm('settings'), wrap(async (req, res) => {
       impact, needs_force: true,
     });
   }
+  // הפוסטים העתידיים שלה שלא פורסמו יורדים איתה — באותה טרנזקציה (כמו
+  // מחיקת קמפיין עם התוכן). מה שפורסם, ומה שהמועד שלו עבר (אולי יצא),
+  // נשאר בהיסטוריה בלי נקודה ובלי תוכן (set null).
+  const removed = await rows(
+    `delete from posts p where p.endpoint_id = $1 and ${FUTURE_OPEN} returning p.id`,
+    [req.params.id]);
   await query('delete from endpoints where id = $1', [req.params.id]);
   const engine = await autoFill(req.body?.week);
-  res.json({ ok: true, engine });
+  res.json({ ok: true, removed_posts: removed.length, engine });
 }));
 
 export default r;

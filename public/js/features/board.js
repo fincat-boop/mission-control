@@ -131,6 +131,12 @@ export async function renderBoard() {
     ${b.held?.length ? `<div class="sumline held">⏸ מוסתרים בגלל השהיה:
       ${b.held.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
       — חוזרים ללוח כשמפעילים את הקמפיין</div>` : ''}
+    ${b.held_endpoints?.length ? `<div class="sumline held" id="heldEndpoints">⏸ מוסתרים — נקודת קצה מושבתת:
+      ${b.held_endpoints.map((h) => `<b>${esc(h.name)}</b> (${h.n})`).join(' · ')}
+      — חוזרים ללוח כשמפעילים אותה
+      ${can('settings') ? setupGoButton({ tab: 'manage', section: 'endpoints',
+        ...(b.held_endpoints.length === 1 ? { endpoint: b.held_endpoints[0].id } : {}) },
+      'הפעל מחדש') : ''}</div>` : ''}
     <section class="oxy" aria-label="מי מקבל במה">
       <h3>מי מקבל במה</h3>
       ${oxy ? `<ul>${oxy}</ul>` : '<p class="d">אף נקודת קצה לא משובצת השבוע</p>'}
@@ -138,6 +144,7 @@ export async function renderBoard() {
 
   renderSetupCard($('#setupCard'), setup);
   wireSetupGo($('#board .board'));
+  if ($('#heldEndpoints')) wireSetupGo($('#heldEndpoints'));
 
   // השבוע המוצג נשמר בכתובת (;w=) — רענון נשאר על אותו שבוע
   $$('#board [data-week]').forEach((btn) =>

@@ -138,7 +138,9 @@ function endpointList(campaigns) {
     const missing = mine.filter((c) => !c.complete).reduce((s, c) => s + c.missing_ahead, 0);
     const drafts = mine.filter((c) => c.complete).reduce((s, c) => s + c.missing_ahead, 0);
     const draftsLabel = drafts === 1 ? 'טיוטה אחת' : `${drafts} טיוטות`;
-    const chip = missing
+    // נקודה מושבתת — הקמפיינים שלה מוחזקים, אין "חסרים" ולא "מלא" (סעיף 16)
+    const chip = !e.active ? '<span class="chip">⏸ מושבתת</span>'
+      : missing
       ? `<span class="chip bad">חסרים ${missing}${drafts ? ` · ${draftsLabel}` : ''}</span>`
       : drafts ? `<span class="chip">${draftsLabel}</span>` : '<span class="chip on">מלא</span>';
     return `<button class="epick" data-pick-endpoint="${e.id}">
@@ -169,7 +171,7 @@ function campaignList(endpoint, campaigns, content) {
         <b>תוכן ערך שוטף</b>
         <span class="d">ללא תאריכים · ${bg.length} זוויות · ${bgReady} מוכנות לפחות בערוץ אחד</span>
       </div>
-      <span class="chip on">פעיל</span>
+      ${endpoint.active ? '<span class="chip on">פעיל</span>' : '<span class="chip">⏸ מושבת</span>'}
     </div>` : '';
 
   return `
@@ -764,6 +766,9 @@ function campaignHead(c) {
             <i></i>סיימתי לכתוב</span>` : ''}
           ${c.recurring ? `<span class="gst na" data-tt="קמפיין מחזורי: משבצים אותו מחדש מלוח האסטרטגיה">
             <i></i>מחזורי</span>` : ''}
+          ${c.endpoint_active === false ? `<span class="gst draft"
+            data-tt="הפוסטים של הקמפיין מוחזקים — לא על הלוח ולא מתפרסמים — עד שמפעילים את נקודת הקצה בניהול">
+            <i></i>הנקודה מושבתת</span>` : ''}
         </div>
         <p class="sub">${facts.join('<i class="dot">·</i>')}${links ? `<i class="dot">·</i>${links}` : ''}</p>
       </div>

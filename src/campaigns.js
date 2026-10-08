@@ -51,9 +51,11 @@ const CHANNEL_IDS_SQL = `(select coalesce(array_agg(cc.channel_id order by cc.ch
 /**
  * הקמפיינים עם החשיבות של נקודת הקצה שלהם והערוצים שלהם — הרשימה ש-shareOf
  * מחלק ביניהם ו-siblingsOf סופר בה. כל מי שמחשב נתח או צורך
- * (channelNeeds) טוען דרכה.
+ * (channelNeeds) טוען דרכה. endpoint_active — קמפיין של נקודה מושבתת לא
+ * מתחרה על שטח, כמו קמפיין מושהה (normalizeShares, סעיף 16).
  */
 export const CAMPAIGNS_WEIGHTED_SQL = `select c.*, e.importance as endpoint_importance,
+       e.active as endpoint_active,
        ${CHANNEL_IDS_SQL}
   from campaigns c join endpoints e on e.id = c.endpoint_id`;
 
@@ -893,11 +895,17 @@ export async function campaignsWithHealth() {
   });
 }
 
+/**
+ * שלב הקמפיין. נקודת קצה מושבתת (endpoint_active === false) = כמו השהיה:
+ * הפוסטים מוחזקים, אין קצב ואין חסר (סעיף 16). התג אומר "הנקודה מושבתת".
+ * קמפיין שכבר הסתיים נשאר "הסתיים" — אין בו מה להחזיק.
+ */
 function phaseOf(c, today) {
   if (c.paused_at) return 'paused';
   if (!c.active) return 'inactive';
-  if (c.starts_on && c.starts_on > today) return 'upcoming';
   if (c.ends_on && c.ends_on < today) return 'ended';
+  if (c.endpoint_active === false) return 'paused';
+  if (c.starts_on && c.starts_on > today) return 'upcoming';
   return 'running';
 }
 
@@ -909,7 +917,7 @@ function phaseOf(c, today) {
 export function statusOf({ c, today, grid, myChannels, ahead = null, noRoom = null,
                            unplaced = 0 }) {
   const st = baseStatus({ c, today, grid, myChannels, ahead, noRoom });
-  if (!(unplaced > 0) || ['paused', 'inactive', 'ended'].includes(st.key)) return st;
+  if (!(unplaced > 0) || ['paused', 'endpoint_off', 'inactive', 'ended'].includes(st.key)) return st;
   const note = unplaced === 1
     ? 'פוסט אחד לא ייכנס עד סוף הקמפיין'
     : `${unplaced} פוסטים לא ייכנסו עד סוף הקמפיין`;
@@ -918,6 +926,10 @@ export function statusOf({ c, today, grid, myChannels, ahead = null, noRoom = nu
 
 function baseStatus({ c, today, grid, myChannels, ahead, noRoom }) {
   const phase = phaseOf(c, today);
+  if (phase === 'paused' && !c.paused_at) {
+    return { key: 'endpoint_off', label: 'הנקודה מושבתת', tone: 'warn',
+             reason: 'הפוסטים של הקמפיין מוחזקים עד שמפעילים את נקודת הקצה בניהול' };
+  }
   if (phase === 'paused') return { key: 'paused', label: 'מושהה', tone: 'warn' };
   if (phase === 'inactive') return { key: 'inactive', label: 'לא פעיל', tone: 'muted' };
   if (phase === 'ended') return { key: 'ended', label: 'הסתיים', tone: 'muted' };
@@ -1080,7 +1092,7 @@ export async function currentAllocation() {
   const shares = normalizeShares(await rows(CAMPAIGNS_WEIGHTED_SQL), { from: today, to: today });
   const running = await rows(
     `select c.*, e.name as endpoint_name
-       from campaigns c join endpoints e on e.id = c.endpoint_id
+       from campaigns c join endpoints e on e.id = c.endpoint_id and e.active
       where c.active = true and c.paused_at is null
         and (c.starts_on is null or c.starts_on <= $1)
         and (c.ends_on is null or c.ends_on >= $1)

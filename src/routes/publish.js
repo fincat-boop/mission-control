@@ -12,6 +12,7 @@ import { HubMailError, audienceLists, hubFillUrl, hubMailReady, hubOrigins,
 import { NEWSLETTER_NO_APPROVE, hubStale, hubUnverified } from '../publish/newsletter.js';
 import { weekMeta } from '../board.js';
 import { friendlyPublishError } from '../publish/errors.js';
+import { postIsLiveSql } from '../live.js';
 
 const r = Router();
 
@@ -285,10 +286,8 @@ r.post('/publish/approve-week', requirePerm('approve'), wrap(async (req, res) =>
         and p.status in ('scheduled', 'failed')
         -- ניוזלטר לא כאן בכלל: הוא עובר ל-HUB בכפתור משלו ומאושר שם
         and c.platform in ('facebook', 'instagram')
-        and c.active
-        and not exists (select 1 from content_items ci
-                          join campaigns ca on ca.id = ci.campaign_id
-                         where ci.id = p.content_id and ca.paused_at is not null)
+        -- פוסט מוחזק (ערוץ / נקודה מושבתים, קמפיין מושהה) — לא על הלוח, לא מאשרים
+        and ${postIsLiveSql('p')}
       order by p.scheduled_at`,
     [from, to]
   );

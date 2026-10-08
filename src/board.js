@@ -2,6 +2,7 @@ import { one, rows } from './db.js';
 import { contentHints } from './candidates.js';
 import { itemAssetsSql } from './links.js';
 import { contentState } from './publish/readiness.js';
+import { postIsLiveSql } from './live.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const HE_MONTHS = [
@@ -86,8 +87,9 @@ export async function buildBoard(anchorDate) {
   // שאילתות במקביל על client אחד (Promise.all רק מתור אותן ומזהיר)
   const channels = await rows('select * from channels where active = true order by sort_order, id');
   const posts = await
-    // שיבוצים של קמפיין מושהה יורדים מהלוח ולא נספרים בקיבולת.
-    // הם נשארים במסד — ההשהיה הפיכה.
+    // שיבוצים של קמפיין מושהה, ערוץ מושבת או נקודת קצה מושבתת יורדים
+    // מהלוח ולא נספרים (postIsLiveSql). הם נשארים במסד — הכול הפיך.
+    // מה שכבר פורסם נשאר — זו עובדה.
     // v.status — הגרסה הספציפית למדיה שהפוסט הזה משודר בה, כדי שהלוח
     // יוכל להראות "יש תוכן" (מוכן) לעומת "יש טיוטה", לא רק "יש/אין".
     rows(
@@ -106,7 +108,7 @@ export async function buildBoard(anchorDate) {
          -- "לא נמדד" על פוסט שפורסם: שורה אחת לפוסט לכל היותר (post_id הוא המפתח)
          left join post_results pr  on pr.post_id = p.id
         where p.scheduled_at >= $1 and p.scheduled_at <= $2
-          and (ca.paused_at is null or p.status = 'published')
+          and (p.status = 'published' or ${postIsLiveSql('p')})
         order by p.scheduled_at`,
       [from, to]
     );
@@ -196,6 +198,18 @@ export async function buildBoard(anchorDate) {
       group by ca.name order by ca.name`,
     [from, to]
   );
+  // נקודות מושבתות (סעיף 16) — כמו השהיה: הפוסטים שלהן לא על הלוח, וכאן
+  // כמה ומי, עם קישור להפעלה מחדש. רק בערוצים פעילים (ערוץ מושבת — אין שורה)
+  const heldEndpoints = await rows(
+    `select e.id, e.name, count(*)::int as n
+       from posts p
+       join endpoints e on e.id = p.endpoint_id and not e.active
+       join channels c  on c.id = p.channel_id and c.active
+      where p.status <> 'published'
+        and p.scheduled_at >= $1 and p.scheduled_at <= $2
+      group by e.id, e.name order by e.name`,
+    [from, to]
+  );
 
   return {
     week: {
@@ -207,6 +221,7 @@ export async function buildBoard(anchorDate) {
       nextWeek: week.nextWeek,
     },
     held,
+    held_endpoints: heldEndpoints,
     channels: byChannel,
     oxygen,
     summary: {

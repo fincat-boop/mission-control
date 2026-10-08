@@ -1,4 +1,5 @@
 import { rows } from './db.js';
+import { postIsLiveSql } from './live.js';
 
 /**
  * "לא אושר שיצא" (סעיף 2 בשיפורי ההתנהגות): כמעט כל פוסט מתפרסם ביד, ומי
@@ -14,8 +15,9 @@ import { rows } from './db.js';
  *
  * ההגדרה:
  *   מתוכנן או מאושר, published_at ריק, המועד עבר לפני יותר מחצי שעה (חסד —
- *   פרסום אוטומטי עוד יכול להיות בדרך), ערוץ פעיל שאינו ניוזלטר (לו מסלול
- *   משלו מול ה-HUB), קמפיין לא מושהה. בלי ממלא מקום של המנוע (auto_hole) שאין
+ *   פרסום אוטומטי עוד יכול להיות בדרך), ערוץ שאינו ניוזלטר (לו מסלול
+ *   משלו מול ה-HUB), ופוסט חי (postIsLiveSql — ערוץ ונקודה פעילים, קמפיין
+ *   לא מושהה). בלי ממלא מקום של המנוע (auto_hole) שאין
  *   לו תוכן — הוא לא יכול היה לצאת, ול"חסר תוכן והמועד עבר" יש התראה משלו.
  *   מבצע דחוף (כותרת בלבד) — כן.
  */
@@ -30,10 +32,8 @@ export const UNCONFIRMED_SQL = `(
   and p.scheduled_at < now() - interval '${UNCONFIRMED_GRACE_MINUTES} minutes'
   and (p.content_id is not null or p.urgent or not p.auto_hole)
   and exists (select 1 from channels uc
-               where uc.id = p.channel_id and uc.active and uc.platform <> 'newsletter')
-  and not exists (select 1 from content_items uci
-                    join campaigns uca on uca.id = uci.campaign_id
-                   where uci.id = p.content_id and uca.paused_at is not null))`;
+               where uc.id = p.channel_id and uc.platform <> 'newsletter')
+  and ${postIsLiveSql('p')})`;
 
 /**
  * הרשימה שההתראה סופרת וחלון האישור מציג — אותה שאילתה, כך שהמספר בהתראה

@@ -189,6 +189,22 @@ export async function evictBlocked() {
   }
 }
 
+/**
+ * נקודה / ערוץ שהופעלו מחדש (סעיף 16): פוסט מאושר שהמועד שלו עבר בזמן שהיה
+ * מוחזק חוזר ל"מתוכנן" בלי אישור — אחרת הטיק הבא היה מפרסם בבת אחת את כל
+ * מה שהצטבר (עד MAX_LATE_HOURS אחורה). מכאן הוא עובר במסלול הרגיל: "לא סומן
+ * כפורסם" (unconfirmed.js) — מי שרוצה שיצא, משבץ אותו מחדש ומאשר שוב.
+ * where — תנאי SQL פנימי על posts p (לא מקלט משתמש). מחזיר כמה חזרו.
+ */
+export async function resetMissedApprovals(where, params) {
+  const r = await query(
+    `update posts p set status = 'scheduled', approved_by = null, approved_at = null
+      where p.status = 'approved' and p.scheduled_at < now() and ${where}
+      returning p.id`,
+    params);
+  return r.rowCount;
+}
+
 // המסלול הישן (multipart → bytea): פעיל מקומית ולפני שאחסון המדיה ב-R2
 // מוגדר (ראו src/media.js — שם ההעלאה ישירה מהדפדפן, עד MAX_MEDIA_MB).
 // הקבצים נשמרים במסד, לכן הם עוברים דרך הזיכרון ולא נכתבים לדיסק.

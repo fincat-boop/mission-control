@@ -7,6 +7,7 @@ import { COVERING_TASK_KINDS, suppressTaskedAlerts } from './task-lifecycle.js';
 import { backupAlerts, readBackupLayers } from './backup-status.js';
 import { mediaReady } from './media.js';
 import { UNCONFIRMED_SQL, unconfirmedAlert, unconfirmedPosts } from './unconfirmed.js';
+import { postIsLiveSql } from './live.js';
 
 const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -51,9 +52,9 @@ export async function buildAlerts(user = null) {
         and not p.urgent
         -- תוכן ריק שהמועד שלו עבר נספר ב"לא סומנו כפורסמו" (UNCONFIRMED_SQL) — סימן אחד
         and (p.content_id is null or p.scheduled_at >= now())
-        -- פוסט של קמפיין מושהה לא על הלוח — אין מה לכתוב לו עכשיו
-        and not exists (select 1 from content_items ci join campaigns ca on ca.id = ci.campaign_id
-                         where ci.id = p.content_id and ca.paused_at is not null)
+        -- פוסט מוחזק (קמפיין מושהה, ערוץ או נקודה מושבתים) לא על הלוח —
+        -- אין מה לכתוב לו עכשיו
+        and ${postIsLiveSql('p')}
         and (p.scheduled_at between now() and now() + ($1 || ' hours')::interval
              or (p.auto_hole and p.scheduled_at between now() - interval '${HOLE_PAST_DAYS} days'
                                                     and now() + interval '${HOLE_AHEAD_DAYS} days'))
@@ -65,14 +66,13 @@ export async function buildAlerts(user = null) {
     !p.content_id || contentStates.get(p.id)?.empty);
   const pending = await rows(`select p.id, p.title, p.scheduled_at, c.name as channel_name
           from posts p left join channels c on c.id = p.channel_id
-         where p.status = 'pending_approval' order by p.scheduled_at`);
+         where p.status = 'pending_approval' and ${postIsLiveSql('p')}
+         order by p.scheduled_at`);
   // פרסום שנכשל — עד שבועיים אחורה. אחר כך זה כבר היסטוריה, לא מצב.
   const failed = await rows(`select p.id, p.title, p.scheduled_at, p.publish_error, c.name as channel_name
           from posts p left join channels c on c.id = p.channel_id
          where p.status = 'failed' and p.scheduled_at >= now() - interval '14 days'
-           and not exists (select 1 from content_items ci
-                             join campaigns ca on ca.id = ci.campaign_id
-                            where ci.id = p.content_id and ca.paused_at is not null)
+           and ${postIsLiveSql('p')}
          order by p.scheduled_at`);
   // המועד עבר ואף אחד לא סימן שפורסם — "לא אושר שיצא" (unconfirmed.js).
   // התראה מרוכזת אחת במקום התראה לכל פוסט, ובלי חיתוך של שבוע.
@@ -281,7 +281,8 @@ export function campaignAlerts(campaigns, today) {
   const alerts = [];
   for (const c of campaigns) {
     if (c.phase === 'ended') {
-      const n = c.unpublished_ready ?? 0;
+      // נקודה מושבתת — מה שלא יצא מוחזק בכוונה, לא "נשאר" (סעיף 16)
+      const n = c.endpoint_active === false ? 0 : (c.unpublished_ready ?? 0);
       const since = c.ends_on ? Math.round((new Date(today) - new Date(c.ends_on)) / DAY) : null;
       if (n > 0 && since !== null && since <= ENDED_WINDOW_DAYS) {
         alerts.push({
@@ -464,20 +465,17 @@ export function endpointAirStatus(e, now = new Date()) {
  * (החלטה ה1 — הוא לא מסומן אוטומטית, אבל גם לא מפיל את הנקודה ל"לא מפרסמת").
  */
 async function endpointsWithoutAir() {
-  // next_at — הפוסט החי הבא שלה (ערוץ פעיל, קמפיין לא מושהה): בתוך הקצב = בדרך
+  // next_at — הפוסט החי הבא שלה (postIsLiveSql): בתוך הקצב = בדרך
   const list = await rows(
     `select e.id, e.name, e.importance, e.created_at,
             max(case when p.status = 'published' then p.published_at
                      else p.scheduled_at end) as last_at,
             (select min(n.scheduled_at) from posts n
-               join channels nc on nc.id = n.channel_id and nc.active
               where n.endpoint_id = e.id
                 and n.status in ('scheduled', 'approved', 'pending_approval', 'publishing')
                 and n.scheduled_at >= now()
                 and not (n.auto_hole and n.content_id is null)
-                and not exists (select 1 from content_items nci
-                                  join campaigns nca on nca.id = nci.campaign_id
-                                 where nci.id = n.content_id and nca.paused_at is not null)
+                and ${postIsLiveSql('n')}
             ) as next_at
        from endpoints e
        left join posts p on p.endpoint_id = e.id

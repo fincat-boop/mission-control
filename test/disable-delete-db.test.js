@@ -1,0 +1,297 @@
+import './_env.js';
+import { after, before, test } from 'node:test';
+import assert from 'node:assert/strict';
+
+/**
+ * שלב 4 של שיפורי ההתנהגות (docs/behavior-improvements.md) מול Postgres אמיתי:
+ *   16 — נקודה / ערוץ מושבתים = כמו קמפיין מושהה (לוח, טיק, נתחים, התראות,
+ *        שלב הקמפיין), הפעלה מחדש מחזירה מאושר שעבר לאישור, מחיקת נקודה
+ *        מוחקת את הפוסטים העתידיים שלה.
+ *   22 — מחיקת תוכן מורידה את הפוסטים העתידיים שלו שלא פורסמו.
+ *   ב2 — העוזר: אותן בדיקות כמו PATCH /posts, get_tasks כמו הטאב.
+ *
+ * רץ רק במפורש, ורק מול מסד מקומי:
+ *   LINKS_TEST_DB=1 DATABASE_URL=postgres://postgres@localhost:5434/<עותק> node --test test/disable-delete-db.test.js
+ * כל הרצה בארגון חדש משלה.
+ */
+const DB_URL = process.env.DATABASE_URL ?? '';
+const RUN = process.env.LINKS_TEST_DB === '1' && /@(localhost|127\.0\.0\.1)[:/]/.test(DB_URL);
+const skip = RUN ? false : 'מסד בדיקה מקומי לא הוגדר (LINKS_TEST_DB=1 + DATABASE_URL מקומי)';
+
+let db, server, base, org, ids;
+const pending = new Set();
+const currentUser = { id: null, name: 'בדיקה', is_owner: true };
+
+async function call(method, path, body) {
+  const res = await fetch(`${base}${path}`, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => null);
+  await Promise.all([...pending]);
+  return { status: res.status, json };
+}
+
+const inOrg = (fn) => db.withOrg(org, fn);
+const q1 = (sql, params) => inOrg(() => db.one(sql, params));
+const qa = (sql, params) => inOrg(() => db.rows(sql, params));
+
+const DAY = 86400000;
+/** מועד עגול: days ימים מהיום, בשעה hour (שעון מקומי) */
+function at(days, hour = 10) {
+  const d = new Date(Date.now() + days * DAY);
+  d.setHours(hour, 0, 0, 0);
+  return d.toISOString();
+}
+const minutes = (m) => new Date(Date.now() + m * 60000).toISOString();
+
+/** נקודת קצה חדשה (שם ייחודי) */
+async function endpoint(name, active = true) {
+  return (await q1('insert into endpoints (name, importance, active) values ($1, 5, $2) returning id',
+    [`${name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, active])).id;
+}
+
+/** תוכן מוכן לערוצים (גרסה מוכנה לכל אחד) */
+async function content(ep, channels, { campaign = null, title = 'תוכן' } = {}) {
+  return inOrg(async () => {
+    const ci = (await db.one(
+      `insert into content_items (endpoint_id, campaign_id, kind, title) values ($1,$2,'value',$3) returning id`,
+      [ep, campaign, title])).id;
+    for (const ch of channels) {
+      await db.query(
+        "insert into content_variants (content_id, channel_id, status, body) values ($1,$2,'ready','טקסט מוכן')",
+        [ci, ch]);
+    }
+    return ci;
+  });
+}
+
+/** פוסט ישירות במסד. when — ISO */
+async function post({ channel = ids.fb, ep, contentId = null, title = 'פוסט', when, status = 'scheduled',
+                      autoHole = false, publishedAt = null } = {}) {
+  return (await q1(
+    `insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at, status, auto_hole,
+                        published_at)
+     values ($1,$2,$3,$4,'value',$5,$6,$7,$8) returning id`,
+    [channel, ep, contentId, title, when, status, autoHole, publishedAt])).id;
+}
+
+const statusOf = async (id) => (await q1('select status from posts where id = $1', [id]))?.status ?? null;
+
+before(async () => {
+  if (!RUN) return;
+  db = await import('../src/db.js');
+  const { default: express } = await import('express');
+  const routes = await Promise.all(['board', 'tasks', 'endpoints', 'channels', 'content']
+    .map(async (n) => (await import(`../src/routes/${n}.js`)).default));
+  const { encryptSecret } = await import('../src/publish/crypto.js');
+
+  await db.migrate();
+  org = (await db.pool.query("insert into orgs (name) values ('disable-delete-test') returning id")).rows[0].id;
+  ids = await inOrg(async () => {
+    await db.query('insert into engine_settings default values');
+    const ch = async (name, platform) => (await db.one(
+      'insert into channels (name, platform, max_per_week) values ($1,$2,20) returning id',
+      [name, platform])).id;
+    const fb = await ch('פייסבוק', 'facebook');
+    const ig = await ch('אינסטגרם', 'instagram');
+    await db.query(
+      `insert into channel_connections (channel_id, page_id, access_token_enc, auto_enabled)
+       values ($1, '9', $2, true)`, [fb, encryptSecret('tok')]);
+    return { fb, ig };
+  });
+
+  const app = express();
+  app.use(express.json());
+  app.use((req, res, next) => {
+    req.user = currentUser;
+    const p = db.withOrg(org, () => new Promise((resolve) => {
+      res.on('finish', resolve);
+      res.on('close', resolve);
+      next();
+    })).catch(() => {}).finally(() => pending.delete(p));
+    pending.add(p);
+  });
+  for (const r of routes) app.use(r);
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, _req, res, _next) => res.status(500).json({ error: err.message }));
+  server = app.listen(0);
+  base = `http://localhost:${server.address().port}`;
+});
+
+after(async () => {
+  if (!RUN) return;
+  server?.close();
+  await db.pool.end();
+});
+
+/* ========================= 16 — נקודה מושבתת ========================= */
+
+test('16 — נקודה מושבתת: יורדת מהלוח לרשימת המוחזקים, ונספרת בחלון האישור', { skip }, async () => {
+  const { buildBoard } = await import('../src/board.js');
+  const live = await endpoint('חיה');
+  const off = await endpoint('מושבתת');
+  const when = at(2);
+  const kept = await post({ ep: live, when, title: 'נשאר' });
+  const held = await post({ ep: off, when, title: 'מוחזק' });
+  const approved = await post({ ep: off, channel: ids.ig, when, title: 'מאושר', status: 'approved' });
+
+  const impact = await call('GET', `/endpoints/${off}/delete-impact`);
+  assert.equal(impact.json.impact.future_posts, 2);
+  assert.equal(impact.json.impact.future_approved, 1);
+
+  const r = await call('PATCH', `/endpoints/${off}`, { active: false });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+
+  const b = await inOrg(() => buildBoard(when));
+  const onGrid = b.channels.flatMap((c) => c.days.flatMap((d) => d.posts.map((p) => p.id)));
+  assert.ok(onGrid.includes(kept));
+  assert.ok(!onGrid.includes(held) && !onGrid.includes(approved));
+  const h = b.held_endpoints.find((x) => x.id === off);
+  assert.equal(h?.n, 2, JSON.stringify(b.held_endpoints));
+  // מה שנספר בסיכום הוא רק מה שעל הלוח
+  assert.equal(b.summary.total, onGrid.length);
+});
+
+test('16 — נקודה מושבתת: הקמפיין שלה לא מתחרה על נתח, ושלב "הנקודה מושבתת"', { skip }, async () => {
+  const { CAMPAIGNS_WEIGHTED_SQL, campaignsWithHealth } = await import('../src/campaigns.js');
+  const { normalizeShares } = await import('../src/capacity.js');
+  const live = await endpoint('נתח-חיה');
+  const off = await endpoint('נתח-מושבתת');
+  const start = at(-3).slice(0, 10);
+  const end = at(20).slice(0, 10);
+  const mk = (ep, name) => q1(
+    `insert into campaigns (endpoint_id, name, starts_on, ends_on) values ($1,$2,$3,$4) returning id`,
+    [ep, name, start, end]);
+  const cLive = (await mk(live, 'רץ')).id;
+  const cOff = (await mk(off, 'בנקודה מושבתת')).id;
+  await call('PATCH', `/endpoints/${off}`, { active: false });
+
+  const today = at(0).slice(0, 10);
+  const shares = normalizeShares(await qa(CAMPAIGNS_WEIGHTED_SQL), { from: today, to: today });
+  assert.ok(shares.has(cLive));
+  assert.ok(!shares.has(cOff), 'קמפיין של נקודה מושבתת לא מקבל נתח');
+
+  const list = await inOrg(() => campaignsWithHealth());
+  const c = list.find((x) => x.id === cOff);
+  assert.equal(c.phase, 'paused');
+  assert.equal(c.status.key, 'endpoint_off');
+  assert.equal(c.status.label, 'הנקודה מושבתת');
+  assert.equal(list.find((x) => x.id === cLive).phase, 'running');
+});
+
+test('16 — נקודה / ערוץ מושבתים: בלי התראות חסר תוכן, נכשל, ממתין לאישור ולא סומן כפורסם', { skip }, async () => {
+  const { buildAlerts } = await import('../src/alerts.js');
+  const { unconfirmedPosts } = await import('../src/unconfirmed.js');
+  const live = await endpoint('התראות-חיה');
+  const off = await endpoint('התראות-מושבתת');
+  const chOff = (await q1(
+    "insert into channels (name, platform, max_per_week) values ('ערוץ כבוי', 'manual', 7) returning id")).id;
+
+  const make = async (ep, channel) => ({
+    hole: await post({ ep, channel, when: minutes(60 * 5), title: 'חור', autoHole: true }),
+    failed: await post({ ep, channel, when: minutes(-60), title: 'נכשל', status: 'failed' }),
+    pend: await post({ ep, channel, when: at(1), title: 'ממתין', status: 'pending_approval' }),
+    past: await post({ ep, channel, contentId: await content(ep, [channel]), when: minutes(-180),
+                       title: 'עבר' }),
+  });
+  const a = await make(live, ids.fb);
+  const b = await make(off, ids.fb);
+  const c = await make(live, chOff);
+  await call('PATCH', `/endpoints/${off}`, { active: false });
+  await call('PATCH', `/channels/${chOff}`, { active: false });
+
+  const { alerts } = await inOrg(() => buildAlerts(null));
+  const has = (id) => alerts.some((x) => x.id === id);
+  // הביקורת: אותם פוסטים בנקודה ובערוץ פעילים — מתריעים
+  assert.ok(has(`no-text-${a.hole}`) && has(`post-failed-${a.failed}`) && has(`approval-${a.pend}`),
+    alerts.map((x) => x.id).join(' '));
+  for (const x of [b, c]) {
+    assert.ok(!has(`no-text-${x.hole}`), 'חסר תוכן');
+    assert.ok(!has(`post-failed-${x.failed}`), 'נכשל');
+    assert.ok(!has(`approval-${x.pend}`), 'ממתין לאישור');
+  }
+  const unconf = (await inOrg(() => unconfirmedPosts())).map((p) => p.id);
+  assert.ok(unconf.includes(a.past));
+  assert.ok(!unconf.includes(b.past) && !unconf.includes(c.past));
+});
+
+test('16 — הטיק לא מפרסם פוסט מאושר של נקודה מושבתת', { skip }, async () => {
+  const runner = await import('../src/publish/runner.js');
+  const live = await endpoint('טיק-חיה');
+  const off = await endpoint('טיק-מושבתת', false);
+  // רק הפוסטים של הבדיקה הזו מאושרים בארגון
+  await inOrg(() => db.query("update posts set status = 'scheduled' where status = 'approved'"));
+  const go = await post({ ep: live, contentId: await content(live, [ids.fb]), when: minutes(-1),
+                          status: 'approved', title: 'יוצא' });
+  const stay = await post({ ep: off, contentId: await content(off, [ids.fb]), when: minutes(-1),
+                            status: 'approved', title: 'מוחזק' });
+  await inOrg(() => db.query('update engine_settings set autopublish_enabled = true'));
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ id: `9_${calls.length}` }), { status: 200 });
+  };
+  try {
+    await runner.publishTickForOrg(org);
+  } finally {
+    globalThis.fetch = realFetch;
+    await inOrg(() => db.query('update engine_settings set autopublish_enabled = false'));
+  }
+  assert.equal(await statusOf(go), 'published');
+  assert.equal(await statusOf(stay), 'approved');
+  assert.equal(calls.filter((u) => u.includes('/9/feed')).length, 1);
+});
+
+test('16 — הפעלה מחדש: מאושר שהמועד שלו עבר בזמן ההשבתה חוזר לאישור; עתידי נשאר מאושר', { skip }, async () => {
+  const ep = await endpoint('הפעלה', false);
+  const missed = await post({ ep, when: minutes(-120), status: 'approved', title: 'פוספס' });
+  const future = await post({ ep, when: at(3), status: 'approved', title: 'עתידי' });
+  const r = await call('PATCH', `/endpoints/${ep}`, { active: true });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.approval_reset, 1);
+  assert.equal(await statusOf(missed), 'scheduled');
+  assert.equal(await statusOf(future), 'approved');
+  // שמירה שלא משנה את מצב ההפעלה — לא נוגעת
+  const again = await call('PATCH', `/endpoints/${ep}`, { importance: 6 });
+  assert.equal(again.json.approval_reset, 0);
+
+  const ch = (await q1(
+    "insert into channels (name, platform, max_per_week, active) values ('חוזר', 'manual', 7, false) returning id")).id;
+  const chMissed = await post({ ep, channel: ch, when: minutes(-90), status: 'approved', title: 'ערוץ פוספס' });
+  const rc = await call('PATCH', `/channels/${ch}`, { active: true });
+  assert.equal(rc.json.approval_reset, 1);
+  assert.equal(await statusOf(chMissed), 'scheduled');
+});
+
+test('16 — ערוץ: חלון ההשבתה סופר פוסטים עתידיים שיוחזקו', { skip }, async () => {
+  const ep = await endpoint('ערוץ-ספירה');
+  const ch = (await q1(
+    "insert into channels (name, platform, max_per_week) values ('לספירה', 'manual', 7) returning id")).id;
+  await post({ ep, channel: ch, when: at(2) });
+  await post({ ep, channel: ch, when: at(3), status: 'approved' });
+  await post({ ep, channel: ch, when: minutes(-60) });
+  await post({ ep, channel: ch, when: at(-5), status: 'published', publishedAt: at(-5) });
+  const r = await call('GET', `/channels/${ch}/delete-impact`);
+  assert.equal(r.json.impact.future_posts, 2);
+  assert.equal(r.json.impact.future_approved, 1);
+});
+
+test('16 — מחיקת נקודה: הפוסטים העתידיים שלה שלא פורסמו נמחקים; פורסם ועבר נשארים', { skip }, async () => {
+  const ep = await endpoint('למחיקה');
+  const ci = await content(ep, [ids.fb]);
+  const future = await post({ ep, contentId: ci, when: at(4), title: 'עתידי' });
+  const futureApproved = await post({ ep, channel: ids.ig, when: at(5), status: 'approved' });
+  const published = await post({ ep, contentId: ci, when: at(-4), status: 'published', publishedAt: at(-4) });
+  const past = await post({ ep, when: minutes(-300), title: 'עבר' });
+
+  const r = await call('DELETE', `/endpoints/${ep}?force=1`);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.removed_posts, 2);
+  const left = await qa('select id, endpoint_id, content_id from posts where id = any($1)',
+    [[future, futureApproved, published, past]]);
+  assert.deepEqual(left.map((p) => p.id).sort((x, y) => x - y), [published, past].sort((x, y) => x - y));
+  assert.ok(left.every((p) => p.endpoint_id === null));
+});

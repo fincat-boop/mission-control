@@ -15,6 +15,7 @@ import {
 } from './newsletter.js';
 import { contentBlocker, coverAsset, isStory, postMedia } from './readiness.js';
 import { LOCAL_TZ, localYmd } from '../task-lifecycle.js';
+import { endpointLiveSql } from '../live.js';
 
 /**
  * מסלול הפרסום האוטומטי.
@@ -322,8 +323,8 @@ async function recordCommentFailed(post, comment, err) {
  * באמצע (failStuckPublishing).
  * $3 (dueOnly, הטיק) — בודקים שוב, ברגע התפיסה, את כל מה שהכניס את הפוסט
  * לרשימת הטיק: הזמן הגיע, המתג של הארגון דולק, הערוץ פעיל ובפרסום
- * אוטומטי, הקמפיין לא מושהה. פוסט שהוזז קדימה, הושהה או שהערוץ שלו כובה
- * בזמן שהטיק עבר על הרשימה — לא יוצא.
+ * אוטומטי, הקמפיין לא מושהה, הנקודה לא מושבתת. פוסט שהוזז קדימה, הושהה או
+ * שהערוץ / הנקודה שלו כובו בזמן שהטיק עבר על הרשימה — לא יוצא.
  */
 const CLAIM_SQL =
   `update posts p set status = 'publishing', publishing_started_at = now()
@@ -336,7 +337,8 @@ const CLAIM_SQL =
                      where c.id = p.channel_id and c.active and cc.auto_enabled)
         and not exists (select 1 from content_items ci
                           join campaigns ca on ca.id = ci.campaign_id
-                         where ci.id = p.content_id and ca.paused_at is not null)))
+                         where ci.id = p.content_id and ca.paused_at is not null)
+        and ${endpointLiveSql('p')}))
     returning p.id`;
 
 /** הפוסט עלה, אבל שמירת התוצאה נכשלה פעמיים — לעולם לא מפרסמים שוב לבד */
@@ -576,7 +578,7 @@ export async function publishTickForOrg(orgId = currentOrg()) {
   await tickStep(orgId, 'בדיקת ניוזלטרים שלא הועברו נכשלה:', newsletterNotTransferred);
 
   // פוסטים שאושרו והגיע זמנם. איחור גדול מדי לא מתפרסם — נכשל עם הסבר.
-  // קמפיין מושהה לא יוצא — גם פוסט שאושר לפני ההשהיה (הלוח כבר מסתיר אותו).
+  // קמפיין מושהה / נקודה מושבתת — לא יוצא, גם פוסט שאושר לפני (הלוח מסתיר אותו).
   // ניוזלטר לא כאן: הוא לא נשלח מהטיק (newsletterNotTransferred / transferNewsletter).
   // התפיסה של כל פוסט בודקת את כל זה שוב (CLAIM_SQL) — הרשימה יכולה להתיישן.
   const due = (await tickStep(orgId, 'שליפת הפוסטים שהגיע זמנם נכשלה:', async () => {
@@ -592,6 +594,7 @@ export async function publishTickForOrg(orgId = currentOrg()) {
           and not exists (select 1 from content_items ci
                             join campaigns ca on ca.id = ci.campaign_id
                            where ci.id = p.content_id and ca.paused_at is not null)
+          and ${endpointLiveSql('p')}
         order by p.scheduled_at`,
       [MAX_LATE_HOURS]
     );
@@ -811,7 +814,8 @@ export async function manualPublishPrep(orgId, now = new Date()) {
                  and exists (select 1 from engine_settings s where s.autopublish_enabled))
         and not exists (select 1 from content_items ci
                           join campaigns ca on ca.id = ci.campaign_id
-                         where ci.id = p.content_id and ca.paused_at is not null)`,
+                         where ci.id = p.content_id and ca.paused_at is not null)
+        and ${endpointLiveSql('p')}`,
     [today]
   ))) ?? [];
 
@@ -878,6 +882,7 @@ async function newsletterNotTransferred() {
         and not exists (select 1 from content_items ci
                           join campaigns ca on ca.id = ci.campaign_id
                          where ci.id = p.content_id and ca.paused_at is not null)
+        and ${endpointLiveSql('p')}
       order by p.scheduled_at`,
     [NOT_TRANSFERRED_WINDOW_HOURS]
   );

@@ -82,14 +82,17 @@ function overlaps(c, from, to) {
  * לא מוקצית לאף קמפיין (היא של התוכן השוטף).
  *
  * @param campaigns שורות עם id, endpoint_id, share_pct, active, paused_at,
- *        starts_on, ends_on, endpoint_importance (CAMPAIGNS_WEIGHTED_SQL)
+ *        starts_on, ends_on, endpoint_importance, endpoint_active (CAMPAIGNS_WEIGHTED_SQL;
+ *        נקודה מושבתת — לא מתחרה, כמו מושהה)
  * @returns {Map<number|'draft', number>} מפתח = shareKey(c), נתח 0..1.
  *          קמפיין שלא מתחרה בטווח לא מופיע במפה.
  */
 export function normalizeShares(campaigns, { from = null, to = null } = {}) {
   const f = ymdOf(from);
   const t = ymdOf(to);
-  const live = campaigns.filter((c) => c.active && !c.paused_at && overlaps(c, f, t));
+  // נקודה מושבתת = כמו השהיה (סעיף 16). שורה בלי endpoint_active — פעילה
+  const live = campaigns.filter((c) => c.active && !c.paused_at && c.endpoint_active !== false &&
+    overlaps(c, f, t));
 
   const out = new Map();
   const explicit = live.filter((c) => c.share_pct != null);
@@ -183,6 +186,7 @@ export function shareOf(campaign, concurrent = []) {
     endpoint_importance: campaign.endpoint_importance ?? listed?.endpoint_importance,
     active: true,
     paused_at: null,
+    endpoint_active: true,
   };
   const key = shareKey(self);
   const others = concurrent.filter((x) => shareKey(x) !== key);
@@ -212,7 +216,7 @@ export function siblingsOf(campaign, concurrent, channelId) {
   const t = ymdOf(campaign.ends_on);
   const others = concurrent.filter((x) => shareKey(x) !== key &&
     Number(x.endpoint_id) === Number(campaign.endpoint_id) &&
-    x.active && !x.paused_at && overlaps(x, f, t) &&
+    x.active && !x.paused_at && x.endpoint_active !== false && overlaps(x, f, t) &&
     (x.channel_ids ?? []).map(Number).includes(Number(channelId)));
   const order = (c) => (c.id == null ? Infinity : Number(c.id));
   const rank = others.filter((x) => order(x) < order(campaign)).length;
