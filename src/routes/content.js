@@ -2,12 +2,13 @@ import { Router } from 'express';
 import { requirePerm } from '../auth.js';
 import {
   autoFill, autoFillCampaign, bad, lockEngineOr503, parseIdList, releaseHeld, titleFromFilename,
-  updateById, upload, wrap,
+  mediaUpload, updateById, upload, wrap,
 } from './_shared.js';
 import { propagateKind, revalidateCampaignPosts } from '../campaign-shift.js';
 import { currentOrg, one, query, rows, tx } from '../db.js';
 import {
-  MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isOwnKey, mediaReady, mediaStore, mediaUrl,
+  MAX_MEDIA_BYTES, TRASH_DAYS, assetView, headMime, isInlineSafeMime, isOwnKey, mediaReady, mediaStore,
+  mediaUrl,
   newMediaKey, uploadSignedHeaders, validateSignRequest, verifyUploaded,
 } from '../media.js';
 import {
@@ -832,7 +833,7 @@ async function ensureVariant(contentId, channelId) {
 }
 
 /** קבצים משותפים לכל המדיות של הזווית */
-r.post('/content/:id/assets', requirePerm('content'), upload.array('files'),
+r.post('/content/:id/assets', requirePerm('content'), mediaUpload.array('files'),
   wrap(async (req, res) => {
     // משבצת מקושרת: הקובץ נרשם על המקור, ומשם כל הקבוצה רואה אותו
     const owner = await mediaOwner(req.params.id);
@@ -871,7 +872,7 @@ r.post('/content/:id/copy-assets', requirePerm('content'), wrap(async (req, res)
 
 /** קבצים ששייכים לגרסה של מדיה אחת — הריל, התמונה המרובעת וכדומה */
 r.post('/content/:id/variants/:channelId/assets', requirePerm('content'),
-  upload.array('files'), wrap(async (req, res) => {
+  mediaUpload.array('files'), wrap(async (req, res) => {
     const slotErr = await slotChannelError(req.params.id, req.params.channelId);
     if (slotErr) return bad(res, slotErr);
     const owner = await mediaOwner(req.params.id, req.params.channelId);
@@ -1011,10 +1012,17 @@ r.get('/assets/:id', wrap(async (req, res) => {
     if (!url) return bad(res, 'הכתובת הציבורית של המדיה לא מוגדרת (R2_PUBLIC_BASE_URL)', 503);
     return res.redirect(302, url);
   }
-  res.setHeader('Content-Type', a.mime);
-  // inline כדי שתמונות ייפתחו בתצוגה מקדימה ולא ירדו כקובץ
+  // inline רק לסוגים בטוחים (תמונה/וידאו/אודיו/PDF) — שייפתחו בתצוגה מקדימה.
+  // כל השאר יורד כקובץ בסוג גנרי: קובץ HTML/JS/SVG שנשמר במסלול הישן לפני
+  // שהסוג נבדק היה רץ כדף מהדומיין שלנו, עם הקוקי של מי שפתח (isInlineSafeMime).
+  const inline = isInlineSafeMime(a.mime);
+  res.setHeader('Content-Type', inline ? a.mime : 'application/octet-stream');
   res.setHeader('Content-Disposition',
-    `inline; filename*=UTF-8''${encodeURIComponent(a.filename)}`);
+    `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.filename)}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // רשת ביטחון לתמונה/וידאו שנפתחים בלשונית: בלי סקריפטים ובלי המקור שלנו.
+  // לא על PDF — מציג ה-PDF של Chrome לא נטען בדף sandbox.
+  if (!/^application\/pdf$/i.test(a.mime)) res.setHeader('Content-Security-Policy', 'sandbox');
   res.send(a.data);
 }));
 
@@ -1192,7 +1200,7 @@ async function bulkGeneral(req, res, campaign, kind, files, attach) {
 }
 
 /** העלאה מרוכזת — multipart, הבייטים נשמרים במסד */
-r.post('/campaigns/:id/bulk', requirePerm('content'), upload.array('files'),
+r.post('/campaigns/:id/bulk', requirePerm('content'), mediaUpload.array('files'),
   wrap(async (req, res) => {
     const files = (req.files ?? []).map((f) => ({ ...f, filename: f.originalname }));
     await bulkAngles(req, res, files, (client, contentId, i) => client.query(

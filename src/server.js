@@ -106,6 +106,8 @@ app.use((err, _req, res, _next) => {
   if (err?.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({ error: `הקובץ גדול מדי — עד ${MAX_FILE_MB}MB לקובץ` });
   }
+  // סוג קובץ שלא ברשימה (mediaUpload ב-_shared.js)
+  if (err?.code === 'UNSUPPORTED_MEDIA_TYPE') return res.status(415).json({ error: err.message });
   if (err?.code === 'LIMIT_FILE_COUNT') {
     return res.status(413).json({ error: 'יותר מדי קבצים בבת אחת — עד 20' });
   }
