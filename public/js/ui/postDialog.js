@@ -223,9 +223,11 @@ async function showReschedule(post) {
     ? 'אחרי שהמועד יישמר הפוסט יאושר לפרסום אוטומטי, ויתפרסם במועד החדש.'
     : post.status === 'approved'
       ? 'האישור לפרסום אוטומטי נשאר — הפוסט יתפרסם במועד החדש.'
-      : post.status === 'failed'
+      : post.status === 'failed' && state.autopublish
         ? 'הפוסט יישאר מסומן "נכשל" עד שמישהו עם הרשאת אישור יאשר אותו שוב.'
-        : '';
+        : post.status === 'failed'
+          ? 'הפוסט יחזור למתוכנן במועד החדש — מפרסמים בעצמכם ומסמנים "פורסם".'
+          : '';
   box.hidden = false;
   box.innerHTML = `
     <div class="pvbox-title">מועד חדש</div>
@@ -546,7 +548,8 @@ const MISSED_CHIP = ['עבר המועד', 'warn'];
  * בפוטר. הסדר: קודם מה שהמצב מזמין, עריכה באמצע, הסרה אחרונה אחרי מפריד.
  */
 function menuKeys(post, f, p) {
-  const connected = AUTO_PLATFORMS.includes(post.platform) && post.autopub_connected;
+  // פרסום אוטומטי כבוי (state.autopublish) — בלי "פרסם עכשיו" / "בטל אישור"
+  const connected = f.autopublish && AUTO_PLATFORMS.includes(post.platform) && post.autopub_connected;
   const future = new Date(post.scheduled_at) > new Date();
   const menu = [];
   if (post.platform === 'newsletter') return newsletterMenuKeys(post, f, p, future);
@@ -557,7 +560,7 @@ function menuKeys(post, f, p) {
     if (p.content) menu.push('markPublished');
     if (p.content && !future) menu.push('reschedule');
   } else if (post.status === 'approved') {
-    if (p.approve) menu.push('unapprove', 'publishNow');
+    if (p.approve && f.autopublish) menu.push('unapprove', 'publishNow');
     if (p.content) menu.push('markPublished');
     if (p.content && isMissed(post)) menu.push('reschedule');
   } else if (post.status === 'published') {
@@ -584,7 +587,9 @@ function menuKeys(post, f, p) {
 function newsletterMenuKeys(post, f, p, future) {
   const menu = [];
   const transferable = ['scheduled', 'approved', 'failed'].includes(post.status);
-  if (transferable && future && p.approve && f.hasContent && f.variantReady) menu.push('transferHub');
+  if (transferable && future && p.approve && f.autopublish && f.hasContent && f.variantReady) {
+    menu.push('transferHub');
+  }
   if (post.external_url && ['publishing', 'published', 'failed'].includes(post.status)) menu.push('openHub');
   if (transferable && p.content) menu.push('markPublished');
   if (transferable && p.content && !future) menu.push('reschedule');
@@ -669,7 +674,7 @@ export async function openPostPreview(postId) {
   if (req !== previewReq) return; // בינתיים נפתח פוסט אחר
   const [{ post, variant, assets, results }, attempts] = data;
   previewPost = post;
-  previewFacts = postFacts(post, variant);
+  previewFacts = postFacts(post, variant, { autopublish: state.autopublish });
   renderActions(post, previewFacts);
   $('#pTabs').hidden = !editable(post);
   if (editable(post)) fillEditForm(post);
@@ -794,7 +799,9 @@ export async function openPostPreview(postId) {
       ? '<div class="pvnote">אם זה ייתקע — "שחרר פרסום תקוע" יופיע כאן אחרי 10 דקות בפרסום.</div>' : ''}
     ${post.status === 'failed'
       ? `<div class="pvwarn"><b>הפרסום האוטומטי נכשל:</b> ${esc(post.publish_error ?? 'ללא פירוט')}
-         <br>${post.platform === 'newsletter'
+         <br>${!state.autopublish
+           ? 'הפרסום האוטומטי כבוי עכשיו — אם הפוסט יצא, מסמנים "פורסם"; אם לא, קובעים מועד חדש ומפרסמים בעצמכם.'
+           : post.platform === 'newsletter'
            ? 'קובעים מועד חדש ולוחצים "העבר ל-HUB" — או, אם הניוזלטר כבר נשלח מה-HUB, מסמנים "פורסם".'
            : 'אפשר לקבוע מועד חדש ולאשר שוב, לפרסם עכשיו, או לפרסם ידנית ולסמן "פורסם".'}</div>` : ''}
     ${isMissed(post)

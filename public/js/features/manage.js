@@ -26,6 +26,7 @@ export async function renderManage() {
   rebuildEpColors();
   state.channels = channels;
   state.users = users;
+  state.autopublish = !!pub.autopublish_enabled;
 
   const ro = !can('settings'); // read-only
   const connOf = (id) => pub.connections.find((c) => c.channel_id === id) ?? null;
@@ -48,11 +49,13 @@ export async function renderManage() {
         <label class="cbline">
           <input type="checkbox" id="autopubGlobal" ${pub.autopublish_enabled ? 'checked' : ''}
                  ${ro ? 'disabled' : ''}>
-          <b>פרסום אוטומטי פעיל</b>
+          <b>פרסום אוטומטי</b>
         </label>
-        <div class="fhint">
-          המתג הראשי של כל הפרסום האוטומטי. גם כשהוא דולק — שום פוסט לא מתפרסם בלי
-          אישור של הפוסט עצמו ("אשר לפרסום אוטומטי" בחלון הפוסט).
+        <div class="fhint">${pub.autopublish_enabled
+          ? `דלוק — המתג הראשי של כל הפרסום האוטומטי. גם כשהוא דולק, שום פוסט לא מתפרסם בלי
+             אישור של הפוסט עצמו ("אשר לפרסום אוטומטי" בחלון הפוסט).`
+          : `כבוי — כל הפרסום ידני: המערכת יוצרת משימת "לפרסם היום", מפרסמים בעצמכם
+             ומסמנים פורסם.`}
         </div>
       </div>
       <div class="panel">${channels.map((c) => channelItem(c, ro, connOf(c.id), pub.hub_mail_ready)).join('')
@@ -63,7 +66,7 @@ export async function renderManage() {
     ${systemGroup(users, settings, backupsRes, ro, apiKeysRes)}`;
 
   restorePlace();
-  wireManage(ro, pub.connections, apiKeysRes);
+  wireManage(ro, pub.connections, apiKeysRes, pub);
 }
 
 /**
@@ -166,7 +169,9 @@ function connectionBlock(c, conn, ro, hubReady) {
       : '<span class="chip bad">לא מחובר</span>';
     return `${select}
       <div class="prow"><label>מערכת הדיוור (HUB)</label>${chip}</div>
-      <div class="fhint">${hubReady
+      <div class="fhint">${!state.autopublish
+        ? 'הפרסום האוטומטי כבוי — שולחים את הניוזלטר ב-HUB בעצמכם ומסמנים "פורסם". נושא וגוף נכתבים בעריכת הגרסה של ערוץ המייל בתוכן.'
+        : hubReady
         ? 'הניוזלטר נשלח דרך ה-HUB: נושא, גוף ורשימות יעד נקבעים בעריכת הגרסה של ערוץ המייל בתוכן. פרסום רק אחרי אישור של כל פוסט.'
         : 'חסרים HUB_API_URL / HUB_API_KEY בשרת (Railway). עד אז אין פרסום אוטומטי לערוץ — אפשר לשבץ ולסמן "פורסם" ידנית.'}</div>`;
   }
@@ -180,7 +185,7 @@ function connectionBlock(c, conn, ro, hubReady) {
     : conn.last_check_ok === false
       ? '<span class="chip bad">בעיה בחיבור</span>'
       : conn.last_check_ok
-        ? `<span class="chip on">מחובר${conn.auto_enabled ? ' · פרסום אוטומטי פעיל' : ''}</span>`
+        ? `<span class="chip on">מחובר${conn.auto_enabled && state.autopublish ? ' · פרסום אוטומטי פעיל' : ''}</span>`
         : '<span class="chip">נשמר, עוד לא נבדק</span>';
 
   return `${select}
@@ -197,13 +202,14 @@ function connectionBlock(c, conn, ro, hubReady) {
              placeholder="${conn?.has_token ? 'שמור ✓ — מזינים רק כדי להחליף' : 'מדביקים כאן'}"
              ${ro ? 'disabled' : ''}>
     </div>
-    <div class="prow">
+    ${state.autopublish ? `<div class="prow">
       <label class="cbline">
         <input type="checkbox" data-conn-auto="${c.id}"
                ${conn?.auto_enabled ? 'checked' : ''} ${ro ? 'disabled' : ''}>
         פרסום אוטומטי לערוץ הזה
       </label>
-    </div>
+    </div>` : `<div class="fhint">החיבור משמש לתובנות. הפרסום האוטומטי כבוי לכל המערכת
+      (המתג למעלה) — מפרסמים בעצמכם ומסמנים "פורסם".</div>`}
     ${ro ? '' : `<div class="btnrow">
       <button class="btn small primary" data-conn-save="${c.id}">שמור חיבור</button>
       ${conn?.has_token ? `<button class="btn small" data-conn-verify="${c.id}">בדוק חיבור</button>
@@ -526,7 +532,7 @@ async function teammateAdded(u) {
   toast(`ההוראות הועתקו — אפשר להדביק ל${u.name}.`);
 }
 
-function wireManage(ro, connections, apiKeysRes) {
+function wireManage(ro, connections, apiKeysRes, pubStatus) {
   wireMultiSelects($('#manage'));
   const reload = run(async () => { await renderManage(); await refreshBoard(); });
   if (apiKeysRes) wireApiKeys(apiKeysRes, run(renderManage));
@@ -580,11 +586,39 @@ function wireManage(ro, connections, apiKeysRes) {
 
   /* ---------- פרסום אוטומטי ---------- */
 
+  // כיבוי = הכול ידני מעכשיו: מאושרים ונכשלים חוזרים למתוכנן בשרת
+  // (resetToManual) — אומרים כמה לפני, ומחכים לאישור
   $('#autopubGlobal')?.addEventListener('change', run(async (e) => {
-    await api('/settings', { method: 'PATCH', body: { autopublish_enabled: e.target.checked } });
-    toast(e.target.checked
+    const on = e.target.checked;
+    if (!on) {
+      const { approved = 0, failed = 0 } = pubStatus.manual_reset ?? {};
+      const back = [
+        approved === 1 ? 'פוסט אחד שאושר לפרסום אוטומטי' : approved ? `${approved} פוסטים שאושרו לפרסום אוטומטי` : '',
+        failed === 1 ? 'פוסט אחד שהפרסום שלו נכשל' : failed ? `${failed} פוסטים שהפרסום שלהם נכשל` : '',
+      ].filter(Boolean).join(' ו');
+      const ok = await confirmDialog(
+        'לכבות את הפרסום האוטומטי? מעכשיו כל הפרסום ידני: המערכת יוצרת משימת "לפרסם היום", ' +
+        'מפרסמים בעצמכם ומסמנים פורסם.' +
+        (back ? `\n${back} — ${approved + failed === 1 ? 'יחזור' : 'יחזרו'} למתוכנן.` : ''),
+        { okLabel: 'כבה פרסום אוטומטי' });
+      if (!ok) {
+        e.target.checked = true;
+        return;
+      }
+    }
+    let res;
+    try {
+      res = await api('/settings', { method: 'PATCH', body: { autopublish_enabled: on } });
+    } catch (err) {
+      e.target.checked = !on;   // לא נשמר בשרת — התיבה לא משקרת
+      throw err;
+    }
+    state.autopublish = on;
+    const n = (res.manual_reset?.approved ?? 0) + (res.manual_reset?.failed ?? 0);
+    toast(on
       ? 'הפרסום האוטומטי פעיל — יתפרסמו רק פוסטים שאושרו אחד-אחד.'
-      : 'הפרסום האוטומטי כבוי — שום פוסט לא יתפרסם לבד.');
+      : `הפרסום האוטומטי כבוי — כל הפרסום ידני.${n ? ` ${n} פוסטים חזרו למתוכנן.` : ''}`);
+    await reload();   // תיבות האוטומטי לכל ערוץ, הלוח וכפתור "אשר את השבוע"
   }));
 
   // אחרי שינוי פלטפורמה הערוץ נשאר פתוח (keepPlace), והפוקוס עובר לשדה
@@ -607,7 +641,9 @@ function wireManage(ro, connections, apiKeysRes) {
     if (idField != null) b[ch?.platform === 'instagram' ? 'ig_user_id' : 'page_id'] = idField;
     const token = $(`[data-conn-token="${id}"]`)?.value.trim();
     if (token) b.access_token = token;   // ריק = לא נוגעים בטוקן השמור
-    b.auto_enabled = $(`[data-conn-auto="${id}"]`)?.checked ?? false;
+    // הפרסום האוטומטי כבוי — התיבה לא מוצגת, והשמירה לא נוגעת בערך השמור
+    const auto = $(`[data-conn-auto="${id}"]`);
+    if (auto) b.auto_enabled = auto.checked;
     return b;
   };
 
@@ -619,7 +655,7 @@ function wireManage(ro, connections, apiKeysRes) {
     const idInput = $(`#manage [data-conn-id-field="${id}"]`);
     const dirty = (idInput && idInput.value.trim() !== idInput.defaultValue.trim())
       || !!$(`#manage [data-conn-token="${id}"]`)?.value.trim()
-      || ($(`#manage [data-conn-auto="${id}"]`)?.checked ?? false) !== !!saved?.auto_enabled;
+      || ($(`#manage [data-conn-auto="${id}"]`)?.checked ?? !!saved?.auto_enabled) !== !!saved?.auto_enabled;
     btn.classList.toggle('dirty', dirty);
     btn.textContent = dirty ? 'שמור חיבור •' : 'שמור חיבור';
   };

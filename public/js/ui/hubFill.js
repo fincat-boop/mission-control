@@ -200,8 +200,12 @@ export function newsletterPostNotes(post) {
         משנים אותם שם, במסך האישור.</div>` : ''}`;
   }
   if (['scheduled', 'approved'].includes(post.status) && new Date(post.scheduled_at) > new Date()) {
-    return `<div class="pvnote">הניוזלטר נשמר בלוח ועוד לא נשלח לשום מקום. סמוך למועד לוחצים
-      "העבר ל-HUB" — שם נוצרת טיוטה עם המועד הזה, ובעל העסק מאשר אותה.</div>`;
+    // פרסום אוטומטי כבוי (state.autopublish) — אין "העבר ל-HUB": שולחים ביד
+    return state.autopublish
+      ? `<div class="pvnote">הניוזלטר נשמר בלוח ועוד לא נשלח לשום מקום. סמוך למועד לוחצים
+      "העבר ל-HUB" — שם נוצרת טיוטה עם המועד הזה, ובעל העסק מאשר אותה.</div>`
+      : `<div class="pvnote">הפרסום האוטומטי כבוי — ביום הפרסום נוצרת משימת "לפרסם היום":
+      שולחים את הניוזלטר ב-HUB בעצמכם ומסמנים "פורסם".</div>`;
   }
   return '';
 }
@@ -394,12 +398,19 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
     if (!alive()) return;
     if (notePostAt(posts)) preview?.queue();
     const transferred = posts.some((p) => p.status === 'publishing' && p.external_id);
+    // פרסום אוטומטי כבוי (state.autopublish) — בלי "העבר ל-HUB": הניוזלטר
+    // נשלח ב-HUB ביד ומסומן "פורסם" בלוח
+    const manual = !state.autopublish;
     const intro = transferred
       ? '<div class="pvwarn">הניוזלטר כבר הועבר ל-HUB — שינויים שתשמור כאן לא יגיעו לשם. משנים במסך האישור ב-HUB.</div>'
-      : '<div class="fhint">שום דבר לא נשלח ולא נוצר ב-HUB עד "העבר ל-HUB". לוחצים סמוך למועד — שם נוצרת טיוטה עם המועד של הפוסט, ובעל העסק מאשר אותה.</div>';
+      : manual
+        ? '<div class="fhint">הפרסום האוטומטי כבוי — ביום הפרסום נוצרת משימת "לפרסם היום": שולחים את הניוזלטר ב-HUB בעצמכם ומסמנים "פורסם" בלוח.</div>'
+        : '<div class="fhint">שום דבר לא נשלח ולא נוצר ב-HUB עד "העבר ל-HUB". לוחצים סמוך למועד — שם נוצרת טיוטה עם המועד של הפוסט, ובעל העסק מאשר אותה.</div>';
     if (!posts.length) {
       box.innerHTML = `<div class="hubposts-head"><b>שליחה דרך ה-HUB</b></div>
-        <div class="fhint">הניוזלטר עוד לא משובץ בלוח. אחרי שהוא משובץ, מעבירים אותו מכאן ל-HUB לאישור.</div>`;
+        <div class="fhint">${manual
+          ? 'הניוזלטר עוד לא משובץ בלוח.'
+          : 'הניוזלטר עוד לא משובץ בלוח. אחרי שהוא משובץ, מעבירים אותו מכאן ל-HUB לאישור.'}</div>`;
       return;
     }
     box.innerHTML = `<div class="hubposts-head"><b>שליחה דרך ה-HUB</b></div>${intro}
@@ -407,6 +418,7 @@ export async function openNewsletterEditor({ item, channelId, reload }) {
         const act = newsletterPostAction(p, { ready: saved.status === 'ready', subject: saved.meta.subject ?? '' });
         const btn = act.action === 'open'
           ? `<a class="btn small" href="${esc(p.external_url)}" target="_blank" rel="noopener">פתח ב-HUB</a>`
+          : act.action === 'transfer' && manual ? ''
           : act.action === 'transfer' && can('approve')
             ? `<button type="button" class="btn small primary" data-hf-transfer="${p.id}">העבר ל-HUB</button>`
             : `<span class="d">${esc(act.action === 'transfer' ? 'העברה ל-HUB דורשת הרשאת אישור' : act.reason ?? '')}</span>`;
