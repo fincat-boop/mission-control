@@ -745,6 +745,33 @@ function openCampaignForm(campaign, reload, defaultEndpoint, { duplicate = false
  * שתי שורות צפופות: פירורי הלחם (השם הוא האחרון) עם התגים, ומתחת הפרטים
  * וחוקי ההעתקה. תפריט שלוש הנקודות בקצה השמאלי, מעל קצה הטבלה.
  */
+/* ---------- מחיקת תוכן מורידה את הפוסטים שלו (סעיף 22) ---------- */
+
+const HE_DAY_LETTER = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+/** "יום ג׳ 10.10 10:00" — שעון מקומי */
+const slotWhen = (iso) => {
+  const d = new Date(iso);
+  const p = (n) => String(n).padStart(2, '0');
+  return `יום ${HE_DAY_LETTER[d.getDay()]} ${d.getDate()}.${d.getMonth() + 1} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/**
+ * שאלת המחיקה + אילו פוסטים יורדים איתה מהלוח (העתידיים שלא פורסמו —
+ * GET /content/:id/delete-impact): עד 3 מועדים, ואז "+N". one — הנושא כשיש
+ * פוסט אחד ("הוא יורד" בחלון הפוסט, "הפוסט שלה יורד" בחלון הזווית).
+ */
+async function withBoardImpact(itemId, question, one = 'הוא יורד') {
+  const { posts } = await api(`/content/${itemId}/delete-impact`);
+  if (!posts.length) return question;
+  const when = posts.slice(0, 3).map((p) => `${slotWhen(p.scheduled_at)}${
+    posts.some((x) => x.channel_name !== posts[0].channel_name) ? ` (${p.channel_name})` : ''}`)
+    .join(', ') + (posts.length > 3 ? ` +${posts.length - 3}` : '');
+  return `${question}\n${posts.length === 1 ? `${one} גם מהלוח` : `${posts.length} פוסטים יורדים גם מהלוח`} ב${when}.`;
+}
+
+const deletedNote = (done, n) =>
+  `${done}${n ? ` — ${n === 1 ? 'פוסט אחד ירד' : `${n} פוסטים ירדו`} מהלוח` : ''}.`;
+
 function campaignHead(c) {
   const range = c.starts_on && c.ends_on
     ? `${fmtDate(c.starts_on)}–${fmtDate(c.ends_on)}` : 'ללא תאריכים';
@@ -1493,12 +1520,13 @@ function openSlotForm({ campaign, channelId, index, item }, reload, { onCreated 
           : item.linked_to_id
             ? `למחוק את הפוסט הזה? רק המשבצת הזו נמחקת — התוכן נשאר ב${names}.`
             : `למחוק את הפוסט הזה? המשבצות המקושרות (${names}) יישארו עם עותק משלהן של התוכן.`;
-        if (!(await confirmDialog(question, { okLabel: 'מחק פוסט', danger: true }))) return;
+        if (!(await confirmDialog(await withBoardImpact(item.id, question),
+          { okLabel: 'מחק פוסט', danger: true }))) return;
         auto.cancel();
         await auto.idle();
         const res = await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         await closeGeneric({ force: true });
-        engineToast(res, 'הפוסט נמחק.');
+        engineToast(res, deletedNote('הפוסט נמחק', res.removed_posts));
         await reload();
       }));
       $$('#genBody [data-unlink]').forEach((b) =>
@@ -2076,11 +2104,11 @@ function openAngleForm({ item, campaign, slot, background }, reload) {
           if (await deleteAssetAsk(b)) filesChanged = true;
         })));
       $('#genDelete')?.addEventListener('click', run(async () => {
-        if (!(await confirmDialog('למחוק את הזווית וכל הגרסאות שלה?',
+        if (!(await confirmDialog(await withBoardImpact(item.id, 'למחוק את הזווית וכל הגרסאות שלה?', 'הפוסט שלה יורד'),
           { okLabel: 'מחק זווית', danger: true }))) return;
         const res = await api(`/content/${item.id}`, { method: 'DELETE', body: { week: state.week } });
         await closeGeneric({ force: true });
-        engineToast(res, 'הזווית נמחקה.');
+        engineToast(res, deletedNote('הזווית נמחקה', res.removed_posts));
         await reload();
       }));
     },

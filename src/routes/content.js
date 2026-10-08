@@ -20,6 +20,7 @@ import {
 } from '../links.js';
 import { contentBlocker, metaExtrasError, readyRejection } from '../publish/readiness.js';
 import { STALE_VARIANT, staleVariant } from '../variant-lock.js';
+import { openPostSql } from '../live.js';
 import { deriveTitle } from '../../public/js/core/title.js';
 
 const r = Router();
@@ -764,17 +765,39 @@ async function reopenIfEmpty(campaignId) {
     [campaignId]);
 }
 
+/**
+ * הפוסטים של תוכן שיורדים איתו במחיקה (סעיף 22): עתידיים שלא פורסמו —
+ * כמו מחיקת קמפיין עם התוכן. בלי זה הם נשארו על הלוח כ"אין תוכן" אדום
+ * (ומאושר נכשל בפרסום). מה שהמועד שלו עבר נשאר בכוונה, בלי תוכן: אולי
+ * יצא ביד ולא סומן — הוא ברשימת "לא סומנו כפורסמו" עד שמישהו מחליט. מה
+ * שפורסם, או באמצע פרסום, נשאר תמיד.
+ */
+const CONTENT_POSTS_GOING = `p.content_id = $1 and ${openPostSql('p')} and p.scheduled_at >= now()`;
+
+/** לחלון האישור: אילו פוסטים יורדים מהלוח עם התוכן — מתי ובאיזה ערוץ */
+r.get('/content/:id/delete-impact', wrap(async (req, res) => {
+  const posts = await rows(
+    `select p.id, p.scheduled_at, c.name as channel_name
+       from posts p left join channels c on c.id = p.channel_id
+      where ${CONTENT_POSTS_GOING}
+      order by p.scheduled_at, p.id`, [req.params.id]);
+  res.json({ posts });
+}));
+
 r.delete('/content/:id', requirePerm('content'), wrap(async (req, res) => {
   // מקור שנמחק לא משאיר עוקבות ריקות: כל אחת נשארת עם עותק משלה (הראשונה
   // יורשת את הקבצים עצמם). עוקבת שנמחקת פשוט יוצאת מהקבוצה.
   try {
     await releaseLinks(req.params.id, { sourceGoing: true });
   } catch (e) { return linkFail(res, e); }
+  // באותה טרנזקציה של הבקשה — פוסט לא נשאר בלי תוכן אם המחיקה נכשלת
+  const posts = await rows(`delete from posts p where ${CONTENT_POSTS_GOING} returning p.id`,
+    [req.params.id]);
   const gone = await one('delete from content_items where id = $1 returning campaign_id',
     [req.params.id]);
   if (gone?.campaign_id) await reopenIfEmpty(gone.campaign_id);
   const engine = await autoFill(req.body?.week);
-  res.json({ ok: true, engine });
+  res.json({ ok: true, removed_posts: posts.length, engine });
 }));
 
 /* ========================= קבצים מצורפים ========================= */

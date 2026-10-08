@@ -295,3 +295,25 @@ test('16 — מחיקת נקודה: הפוסטים העתידיים שלה של�
   assert.deepEqual(left.map((p) => p.id).sort((x, y) => x - y), [published, past].sort((x, y) => x - y));
   assert.ok(left.every((p) => p.endpoint_id === null));
 });
+
+/* ========================= 22 — מחיקת תוכן ========================= */
+
+test('22 — מחיקת תוכן: העתידיים שלא פורסמו יורדים; פורסם, ומה שהמועד שלו עבר, נשארים', { skip }, async () => {
+  const ep = await endpoint('תוכן-למחיקה');
+  const ci = await content(ep, [ids.fb, ids.ig]);
+  const a = await post({ ep, contentId: ci, when: at(2), title: 'א' });
+  const b = await post({ ep, contentId: ci, channel: ids.ig, when: at(3), status: 'approved', title: 'ב' });
+  const pub = await post({ ep, contentId: ci, when: at(-3), status: 'published', publishedAt: at(-3) });
+  const past = await post({ ep, contentId: ci, when: minutes(-200), title: 'עבר' });
+
+  const imp = await call('GET', `/content/${ci}/delete-impact`);
+  assert.deepEqual(imp.json.posts.map((p) => p.id), [a, b]);
+  assert.ok(imp.json.posts[0].channel_name);
+
+  const r = await call('DELETE', `/content/${ci}`);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.removed_posts, 2);
+  const left = await qa('select id, content_id from posts where id = any($1) order by id', [[a, b, pub, past]]);
+  assert.deepEqual(left.map((p) => p.id), [pub, past].sort((x, y) => x - y));
+  assert.ok(left.every((p) => p.content_id === null));
+});
