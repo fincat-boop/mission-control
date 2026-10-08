@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { pool, query, rows, one } from './db.js';
 import { ymd } from './board.js';
 import {
-  addGroupDay, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES, linkDayTaken, nearestDays,
-  removeGroupDay, takesRoom,
+  addGroupDay, addPairGap, COMPLETE_SPREAD_COLUMNS, gapViolation, LINK_LIVE_STATUSES, linkDayTaken,
+  ownGapDays, removeGroupDay, takesRoom,
 } from './engine.js';
 import { windowAllows } from './respace.js';
 import { gapOn } from './capacity.js';
@@ -17,7 +17,7 @@ import { loadGapContext } from './capacity-db.js';
  * הכלל נאכף במנוע ובמבצע הדחוף, אבל נתונים שנוצרו לפניו — או שיבוץ ידני —
  * יכולים עדיין להכיל התנגשויות. הסקריפט מזיז את המאוחר יותר ליום החוקי הבא
  * (עד שבועיים קדימה): לא יום חסום בערוץ, לא יום שכבר יש בו פוסט של הנקודה
- * בערוץ, במרווח של הקמפיין של הפוסט (contentGap) מהשכן הקרוב לשני הכיוונים,
+ * בערוץ, במרווח מול כל שכן (pairGap — המפורש של הפוסט ושל השכן) לשני הכיוונים,
  * בתוך חלון הקמפיין ולא לפני התאריך המתוכנן בקמפיין מוכן (windowAllows, כמו
  * ב-respace), לא מעבר ל-max_promo_per_day, ולא ליום שבו כבר יוצא פוסט מקושר
  * מאותה קבוצה (links_apart של הקמפיין, בכל ערוץ). השעה נשמרת; תפוסה בערוץ —
@@ -69,12 +69,15 @@ export function planClashFixes(posts, { channels = [], settings = null, now = ne
   const linkClash = (p, key) => linked(p) && p.campaign_links_apart !== false &&
     linkDayTaken(groupDays, groupRoot(p), p.content_id, key);
 
-  // כל הימים התפוסים לכל נקודה+ערוץ — מולם נבדקים אותו יום והמרווח
+  // כל הימים התפוסים לכל נקודה+ערוץ — מולם נבדקים אותו יום והמרווח;
+  // pairGaps — המרווח המפורש של הקמפיין של כל שכן (pairGap דרך gapViolation)
   const pairs = new Map();
+  const pairGaps = new Map();
   const byDay = new Map();
   for (const p of live) {
     const pair = `${p.endpoint_id}:${p.channel_id}`;
     pairs.set(pair, [...(pairs.get(pair) ?? []), dayOf(p)]);
+    addPairGap(pairGaps, pair, dayOf(p), ownGapDays(p));
     const key = `${pair}:${dayOf(p)}`;
     byDay.set(key, [...(byDay.get(key) ?? []), p]);
   }
@@ -93,20 +96,25 @@ export function planClashFixes(posts, { channels = [], settings = null, now = ne
                 stay, moves: [], stuck: [] };
 
     for (const p of go) {
-      const list = pairs.get(`${p.endpoint_id}:${p.channel_id}`);
+      const pair = `${p.endpoint_id}:${p.channel_id}`;
+      const list = pairs.get(pair);
+      const gapsAt = pairGaps.get(pair);
       // הפוסט עצמו זז — הוא לא שכן של עצמו, לא תופס את השעה שלו ולא נספר ביום שלו
       list.splice(list.indexOf(dayOf(p)), 1);
+      const ownAt = gapsAt.get(dayOf(p));
+      ownAt.splice(ownAt.indexOf(ownGapDays(p)), 1);
       hours.delete(`${p.channel_id}:${dayOf(p)}:${hourOf(p)}`);
       if (p.kind === 'promo') addPromo(dayOf(p), -1);
       if (linked(p)) removeGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
-      const gap = contentGap(p, settings, gapOn(gapCtx, p.channel_id));
+      const on = gapOn(gapCtx, p.channel_id);
       let to = null;
       for (let d = 1; d <= LOOKAHEAD_DAYS && !to; d += 1) {
         const at = new Date(p.scheduled_at);
         at.setDate(at.getDate() + d);
         const key = ymd(at);
         if ((blocked.get(p.channel_id) ?? []).includes(at.getDay())) continue;
-        if (list.includes(key) || nearestDays(list, key) < gap) continue;
+        if (list.includes(key) ||
+            gapViolation(ownGapDays(p), list, key, gapsAt, settings, on) != null) continue;
         if (!windowAllows(p, key)) continue;
         if (p.kind === 'promo' && (promo.get(key) ?? 0) >= maxPromoPerDay) continue;
         if (linkClash(p, key)) continue;
@@ -118,6 +126,7 @@ export function planClashFixes(posts, { channels = [], settings = null, now = ne
       }
       if (!to) {
         list.push(dayOf(p));
+        ownAt.push(ownGapDays(p));
         hours.add(`${p.channel_id}:${dayOf(p)}:${hourOf(p)}`);
         if (p.kind === 'promo') addPromo(dayOf(p), 1);
         if (linked(p)) addGroupDay(groupDays, groupRoot(p), p.content_id, dayOf(p));
@@ -125,6 +134,7 @@ export function planClashFixes(posts, { channels = [], settings = null, now = ne
         continue;
       }
       list.push(ymd(to));
+      addPairGap(pairGaps, pair, ymd(to), ownGapDays(p));
       hours.add(`${p.channel_id}:${ymd(to)}:${to.getHours()}`);
       if (p.kind === 'promo') addPromo(ymd(to), 1);
       if (linked(p)) addGroupDay(groupDays, groupRoot(p), p.content_id, ymd(to));

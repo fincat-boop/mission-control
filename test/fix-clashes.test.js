@@ -128,3 +128,12 @@ test('planClashFixes — שעה תפוסה בערוץ: השעה הפנויה ה�
   assert.equal(f.groups.length, 1);
   assert.equal(day(f.groups[0].moves[0]), '2030-01-10');
 });
+
+test('planClashFixes — סבב 3: מכבד את המרווח המפורש של השכן (pairGap), לא רק את שלו', () => {
+  // שני פוסטים ב-8.1 (הזז — קמפיין מרווח 1), ושכן ב-10.1 של קמפיין שביקש 5:
+  // 9.1 ו-11–14.1 קרובים לשכן — הראשון הפנוי הוא 15.1
+  const posts = [p(1, '2030-01-08'), p(2, '2030-01-08', 'scheduled', { campaign_id: 3, campaign_min_gap_days: 1 }),
+                 p(3, '2030-01-10', 'scheduled', { campaign_id: 4, campaign_min_gap_days: 5 })];
+  const { groups } = planClashFixes(posts, { channels: ch(), settings: { min_gap_days: 1 }, today });
+  assert.equal(day(groups[0].moves[0]), '2030-01-15');
+});

@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { pool, rows, one, query } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import {
-  addGroupDay, buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES,
-  linkDayTaken, nearestDays, nextSlot, outsideCampaignWindow, takesRoom, takesRoomSql,
-  withEngineLock,
+  addGroupDay, addPairGap, buildSlots, buildUsage, COMPLETE_SPREAD_COLUMNS, gapViolation,
+  LINK_LIVE_STATUSES, linkDayTaken, nextSlot, outsideCampaignWindow, ownGapDays, takesRoom,
+  takesRoomSql, withEngineLock,
 } from './engine.js';
 import { effectiveGap, gapOn } from './capacity.js';
 import { loadGapContext } from './capacity-db.js';
@@ -32,7 +32,7 @@ import { postIsLiveSql } from './live.js';
  * כללים שנאכפים על היעד: יום חסום בערוץ · אותה נקודת קצה לא מקבלת שני
  * פוסטים באותה מדיה באותו יום · max_promo_per_day · המרווח מול פוסטים
  * בשבועות הסמוכים ומול הקבועים באותו שבוע — המרווח של הקמפיין של הפוסט
- * שזז (contentGap), לשני הכיוונים · פוסט מקושר לא ליום שבו כבר יוצא פוסט
+ * שזז ושל השכן (pairGap), לשני הכיוונים · פוסט מקושר לא ליום שבו כבר יוצא פוסט
  * אחר מהקבוצה שלו, בכל ערוץ (links_apart של הקמפיין). פוסט שאין לו יום חוקי
  * נשאר במקום ומדווח.
  */
@@ -84,13 +84,14 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
 
   // פוסטים של אותה נקודה+ערוץ מחוץ לשבוע — מולם נמדד המרווח. הטווח לפי
   // המרווח הגדול ביותר שאפשר (30 = התקרה של מרווח קמפיין, או הכללי)
-  const neighbours = await neighbourDays(from, to, Math.max(30, effectiveGap(null, settings)));
+  const { days: neighbours, gaps: neighbourGaps } =
+    await neighbourDays(from, to, Math.max(30, effectiveGap(null, settings)));
 
   // ברירת המחדל של המרווח בכל ערוץ — נגזרת מהקצב שלו (effectiveGap, סעיף 5)
   const gapCtx = await loadGapContext(week.start, week.end, { settings });
 
-  return respaceMoves({ week, channels, posts, settings, neighbours, onlyIllegal, gapCtx,
-                        now: new Date() });
+  return respaceMoves({ week, channels, posts, settings, neighbours, neighbourGaps, onlyIllegal,
+                        gapCtx, now: new Date() });
 }
 
 /**
@@ -109,8 +110,8 @@ export async function planRespace(anchor, { onlyIllegal = false } = {}) {
  * המשבצת לא נלקחת והפוסט מחכה למשבצת הבאה.
  */
 export function respaceMoves({ week, channels, posts, settings, neighbours = new Map(),
-                               onlyIllegal = false, now = new Date(), today = ymd(now),
-                               gapCtx = null }) {
+                               neighbourGaps = new Map(), onlyIllegal = false, now = new Date(),
+                               today = ymd(now), gapCtx = null }) {
   const byId = new Map(channels.map((c) => [c.id, c]));
   const illegal = (p) => onBlockedDay(p, byId.get(p.channel_id));
   const dayOf = (p) => ymd(new Date(p.scheduled_at));
@@ -147,10 +148,14 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
   }
 
   // המרווח נמדד מול השכנים מחוץ לשבוע וגם מול הקבועים שבתוכו
+  // nearGaps — המרווח המפורש של הקמפיין של כל שכן (pairGap דרך gapViolation,
+  // אותו כלל כמו המנוע ואזהרות הלוח)
   const near = new Map([...neighbours].map(([k, v]) => [k, [...v]]));
+  const nearGaps = new Map([...neighbourGaps].map(([k, v]) => [k, new Map(v)]));
   for (const p of room.filter((x) => x.endpoint_id)) {
     const key = `${p.endpoint_id}:${p.channel_id}`;
     near.set(key, [...(near.get(key) ?? []), dayOf(p)]);
+    addPairGap(nearGaps, key, dayOf(p), ownGapDays(p));
   }
 
   // תור לכל ערוץ, לפי הסדר הנוכחי על הלוח: מי שהיה ראשון יישאר ראשון
@@ -183,6 +188,7 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
       sameDay.add(`${post.endpoint_id}:${slot.channel_id}:${slot.dateKey}`);
       const key = `${post.endpoint_id}:${post.channel_id}`;
       near.set(key, [...(near.get(key) ?? []), slot.dateKey]);
+      addPairGap(nearGaps, key, slot.dateKey, ownGapDays(post));
     }
     if (post.kind === 'promo') {
       promoPerDay.set(slot.dateKey, (promoPerDay.get(slot.dateKey) ?? 0) + 1);
@@ -222,10 +228,10 @@ export function respaceMoves({ week, channels, posts, settings, neighbours = new
     if (post.endpoint_id) {
       if (sameDay.has(`${post.endpoint_id}:${post.channel_id}:${dateKey}`)) return false;
 
-      // המרווח של הקמפיין של הפוסט שזז; השכן הקרוב לפני או אחרי
-      const others = near.get(`${post.endpoint_id}:${post.channel_id}`);
-      if (nearestDays(others, dateKey) <
-          contentGap(post, settings, gapOn(gapCtx, post.channel_id))) return false;
+      // המרווח מול כל שכן לפני או אחרי — pairGap (המפורש של הפוסט שזז ושל השכן)
+      const key = `${post.endpoint_id}:${post.channel_id}`;
+      if (gapViolation(ownGapDays(post), near.get(key), dateKey, nearGaps.get(key), settings,
+        gapOn(gapCtx, post.channel_id)) != null) return false;
     }
     if (post.kind === 'promo' && (promoPerDay.get(dateKey) ?? 0) >= maxPromoPerDay) return false;
     if (post.content_id && post.campaign_links_apart !== false &&
@@ -323,22 +329,27 @@ async function neighbourDays(from, to, horizon) {
 
   // נכשל שהמועד שלו עבר לא חוסם מרווח (takesRoom)
   const r = await rows(
-    `select endpoint_id, channel_id, scheduled_at
+    `select p.endpoint_id, p.channel_id, p.scheduled_at, ca.min_gap_days as campaign_min_gap_days
        from posts p
-      where endpoint_id is not null
-        and status = any($1)
+       left join content_items ci on ci.id = p.content_id
+       left join campaigns ca     on ca.id = ci.campaign_id
+      where p.endpoint_id is not null
+        and p.status = any($1)
         and ${takesRoomSql()}
-        and scheduled_at >= $2 and scheduled_at <= $3
-        and (scheduled_at < $4 or scheduled_at > $5)`,
+        and p.scheduled_at >= $2 and p.scheduled_at <= $3
+        and (p.scheduled_at < $4 or p.scheduled_at > $5)`,
     [ON_BOARD, before, after, from, to]
   );
 
-  const map = new Map();
+  const days = new Map();
+  const gaps = new Map();
   for (const p of r) {
     const key = `${p.endpoint_id}:${p.channel_id}`;
-    map.set(key, [...(map.get(key) ?? []), ymd(new Date(p.scheduled_at))]);
+    const day = ymd(new Date(p.scheduled_at));
+    days.set(key, [...(days.get(key) ?? []), day]);
+    addPairGap(gaps, key, day, p.campaign_min_gap_days ?? null);
   }
-  return map;
+  return { days, gaps };
 }
 
 /* ========================= CLI ========================= */

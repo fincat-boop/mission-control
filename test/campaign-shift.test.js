@@ -79,3 +79,17 @@ test('מחוץ לחלון החדש של הקמפיין — יורד', () => {
   assert.equal(plan(moving, { days: 3 }).drops.length, 1);
   assert.equal(plan(moving, { days: 1 }).moves.length, 1);
 });
+
+test('סבב 3: ההזזה מכבדת את המרווח המפורש של שכן קבוע (pairGap)', () => {
+  // הפוסט זז יום קדימה ל-25.11; שכן קבוע ב-23.11 של קמפיין שביקש 7 — יורד
+  const fixed = [post(9, '2030-11-23T10:00:00', { content_id: 500, campaign_id: 5,
+                                                   campaign_min_gap_days: 7 })];
+  const { moves, drops } = plan([post(1, '2030-11-24T10:00:00', { campaign_min_gap_days: 1 })],
+    { fixed, days: 1 });
+  assert.deepEqual(moves, []);
+  assert.deepEqual(drops.map((p) => p.id), [1]);
+  // שכן בלי מרווח מפורש — רק המרווח של הפוסט (1): נכנס
+  const ok = plan([post(1, '2030-11-24T10:00:00', { campaign_min_gap_days: 1 })],
+    { fixed: [post(9, '2030-11-23T10:00:00', { content_id: 500, campaign_id: null })], days: 1 });
+  assert.equal(ok.moves.length, 1);
+});

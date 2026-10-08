@@ -137,3 +137,19 @@ test('respaceMoves — 21:00 ו-22:00 תפוסות ביום היחיד: לא נ�
   assert.equal(plan.moves.length, 0);
   assert.deepEqual(plan.stuck.map((s) => s.post.id), [1]);
 });
+
+test('respaceMoves — סבב 3: מכבד את המרווח המפורש של שכן מחוץ לשבוע (pairGap)', () => {
+  // הפוסט על שישי החסום, מרווח 1 משלו; שכן ב-5.1 שהקמפיין שלו ביקש 7 →
+  // רק שבת 12.1 רחוקה מספיק (קודם — כל יום אחר בשבוע)
+  const ch = { ...rCh, blocked_days: [5] };
+  const posts = [rPost(2, '2030-01-11', 'scheduled', { campaign_id: 4, campaign_min_gap_days: 1 })];
+  const neighbours = new Map([['1:1', ['2030-01-05']]]);
+  const neighbourGaps = new Map([['1:1', new Map([['2030-01-05', [7]]])]]);
+  const plan = respaceMoves({ week: rWeek, channels: [ch], posts, settings: rSettings,
+                              neighbours, neighbourGaps, onlyIllegal: true, today: '2030-01-06' });
+  assert.deepEqual(plan.moves.map((m) => m.dateKey), ['2030-01-12']);
+  // בלי המרווח המפורש של השכן — המרווח של הפוסט עצמו (1) מספיק ליום אחר
+  const loose = respaceMoves({ week: rWeek, channels: [ch], posts, settings: rSettings,
+                               neighbours, onlyIllegal: true, today: '2030-01-06' });
+  assert.notEqual(loose.moves[0].dateKey, '2030-01-12');
+});

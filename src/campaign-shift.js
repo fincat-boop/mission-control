@@ -1,8 +1,8 @@
 import { query, rows, one } from './db.js';
 import { weekMeta, ymd } from './board.js';
 import {
-  addGroupDay, buildUsage, COMPLETE_SPREAD_COLUMNS, contentGap, LINK_LIVE_STATUSES, linkDayTaken,
-  nearestDays, outsideCampaignWindow, takesRoomSql,
+  addGroupDay, addPairGap, buildUsage, COMPLETE_SPREAD_COLUMNS, gapViolation, LINK_LIVE_STATUSES,
+  linkDayTaken, outsideCampaignWindow, ownGapDays, takesRoomSql,
 } from './engine.js';
 import { effectiveGap, gapOn } from './capacity.js';
 import { loadGapContext } from './capacity-db.js';
@@ -57,11 +57,12 @@ const LAST_HOUR = 22;
  * מתכנן את ההזזה (טהורה).
  *
  * moving — הפוסטים של הקמפיין שזזים (SHIFT_STATUSES, עתידיים), עם עמודות
- *   התוכן והקמפיין שהמנוע צריך (contentGap, outsideCampaignWindow,
+ *   התוכן והקמפיין שהמנוע צריך (ownGapDays / gapViolation, outsideCampaignWindow,
  *   links_apart): campaign_id, campaign_min_gap_days, campaign_starts_on/
  *   ends_on (החדשים), עמודות קמפיין מוכן, content_id, linked_to_id,
  *   campaign_links_apart.
- * fixed — כל שאר הפוסטים החיים סביב התאריכים החדשים (גם של הקמפיין עצמו
+ * fixed — כל שאר הפוסטים החיים סביב התאריכים החדשים, עם campaign_id ו-
+ *   campaign_min_gap_days של השכן (pairGap) (גם של הקמפיין עצמו
  *   שלא זזים — היסטוריה, פורסם). מולם נבדק כל פוסט, ומול מה שכבר התקבל
  *   לפניו — כך שגם הפוסטים של הקמפיין נבדקים זה מול זה: בהזזה אחידה זה
  *   כמעט תמיד עובר, ובבדיקה בלי הזזה (days = 0, revalidateCampaignPosts) זה
@@ -97,11 +98,15 @@ export function planCampaignShift({
   };
 
   // הימים התפוסים לכל נקודה×ערוץ (אותו יום + מרווח), וימי קבוצות הקישור
+  // pairGaps — המרווח המפורש של הקמפיין של כל שכן (pairGap דרך gapViolation,
+  // אותו כלל כמו המנוע ואזהרות הלוח)
   const pairs = new Map();
+  const pairGaps = new Map();
   const addPair = (p, key) => {
     if (!p.endpoint_id) return;
     const k = `${p.endpoint_id}:${p.channel_id}`;
     pairs.set(k, [...(pairs.get(k) ?? []), key]);
+    addPairGap(pairGaps, k, key, ownGapDays(p));
   };
   const groupDays = new Map();
   const root = (p) => p.linked_to_id ?? p.content_id;
@@ -132,15 +137,17 @@ export function planCampaignShift({
       if (key !== today || at.getHours() > LAST_HOUR) { drops.push(p); continue; }
     }
     const usage = usageFor(key);
-    const list = p.endpoint_id ? pairs.get(`${p.endpoint_id}:${p.channel_id}`) ?? [] : [];
+    const pairKey = `${p.endpoint_id}:${p.channel_id}`;
+    const list = p.endpoint_id ? pairs.get(pairKey) ?? [] : [];
     const fits =
       !(check.linksApart && p.content_id && p.campaign_links_apart !== false &&
         linkDayTaken(groupDays, root(p), p.content_id, key)) &&
       !(check.window && outsideCampaignWindow(p, key)) &&
       // יום חסום, תקציב שבועי של הערוץ, תקרה לסוג, מכירתי ליום — רק בהזזה
       (!all || usage.allows(p.channel_id, key, p.kind)) &&
-      // אותה נקודה, אותו ערוץ, אותו יום — ומרווח מהשכן הקרוב לשני הכיוונים
-      !(check.gap && (list.includes(key) || nearestDays(list, key) < contentGap(p, settings, gapOn(gapCtx, p.channel_id))));
+      // אותה נקודה, אותו ערוץ, אותו יום — ומרווח מכל שכן לשני הכיוונים (pairGap)
+      !(check.gap && (list.includes(key) || gapViolation(ownGapDays(p), list, key,
+        pairGaps.get(pairKey), settings, gapOn(gapCtx, p.channel_id)) != null));
     if (!fits) { drops.push(p); continue; }
 
     if (all) {
@@ -237,7 +244,7 @@ async function reschedule(campaignId, days, now, { rules = null, contentIds = nu
   // עבר (takesRoom)
   const fixed = await rows(
     `select p.id, p.channel_id, p.endpoint_id, p.content_id, p.kind, p.status, p.scheduled_at,
-            ci.linked_to_id
+            ci.linked_to_id, ci.campaign_id, ca.min_gap_days as campaign_min_gap_days
        from posts p
        left join content_items ci on ci.id = p.content_id
        left join campaigns ca on ca.id = ci.campaign_id
