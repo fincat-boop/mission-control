@@ -103,6 +103,8 @@ test('סעיף 33 — המנוע ומסך הנתונים: אותו חלון (180
   assert.equal(shown.get(c.id).n, 2);
   assert.equal(shown.get(c.id).nudge, 1, 'שתי תוצאות — לא משפיעות');
 
+  assert.equal(screen.use_performance, true, 'תאימות API: נגזר — יש נקודה עם מכפיל ≠ 1');
+
   const nudges = await inOrg(() => perf.endpointNudges());
   assert.deepEqual([...nudges].sort(), [[a.id, 1.15], [b.id, 0.85]].sort());
 
@@ -161,6 +163,47 @@ test('סעיף 34 — מסך האסטרטגיה: אותו נתח כמו טופס
   assert.equal(alloc.window.to >= inDays(0), true, 'החלון נגמר בסוף השבוע הנוכחי');
 });
 
+test('סעיף 34 — החלפת קמפיין: הפוסטים של קמפיין שהסתיים לא מפילים את החדש ל"מפגר"', { skip }, async () => {
+  await wipe();
+  const { currentAllocation } = await import('../src/campaigns.js');
+  const fb = await channel('פייסבוק', 5);
+  const a = await endpoint('א', 5);
+  const b = await endpoint('ב', 5);
+  // א הסתיים לפני השבוע הנוכחי (4 פוסטים בחלון של 28 יום); ב רץ מאז, 2 פוסטים
+  const old = await campaign(a.id, [fb.id], { name: 'ישן', starts: inDays(-25), ends: inDays(-8) });
+  const cur = await campaign(b.id, [fb.id], { name: 'חדש', starts: inDays(-7), ends: inDays(20) });
+  for (let i = 9; i <= 12; i += 1) await post(fb.id, a.id, `${inDays(-i)}T10:00:00`, { campaignId: old.id });
+  await post(fb.id, b.id, `${inDays(-3)}T10:00:00`, { campaignId: cur.id });
+  await post(fb.id, b.id, `${inDays(-2)}T10:00:00`, { campaignId: cur.id });
+
+  const alloc = await inOrg(() => currentAllocation());
+  assert.deepEqual(alloc.rows.map((r) => r.campaign_id), [cur.id]);
+  const r = alloc.rows[0];
+  assert.equal(r.target_pct, 100);
+  assert.equal(r.actual_pct, 100, 'כמו campaignLag: רק מי שמתחרה השבוע בבסיס');
+  assert.equal(r.lagging, false);
+});
+
+test('סעיף 34 — נתח קבוע שמוקטן (סך הקבועים בערוץ > 100%): מה שנקבע + מה שהמנוע נותן', { skip }, async () => {
+  await wipe();
+  const { currentAllocation } = await import('../src/campaigns.js');
+  const fb = await channel('פייסבוק', 5);
+  const a = await endpoint('א', 5);
+  const b = await endpoint('ב', 5);
+  const c80 = await campaign(a.id, [fb.id], { name: '80', starts: inDays(-5), ends: inDays(20), share: 80 });
+  const c60 = await campaign(b.id, [fb.id], { name: '60', starts: inDays(-5), ends: inDays(20), share: 60 });
+  const row = new Map((await inOrg(() => currentAllocation())).rows.map((r) => [r.campaign_id, r]));
+  assert.deepEqual([row.get(c80.id).fixed_pct, row.get(c80.id).target_pct, row.get(c80.id).scaled],
+    [80, Math.round((80 / 140) * 100), true]);
+  assert.deepEqual([row.get(c60.id).fixed_pct, row.get(c60.id).target_pct, row.get(c60.id).scaled],
+    [60, Math.round((60 / 140) * 100), true]);
+  // בלי הקטנה — scaled false
+  await q('update campaigns set share_pct = 20 where id = $1', [c60.id]);
+  const again = new Map((await inOrg(() => currentAllocation())).rows.map((r) => [r.campaign_id, r]));
+  assert.equal(again.get(c80.id).scaled, false);
+  assert.equal(again.get(c80.id).target_pct, 80);
+});
+
 /* ========================= סעיף 35 ========================= */
 
 test('סעיף 35 — POST /settings/consequences: אותם מספרים כמו capacity.js והמנוע', { skip }, async () => {
@@ -198,7 +241,7 @@ test('סעיף 35 — POST /settings/consequences: אותם מספרים כמו 
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const json = await res.json();
     await Promise.all([...pending]);
-    return json;
+    return Object.assign(json, { _status: res.status });
   };
   try {
     const week = weekMeta(new Date());
@@ -228,6 +271,14 @@ test('סעיף 35 — POST /settings/consequences: אותם מספרים כמו 
     assert.ok(d.channels.every((ch) => ch.gap_days <= 1));
     assert.equal((await q1('select importance from endpoints where id = $1', [a.id])).importance, 7);
     assert.equal((await q1('select min_gap_days from engine_settings')).min_gap_days, 7);
+
+    // קלט לא תקין — 400, לא 500; מחוץ לטווח — נחתך
+    assert.equal((await post35({ endpoints: [] }))._status, 400);
+    assert.equal((await post35({ channels: { [fb.id]: 'x' } }))._status, 400);
+    assert.equal((await post35({ endpoints: { [a.id]: 'abc' } }))._status, 400);
+    const big = await post35({ endpoints: { [a.id]: 99 } });
+    assert.equal(big._status, 200);
+    assert.equal(big.endpoints.find((e) => e.id === a.id).importance, 10);
   } finally {
     server.close();
   }

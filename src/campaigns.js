@@ -1284,18 +1284,21 @@ export async function shareTimeline(monthsBack = 1, monthsAhead = 10) {
  * חלוקת השטח בפועל מול הנתח, לקמפיינים שרצים עכשיו — שורה לכל קמפיין (מסך
  * האסטרטגיה). אותם מספרים כמו טופס הקמפיין והמנוע (סעיף 34):
  *
- * הנתח (target_pct) — בדיוק המספר שבטופס: הנתח הממוצע של הקמפיין על כל
- * התקופה שלו, בכל ערוץ שלו מול מי שיושב בו (shareOf — averageSharesByChannel),
- * משוקלל בתקציבי הערוצים שלו (blendShares). share_pct קבוע (⋮) גובר; בלעדיו —
- * חלק מהיתרה לפי החשיבות של נקודת הקצה. קודם — הנתח של היום בלבד, משוקלל בכל
- * הערוצים שיש בהם קמפיינים, והמספר לא הסכים עם הטופס. מכאן שהסכום של השורות
- * יכול לעבור 100% (כל קמפיין נמדד על התקופה והערוצים שלו).
+ * הנתח (target_pct) — הנתח הממוצע של הקמפיין על כל התקופה שלו, בכל ערוץ שלו
+ * מול מי שיושב בו (shareOf — averageSharesByChannel), משוקלל בתקציבי הערוצים
+ * שלו (blendShares). אוטומטי — בדיוק share_auto שבטופס (חלק מהיתרה לפי החשיבות
+ * של נקודת הקצה). קבוע (⋮) — share_pct, אלא אם סך הקבועים בערוץ עובר 100% ואז
+ * מוקטן כמו במנוע: fixed_pct = מה שנקבע, scaled = המנוע נותן פחות. קודם — הנתח
+ * של היום בלבד, משוקלל בכל הערוצים שיש בהם קמפיינים, והמספר לא הסכים עם הטופס.
+ * מכאן שהסכום של השורות יכול לעבור 100% (כל קמפיין נמדד על התקופה והערוצים שלו).
  *
  * בפועל (actual_pct) — מה שהמנוע סופר (airCounts): פורסם + חי על הלוח (כולל
  * "לא סומנו כפורסמו"), בחלון של המנוע — 28 הימים שמסתיימים בסוף השבוע הנוכחי
  * (strategyTargets / ratioWindowStart). בכל ערוץ של הקמפיין: החלק שלו מהפוסטים
- * של הקמפיינים שמתחרים בערוץ (תוכן שוטף לא נספר), ואז אותו שקלול כמו הנתח —
- * אותו בסיס משני הצדדים. published — מתוכם מה שסומן פורסם.
+ * של הקמפיינים שמתחרים בערוץ *השבוע* — המפתחות של averageSharesByChannel לשבוע,
+ * בדיוק כמו campaignLag במנוע (תוכן שוטף וקמפיין שהסתיים לא נספרים; בלי זה,
+ * אחרי החלפת קמפיין החדש "פיגר" ארבעה שבועות מול הפוסטים של הקודם) — ואז אותו
+ * שקלול כמו הנתח. published — מתוכם מה שסומן פורסם.
  * קמפיין מושהה / של נקודה מושבתת לא נספר — הוא לא מתחרה על שטח (normalizeShares).
  */
 export async function currentAllocation(now = new Date()) {
@@ -1331,6 +1334,9 @@ export async function currentAllocation(now = new Date()) {
     publishedOf.set(r.campaign_id, (publishedOf.get(r.campaign_id) ?? 0) + r.published);
   }
   const inWindow = (id) => [...byChannel.values()].reduce((s, m) => s + (m.get(id) ?? 0), 0);
+  // מי מתחרה בכל ערוץ השבוע — הבסיס של "בפועל", כמו campaignLag (target) במנוע
+  const weekShares = averageSharesByChannel(list,
+    { from: week.days[0].date, to, channelIds: channels.map((ch) => ch.id) });
 
   const out = running.map((c) => {
     const mine = channelsOf(c);
@@ -1338,7 +1344,8 @@ export async function currentAllocation(now = new Date()) {
     // בכל ערוץ: החלק של הקמפיין מהפוסטים של הקמפיינים בערוץ — ואז אותו שקלול
     const per = new Map(mine.map((ch) => {
       const m = byChannel.get(ch.id) ?? new Map();
-      const total = [...m.values()].reduce((s, n) => s + n, 0);
+      const competitors = weekShares.get(ch.id) ?? new Map();
+      const total = [...competitors.keys()].reduce((s, k) => s + (m.get(k) ?? 0), 0);
       return [ch.id, total ? (m.get(c.id) ?? 0) / total : 0];
     }));
     const actual = Math.round(blendShares(per, mine) * 100);
@@ -1349,6 +1356,9 @@ export async function currentAllocation(now = new Date()) {
       endpoint_name: names.get(c.endpoint_id) ?? '',
       target_pct: target,
       auto: c.share_pct == null,
+      // נתח קבוע: מה שנקבע (כמו בטופס); scaled — המנוע נותן פחות (target_pct)
+      fixed_pct: c.share_pct == null ? null : Number(c.share_pct),
+      scaled: c.share_pct != null && target !== Math.round(Number(c.share_pct)),
       actual_pct: actual,
       live: inWindow(c.id),
       published: publishedOf.get(c.id) ?? 0,

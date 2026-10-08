@@ -349,7 +349,11 @@ function allocPanel(alloc) {
   if (!alloc?.window || !alloc.rows.length) {
     return '<div class="alloc"><div class="empty">אין קמפיינים שרצים עכשיו.</div></div>';
   }
-  // שורה לכל קמפיין: הנתח — אותו מספר כמו בטופס הקמפיין — מול מה שהמנוע סופר באוויר
+  // שורה לכל קמפיין: הנתח (אוטומטי — המספר שבטופס; קבוע — מה שנקבע, ומה שהמנוע
+  // נותן כשסך הקבועים עובר 100%) מול מה שהמנוע סופר באוויר
+  const share = (r) => (r.auto ? `נתח ${r.target_pct}% (אוטומטי)`
+    : r.scaled ? `נתח ${r.fixed_pct}% (בפועל ${r.target_pct}% — סך הנתחים הקבועים בערוץ עובר 100%)`
+      : `נתח ${r.target_pct}%`);
   const rows = alloc.rows.map((r) => `
     <div class="arow">
       <span class="an">${esc(r.campaign_name)}<small>${esc(r.endpoint_name)}</small></span>
@@ -357,7 +361,7 @@ function allocPanel(alloc) {
         <div class="target" style="width:${Math.min(100, r.target_pct)}%"></div>
         <div class="actual" style="width:${Math.min(100, r.actual_pct)}%"></div>
       </div>
-      <span class="at">נתח ${r.target_pct}%${r.auto ? ' (אוטומטי)' : ''} · בפועל ${r.actual_pct}%
+      <span class="at">${share(r)} · בפועל ${r.actual_pct}%
         ${r.lagging ? '<span class="off">⚠ מפגר</span>' : '<span class="ok">✓</span>'}
         <small>${r.live} פוסטים באוויר, ${r.published} סומנו פורסמו</small></span>
     </div>`).join('');
@@ -365,13 +369,15 @@ function allocPanel(alloc) {
   return `<div class="alloc">
     <h4>יעד מול ביצוע — ${fmtDate(alloc.window.from)} עד ${fmtDate(alloc.window.to)}</h4>
     ${rows}
+    <p class="fhint">כל קמפיין נמדד בערוצים ובתקופה שלו, ולכן סך השורות יכול לעבור 100%.</p>
     <p class="sumline alloc-how">איך נקבע הנתח: אוטומטי לפי החשיבות של נקודת הקצה — בכל ערוץ של
       הקמפיין, מול הקמפיינים שיושבים באותו ערוץ בזמן שלו (למשל נקודה בחשיבות 6 מול 4 = 60% ו-40%;
       שני קמפיינים של אותה נקודה מתחלקים שווה), בממוצע על כל התקופה שלו — אותו מספר כמו בטופס
-      הקמפיין. קמפיינים מושהים ונקודות מושבתות לא נספרים. נתח קבוע (בתפריט ⋮ של הקמפיין) גובר.</p>
-    <p class="sumline">בפועל: החלק של הקמפיין מהפוסטים של כל הקמפיינים בערוצים שלו, בחלון של
-      המנוע — מה שפורסם, מה שמתוכנן עד סוף השבוע ומה שלא סומן כפורסם, כמו שהמנוע סופר. תוכן שוטף
-      לא נספר.</p>
+      הקמפיין. קמפיינים מושהים ונקודות מושבתות לא נספרים. נתח קבוע (בתפריט ⋮ של הקמפיין) גובר;
+      כשסך הקבועים בערוץ עובר 100%, כולם מוקטנים באותו יחס.</p>
+    <p class="sumline">בפועל: החלק של הקמפיין מהפוסטים של הקמפיינים שרצים השבוע בערוצים שלו, ב-28
+      הימים עד סוף השבוע — מה שפורסם, מה שמתוכנן ומה שלא סומן כפורסם, כמו שהמנוע סופר. תוכן שוטף
+      וקמפיינים שהסתיימו לא נספרים.</p>
   </div>`;
 }
 
