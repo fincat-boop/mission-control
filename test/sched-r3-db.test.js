@@ -217,3 +217,67 @@ test('PATCH /posts: סוג אחר שחורג מהתקרה לסוג — אזהר�
   assert.equal(ok.status, 200, JSON.stringify(ok.json));
   assert.equal(ok.json.post.kind, 'value');
 });
+
+/* ========================= ב: סוג ונקודת קצה עוברים לפוסטים ========================= */
+
+test('PATCH /content: סוג חדש עובר לפוסטים העתידיים של התוכן, לא לפורסם', { skip }, async () => {
+  const x = await fresh('סוג תוכן');
+  const it = await q1(
+    `insert into content_items (endpoint_id, kind, title) values ($1, 'value', 'פריט') returning id`, [x.ep]);
+  const future = await post(x, { day: 6, content: it.id });
+  const past = await post(x, { day: -3, content: it.id, status: 'published' });
+
+  const r = await call('PATCH', `/content/${it.id}`, { kind: 'promo' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.kind_posts, 1);
+  assert.equal((await q1('select kind from posts where id = $1', [future.id])).kind, 'promo');
+  assert.equal((await q1('select kind from posts where id = $1', [past.id])).kind, 'value');
+});
+
+test('PATCH /campaigns: נקודת קצה חדשה עוברת לתוכן ולפוסטים; פוסט שנפגש באותו יום עם הנקודה החדשה — משובץ מחדש',
+  { skip }, async () => {
+    const x = await fresh('נקודה של קמפיין');
+    const target = (await q1("insert into endpoints (name, importance) values ('נקודה חדשה', 5) returning id")).id;
+    // לנקודה החדשה כבר יש פוסט ביום 5 באותו ערוץ
+    const theirs = await post(x, { day: 5, endpoint: target, title: 'של הנקודה החדשה' });
+    const { camp, posts } = await inOrg(async () => {
+      const camp = (await db.one(
+        `insert into campaigns (endpoint_id, name, starts_on, ends_on, share_pct, structure)
+         values ($1, 'מחליף נקודה', $2, $3, 100, 'general') returning id`,
+        [x.ep, inDays(1), inDays(20)])).id;
+      await db.query('insert into campaign_channels values ($1, $2)', [camp, x.ch]);
+      const posts = [];
+      for (const [i, day] of [5, 9].entries()) {
+        const it = (await db.one(
+          `insert into content_items (endpoint_id, campaign_id, kind, title, sort_order, slot_channel_id)
+           values ($1, $2, 'value', $3, $4, $5) returning id`,
+          [x.ep, camp, `זווית ${i + 1}`, i + 1, x.ch])).id;
+        await db.query(`insert into content_variants (content_id, channel_id, body, status)
+                        values ($1, $2, 'x', 'ready')`, [it, x.ch]);
+        posts.push((await db.one(
+          `insert into posts (channel_id, endpoint_id, content_id, title, kind, scheduled_at)
+           values ($1, $2, $3, $4, 'value', $5) returning id`,
+          [x.ch, x.ep, it, `זווית ${i + 1}`, at(day)])).id);
+      }
+      return { camp, posts };
+    });
+
+    const r = await call('PATCH', `/campaigns/${camp}`, { endpoint_id: target });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.endpoint_posts, 2);
+    assert.deepEqual(r.json.shift, { kept: 1, rescheduled: 1, approved: 0 });
+
+    const items = await q('select distinct endpoint_id from content_items where campaign_id = $1', [camp]);
+    assert.deepEqual(items.map((i) => i.endpoint_id), [target]);
+    const kept = await q1('select endpoint_id, scheduled_at from posts where id = $1', [posts[1]]);
+    assert.equal(kept.endpoint_id, target);
+    assert.equal(+kept.scheduled_at, +at(9));
+    assert.equal(await q1('select 1 from posts where id = $1', [posts[0]]), null);
+    // אף יום עם שני פוסטים של הנקודה החדשה בערוץ (המילוי שיבץ את הזווית מחדש)
+    const days = (await q(
+      `select (scheduled_at at time zone 'Asia/Jerusalem')::date::text as d from posts
+        where endpoint_id = $1 and channel_id = $2`, [target, x.ch])).map((p) => p.d);
+    assert.equal(new Set(days).size, days.length, days.join());
+    assert.ok(days.includes(inDays(5)));
+    assert.ok(await q1('select 1 from posts where id = $1', [theirs.id]));
+  });
