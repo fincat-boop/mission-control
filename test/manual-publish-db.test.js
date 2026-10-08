@@ -116,16 +116,16 @@ test('ב1 — POST /posts מתעלם מ-status בגוף: פוסט ידני נו�
 
 test('ב1 — POST /posts דוחה מועד שעבר; אותו יום בשעה מאוחרת יותר — בסדר', { skip }, async () => {
   const past = await call('POST', '/posts', {
-    channel_id: ids.fb, title: 'בעבר', kind: 'value', scheduled_at: minutes(-5),
+    channel_id: ids.fb, endpoint_id: ids.ep, title: 'בעבר', kind: 'value', scheduled_at: minutes(-5),
   });
   assert.equal(past.status, 400);
   assert.equal(past.json.error, 'אי אפשר לשבץ פוסט לזמן שעבר');
   const broken = await call('POST', '/posts', {
-    channel_id: ids.fb, title: 'שבור', kind: 'value', scheduled_at: 'לא-תאריך',
+    channel_id: ids.fb, endpoint_id: ids.ep, title: 'שבור', kind: 'value', scheduled_at: 'לא-תאריך',
   });
   assert.equal(broken.status, 400);
   const soon = await call('POST', '/posts', {
-    channel_id: ids.wa, title: 'עוד מעט', kind: 'value', scheduled_at: minutes(2),
+    channel_id: ids.wa, endpoint_id: ids.ep, title: 'עוד מעט', kind: 'value', scheduled_at: minutes(2),
   });
   assert.equal(soon.status, 201, JSON.stringify(soon.json));
 });
@@ -238,6 +238,8 @@ test('1 — בבוקר: משימה לכל פוסט של היום בערוץ יד
   // המתג הכללי דלוק: האינסטגרם המחובר מתפרסם לבד — בלי משימה
   await inOrg(() => db.query('update engine_settings set autopublish_enabled = true'));
   await runner.manualPublishPrep(org, dayAt(8));
+  // ...וגם הניוזלטר: כשהמתג דלוק יש לו מסלול משלו (העבר ל-HUB)
+  assert.equal((await dayTasks(p.nl)).length, 0);
   await inOrg(() => db.query('update engine_settings set autopublish_enabled = false'));
   await runner.manualPublishPrep(org, dayAt(9)); // שוב — לא כפולה
 
@@ -252,9 +254,16 @@ test('1 — בבוקר: משימה לכל פוסט של היום בערוץ יד
   assert.equal(wa[0].title, 'לשלוח בוואטסאפ: וואטסאפ היום');
   assert.equal(wa[0].meta.wa_send, true);
   assert.equal((await dayTasks(p.urgent))[0]?.subtitle, runner.MANUAL_SUB_TITLE_ONLY);
-  for (const k of ['nl', 'off', 'paused', 'blank', 'tomorrow']) {
+  for (const k of ['off', 'paused', 'blank', 'tomorrow']) {
     assert.equal((await dayTasks(p[k])).length, 0, k);
   }
+  // המתג כבוי = אין פרסום אוטומטי בכלל (8.10.26): הניוזלטר נשלח ביד ב-HUB,
+  // ומקבל משימת "לפרסם היום" כמו כל ערוץ ידני — בלי גוף ה-HTML להעתקה
+  const nl = await dayTasks(p.nl);
+  assert.equal(nl.length, 1);
+  assert.equal(nl[0].title, 'לפרסם היום בניוזלטר: ניוזלטר');
+  assert.equal(nl[0].subtitle, runner.NEWSLETTER_SUB_READY);
+  assert.equal(nl[0].meta.body, null);
   // המתג כבוי עכשיו — האינסטגרם כבר לא מתפרסם לבד, ולכן יש משימה
   assert.equal((await dayTasks(p.auto)).length, 1);
 });
@@ -321,6 +330,8 @@ async function freshOrg(name) {
 
 test('2 — התראה מרוכזת אחת: מי נספר ומי לא; משימת היום מכסה; חלון האישור = אותה רשימה', { skip }, async () => {
   await freshOrg('unconfirmed-test');
+  // המתג דלוק: לניוזלטר מסלול משלו (העבר ל-HUB), והוא לא ברשימה. כבוי — בסוף
+  await inOrg(() => db.query('update engine_settings set autopublish_enabled = true'));
   const day = 60 * 24;
   const paused = await inOrg(async () => {
     const ca = (await db.one(
@@ -368,6 +379,13 @@ test('2 — התראה מרוכזת אחת: מי נספר ומי לא; משימ�
   const viewer = { is_owner: false, perm_content: false };
   ({ alerts } = await inOrg(() => buildAlerts(viewer)));
   assert.ok(!alerts.some((a) => a.id === 'unconfirmed'));
+
+  // המתג כבוי (8.10.26 — אין פרסום אוטומטי בכלל): גם הניוזלטר נשלח ומסומן ביד
+  await inOrg(() => db.query('update engine_settings set autopublish_enabled = false'));
+  ({ alerts } = await inOrg(() => buildAlerts(null)));
+  assert.equal(alerts.find((a) => a.id === 'unconfirmed').title, '6 פוסטים לא סומנו כפורסמו');
+  const offList = await call('GET', '/posts/unconfirmed');
+  assert.ok(offList.json.posts.some((x) => x.id === p.nl));
 });
 
 test('2 — "סמן שפורסמו": מרוכז, אותו כלל סטטוס, published_at = המועד, משימות נסגרות', { skip }, async () => {

@@ -8,6 +8,11 @@ export const TABS = ['board', 'strategy', 'plan', 'tasks', 'data', 'manage'];
 export const state = {
   me: null,
   media: null,         // { ready, max_mb } — אחסון המדיה ב-R2, מגיע עם /api/me
+  // מתג-העל של הפרסום האוטומטי (engine_settings.autopublish_enabled). כבוי =
+  // אין פרסום אוטומטי בכלל: אישור, "אשר את השבוע", "פרסם עכשיו", "העבר
+  // ל-HUB" ותיבת האוטומטי לכל ערוץ מוסתרים (החלטת המשתמש 8.10.26). נטען
+  // בעלייה (/settings), ומתעדכן בניהול ← ערוצי פרסום.
+  autopublish: false,
   week: null,          // תאריך עוגן לשבוע המוצג
   channels: [],
   endpoints: [],

@@ -30,6 +30,26 @@ test('postFacts — autoReady דורש פלטפורמה, חיבור וגם פר�
   assert.equal(postFacts({ ...post, content_id: null }, null).hasContent, false);
 });
 
+test('פרסום אוטומטי כבוי במערכת (8.10.26) — אין אישור, אין "בטל אישור", אין "העבר ל-HUB"; עבר המועד — "סמן כפורסם"', () => {
+  const post = { status: 'scheduled', scheduled_at: FUTURE, content_id: 3, platform: 'facebook',
+                 autopub_connected: true, autopub_enabled: true };
+  const off = postFacts(post, { status: 'ready' }, { autopublish: false });
+  assert.equal(off.autoReady, false);
+  assert.equal(pick(off).primary, null);
+  assert.equal(pick({ ...off, status: 'approved' }).primary, null);
+  const nl = postFacts({ ...post, platform: 'newsletter' }, { status: 'ready' }, { autopublish: false });
+  assert.notEqual(pick(nl).primary, 'transferHub');
+  assert.equal(pick({ ...nl, autopublish: true, autoReady: true }).primary, 'transferHub');
+  assert.equal(pick({ ...off, scheduled_at: PAST }).primary, 'markPublished');
+  assert.equal(rescheduleApproves({ ...off, status: 'failed' }, ALL), false);
+  // נכשל שנשאר נכשל כשהמתג כבוי (אולי יצא) — "סמן כפורסם"; ניוזלטר שהועבר — גם "פתח ב-HUB"
+  assert.deepEqual(pick({ ...off, status: 'failed', scheduled_at: PAST }),
+    { primary: 'markPublished', secondary: null });
+  assert.deepEqual(pick({ ...nl, status: 'failed', externalUrl: 'https://hub/x' }),
+    { primary: 'markPublished', secondary: 'openHub' });
+  assert.equal(pick({ ...off, status: 'failed' }, NONE).primary, null);
+});
+
 test('מתוכנן עתידי עם תוכן מוכן בערוץ אוטומטי — "אשר לפרסום אוטומטי"', () => {
   assert.deepEqual(pick(facts()), { primary: 'approve', secondary: null });
 });

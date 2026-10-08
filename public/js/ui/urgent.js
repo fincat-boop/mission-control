@@ -5,6 +5,7 @@ import { api } from '../core/api.js';
 import { refreshAfterPostChange } from '../ui/refresh.js';
 import { channelHour, defaultUrgentTime } from '../core/postActions.js';
 import { multiSelectHtml, wireMultiSelects } from './multiSelect.js';
+import { activeEndpoints } from './addPost.js';
 
 /* ========================= מבצע דחוף ========================= */
 
@@ -57,7 +58,11 @@ function resetPlan() {
 export function openUrgent() {
   if (!can('content')) return toast('אין לך הרשאה לשבץ תוכן', true);
 
-  fillSelect($('#uEndpoint'), state.endpoints, 'name', 'ללא נקודת קצה');
+  // אין פוסט בלי נקודת קצה (החלטת המשתמש 8.10.26)
+  const endpoints = activeEndpoints();
+  if (!endpoints.length) return toast('אין נקודת קצה פעילה — מוסיפים אחת בניהול, ואז משבצים', true);
+  fillSelect($('#uEndpoint'), endpoints, 'name');
+  if (endpoints.some((e) => e.id === state.planEndpoint)) $('#uEndpoint').value = state.planEndpoint;
   $('#uChannels').innerHTML = multiSelectHtml({
     options: state.channels.filter((c) => c.active).map((c) => [c.id, c.name]),
     placeholder: 'בחירת ערוצים…',

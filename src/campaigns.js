@@ -936,6 +936,9 @@ export async function campaignsWithHealth() {
   const channels = await rows('select * from channels order by sort_order, id');
   const links = await rows('select * from campaign_channels');
   const opts = await loadCapacityOptions();
+  // פרסום אוטומטי כבוי — גם הניוזלטר נשלח ומסומן ביד (paceDone, כמו UNCONFIRMED_SQL)
+  const manualNewsletter = !(await one('select autopublish_enabled from engine_settings limit 1'))
+    ?.autopublish_enabled;
 
   const today = ymd(new Date());
   const channelById = new Map(channels.map((c) => [c.id, c]));
@@ -1044,7 +1047,7 @@ export async function campaignsWithHealth() {
       no_room_reason: noRoom,
       // הקצב בחודש האחרון בלבד — היעד ו"יצאו" באותו חלון (paceWindow, R1)
       pace: paceOf(c, today, paceDone(myPosts, channelById,
-        { today, from: paceWindow(c, today)?.from ?? null }), grid),
+        { today, from: paceWindow(c, today)?.from ?? null, manualNewsletter }), grid),
       content: shaped,
       grid: grid.angles,
       // זוויות שאין להן מקום ברשת (מעבר לתכנון / כפולות) — מוצגות מתחת לה
@@ -1137,14 +1140,17 @@ function baseStatus({ c, today, grid, myChannels, ahead, noRoom }) {
  *   - מה שמתוכנן/מאושר עד היום (כולל מאוחר יותר היום) בערוץ פעיל — היום
  *     עוד לא נגמר, והוא בדרך;
  *   - מה שלא אושר שיצא (UNCONFIRMED_SQL ב-unconfirmed.js): מתוכנן/מאושר
- *     מיום שעבר, בערוץ פעיל שאינו ניוזלטר. לא ידוע ≠ לא יצא — כמעט הכול
- *     מתפרסם ביד ולא מסומן (החלטה ה1: לא מסמנים אוטומטית, רק לא מפילים את הקצב).
+ *     מיום שעבר, בערוץ פעיל שאינו ניוזלטר — אלא אם manualNewsletter (פרסום
+ *     אוטומטי כבוי: גם הניוזלטר נשלח ביד, אותו כלל כמו UNCONFIRMED_SQL; הקורא
+ *     מעביר את המתג). לא ידוע ≠ לא יצא — כמעט הכול מתפרסם ביד ולא מסומן
+ *     (החלטה ה1: לא מסמנים אוטומטית, רק לא מפילים את הקצב).
  * channelById — הערוצים לפי מזהה (active, platform). today — 'YYYY-MM-DD' מקומי.
  * from — רק מה שיום הפרסום שלו (published_at, ובלעדיו המועד) מ-from והלאה:
  *   החלון של הקצב (paceWindow).
  */
 export function paceDone(myPosts, channelById,
-                         { now = new Date(), today = ymd(now), from = null } = {}) {
+                         { now = new Date(), today = ymd(now), from = null,
+                           manualNewsletter = false } = {}) {
   const cutoff = now.getTime() - 30 * 60000;
   return myPosts.filter((p) => {
     if (from && ymd(new Date(p.published_at ?? p.scheduled_at)) < from) return false;
@@ -1154,7 +1160,8 @@ export function paceDone(myPosts, channelById,
     if (!ch?.active) return false;
     const day = ymd(new Date(p.scheduled_at));
     if (day === today) return true;
-    return day < today && ch.platform !== 'newsletter' && new Date(p.scheduled_at).getTime() < cutoff;
+    return day < today && (manualNewsletter || ch.platform !== 'newsletter') &&
+      new Date(p.scheduled_at).getTime() < cutoff;
   }).length;
 }
 

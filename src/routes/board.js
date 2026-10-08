@@ -8,7 +8,7 @@ import {
 import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
-import { emitPostEvent } from '../publish/runner.js';
+import { autopublishOn, emitPostEvent, maybeOutSql } from '../publish/runner.js';
 import { hubStale, hubUnverified } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
 import { contentState } from '../publish/readiness.js';
@@ -39,6 +39,10 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (!['promo', 'value', 'hybrid'].includes(b.kind)) {
     return bad(res, 'סוג הפוסט חייב להיות promo / value / hybrid');
   }
+  // אין פוסט בלי נקודת קצה (החלטת המשתמש 8.10.26): כל קמפיין שייך לנקודה,
+  // ופוסט בלי נקודה הוא פוסט בלי קמפיין — כרטיס אפור שאיש לא מתכנן
+  const epErr = await postEndpointError({ endpointId: b.endpoint_id, contentId: b.content_id });
+  if (epErr) return bad(res, epErr.error, epErr.status);
   // מועד שעבר לא יתפרסם לעולם (כמו בהזזה — moveBlocker). אותו יום בשעה
   // מאוחרת יותר — בסדר.
   const when = new Date(b.scheduled_at);
@@ -82,6 +86,30 @@ r.post('/posts', requirePerm('content'), wrap(async (req, res) => {
   if (post.content_id) await liftDismissals(post.content_id, post.channel_id);
   res.status(201).json({ post });
 }));
+
+export const ENDPOINT_REQUIRED = 'צריך לבחור נקודת קצה לפוסט — אין פוסט בלי נקודת קצה';
+
+/**
+ * למה נקודת הקצה של פוסט לא תקינה, או null: חובה, קיימת ופעילה, ואם יש לפוסט
+ * תוכן — הנקודה של התוכן (תוכן תמיד שייך לנקודה, ותוכן של קמפיין — לנקודה
+ * של הקמפיין). { status, error }. גם PATCH /posts (כשהנקודה או התוכן משתנים).
+ */
+export async function postEndpointError({ endpointId, contentId = null }) {
+  const id = idOrNull(endpointId);
+  if (!id || !Number.isInteger(id) || id <= 0) return { status: 400, error: ENDPOINT_REQUIRED };
+  const ep = await one('select active from endpoints where id = $1', [id]);
+  if (!ep) return { status: 404, error: 'לא נמצאה נקודת קצה כזו' };
+  if (!ep.active) return { status: 409, error: 'נקודת הקצה הזו מושבתת — בוחרים נקודה פעילה' };
+  const cid = idOrNull(contentId);
+  if (cid) {
+    const item = await one('select endpoint_id from content_items where id = $1', [cid]);
+    if (!item) return { status: 404, error: 'לא נמצא תוכן כזה' };
+    if (item.endpoint_id !== id) {
+      return { status: 400, error: 'התוכן שייך לנקודת קצה אחרת מזו של הפוסט' };
+    }
+  }
+  return null;
+}
 
 /** הודעת החסימה של יום שהערוץ לא מקבל בו תוכן, או null. target — שורת הערוץ */
 export function blockedDayError(target, when) {
@@ -179,6 +207,21 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   const changed = (key) => key in b && idOrNull(b[key]) !== (current[key] ?? null);
   const contentChanged = b.content_id != null && changed('content_id');
   const kindChanged = b.kind != null && b.kind !== current.kind;
+  // אין פוסט בלי נקודת קצה: אי אפשר לאפס אותה, ותוכן חדש / נקודה חדשה — רק
+  // כשהם תואמים (postEndpointError). פוסט ישן בלי נקודה (פורסם לפני הכלל)
+  // עדיין נערך בכותרת / בהערה — נבדק רק מה שהבקשה משנה.
+  // שארית ישנה בלי נקודה: הזזה (מועד או ערוץ) מחזירה אותה לתכנון, ולכן רק
+  // עם נקודה באותה בקשה. כותרת, הערה וסימון "פורסם" — בלי
+  if (current.endpoint_id == null && isMove(current, b) && !idOrNull(b.endpoint_id)) {
+    return bad(res, ENDPOINT_REQUIRED);
+  }
+  if (changed('endpoint_id') || contentChanged) {
+    const epErr = await postEndpointError({
+      endpointId: 'endpoint_id' in b ? b.endpoint_id : current.endpoint_id,
+      contentId: 'content_id' in b ? b.content_id : current.content_id,
+    });
+    if (epErr) return bad(res, epErr.error, epErr.status);
+  }
   if (b.scheduled_at || b.channel_id || changed('endpoint_id') || contentChanged || kindChanged) {
     const when = b.scheduled_at ?? current.scheduled_at;
     const channel = b.channel_id ?? current.channel_id;
@@ -255,6 +298,23 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
         where id = $1 and status = 'approved' returning *`,
       [current.id]) ?? post;
   }
+  // פרסום אוטומטי כבוי (runner.js AUTOPUBLISH_OFF_ERROR): נכשל שקיבל מועד
+  // חדש חוזר למתוכנן — אין מי שיאשר אותו שוב, ובלי זה הוא היה נשאר אדום
+  // לתמיד. משימת הכשל שלו נסגרת. רק נכשל שבוודאות לא יצא (maybeOutSql) —
+  // מה שאולי יצא נשאר נכשל, ומסמנים אותו "פורסם". מתג דלוק — נשאר נכשל עד
+  // אישור, כמו היום.
+  if (current.status === 'failed' && isMove(current, b) && !(await autopublishOn())) {
+    const back = await one(
+      `update posts p set status = 'scheduled', publish_error = null, approved_by = null,
+                          approved_at = null
+        where p.id = $1 and p.status = 'failed' and not ${maybeOutSql('p')} returning *`, [current.id]);
+    if (back) {
+      post = back;
+      await query(
+        "update tasks set done = true, done_at = now() where post_id = $1 and kind = 'failed' and not done",
+        [current.id]);
+    }
+  }
   res.json({ post, approval_reset: approvalReset });
 }));
 
@@ -301,7 +361,9 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
             u.name as assignee_name, ci.title as content_title, ci.kind as content_kind,
             ci.evergreen, ca.name as campaign_name, au.name as approved_by_name,
             cc.auto_enabled as autopub_enabled,
-            cc.access_token_enc is not null as autopub_connected
+            cc.access_token_enc is not null as autopub_connected,
+            -- נכשל שאולי כבר יצא — לא חוזר למתוכנן כשהמתג כבוי (runner.js maybeOutSql)
+            (p.status = 'failed' and ${maybeOutSql('p')}) as maybe_out
        from posts p
        left join channels c       on c.id = p.channel_id
        left join channel_connections cc on cc.channel_id = p.channel_id

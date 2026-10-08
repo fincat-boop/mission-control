@@ -287,14 +287,17 @@ test('POST /posts — יום חסום ואותה נקודה באותו יום נ
 
     await call('POST', '/posts',
       { channel_id: s.ch, endpoint_id: s.ep2, title: 'שני', kind: 'value', scheduled_at: at(19) });
-    const over = { channel_id: s.ch, title: 'שלישי', kind: 'value', scheduled_at: at(20) };
+    // אין פוסט בלי נקודת קצה (8.10.26) — השלישי והרביעי באותו יום, כל אחד לנקודה אחרת
+    const over = { channel_id: s.ch, endpoint_id: s.ep, title: 'שלישי', kind: 'value',
+                   scheduled_at: at(20) };
     const warn = await call('POST', '/posts', over);
     assert.equal(warn.status, 409, JSON.stringify(warn.json));
     assert.equal(warn.json.needs_confirm, true);
     assert.match(warn.json.error, /2 מתוך 2 פוסטים בשבוע/);
     const ok = await call('POST', '/posts', { ...over, confirm_warnings: true });
     assert.equal(ok.status, 201);
-    const legacy = await call('POST', '/posts', { ...over, title: 'רביעי', confirm_gap: true });
+    const legacy = await call('POST', '/posts',
+      { ...over, endpoint_id: s.ep2, title: 'רביעי', confirm_gap: true });
     assert.equal(legacy.status, 201);
   } finally {
     await capCleanup(s);
@@ -306,8 +309,11 @@ test('PATCH /posts — הזזה לשבוע מלא: אזהרת מכסה; הזזה
   try {
     await insertPost({ channel: s.ch, ep: s.ep, at: at(18) });
     await insertPost({ channel: s.ch, ep: s.ep2, at: at(19) });
-    const mover = await insertPost({ channel: s.ch, at: at(25) });
-    const inWeek = await insertPost({ channel: s.ch, at: at(26) });
+    // אין פוסט בלי נקודת קצה (8.10.26) — ונקודה שלישית, שהמרווח מול 18/19 לא יוסיף אזהרה
+    s.ep3 = await inOrg(async () => (await db.one(
+      "insert into endpoints (name, importance) values ('הזזה 3', 5) returning id")).id);
+    const mover = await insertPost({ channel: s.ch, ep: s.ep3, at: at(25) });
+    const inWeek = await insertPost({ channel: s.ch, ep: s.ep2, at: at(26) });
 
     const warn = await call('PATCH', `/posts/${mover}`, { scheduled_at: at(20) });
     assert.equal(warn.status, 409, JSON.stringify(warn.json));
@@ -321,6 +327,7 @@ test('PATCH /posts — הזזה לשבוע מלא: אזהרת מכסה; הזזה
     assert.equal((await call('PATCH', `/posts/${inWeek}`, { scheduled_at: at(27) })).status, 200);
   } finally {
     await capCleanup(s);
+    if (s.ep3) await inOrg(() => db.query('delete from endpoints where id = $1', [s.ep3]));
   }
 });
 
@@ -355,9 +362,11 @@ test('הלוח: פוסט מקושר באותו יום — הזזה ושיוך ת
     const done = await call('PATCH', `/posts/${hole}`, { scheduled_at: at(18, 12), confirm_warnings: true });
     assert.equal(done.status, 200, JSON.stringify(done.json));
 
-    // POST /posts עם תוכן מקושר באותו יום
-    const direct = await call('POST', '/posts', { channel_id: s.b, title: 'ידני', kind: 'value',
-      content_id: s.follower, scheduled_at: at(18, 16) });
+    // POST /posts עם תוכן מקושר באותו יום. הפוסט מקבל את הנקודה של התוכן (אין
+    // פוסט בלי נקודה) — ולכן קודם מורידים את העוקבת מ-B, שלא תתנגש באותו יום
+    await inOrg(() => db.query('delete from posts where id = $1', [hole]));
+    const direct = await call('POST', '/posts', { channel_id: s.b, endpoint_id: s.ep, title: 'ידני',
+      kind: 'value', content_id: s.follower, scheduled_at: at(18, 16) });
     assert.equal(direct.status, 409, JSON.stringify(direct.json));
     assert.match(direct.json.error, /פוסט מקושר/);
   } finally {

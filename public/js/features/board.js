@@ -123,7 +123,8 @@ export async function renderBoard() {
       </div>
       <button class="btn small" id="thisWeek">השבוע</button>
       <div class="spacer"></div>
-      ${can('approve') ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
+      ${can('approve') && state.autopublish
+        ? `<button class="btn small" id="approveWeek">${APPROVE_WEEK_LABEL}</button>` : ''}
       ${editable ? '<button class="btn small primary" id="runEngine">⚙ מלא את השבוע</button>' : ''}
     </div>
 

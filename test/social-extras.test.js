@@ -267,3 +267,19 @@ test('moreSummary — "אפשרויות נוספות": מה בשימוש, בלי
   assert.match(html, /תיאור תמונה<\/span>/);
   assert.equal(extrasHtml({ platform: 'newsletter' }), '');
 });
+
+test('הסברי השדות — המתג כבוי (8.10.26): שום "נשלח אוטומטית", רק פרסום ידני', async () => {
+  const { extrasHtml } = await import('../public/js/ui/variantExtras.js');
+  const { state } = await import('../public/js/core/state.js');
+  const meta = { format: 'story', first_comment: 'x', alt_text: 'y' };
+  try {
+    state.autopublish = true;
+    assert.match(extrasHtml({ platform: 'instagram', meta }), /סטורי נשלח לאינסטגרם אוטומטית/);
+    state.autopublish = false;
+    const off = extrasHtml({ platform: 'instagram', meta: { first_comment: 'x' } });
+    assert.doesNotMatch(off, /אוטומטית|מיד אחרי הפרסום/);
+    assert.match(off, /הפרסום האוטומטי כבוי — מפרסמים ידנית/);
+  } finally {
+    state.autopublish = false;
+  }
+});

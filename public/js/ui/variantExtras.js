@@ -1,5 +1,6 @@
 import { $$, esc } from '../core/dom.js';
 import { isImage, isVideo } from '../core/format.js';
+import { state } from '../core/state.js';
 import {
   IG_LIMITS, badFeedRatio, captionCounts, extraSummary, extrasFor,
 } from '../core/socialRules.js';
@@ -39,8 +40,14 @@ const HINTS = {
     facebook: 'מה רואים בתמונה, למי שמשתמש בקורא מסך. נשלח בפוסט עם תמונה אחת.',
   },
 };
-const hint = (key, platform) => HINTS[key]?.[platform] ??
-  (key === 'cover' ? 'תמונה שנבחרה כשער לא יוצאת כחלק מהפוסט.' : MANUAL_HINT);
+// פרסום אוטומטי כבוי במערכת (state.autopublish): שום דבר לא "נשלח
+// אוטומטית" — כל שדה מוצג למי שמפרסם ידנית
+const OFF_HINT = 'הפרסום האוטומטי כבוי — מפרסמים ידנית. מופיע בתצוגת הפוסט בלוח, להעתקה.';
+const hint = (key, platform) => {
+  if (key === 'cover') return 'תמונה שנבחרה כשער לא יוצאת כחלק מהפוסט.';
+  if (!state.autopublish) return OFF_HINT;
+  return HINTS[key]?.[platform] ?? MANUAL_HINT;
+};
 
 function sectionBody(key, platform, meta, files) {
   if (key === 'format') {

@@ -50,6 +50,9 @@ export async function planUrgent(input, { now = new Date() } = {}) {
   const errors = [];
   if (!title) errors.push('צריך לכתוב מה מפרסמים');
   if (channelIds.length === 0) errors.push('צריך לבחור לפחות ערוץ אחד');
+  // אין פוסט בלי נקודת קצה (החלטת המשתמש 8.10.26) — גם לא במבצע דחוף
+  const endpointId = Number(input.endpoint_id) || null;
+  if (!endpointId) errors.push('צריך לבחור נקודת קצה');
 
   const until = input.until ? new Date(input.until) : null;
   if (until && Number.isNaN(until.getTime())) errors.push('תאריך "רלוונטי עד" לא תקין');
@@ -57,6 +60,12 @@ export async function planUrgent(input, { now = new Date() } = {}) {
   const hm = input.time ? parseTime(input.time) : null;
   if (input.time && !hm) errors.push('שעה לא תקינה');
   if (errors.length) return { ok: false, errors, placements: [], warnings: [], displaced: [] };
+
+  const ep = await one('select active from endpoints where id = $1', [endpointId]);
+  if (!ep?.active) {
+    return { ok: false, errors: [ep ? 'נקודת הקצה שנבחרה מושבתת' : 'לא נמצאה נקודת קצה כזו'],
+             placements: [], warnings: [], displaced: [] };
+  }
 
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
@@ -96,7 +105,6 @@ export async function planUrgent(input, { now = new Date() } = {}) {
 
   // אותה נקודת קצה לא מקבלת שני פוסטים באותה מדיה באותו יום —
   // אחרת מבצע דחוף יכול לנחות על יום שכבר יש בו תוכן ערך לאותה נקודה
-  const endpointId = input.endpoint_id ?? null;
   const sameDay = new Set(
     existing
       .filter((p) => p.endpoint_id && p.endpoint_id === endpointId)

@@ -5,6 +5,7 @@ import { PUBLIC_USER_COLS, hashPassword, requirePerm } from '../auth.js';
 import { readBackupLayers } from '../backup-status.js';
 import { isPlatformOrg } from '../platform.js';
 import { setupSteps } from '../setup.js';
+import { resetToManual } from '../publish/runner.js';
 
 const r = Router();
 
@@ -27,8 +28,11 @@ r.patch('/settings', requirePerm('settings'), wrap(async (req, res) => {
     const sets = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
     s = await one(`update engine_settings set ${sets} returning *`, entries.map(([, v]) => v));
   }
+  // כיבוי הפרסום האוטומטי = הכול ידני, מעכשיו: מאושר ונכשל חוזרים למתוכנן
+  // באותה בקשה (resetToManual) — לא נשאר "מאושר" שלא ייצא או כרטיס אדום
+  const manualReset = req.body?.autopublish_enabled === false ? await resetToManual() : null;
   const engine = await autoFill(req.body?.week);
-  res.json({ settings: s, engine });
+  res.json({ settings: s, engine, ...(manualReset ? { manual_reset: manualReset } : {}) });
 }));
 
 /* ========================= רשימת ההקמה ========================= */

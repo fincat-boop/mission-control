@@ -36,15 +36,21 @@ export const autoReady = (post) =>
 
 /**
  * העובדות שהבחירה נשענת עליהן, מתוך תשובת /posts/:id/preview.
+ * autopublish — מתג-העל של הארגון (state.autopublish). כבוי = אין פרסום
+ * אוטומטי בכלל (8.10.26): autoReady תמיד false, ובלי "העבר ל-HUB" / "בטל אישור".
  * @param {object} post
  * @param {object|null} variant הגרסה של התוכן לערוץ של הפוסט
+ * @param {{autopublish?: boolean}} [opts]
  */
-export function postFacts(post, variant) {
+export function postFacts(post, variant, { autopublish = true } = {}) {
   return {
     status: post.status,
     scheduled_at: post.scheduled_at,
     platform: post.platform,
-    autoReady: autoReady(post),
+    autopublish,
+    autoReady: autopublish && autoReady(post),
+    // ניוזלטר שהועבר ל-HUB (גם אם נכשל) — "פתח ב-HUB"
+    externalUrl: post.external_url ?? null,
     hasContent: !!post.content_id,
     variantReady: variant?.status === 'ready',
     // ניוזלטר שהועבר ל-HUB מחכה לאישור ולמועד — "תקוע" נספר רק מהמועד
@@ -110,13 +116,21 @@ export function choosePrimary(f, perms, now = new Date()) {
     return only(f.autoReady ? 'reschedule' : 'markPublished');
   }
 
-  // ניוזלטר עתידי עם תוכן מוכן: לא "מאשרים" כאן — מעבירים ל-HUB, ומאשרים שם
-  if (f.platform === 'newsletter' && !past && f.hasContent && f.variantReady &&
+  // ניוזלטר עתידי עם תוכן מוכן: לא "מאשרים" כאן — מעבירים ל-HUB, ומאשרים שם.
+  // פרסום אוטומטי כבוי — אין העברה: הניוזלטר נשלח ביד ומסומן "פורסם"
+  if (f.platform === 'newsletter' && f.autopublish !== false && !past && f.hasContent && f.variantReady &&
       ['scheduled', 'approved', 'failed'].includes(f.status)) {
     return perms.approve ? only('transferHub') : NONE;
   }
 
   if (f.status === 'failed') {
+    // פרסום אוטומטי כבוי: נכשל שנשאר נכשל אולי כבר יצא (runner.js maybeOutSql)
+    // — בודקים ומסמנים "פורסם"; ניוזלטר שהועבר — בודקים ב-HUB
+    if (f.autopublish === false) {
+      if (!perms.content) return NONE;
+      return { primary: 'markPublished',
+               secondary: f.platform === 'newsletter' && f.externalUrl ? 'openHub' : null };
+    }
     if (past) return perms.content ? only('reschedule') : NONE;
     // נכשל והוזז כבר למועד עתידי — נשאר רק לאשר שוב
     if (perms.approve && f.autoReady && f.hasContent && f.variantReady) return only('approve');
@@ -124,7 +138,7 @@ export function choosePrimary(f, perms, now = new Date()) {
   }
 
   if (!f.hasContent) return perms.content ? only('attach') : NONE;
-  if (f.status === 'approved') return perms.approve ? only('unapprove') : NONE;
+  if (f.status === 'approved') return perms.approve && f.autopublish !== false ? only('unapprove') : NONE;
 
   // מתוכנן, עתידי, עם תוכן
   if (perms.approve && f.autoReady && f.variantReady) return only('approve');

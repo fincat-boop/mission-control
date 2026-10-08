@@ -89,9 +89,10 @@ async function boot() {
   markEntry();
 
   try {
-    const [{ channels }, { endpoints }, { users }] = await Promise.all([
-      api('/channels'), api('/endpoints'), api('/users'),
+    const [{ channels }, { endpoints }, { users }, { settings }] = await Promise.all([
+      api('/channels'), api('/endpoints'), api('/users'), api('/settings'),
     ]);
+    state.autopublish = !!settings?.autopublish_enabled;
     state.channels = channels;
     state.endpoints = endpoints;
     rebuildEpColors();
