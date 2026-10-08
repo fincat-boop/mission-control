@@ -8,7 +8,7 @@ import {
 import { one, query, rows } from '../db.js';
 import { parseMetric } from '../performance.js';
 import { hubMailReady } from '../hub-mail.js';
-import { autopublishOn, emitPostEvent } from '../publish/runner.js';
+import { autopublishOn, emitPostEvent, maybeOutSql } from '../publish/runner.js';
 import { hubStale, hubUnverified } from '../publish/newsletter.js';
 import { assetView } from '../media.js';
 import { contentState } from '../publish/readiness.js';
@@ -291,15 +291,20 @@ r.patch('/posts/:id', requirePerm('content'), wrap(async (req, res) => {
   }
   // פרסום אוטומטי כבוי (runner.js AUTOPUBLISH_OFF_ERROR): נכשל שקיבל מועד
   // חדש חוזר למתוכנן — אין מי שיאשר אותו שוב, ובלי זה הוא היה נשאר אדום
-  // לתמיד. משימת הכשל שלו נסגרת. מתג דלוק — נשאר נכשל עד אישור, כמו היום.
+  // לתמיד. משימת הכשל שלו נסגרת. רק נכשל שבוודאות לא יצא (maybeOutSql) —
+  // מה שאולי יצא נשאר נכשל, ומסמנים אותו "פורסם". מתג דלוק — נשאר נכשל עד
+  // אישור, כמו היום.
   if (current.status === 'failed' && isMove(current, b) && !(await autopublishOn())) {
-    post = await one(
-      `update posts set status = 'scheduled', publish_error = null, approved_by = null,
-                        approved_at = null
-        where id = $1 and status = 'failed' returning *`, [current.id]) ?? post;
-    await query(
-      "update tasks set done = true, done_at = now() where post_id = $1 and kind = 'failed' and not done",
-      [current.id]);
+    const back = await one(
+      `update posts p set status = 'scheduled', publish_error = null, approved_by = null,
+                          approved_at = null
+        where p.id = $1 and p.status = 'failed' and not ${maybeOutSql('p')} returning *`, [current.id]);
+    if (back) {
+      post = back;
+      await query(
+        "update tasks set done = true, done_at = now() where post_id = $1 and kind = 'failed' and not done",
+        [current.id]);
+    }
   }
   res.json({ post, approval_reset: approvalReset });
 }));
@@ -347,7 +352,9 @@ r.get('/posts/:id/preview', wrap(async (req, res) => {
             u.name as assignee_name, ci.title as content_title, ci.kind as content_kind,
             ci.evergreen, ca.name as campaign_name, au.name as approved_by_name,
             cc.auto_enabled as autopub_enabled,
-            cc.access_token_enc is not null as autopub_connected
+            cc.access_token_enc is not null as autopub_connected,
+            -- נכשל שאולי כבר יצא — לא חוזר למתוכנן כשהמתג כבוי (runner.js maybeOutSql)
+            (p.status = 'failed' and ${maybeOutSql('p')}) as maybe_out
        from posts p
        left join channels c       on c.id = p.channel_id
        left join channel_connections cc on cc.channel_id = p.channel_id

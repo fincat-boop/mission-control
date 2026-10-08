@@ -125,3 +125,20 @@ test('stuckPublishingError — ניוזלטר שה-HUB עוד שולח נשאר 
   assert.equal(nl(73, 'active'), STUCK_NEWSLETTER_CAP_ERROR);
   assert.equal(nl(10, 'unreachable'), null);
 });
+
+/** LIKE של SQL (רק %) → RegExp, לבדיקה שהתבניות תואמות את ההודעות האמיתיות */
+const likeRe = (pat) => new RegExp(`^${pat.split('%').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 's');
+
+test('MAYBE_OUT_PATTERNS — תופסות בדיוק את ההודעות של "אולי עלה", ולא שגיאה ידועה', async () => {
+  const { MAYBE_OUT_PATTERNS } = await import('../src/publish/runner.js');
+  const maybe = (m) => MAYBE_OUT_PATTERNS.some((p) => likeRe(p).test(m));
+  const timeout = (maybeLive) => friendlyPublishError(
+    Object.assign(new Error('timeout'), { kind: 'graph_timeout', maybeLive }), { platform: 'facebook' }).message;
+  assert.ok(maybe(timeout(true)), 'מטא לא ענתה אחרי השליחה');
+  assert.ok(!maybe(timeout(false)), 'מטא לא ענתה לפני השליחה — לא עלה');
+  assert.ok(maybe(friendlyPublishError(new Error('fetch failed'), { platform: 'facebook' }).message), 'תקלת רשת');
+  assert.ok(maybe(friendlyPublishError(new Error('weird thing xyz'), { platform: 'facebook' }).message), 'לא זיהינו');
+  assert.ok(maybe('הפרסום סומן כתקוע ידנית על ידי דנה — בודקים בעמוד אם הפוסט עלה'), 'שחרור ידני');
+  assert.ok(!maybe(friendlyPublishError(graphErr('Error validating access token', 190), { platform: 'facebook' }).message),
+    'טוקן פג — בוודאות לא עלה');
+});

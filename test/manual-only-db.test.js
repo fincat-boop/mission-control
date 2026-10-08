@@ -293,6 +293,58 @@ test('ב — המתג כבוי: נכשל שמקבל מועד חדש חוזר ל�
   }
 });
 
+/** נכשלים שאולי כבר יצאו (runner.js maybeOutSql) ונכשל אחד שבוודאות לא */
+async function maybeOutPosts(tag) {
+  const runner = await import('../src/publish/runner.js');
+  const { friendlyPublishError } = await import('../src/publish/errors.js');
+  const failed = (o) => post({ status: 'failed', at: -60 * 3, ...o });
+  const timeout = friendlyPublishError(
+    Object.assign(new Error('t'), { kind: 'graph_timeout', maybeLive: true }), { platform: 'facebook' }).message;
+  return {
+    sure: await failed({ title: `${tag} טוקן פג`, error: 'הטוקן של העמוד פג — מחברים מחדש' }),
+    tooLate: await failed({ title: `${tag} מאוחר`, error: runner.TOO_LATE_ERROR }),
+    maybe: [
+      await failed({ title: `${tag} נקטע`, error: runner.STUCK_SOCIAL_ERROR }),
+      await failed({ title: `${tag} HUB יממה`, error: runner.STUCK_NEWSLETTER_ERROR, channel: ids.nl }),
+      await failed({ title: `${tag} HUB 3 ימים`, error: runner.STUCK_NEWSLETTER_CAP_ERROR, channel: ids.nl }),
+      await failed({ title: `${tag} לא נשמר`, error: runner.PUBLISHED_UNSAVED_ERROR }),
+      await failed({ title: `${tag} timeout`, error: timeout }),
+      await failed({ title: `${tag} שוחרר`, error: 'הפרסום סומן כתקוע ידנית על ידי דנה — בודקים בעמוד' }),
+      await failed({ title: `${tag} הועבר`, error: 'נדחה ב-HUB', channel: ids.nl, externalId: 'hub-1' }),
+      await failed({ title: `${tag} בידי HUB`, error: 'x', channel: ids.nl, hubAt: minutes(-60 * 24) }),
+    ],
+  };
+}
+
+test('ב — כיבוי: נכשל שאולי כבר יצא נשאר נכשל (ולא נספר בחלון); שבוודאות לא יצא — חוזר', { skip }, async () => {
+  await setAuto(true);
+  const x = await maybeOutPosts('כיבוי');
+  const before = (await call('GET', '/publish/status')).json.manual_reset.failed;
+  const r = await call('PATCH', '/settings', { autopublish_enabled: false });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.manual_reset.failed, before, 'החלון סופר רק את מי שחוזר');
+  assert.equal(await statusOf(x.sure), 'scheduled');
+  assert.equal(await statusOf(x.tooLate), 'scheduled');
+  for (const id of x.maybe) assert.equal(await statusOf(id), 'failed', String(id));
+
+  // הזזה של נכשל שאולי יצא כשהמתג כבוי — המועד זז, הסטטוס נשאר נכשל
+  const moved = await call('PATCH', `/posts/${x.maybe[0]}`, { scheduled_at: days(25), confirm_warnings: true });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(moved.json.post.status, 'failed');
+  const pv = await call('GET', `/posts/${x.maybe[0]}/preview`);
+  assert.equal(pv.json.post.maybe_out, true);
+});
+
+test('manual_only_v1: נכשל שאולי כבר יצא נשאר נכשל — אותו תנאי כמו resetToManual', { skip }, async () => {
+  await setAuto(false);
+  const x = await maybeOutPosts('צעד');
+  await db.pool.query("delete from app_migrations where key = 'manual_only_v1'");
+  await db.migrate();
+  assert.equal(await statusOf(x.sure), 'scheduled');
+  assert.equal(await statusOf(x.tooLate), 'scheduled');
+  for (const id of x.maybe) assert.equal(await statusOf(id), 'failed', String(id));
+});
+
 /* ========================= הצעדים החד-פעמיים ========================= */
 
 test('orphan_posts_v1: יתום עם תוכן מקבל את הנקודה של התוכן; נמחק רק מה שבוודאות לא יצא', { skip }, async () => {

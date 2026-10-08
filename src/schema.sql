@@ -903,11 +903,16 @@ end $$;
 -- מאושר ונכשל חוזרים למתוכנן. הצעד הזה עושה את אותו ניקוי פעם אחת לכל ארגון
 -- שהמתג שלו כבוי ביום העלייה (או שאין לו שורת הגדרות), עם app.current_org שלו:
 --   1. פוסט approved ← scheduled, בלי approved_by / approved_at.
---   2. פוסט failed ← scheduled, בלי publish_error (וגם בלי approved_by /
---      approved_at). נכשל שהמועד שלו עבר מופיע אז כ"עבר המועד" / "לא סומנו
---      כפורסמו" — כמו כל פוסט ידני שלא סומן.
+--   2. פוסט failed שבוודאות לא יצא ← scheduled, בלי publish_error (וגם בלי
+--      approved_by / approved_at). נכשל שהמועד שלו עבר מופיע אז כ"עבר
+--      המועד" / "לא סומנו כפורסמו" — כמו כל פוסט ידני שלא סומן.
+--      נכשל שאולי כבר יצא נשאר failed (ומשימת הכשל שלו פתוחה) — ניוזלטר
+--      שהועבר ל-HUB (external_id / hub_transferred_at), ו-publish_error של
+--      "אולי עלה". זה התנאי של runner.js maybeOutSql, מילה במילה (הקבועים
+--      STUCK_SOCIAL_ERROR, STUCK_NEWSLETTER_ERROR, STUCK_NEWSLETTER_CAP_ERROR,
+--      PUBLISHED_UNSAVED_ERROR ותבניות ההודעות של errors.js / resetPublishing).
 --   3. משימות כשל פתוחות (tasks.kind = 'failed', done = false) של הפוסטים
---      האלה ← נסגרות (done, done_at = now()).
+--      שחזרו ← נסגרות (done, done_at = now()).
 --   publishing ו-published — לא נוגעים. ארגון שהמתג שלו דלוק — לא נוגעים.
 do $$
 declare o record;
@@ -921,7 +926,18 @@ begin
     with moved as (
       update posts p
          set status = 'scheduled', approved_by = null, approved_at = null, publish_error = null
-       where p.org_id = o.id and p.status in ('approved', 'failed')
+       where p.org_id = o.id
+         and (p.status = 'approved'
+              or (p.status = 'failed'
+                  and p.external_id is null and p.hub_transferred_at is null
+                  and coalesce(p.publish_error, '') not in (
+                    'הפרסום נקטע באמצע וייתכן שהפוסט כבר עלה — בודקים בעמוד לפני שמפרסמים שוב: אם הוא שם מסמנים "פורסם", ורק אם לא — מפרסמים שוב',
+                    'ה-HUB לא ענה על הניוזלטר יממה אחרי המועד — בודקים ב-HUB מה קרה לקמפיין, ואז מסמנים פורסם או מעבירים שוב',
+                    'ה-HUB עדיין לא סיים לשלוח 3 ימים אחרי המועד — בודקים ב-HUB מה קרה לקמפיין, ואז מסמנים פורסם או מעבירים שוב',
+                    'הפוסט נשלח לפלטפורמה, אבל שמירת התוצאה במערכת נכשלה — לא מפרסמים שוב. בודקים בעמוד, ואם הוא שם מסמנים "פורסם"')
+                  and not coalesce(p.publish_error, '') like any (array[
+                    'הפרסום סומן כתקוע ידנית%', '%וייתכן שהוא עלה%', '%(תקלת רשת)%',
+                    'הפרסום נכשל מסיבה שלא זיהינו%'])))
       returning p.id
     )
     update tasks t set done = true, done_at = now()

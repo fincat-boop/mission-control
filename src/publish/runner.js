@@ -52,16 +52,49 @@ export async function autopublishOn() {
 }
 
 /**
+ * נכשל שאולי כבר יצא — לא חוזר למתוכנן במעבר לפרסום ידני (resetToManual,
+ * manual_only_v1, הזזה של נכשל כשהמתג כבוי), כי מי שיפרסם אותו שוב ביד
+ * עלול לפרסם פעמיים. נשאר "נכשל" עם ההסבר שלו, וממנו מסמנים "פורסם".
+ * הזיהוי לפי ההודעה שנשמרה ב-publish_error (מדויק: כל מסלול כשל כותב הודעה
+ * קבועה), ולא לפי publishing_started_at — הוא נכתב גם כשהפלטפורמה דחתה את
+ * הפוסט בוודאות (טוקן פג וכו'), ואז הפוסט בטוח לא יצא:
+ *   - ניוזלטר שהועבר ל-HUB (external_id / hub_transferred_at): ה-HUB עוד
+ *     נשאל עליו (pollNewsletterOutcomes), ושליחה ידנית הייתה כפולה;
+ *   - הודעות קבועות של "אולי עלה": STUCK_SOCIAL_ERROR, STUCK_NEWSLETTER_ERROR,
+ *     STUCK_NEWSLETTER_CAP_ERROR, PUBLISHED_UNSAVED_ERROR;
+ *   - הודעות של friendlyPublishError (errors.js) שאומרות שאולי עלה: מטא לא
+ *     ענתה בזמן אחרי השליחה ("וייתכן שהוא עלה"), תקלת רשת, וסיבה שלא זיהינו;
+ *   - שחרור ידני של פרסום תקוע (resetPublishing — "הפרסום סומן כתקוע ידנית").
+ * כל השאר — לא הועבר, מאוחר מדי, שגיאת API ידועה — בוודאות לא יצא, וחוזר.
+ * אותו תנאי, מילה במילה, בצעד manual_only_v1 ב-schema.sql (הבדיקה
+ * ב-manual-only-db מריצה את שניהם מול הקבועים האלה).
+ */
+export const MAYBE_OUT_PATTERNS = [
+  'הפרסום סומן כתקוע ידנית%', '%וייתכן שהוא עלה%', '%(תקלת רשת)%', 'הפרסום נכשל מסיבה שלא זיהינו%',
+];
+const sqlLit = (v) => `'${String(v).replace(/'/g, "''")}'`;
+export const maybeOutErrors = () => [STUCK_SOCIAL_ERROR, STUCK_NEWSLETTER_ERROR,
+  STUCK_NEWSLETTER_CAP_ERROR, PUBLISHED_UNSAVED_ERROR];
+/** תנאי SQL: הפוסט בכינוי p אולי כבר יצא (רלוונטי לנכשל) */
+export const maybeOutSql = (p = 'p') => `(${p}.external_id is not null
+    or ${p}.hub_transferred_at is not null
+    or coalesce(${p}.publish_error, '') in (${maybeOutErrors().map(sqlLit).join(', ')})
+    or coalesce(${p}.publish_error, '') like any (array[${MAYBE_OUT_PATTERNS.map(sqlLit).join(', ')}]))`;
+
+/**
  * מעבר לפרסום ידני בלבד (כיבוי המתג — PATCH /settings, וצעד manual_only_v1
- * ב-schema.sql עושה אותו דבר פעם אחת): מאושר לפרסום אוטומטי ונכשל חוזרים
- * למתוכנן — בלי אישור ובלי הודעת הכשל — ומשימות הכשל הפתוחות שלהם נסגרות.
- * נכשל שהמועד שלו עבר מופיע אז כ"עבר המועד" וברשימת "לא סומנו כפורסמו".
+ * ב-schema.sql עושה אותו דבר פעם אחת): מאושר לפרסום אוטומטי, ונכשל שבוודאות
+ * לא יצא (maybeOutSql), חוזרים למתוכנן — בלי אישור ובלי הודעת הכשל — ומשימות
+ * הכשל הפתוחות שלהם נסגרות. נכשל שהמועד שלו עבר מופיע אז כ"עבר המועד"
+ * וברשימת "לא סומנו כפורסמו". נכשל שאולי יצא נשאר נכשל, עם המשימה שלו.
  * publishing — לא נוגעים: הוא כבר יצא לדרך (failStuckPublishing / ה-HUB סוגרים).
  * @returns {Promise<{approved:number, failed:number}>}
  */
 export async function resetToManual() {
   const moved = await rows(
-    `with t as (select id, status from posts where status in ('approved', 'failed') for update)
+    `with t as (select id, status from posts p
+                 where status = 'approved' or (status = 'failed' and not ${maybeOutSql('p')})
+                 for update)
      update posts p set status = 'scheduled', approved_by = null, approved_at = null,
                         publish_error = null
        from t where p.id = t.id

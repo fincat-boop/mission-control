@@ -5,7 +5,7 @@ import { one, query, rows } from '../db.js';
 import { requirePerm } from '../auth.js';
 import { encryptSecret, decryptSecret } from '../publish/crypto.js';
 import { verifyConnection } from '../publish/meta.js';
-import { AUTOPUBLISH_OFF_ERROR, autopublishOn, loadPayload, publishBlocker, publishOne,
+import { AUTOPUBLISH_OFF_ERROR, autopublishOn, loadPayload, maybeOutSql, publishBlocker, publishOne,
          resetPublishing, transferNewsletter } from '../publish/runner.js';
 import { HubMailError, audienceLists, hubFillUrl, hubMailReady, hubOrigins,
          newsletterTemplate, newsletterPreview } from '../hub-mail.js';
@@ -29,11 +29,12 @@ r.get('/publish/status', wrap(async (_req, res) => {
             cc.access_token_enc is not null as has_token,
             cc.last_check_at, cc.last_check_ok, cc.last_check_note
        from channel_connections cc`);
-  // כמה פוסטים יחזרו למתוכנן בכיבוי המתג (resetToManual) — לחלון האישור בניהול
+  // כמה פוסטים יחזרו למתוכנן בכיבוי המתג (resetToManual) — לחלון האישור בניהול.
+  // נכשל שאולי כבר יצא (maybeOutSql) לא חוזר, ולכן לא נספר
   const reset = await one(
     `select count(*) filter (where status = 'approved')::int as approved,
-            count(*) filter (where status = 'failed')::int   as failed
-       from posts where status in ('approved', 'failed')`);
+            count(*) filter (where status = 'failed' and not ${maybeOutSql('p')})::int as failed
+       from posts p where status in ('approved', 'failed')`);
   res.json({
     autopublish_enabled: settings?.autopublish_enabled ?? false,
     hub_mail_ready: hubMailReady(),

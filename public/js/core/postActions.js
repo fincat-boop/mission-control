@@ -49,6 +49,8 @@ export function postFacts(post, variant, { autopublish = true } = {}) {
     platform: post.platform,
     autopublish,
     autoReady: autopublish && autoReady(post),
+    // ניוזלטר שהועבר ל-HUB (גם אם נכשל) — "פתח ב-HUB"
+    externalUrl: post.external_url ?? null,
     hasContent: !!post.content_id,
     variantReady: variant?.status === 'ready',
     // ניוזלטר שהועבר ל-HUB מחכה לאישור ולמועד — "תקוע" נספר רק מהמועד
@@ -122,6 +124,13 @@ export function choosePrimary(f, perms, now = new Date()) {
   }
 
   if (f.status === 'failed') {
+    // פרסום אוטומטי כבוי: נכשל שנשאר נכשל אולי כבר יצא (runner.js maybeOutSql)
+    // — בודקים ומסמנים "פורסם"; ניוזלטר שהועבר — בודקים ב-HUB
+    if (f.autopublish === false) {
+      if (!perms.content) return NONE;
+      return { primary: 'markPublished',
+               secondary: f.platform === 'newsletter' && f.externalUrl ? 'openHub' : null };
+    }
     if (past) return perms.content ? only('reschedule') : NONE;
     // נכשל והוזז כבר למועד עתידי — נשאר רק לאשר שוב
     if (perms.approve && f.autoReady && f.hasContent && f.variantReady) return only('approve');

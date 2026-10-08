@@ -42,6 +42,12 @@ test('פרסום אוטומטי כבוי במערכת (8.10.26) — אין אי�
   assert.equal(pick({ ...nl, autopublish: true, autoReady: true }).primary, 'transferHub');
   assert.equal(pick({ ...off, scheduled_at: PAST }).primary, 'markPublished');
   assert.equal(rescheduleApproves({ ...off, status: 'failed' }, ALL), false);
+  // נכשל שנשאר נכשל כשהמתג כבוי (אולי יצא) — "סמן כפורסם"; ניוזלטר שהועבר — גם "פתח ב-HUB"
+  assert.deepEqual(pick({ ...off, status: 'failed', scheduled_at: PAST }),
+    { primary: 'markPublished', secondary: null });
+  assert.deepEqual(pick({ ...nl, status: 'failed', externalUrl: 'https://hub/x' }),
+    { primary: 'markPublished', secondary: 'openHub' });
+  assert.equal(pick({ ...off, status: 'failed' }, NONE).primary, null);
 });
 
 test('מתוכנן עתידי עם תוכן מוכן בערוץ אוטומטי — "אשר לפרסום אוטומטי"', () => {
