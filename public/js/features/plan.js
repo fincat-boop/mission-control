@@ -141,7 +141,11 @@ function endpointList(campaigns) {
     const drafts = mine.filter((c) => c.complete).reduce((s, c) => s + c.missing_ahead, 0);
     const draftsLabel = drafts === 1 ? 'טיוטה אחת' : `${drafts} טיוטות`;
     // נקודה מושבתת — הקמפיינים שלה מוחזקים, אין "חסרים" ולא "מלא" (סעיף 16)
+    // "מלא" רק כשיש קמפיין שרץ או מתוכנן — בלי קמפיין אין מה למלא
+    const live = mine.some((c) => c.phase === 'running' || c.phase === 'upcoming');
     const chip = !e.active ? '<span class="chip">⏸ מושבתת</span>'
+      : !mine.length ? '<span class="chip">אין קמפיינים</span>'
+      : !live && !missing && !drafts ? '<span class="chip">אין קמפיין פעיל</span>'
       : missing
       ? `<span class="chip bad">חסרים ${missing}${drafts ? ` · ${draftsLabel}` : ''}</span>`
       : drafts ? `<span class="chip">${draftsLabel}</span>` : '<span class="chip on">מלא</span>';
